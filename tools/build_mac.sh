@@ -155,7 +155,7 @@ if want app; then
     "-DCMAKE_C_FLAGS_RELEASE=$RELEASE" "-DCMAKE_CXX_FLAGS_RELEASE=$RELEASE" \
     "-DCMAKE_BUILD_RPATH=@executable_path" \
     "-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out" \
-    -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
+    -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_METAL=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
     "-DBO2ZM_BUILD_ID=mac-arm64-$(date +%Y%m%d-%H%M%S)" "-DREXSDK_DIR=$ROOT/sdk" > /dev/null
   G="$ROOT/app/generated/default_mp"
   "$PY" "$ROOT/tools/direct_calls.py" --check --gen "$G"
