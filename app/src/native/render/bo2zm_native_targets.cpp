@@ -833,6 +833,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         dfn_(deferred::Table(*vulkan_device)),  // the device's, with the vkCmd* calls queued (deferred.h)
         gpu_(dfn_),
         device_(vulkan_device->device()),
+        work_(dfn_, device_),
         memory_(guest_memory),
         family_(vulkan_device->queue_family_graphics_compute()) {}
 
@@ -3501,10 +3502,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return VK_NULL_HANDLE;
     }
     if (!recording_upload_) {
-      VkCommandBufferBeginInfo start{};
-      start.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-      start.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-      if (dfn_.vkBeginCommandBuffer(commands_upload_, &start) != VK_SUCCESS) {
+      if (!work_.Begin(commands_upload_)) {
         return VK_NULL_HANDLE;
       }
       recording_upload_ = true;
@@ -6147,17 +6145,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     Complete(slot);
     deferred::Finish();  // nothing of an earlier recording may still be queued when its pool is reset
     const auto before_pools = std::chrono::steady_clock::now();
-    dfn_.vkResetCommandPool(device_, slot.pool_job, 0);
-    dfn_.vkResetCommandPool(device_, slot.pool_upload, 0);
+    work_.Reset(slot.pool_job);
+    work_.Reset(slot.pool_upload);
     ns_reset_pools_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - before_pools).count());
     commands_job_ = slot.job;
     commands_upload_ = slot.upload;
     recording_upload_ = false;
-    VkCommandBufferBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    start.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (dfn_.vkBeginCommandBuffer(commands_job_, &start) != VK_SUCCESS) {
+    if (!work_.Begin(commands_job_)) {
       return false;
     }
     deferred::Begin(commands_job_);  // from here to SubmitJob its vkCmd* calls are queued
@@ -6251,7 +6246,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   void Complete(WorkSlot& slot) {
     for (WorkSlot& other : slots_) {
       if (&other != &slot && other.pending && other.order < slot.order &&
-          dfn_.vkGetFenceStatus(device_, other.fence) == VK_SUCCESS) {
+          work_.Finished(other.fence)) {
         CompleteOne(other);
       }
     }
@@ -6263,7 +6258,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return;
     }
     const auto before_wait = std::chrono::steady_clock::now();
-    dfn_.vkWaitForFences(device_, 1, &slot.fence, VK_TRUE, UINT64_MAX);
+    work_.Wait(slot.fence);
     ns_waits_gpu_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                     std::chrono::steady_clock::now() - before_wait)
                                     .count());
@@ -6274,7 +6269,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                       .count());
       ++jobs_gpu_;
     }
-    dfn_.vkResetFences(device_, 1, &slot.fence);
+    work_.Rearm(slot.fence);
     slot.pending = false;
     const uint32_t marked = uint32_t(slot.categories.size());
     if (queries_ != VK_NULL_HANDLE && marked >= 2) {
@@ -6472,12 +6467,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         draws_->BeforeSubmit();  // closes the pass and publishes the upload buffer
       }
       recording_ = false;
-      std::array<VkCommandBuffer, 2> buffers{};
+      std::array<gpu::CommandList, 2> buffers{};
       uint32_t n = 0;
       if (recording_upload_) {
         recording_upload_ = false;
         UploadBarrier();  // and the job buffer after it waits for what it wrote
-        if (dfn_.vkEndCommandBuffer(commands_upload_) != VK_SUCCESS) {
+        if (!work_.End(commands_upload_)) {
           return false;
         }
         buffers[n++] = commands_upload_;
@@ -6491,19 +6486,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       deferred::Finish();  // the recorder makes the last queued calls; then the buffer is the ring thread's again
       deferred::Report();
-      if (dfn_.vkEndCommandBuffer(commands_job_) != VK_SUCCESS) {
+      if (!work_.End(commands_job_)) {
         return false;
       }
       buffers[n++] = commands_job_;
-      VkSubmitInfo submit{};
-      submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-      submit.commandBufferCount = n;
-      submit.pCommandBuffers = buffers.data();
       {
         const auto before_latch = std::chrono::steady_clock::now();  // "C2: present" report
         const auto queue = vulkan_device_->AcquireQueue(family_, 0);
         const auto before_submit = std::chrono::steady_clock::now();
-        if (dfn_.vkQueueSubmit(queue.queue(), 1, &submit, slots_[slot_].fence) != VK_SUCCESS) {
+        if (!work_.Submit(queue.queue(), n, buffers.data(), slots_[slot_].fence)) {
           return false;
         }
         ns_latch_job_ += Ns(before_latch, before_submit);
@@ -6539,8 +6530,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   void WaitOutputs() {
     for (uint32_t i = 0; i < kSlotsOutput; ++i) {
       if (outputs_pending_[i]) {
-        dfn_.vkWaitForFences(device_, 1, &fences_output_[i], VK_TRUE, UINT64_MAX);
-        dfn_.vkResetFences(device_, 1, &fences_output_[i]);
+        work_.Wait(fences_output_[i]);
+        work_.Rearm(fences_output_[i]);
         outputs_pending_[i] = false;
       }
     }
@@ -7064,10 +7055,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const uint32_t s = output_no_wait_ ? (output_current_ + 1) % kSlotsOutput : 0;
     if (outputs_pending_[s]) {
       const auto before_wait = std::chrono::steady_clock::now();  // "C2: present" report
-      dfn_.vkWaitForFences(device_, 1, &fences_output_[s], VK_TRUE, UINT64_MAX);
+      work_.Wait(fences_output_[s]);
       ns_wait_output_ += Ns(before_wait, std::chrono::steady_clock::now());
       ++waits_output_;
-      dfn_.vkResetFences(device_, 1, &fences_output_[s]);
+      work_.Rearm(fences_output_[s]);
       outputs_pending_[s] = false;
     }
     output_current_ = s;
@@ -7154,11 +7145,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     bo2zm::credits::Placement credits{};
     const bool draw_credits = bo2zm::credits::Place(width, height, credits) && CreditsReady();
 
-    dfn_.vkResetCommandPool(device_, pools_output_[s], 0);
-    VkCommandBufferBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    start.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (dfn_.vkBeginCommandBuffer(commands_output_[s], &start) != VK_SUCCESS) {
+    work_.Reset(pools_output_[s]);
+    if (!work_.Begin(commands_output_[s])) {
       return false;
     }
     if (draw_credits && !credits_.uploaded) {
@@ -7246,18 +7234,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
                    nullptr, 0, nullptr, 0, nullptr);
     }
-    if (dfn_.vkEndCommandBuffer(commands_output_[s]) != VK_SUCCESS) {
+    if (!work_.End(commands_output_[s])) {
       return false;
     }
-    VkSubmitInfo submit{};
-    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &commands_output_[s];
     {
       const auto before_latch = std::chrono::steady_clock::now();  // "C2: present" report
       const auto queue = vulkan_device_->AcquireQueue(family_, 0);
       const auto before_submit = std::chrono::steady_clock::now();
-      if (dfn_.vkQueueSubmit(queue.queue(), 1, &submit, fences_output_[s]) != VK_SUCCESS) {
+      if (!work_.Submit(queue.queue(), 1, &commands_output_[s], fences_output_[s])) {
         return false;
       }
       ns_latch_output_ += Ns(before_latch, before_submit);
@@ -7278,6 +7262,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   const VulkanDevice::Functions& dfn_;
   gpu::vulkan::Recorder gpu_;  // the layer's recording calls (bo2zm_gpu_vulkan.h), through dfn_
   VkDevice device_;
+  gpu::vulkan::Work work_;  // command buffers, submissions and fences (bo2zm_gpu_vulkan.h)
   rex::memory::Memory* memory_;
   uint32_t family_;
 
