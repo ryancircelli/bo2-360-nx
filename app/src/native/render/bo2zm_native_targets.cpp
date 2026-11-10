@@ -3596,13 +3596,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu_.Barrier(commands_job_,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, &barrier);
-    VkRenderPassBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    start.renderPass = pass;
-    start.framebuffer = framebuffer;
-    start.renderArea = {{int32_t(dx), int32_t(dy)}, {width, height}};
     MarkGpu(kGpuCopies);
-    gpu_.BeginPass(commands_job_, start);
+    gpu_.BeginPass(commands_job_, pass, framebuffer, gpu::Rect{int32_t(dx), int32_t(dy), width, height});
     gpu_.BindGraphicsPipeline(commands_job_, pipeline);
     gpu_.BindSets(commands_job_, layout_pipeline_, 0, 1, &set);
     gpu_.SetViewport(commands_job_, gpu::Viewport{float(dx), float(dy), float(width), float(height), 0.0f, 1.0f});
@@ -6873,11 +6868,6 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (draw_credits && !credits_.uploaded) {
       RecordCreditsUpload(commands_output_[s]);
     }
-    VkRenderPassBeginInfo pass{};
-    pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    pass.renderPass = render_pass_output_;
-    pass.framebuffer = framebuffer;
-    pass.renderArea.extent = {width, height};
     if (since_target) {
       // That image was just written as a render target (or copy destination) in the frame's work, which goes in
       // another submission: make the output read it fully written.
@@ -6888,7 +6878,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, &barrier);
     }
-    gpu_.BeginPass(commands_output_[s], pass);
+    gpu_.BeginPass(commands_output_[s], render_pass_output_, framebuffer, gpu::Rect{0, 0, width, height});
     gpu_.SetViewport(commands_output_[s], gpu::Viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f});
     gpu_.SetScissor(commands_output_[s], gpu::Rect{0, 0, width, height});
     gpu::Pipeline pipeline = pipeline_;
