@@ -59,6 +59,19 @@ class Device {
   // Gives back a buffer from CreateHostBuffer or WrapHostMemory; the memory of a wrapped range stays the caller's.
   static void Release(HostBuffer& buffer);
 
+  // Images. Textures live in placement heaps (the texture pool's slabs), anything else in its own allocation; all in
+  // private storage. TextureRequirements is what a heap needs for the image (types = 1: Metal has one memory type).
+  Requirements TextureRequirements(const ImageDesc& desc);
+  // A placement heap of `bytes` bytes for images; nullptr if Metal refuses. ReleaseHeap gives it back once its images
+  // are gone.
+  Memory CreateHeap(Size bytes);
+  static void ReleaseHeap(Memory heap);
+  // An image at `offset` in a heap, or one with its own memory; nullptr if the format has no Metal equivalent or
+  // Metal refuses. Release gives either back.
+  Image CreatePlacedImage(Memory heap, Size offset, const ImageDesc& desc);
+  Image CreateImage(const ImageDesc& desc);
+  static void Release(Image image);
+
   // The function of a shader, from its library (loaded the first time one of its functions is asked for).
   // nullptr if there is no such function; the returned id<MTLFunction> is owned by the device.
   void* Function(std::string_view name);
