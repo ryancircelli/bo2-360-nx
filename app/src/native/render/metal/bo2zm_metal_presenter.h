@@ -5,9 +5,9 @@
 // through RefreshGuestOutput (the context hands out the texture) and the paint thread puts the newest one on
 // the layer's drawable.
 //
-// First version: the drawable is cleared and the guest output is copied 1:1, centred (no scaling and no UI
-// layer: the SDK's ImGui drawers are Vulkan and are not run here). Scaling goes through a small internal
-// shader built ahead of time, with the other output shaders.
+// The drawable is cleared and the guest output is scaled into it (aspect fit, centred, bilinear, with
+// MetalPerformanceShaders' prebuilt kernel, so no shader is compiled). No UI layer yet: the SDK's ImGui
+// drawers record Vulkan commands and are not run here.
 
 #include "bo2zm_gpu_metal.h"
 

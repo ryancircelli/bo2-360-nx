@@ -201,7 +201,7 @@ if(BO2ZM_NATIVE_METAL)
     src/native/render/metal/bo2zm_metal_presenter.mm PROPERTIES
     LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
   target_compile_definitions(bo2zm PRIVATE BO2ZM_NATIVE_METAL=1)
-  target_link_libraries(bo2zm PRIVATE "-framework Metal" "-framework QuartzCore" "-framework Foundation")
+  target_link_libraries(bo2zm PRIVATE "-framework Metal" "-framework MetalPerformanceShaders" "-framework QuartzCore" "-framework Foundation")
 endif()
 
 # Profile-guided optimization of the generated code (app/build_switch.sh, BO2_PGO), and of the app's hot native code
