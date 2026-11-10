@@ -165,6 +165,11 @@ void TextureCheck::OnTextureLoadWindow(const TextureLoadEvent& event) {
       e.race_frame = write_frame;
       e.race_write_address = write_address;
       ++race_injections_;
+      if (injected_packet_ != position_.packet) {
+        injected_packet_ = position_.packet;
+        injected_.clear();
+      }
+      injected_.push_back({write_address & 0x1FFFFFFF, (write_address & 0x1FFFFFFF) + write_length});
       if (report_) {
         std::fprintf(report_,
                      "{\"kind\":\"race\",\"frame\":%u,\"draw\":%u,\"texture\":\"0x%08X\","
@@ -178,6 +183,19 @@ void TextureCheck::OnTextureLoadWindow(const TextureLoadEvent& event) {
     }
     ++race_misses_;
   }
+}
+
+bool TextureCheck::InjectedThisPacket(uint32_t address, uint32_t size) const {
+  if (injected_packet_ != position_.packet) {
+    return false;
+  }
+  address &= 0x1FFFFFFF;
+  for (auto [s0, s1] : injected_) {
+    if (s0 < address + size && s1 > address) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void TextureCheck::CheckDraw(const RegisterFile& regs, Shader* vs, Shader* ps,
@@ -236,9 +254,14 @@ void TextureCheck::CheckDraw(const RegisterFile& regs, Shader* vs, Shader* ps,
             cur_mips = HashGuest(entry->mips.address, entry->mips.size);
             stale_mips = cur_mips != entry->mips.hash;
           }
-          if ((stale_base || stale_mips) && entry->race_packet == position_.packet) {
-            // The write was injected while this draw's load was in flight:
-            // the draw itself legitimately used the bytes from before it.
+          if ((stale_base || stale_mips) &&
+              (entry->race_packet == position_.packet ||
+               (stale_base && InjectedThisPacket(entry->base.address, entry->base.size)) ||
+               (stale_mips && InjectedThisPacket(entry->mips.address, entry->mips.size)))) {
+            // The write was injected while this draw's loads were in flight
+            // (this texture's window, or another texture's window after this
+            // one was validated): the draw itself legitimately used the bytes
+            // from before it. Staleness counts from the next draw on.
             state = "race";
             stale_base = stale_mips = false;
           } else if (stale_base || stale_mips) {
