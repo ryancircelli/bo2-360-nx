@@ -88,7 +88,9 @@ std::unique_ptr<Device> Device::Create(const std::filesystem::path& library_fold
     caps.pipeline_statistics = false;
     // Timestamps come from counter sample buffers, decided with the command recording (phase 5); none until then.
     caps.timestamp_period_ns = 0.0f;
-    // Pipelines can be asked to come only from the binary archive (MTLPipelineOptionFailOnBinaryArchiveMiss).
+    // The pipeline cache is an MTLBinaryArchive serialized to disk, and pipelines can be asked to come only from it
+    // (MTLPipelineOptionFailOnBinaryArchiveMiss).
+    caps.pipeline_cache = true;
     caps.pipeline_cache_control = true;
     caps.api_version = 0;
     // Viewport, scissor, cull, winding, depth bias and depth/stencil state are encoder state, set per draw;

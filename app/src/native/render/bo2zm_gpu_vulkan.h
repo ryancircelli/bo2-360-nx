@@ -1076,6 +1076,46 @@ inline bool CreateComputePipeline(const rex::ui::vulkan::VulkanDevice::Functions
   return true;
 }
 
+// The on-disk pipeline cache's functions, which the device's function table does not load.
+struct PipelineCacheFunctions {
+  PFN_vkCreatePipelineCache create = nullptr;
+  PFN_vkGetPipelineCacheData data = nullptr;
+  PFN_vkDestroyPipelineCache destroy = nullptr;
+};
+
+inline PipelineCacheFunctions LoadPipelineCache(const rex::ui::vulkan::VulkanDevice& device) {
+  const auto& ifn = device.vulkan_instance()->functions();
+  PipelineCacheFunctions f;
+  f.create = reinterpret_cast<PFN_vkCreatePipelineCache>(ifn.vkGetDeviceProcAddr(device.device(),
+                                                                                  "vkCreatePipelineCache"));
+  f.data = reinterpret_cast<PFN_vkGetPipelineCacheData>(ifn.vkGetDeviceProcAddr(device.device(),
+                                                                                 "vkGetPipelineCacheData"));
+  f.destroy = reinterpret_cast<PFN_vkDestroyPipelineCache>(ifn.vkGetDeviceProcAddr(device.device(),
+                                                                                    "vkDestroyPipelineCache"));
+  return f;
+}
+
+// A pipeline cache seeded with data (empty: a new one). false if the driver refuses it.
+inline bool CreatePipelineCache(const PipelineCacheFunctions& f, VkDevice device, const void* data, size_t bytes,
+                                PipelineCache& out) {
+  VkPipelineCacheCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+  info.initialDataSize = bytes;
+  info.pInitialData = bytes ? data : nullptr;
+  return f.create(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+// The cache's data size (data == nullptr) or the data itself; false on failure. Incomplete data counts as data.
+inline bool PipelineCacheData(const PipelineCacheFunctions& f, VkDevice device, PipelineCache cache, size_t& bytes,
+                              void* data) {
+  const VkResult result = f.data(device, cache, &bytes, data);
+  return result == VK_SUCCESS || (data && result == VK_INCOMPLETE);
+}
+
+inline void DestroyPipelineCache(const PipelineCacheFunctions& f, VkDevice device, PipelineCache cache) {
+  f.destroy(device, cache, nullptr);
+}
+
 // The device's capabilities. queue_family is the family the renderer submits to (its timestamps). The depth format
 // is the first of D24S8 and D32S8 that can be drawn in and also be sampled, copied from and copied to; if neither
 // can do all of that, the first one that can be drawn in.
@@ -1097,6 +1137,8 @@ inline Caps CapsOf(const rex::ui::vulkan::VulkanDevice& device, uint32_t queue_f
   caps.occlusion_precise = p.occlusionQueryPrecise;
   caps.pipeline_statistics = p.pipelineStatisticsQuery;
   caps.pipeline_cache_control = p.pipelineCreationCacheControl;
+  const PipelineCacheFunctions cache = LoadPipelineCache(device);
+  caps.pipeline_cache = cache.create && cache.data && cache.destroy;
   caps.api_version = p.apiVersion;
   caps.dynamic_state12 = p.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0);
 #if defined(REX_UI_VULKAN_DYNAMIC_STATE3)
