@@ -99,6 +99,39 @@ enum Aspect : uint32_t {
 };
 using Aspects = uint32_t;
 
+// Mip levels and array layers of an image (layout of VkImageSubresourceRange). kAllLevels (below): from base_level
+// to the last.
+struct Range {
+  Aspects aspects;
+  uint32_t base_level;
+  uint32_t levels;
+  uint32_t base_layer;
+  uint32_t layers;
+};
+
+// Ordering between commands, in Vulkan's numbering: pipeline stages, memory accesses and image layouts. Metal tracks
+// most hazards itself, so there a barrier becomes an encoder boundary or a memory barrier on the encoder, and image
+// layouts mean nothing.
+using Stages = uint32_t;
+using Accesses = uint32_t;
+using Layout = uint32_t;
+
+// The writes in `before` are made visible to the accesses in `after`.
+struct MemoryBarrier {
+  Accesses before = 0;
+  Accesses after = 0;
+};
+
+// The same for one image, which also changes layout from old_layout to new_layout.
+struct ImageBarrier {
+  Image image = nullptr;
+  Layout old_layout = 0;
+  Layout new_layout = 0;
+  Accesses before = 0;
+  Accesses after = 0;
+  Range range{};
+};
+
 // A viewport (Vulkan's VkViewport, Metal's MTLViewport with znear and zfar).
 struct Viewport {
   float x = 0.0f;
