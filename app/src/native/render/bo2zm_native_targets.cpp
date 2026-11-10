@@ -872,13 +872,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     for (auto& f : framebuffers_) {
       if (f.framebuffer != VK_NULL_HANDLE) {
-        dfn_.vkDestroyFramebuffer(device_, f.framebuffer, nullptr);
+        gpu::vulkan::DestroyFramebuffer(dfn_, device_, f.framebuffer);
       }
     }
     if (pipeline_ != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, pipeline_, nullptr);
 
     for (auto& [view, fb] : conv_framebuffers_) {
-      if (fb != VK_NULL_HANDLE) dfn_.vkDestroyFramebuffer(device_, fb, nullptr);
+      if (fb != VK_NULL_HANDLE) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb);
     }
     for (auto& [format, p] : conv_pipelines_) {
       if (p != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, p, nullptr);
@@ -3704,15 +3704,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     VkFramebuffer& framebuffer = conv_framebuffers_[target.view];
     if (framebuffer == VK_NULL_HANDLE) {
-      VkFramebufferCreateInfo info_fb{};
-      info_fb.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-      info_fb.renderPass = pass;
-      info_fb.attachmentCount = 1;
-      info_fb.pAttachments = &target.view;
-      info_fb.width = target.width;
-      info_fb.height = target.height;
-      info_fb.layers = 1;
-      if (dfn_.vkCreateFramebuffer(device_, &info_fb, nullptr, &framebuffer) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateFramebuffer(dfn_, device_, pass, 1, &target.view, target.width, target.height,
+                                          framebuffer)) {
         framebuffer = VK_NULL_HANDLE;
         return false;
       }
@@ -5972,7 +5965,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (image.view != VK_NULL_HANDLE) {  // Its CopyConverted framebuffer goes too
       const auto fb = conv_framebuffers_.find(image.view);
       if (fb != conv_framebuffers_.end()) {
-        if (fb->second != VK_NULL_HANDLE) dfn_.vkDestroyFramebuffer(device_, fb->second, nullptr);
+        if (fb->second != VK_NULL_HANDLE) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb->second);
         conv_framebuffers_.erase(fb);
       }
     }
@@ -7019,19 +7012,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       next_framebuffer_ = (next_framebuffer_ + 1) % framebuffers_.size();
       if (f.framebuffer != VK_NULL_HANDLE) {
         WaitOutputs();  // a pending output could still use this framebuffer
-        dfn_.vkDestroyFramebuffer(device_, f.framebuffer, nullptr);
+        gpu::vulkan::DestroyFramebuffer(dfn_, device_, f.framebuffer);
         f.framebuffer = VK_NULL_HANDLE;
       }
       VkImageView view = context.image_view();
-      VkFramebufferCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-      info.renderPass = render_pass_output_;
-      info.attachmentCount = 1;
-      info.pAttachments = &view;
-      info.width = width;
-      info.height = height;
-      info.layers = 1;
-      if (dfn_.vkCreateFramebuffer(device_, &info, nullptr, &f.framebuffer) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateFramebuffer(dfn_, device_, render_pass_output_, 1, &view, width, height,
+                                          f.framebuffer)) {
         f.framebuffer = VK_NULL_HANDLE;
         return false;
       }
