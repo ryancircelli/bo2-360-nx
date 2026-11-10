@@ -8,6 +8,7 @@
  *                 [--backend vulkan] [--label name] [--no-color] [--no-depth]
  *                 [--full] [--frames N] [--scratch 0xADDR]
  *                 [--draws FIRST:COUNT] [--log-level info]
+ *                 [--bench [PASSES]]   (CP timing, writes <out_dir>/bench.json)
  */
 
 #include <dlfcn.h>
@@ -34,7 +35,7 @@ void Usage() {
                "usage: rexgpu-replay <trace.xtr> -o <out_dir> [--plugin path|name]\n"
                "       [--backend vulkan|any] [--label name] [--no-color] [--no-depth]\n"
                "       [--full] [--frames N] [--scratch 0xADDR] [--draws FIRST:COUNT]\n"
-               "       [--texcheck] [--race] [--race-frames N]\n"
+               "       [--texcheck] [--race] [--race-frames N] [--bench [PASSES]]\n"
                "       [--log-level trace|debug|info|warn|error] [--cvar name=value]...\n");
 }
 
@@ -57,6 +58,7 @@ int main(int argc, char** argv) {
   std::string trace_path, out_dir = "replay_out", plugin = "xenos", backend = "vulkan", label;
   std::string log_level = "info";
   uint32_t race_frames = 0;
+  uint32_t bench_iterations = 0;
   uint32_t flags = kRexGpuTraceReplayReadbackColor | kRexGpuTraceReplayReadbackDepth;
   uint32_t frames = 0, scratch = 0, first_draw = 0, draw_count = 0;
   std::vector<std::pair<std::string, std::string>> cvars;
@@ -88,6 +90,13 @@ int main(int argc, char** argv) {
       flags |= kRexGpuTraceReplayTexCheck;
     } else if (a == "--race") {
       flags |= kRexGpuTraceReplayTexCheck | kRexGpuTraceReplayRace;
+    } else if (a == "--bench") {
+      // CP benchmark: no readback; optional pass count.
+      flags = (flags & ~(kRexGpuTraceReplayReadbackColor | kRexGpuTraceReplayReadbackDepth)) |
+              kRexGpuTraceReplayBench;
+      if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
+        bench_iterations = uint32_t(std::stoul(next()));
+      }
     } else if (a == "--race-frames") {
       race_frames = uint32_t(std::stoul(next()));
     } else if (a == "--frames") {
@@ -126,6 +135,11 @@ int main(int argc, char** argv) {
   }
   if (label.empty()) {
     label = plugin + ":" + backend;
+  }
+  if ((flags & kRexGpuTraceReplayBench) && (flags & kRexGpuTraceReplayTexCheck)) {
+    // The texture check turns the Metal draw queue off, a different CP path.
+    std::fprintf(stderr, "--bench cannot be combined with --texcheck or --race\n");
+    return 2;
   }
   if (flags & kRexGpuTraceReplayTexCheck) {
     // The texture check compares each draw's bound textures with guest memory
@@ -206,6 +220,7 @@ int main(int argc, char** argv) {
   options.first_draw = first_draw;
   options.draw_count = draw_count;
   options.race_frames = race_frames;
+  options.bench_iterations = bench_iterations;
   int result = replay_fn(runtime->graphics_system(), &options);
 
   runtime->Shutdown();

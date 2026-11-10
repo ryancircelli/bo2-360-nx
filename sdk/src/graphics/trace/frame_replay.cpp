@@ -20,6 +20,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,10 @@
 #include <vector>
 
 #include <zlib.h>
+#include <time.h>
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#endif
 
 #include <fmt/format.h>
 
@@ -231,6 +236,10 @@ class ReplayHooks : public TraceHooks {
     if (suppress) {
       return;
     }
+    if (count_only) {
+      ++draw_count;
+      return;
+    }
     if (chain) chain->OnDrawEnd(cp, draw);
     pending_draws.push_back(draw);
   }
@@ -241,7 +250,86 @@ class ReplayHooks : public TraceHooks {
   bool forward() const { return chain && !suppress; }
   TraceHooks* chain = nullptr;
   bool suppress = false;
+  // Bench mode: count draws, keep no records.
+  bool count_only = false;
+  uint64_t draw_count = 0;
   std::vector<DrawEvent> pending_draws;
+};
+
+// Bench clocks. Thread CPU time does not advance while the thread is
+// preempted or blocked (GPU waits), so it holds up on a loaded machine; it
+// costs about 1 us per read on macOS, so it is read once per run of
+// consecutive packets, not per packet.
+uint64_t ThreadCpuNs() {
+#if defined(__APPLE__)
+  return clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+#else
+  timespec ts;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+#endif
+}
+
+uint64_t WallNs() {
+#if defined(__APPLE__)
+  static const mach_timebase_info_data_t tb = [] {
+    mach_timebase_info_data_t t;
+    mach_timebase_info(&t);
+    return t;
+  }();
+  return mach_absolute_time() * tb.numer / tb.denom;
+#else
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+#endif
+}
+
+// Core cycles and instructions of the calling thread (Apple's per-thread
+// fixed counters). Cycles do not depend on the clock frequency, which on a
+// loaded Mac moves thread CPU time by a few percent between runs; they stay
+// within a fraction of a percent. Zero when the counters are unavailable.
+#if defined(__APPLE__)
+extern "C" int thread_selfcounts(int type, void* buf, size_t nbytes) __attribute__((weak_import));
+#endif
+struct ThreadCounts {
+  uint64_t cycles = 0;
+  uint64_t instructions = 0;
+};
+ThreadCounts ReadThreadCounts() {
+  ThreadCounts c;
+#if defined(__APPLE__)
+  uint64_t v[2] = {};
+  if (thread_selfcounts && thread_selfcounts(1, v, sizeof(v)) == 0) {
+    c.cycles = v[0];
+    c.instructions = v[1];
+  }
+#endif
+  return c;
+}
+
+struct BenchPass {
+  uint64_t cp_cpu_ns = 0;    // thread CPU in packet execution
+  uint64_t cp_cycles = 0;    // core cycles in packet execution
+  uint64_t cp_instructions = 0;
+  uint64_t cp_wall_ns = 0;   // wall time in packet execution
+  uint64_t pass_cpu_ns = 0;  // thread CPU of the whole pass
+  uint64_t pass_wall_ns = 0;
+  uint64_t draws = 0;
+  uint64_t packets = 0;
+  uint64_t segments = 0;
+  uint64_t writes = 0;            // trace memory records written
+  uint64_t unchanged_writes = 0;  // records skipped, bytes already in place
+  uint32_t frames = 0;
+  bool ok = false;
+};
+
+// Bench: decoded memory records kept across passes, so passes after the
+// first spend no time in zlib (decoding was ~75% of a pass's wall time).
+struct BenchDecodeCache {
+  std::vector<std::vector<uint8_t>> blocks;  // by record index; empty = not kept
+  uint64_t budget = 0;
+  uint64_t used = 0;
 };
 
 struct TargetImage {
@@ -262,6 +350,8 @@ class Replayer {
         out_dir_(options.output_dir ? options.output_dir : "replay_out") {}
 
   int Run(const std::vector<uint8_t>& trace);
+  // One bench pass: executes the trace with no readback and no records.
+  void RunBench(const std::vector<uint8_t>& trace, BenchPass& pass, BenchDecodeCache& cache);
 
  private:
   bool ExecuteCommands(const std::vector<uint8_t>& trace);
@@ -288,6 +378,15 @@ class Replayer {
                  uint32_t& write_length, uint32_t& write_frame);
   void RestoreRegisters(uint32_t first, uint32_t count, const uint32_t* values);
   void HandleDraws();
+  void EndCpSegment() {
+    if (bench_ && in_cp_segment_) {
+      bench_pass_->cp_cpu_ns += ThreadCpuNs() - cp_segment_start_;
+      const ThreadCounts c = ReadThreadCounts();
+      bench_pass_->cp_cycles += c.cycles - cp_segment_counts_.cycles;
+      bench_pass_->cp_instructions += c.instructions - cp_segment_counts_.instructions;
+      in_cp_segment_ = false;
+    }
+  }
   void RecordDraw(const DrawEvent& draw);
   bool ReadbackTarget(int source, uint32_t width, uint32_t height, TargetImage& image);
   void EmitTarget(const std::string& label, TargetImage& image, std::string& json);
@@ -318,6 +417,12 @@ class Replayer {
   std::vector<uint32_t> early_pending_;
   std::vector<uint8_t> decode_buffer_;
   std::vector<uint8_t> race_buffer_;
+  bool bench_ = false;
+  BenchPass* bench_pass_ = nullptr;
+  BenchDecodeCache* bench_cache_ = nullptr;
+  bool in_cp_segment_ = false;
+  uint64_t cp_segment_start_ = 0;
+  ThreadCounts cp_segment_counts_;
 };
 
 constexpr uint32_t kRecordPageShift = 16;
@@ -632,6 +737,32 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
   return ok ? 0 : 1;
 }
 
+void Replayer::RunBench(const std::vector<uint8_t>& trace, BenchPass& pass,
+                        BenchDecodeCache& cache) {
+  bench_ = true;
+  bench_pass_ = &pass;
+  bench_cache_ = &cache;
+  if (options_.scratch_address) {
+    scratch_ = options_.scratch_address & 0x1FFFFFFF;
+  }
+  trace_data_ = trace.data();
+  hooks_.chain = cp_.trace_hooks();
+  hooks_.count_only = true;
+  cp_.set_trace_hooks(&hooks_);
+  const uint64_t cpu0 = ThreadCpuNs(), wall0 = WallNs();
+  pass.ok = ExecuteCommands(trace);
+  EndCpSegment();
+  pass.pass_cpu_ns = ThreadCpuNs() - cpu0;
+  pass.pass_wall_ns = WallNs() - wall0;
+  cp_.set_trace_hooks(hooks_.chain);
+  pass.draws = hooks_.draw_count;
+  pass.packets = packet_index_;
+  pass.frames = frame_index_;
+  bench_ = false;
+  bench_pass_ = nullptr;
+  bench_cache_ = nullptr;
+}
+
 bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
   const uint8_t* ptr = trace.data() + sizeof(TraceHeader);
   const uint8_t* end = trace.data() + trace.size();
@@ -685,13 +816,26 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
         if (texcheck_) {
           texcheck_->set_position({frame_index_, draw_index_, packet_index_});
         }
-        cp_.ExecutePacket(pending_packet->base_ptr, pending_packet->count);
+        if (bench_) {
+          if (!in_cp_segment_) {
+            in_cp_segment_ = true;
+            ++bench_pass_->segments;
+            cp_segment_counts_ = ReadThreadCounts();
+            cp_segment_start_ = ThreadCpuNs();
+          }
+          const uint64_t t0 = WallNs();
+          cp_.ExecutePacket(pending_packet->base_ptr, pending_packet->count);
+          bench_pass_->cp_wall_ns += WallNs() - t0;
+        } else {
+          cp_.ExecutePacket(pending_packet->base_ptr, pending_packet->count);
+        }
         pending_packet = nullptr;
         ++packet_index_;
         HandleDraws();
         break;
       }
       case TraceCommandType::kMemoryRead: {
+        EndCpSegment();
         if (!need(sizeof(MemoryCommand))) {
           return false;
         }
@@ -701,7 +845,16 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
           return false;
         }
         const uint8_t* data = ptr;
-        if (cmd->encoding_format != MemoryEncodingFormat::kNone) {
+        std::vector<uint8_t>* cached = nullptr;
+        if (bench_cache_ && cmd->encoding_format != MemoryEncodingFormat::kNone) {
+          if (bench_cache_->blocks.size() <= next_record_) {
+            bench_cache_->blocks.resize(next_record_ + 1);
+          }
+          cached = &bench_cache_->blocks[next_record_];
+        }
+        if (cached && cached->size() == cmd->decoded_length && cmd->decoded_length) {
+          data = cached->data();
+        } else if (cmd->encoding_format != MemoryEncodingFormat::kNone) {
           if (!DecodeBlock(cmd->encoding_format, ptr, cmd->encoded_length, cmd->decoded_length,
                            decode_buffer_)) {
             REXGPU_ERROR("replay: cannot decode memory block (encoding {})",
@@ -709,6 +862,10 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
             return false;
           }
           data = decode_buffer_.data();
+          if (cached && bench_cache_->used + cmd->decoded_length <= bench_cache_->budget) {
+            cached->assign(data, data + cmd->decoded_length);
+            bench_cache_->used += cmd->decoded_length;
+          }
         }
         if (texcheck_) {
           if (options_.flags & kRexGpuTraceReplayRace) {
@@ -717,7 +874,16 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
             texcheck_->NoteWrite(cmd->base_ptr, data, cmd->decoded_length, frame_index_);
             WriteMemory(cmd->base_ptr, data, cmd->decoded_length);
           }
+        } else if (bench_ && cmd->decoded_length &&
+                   std::memcmp(memory_->TranslatePhysical(cmd->base_ptr & 0x1FFFFFFF), data,
+                               cmd->decoded_length) == 0) {
+          // Bench: bytes already in guest memory. The game's CPU would not
+          // have rewritten them, so do not invalidate the GPU caches over them.
+          ++bench_pass_->unchanged_writes;
         } else {
+          if (bench_) {
+            ++bench_pass_->writes;
+          }
           WriteMemory(cmd->base_ptr, data, cmd->decoded_length);
         }
         ++next_record_;
@@ -756,6 +922,7 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
         break;
       }
       case TraceCommandType::kRegisters: {
+        EndCpSegment();
         if (!need(sizeof(RegistersCommand))) {
           return false;
         }
@@ -771,6 +938,7 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
         break;
       }
       case TraceCommandType::kGammaRamp: {
+        EndCpSegment();
         if (!need(sizeof(GammaRampCommand))) {
           return false;
         }
@@ -1157,6 +1325,110 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
 
 }  // namespace
 
+namespace {
+
+double Median(std::vector<double> v) {
+  if (v.empty()) {
+    return 0.0;
+  }
+  std::sort(v.begin(), v.end());
+  size_t n = v.size();
+  return n & 1 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
+// Replays the trace several times on the command processor thread, each pass
+// with a fresh Replayer (guest memory and registers are rebuilt from the
+// trace; the GPU caches stay warm, so pass 1 is reported apart). Writes
+// bench.json and prints one "bench" line per pass and a summary line.
+int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& options,
+               const std::vector<uint8_t>& trace) {
+  const uint32_t passes = options.bench_iterations ? options.bench_iterations : 6;
+  std::vector<BenchPass> results(passes);
+  BenchDecodeCache cache;
+  cache.budget = 4096ull << 20;
+  if (const char* mb = std::getenv("REX_REPLAY_BENCH_CACHE_MB")) {
+    cache.budget = std::strtoull(mb, nullptr, 10) << 20;
+  }
+  for (uint32_t i = 0; i < passes; ++i) {
+    std::promise<void> done;
+    auto finished = done.get_future();
+    graphics_system->command_processor()->CallInThread([&, i]() {
+      Replayer replayer(graphics_system, options);
+      replayer.RunBench(trace, results[i], cache);
+      done.set_value();
+    });
+    finished.get();
+    const BenchPass& p = results[i];
+    std::printf(
+        "bench pass %u: cp_cpu %.2f ms, cp_wall %.2f ms, pass_cpu %.2f ms, pass_wall %.2f ms, "
+        "%llu draws, %u frames, %llu packets, %llu segments, %.3f us/draw, %.0f cycles/draw, "
+        "%.0f instructions/draw, %llu/%llu memory records written%s\n",
+        i + 1, p.cp_cpu_ns / 1e6, p.cp_wall_ns / 1e6, p.pass_cpu_ns / 1e6, p.pass_wall_ns / 1e6,
+        (unsigned long long)p.draws, p.frames, (unsigned long long)p.packets,
+        (unsigned long long)p.segments, p.draws ? p.cp_cpu_ns / 1e3 / double(p.draws) : 0.0,
+        p.draws ? double(p.cp_cycles) / double(p.draws) : 0.0,
+        p.draws ? double(p.cp_instructions) / double(p.draws) : 0.0,
+        (unsigned long long)p.writes, (unsigned long long)(p.writes + p.unchanged_writes),
+        p.ok ? "" : " (trace error)");
+    std::fflush(stdout);
+    if (!p.ok) {
+      return 1;
+    }
+  }
+  // Steady state: passes 2..N (all passes when there is only one).
+  std::vector<double> us_per_draw, cp_ms, wall_ms, fps, cycles_per_draw, instr_per_draw;
+  for (uint32_t i = passes > 1 ? 1 : 0; i < passes; ++i) {
+    const BenchPass& p = results[i];
+    us_per_draw.push_back(p.draws ? p.cp_cpu_ns / 1e3 / double(p.draws) : 0.0);
+    cp_ms.push_back(p.cp_cpu_ns / 1e6);
+    wall_ms.push_back(p.cp_wall_ns / 1e6);
+    fps.push_back(p.cp_cpu_ns ? p.frames * 1e9 / double(p.cp_cpu_ns) : 0.0);
+    cycles_per_draw.push_back(p.draws ? double(p.cp_cycles) / double(p.draws) : 0.0);
+    instr_per_draw.push_back(p.draws ? double(p.cp_instructions) / double(p.draws) : 0.0);
+  }
+  auto [clo, chi] = std::minmax_element(cycles_per_draw.begin(), cycles_per_draw.end());
+  const double cmed = Median(cycles_per_draw);
+  auto [lo, hi] = std::minmax_element(us_per_draw.begin(), us_per_draw.end());
+  const double med = Median(us_per_draw);
+  const BenchPass& last = results.back();
+  std::string json = fmt::format(
+      "{{\n  \"trace\": \"{}\",\n  \"backend\": \"{}\",\n  \"passes\": {},\n"
+      "  \"draws_per_pass\": {},\n  \"frames_per_pass\": {},\n  \"packets_per_pass\": {},\n"
+      "  \"median_us_per_draw\": {:.4f},\n  \"min_us_per_draw\": {:.4f},\n"
+      "  \"max_us_per_draw\": {:.4f},\n  \"median_cp_cpu_ms\": {:.3f},\n"
+      "  \"median_cp_wall_ms\": {:.3f},\n  \"median_cp_frames_per_s\": {:.2f},\n"
+      "  \"pass1_cp_cpu_ms\": {:.3f},\n  \"median_cycles_per_draw\": {:.1f},\n"
+      "  \"min_cycles_per_draw\": {:.1f},\n  \"max_cycles_per_draw\": {:.1f},\n"
+      "  \"median_instructions_per_draw\": {:.1f},\n  \"pass_list\": [",
+      JsonEscape(options.trace_path ? options.trace_path : ""),
+      JsonEscape(options.backend_label ? options.backend_label : ""), passes, last.draws,
+      last.frames, last.packets, med, *lo, *hi, Median(cp_ms), Median(wall_ms), Median(fps),
+      results[0].cp_cpu_ns / 1e6, cmed, *clo, *chi, Median(instr_per_draw));
+  for (uint32_t i = 0; i < passes; ++i) {
+    const BenchPass& p = results[i];
+    json += fmt::format(
+        "{}\n    {{\"cp_cpu_ms\": {:.3f}, \"cp_wall_ms\": {:.3f}, \"pass_cpu_ms\": {:.3f}, "
+        "\"pass_wall_ms\": {:.3f}, \"cp_cycles\": {}, \"cp_instructions\": {}, "
+        "\"draws\": {}, \"segments\": {}}}",
+        i ? "," : "", p.cp_cpu_ns / 1e6, p.cp_wall_ns / 1e6, p.pass_cpu_ns / 1e6,
+        p.pass_wall_ns / 1e6, p.cp_cycles, p.cp_instructions, p.draws, p.segments);
+  }
+  json += "\n  ]\n}\n";
+  std::filesystem::path out_dir(options.output_dir ? options.output_dir : "replay_out");
+  std::error_code ec;
+  std::filesystem::create_directories(out_dir, ec);
+  std::ofstream(out_dir / "bench.json") << json;
+  std::printf(
+      "bench: median %.4f us/draw (min %.4f, max %.4f, spread %.2f%%), %.3f ms CP per pass, "
+      "%.2f CP frames/s, median %.0f cycles/draw (spread %.2f%%), %llu draws x %u passes\n",
+      med, *lo, *hi, med ? 100.0 * (*hi - *lo) / med : 0.0, Median(cp_ms), Median(fps), cmed,
+      cmed ? 100.0 * (*chi - *clo) / cmed : 0.0, (unsigned long long)last.draws, passes);
+  std::fflush(stdout);
+  return 0;
+}
+
+}  // namespace
+
 int ReplayTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& options) {
   if (!graphics_system || !graphics_system->command_processor() || !options.trace_path) {
     return 1;
@@ -1177,8 +1449,12 @@ int ReplayTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions&
     return 1;
   }
 
-  // Resolved data must reach guest memory synchronously for readback.
-  rex::cvar::SetFlagByName("readback_resolve", "full");
+  const bool bench = (options.flags & kRexGpuTraceReplayBench) != 0;
+  if (!bench) {
+    // Resolved data must reach guest memory synchronously for readback.
+    // (The bench keeps the game's setting, so it times the game's path.)
+    rex::cvar::SetFlagByName("readback_resolve", "full");
+  }
   // Deterministic output: never skip a draw while its pipeline compiles.
   rex::cvar::SetFlagByName("async_shader_compilation", "false");
 
@@ -1187,6 +1463,10 @@ int ReplayTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions&
   heap->AllocFixed(heap->heap_base(), heap->heap_size(), heap->page_size(),
                    memory::kMemoryAllocationReserve | memory::kMemoryAllocationCommit,
                    memory::kMemoryProtectRead | memory::kMemoryProtectWrite);
+
+  if (bench) {
+    return BenchTrace(graphics_system, options, trace);
+  }
 
   std::promise<int> done;
   auto result = done.get_future();
