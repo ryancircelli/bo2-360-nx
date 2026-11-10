@@ -1070,6 +1070,75 @@ inline bool CreateComputePipeline(const rex::ui::vulkan::VulkanDevice::Functions
   return true;
 }
 
+// The device's capabilities. queue_family is the family the renderer submits to (its timestamps). The depth format
+// is the first of D24S8 and D32S8 that can be drawn in and also be sampled, copied from and copied to; if neither
+// can do all of that, the first one that can be drawn in.
+inline Caps CapsOf(const rex::ui::vulkan::VulkanDevice& device, uint32_t queue_family) {
+  const auto& p = device.properties();
+  Caps caps;
+  std::strncpy(caps.device_name, p.deviceName, sizeof(caps.device_name) - 1);
+  caps.int64 = p.shaderInt64;
+  caps.buffer_address = p.bufferDeviceAddress;
+  caps.runtime_arrays = p.runtimeDescriptorArray;
+  caps.dynamic_indexing = p.shaderSampledImageArrayDynamicIndexing;
+  caps.partially_bound = p.descriptorBindingPartiallyBound;
+  caps.update_after_bind = p.descriptorBindingSampledImageUpdateAfterBind;
+  caps.update_unused_pending = p.descriptorBindingUpdateUnusedWhilePending;
+  caps.mirror_clamp_to_edge = p.samplerMirrorClampToEdge;
+  caps.anisotropy = p.samplerAnisotropy;
+  caps.max_anisotropy = p.maxSamplerAnisotropy;
+  caps.uniform_alignment = p.minUniformBufferOffsetAlignment;
+  caps.occlusion_precise = p.occlusionQueryPrecise;
+  caps.pipeline_statistics = p.pipelineStatisticsQuery;
+  caps.pipeline_cache_control = p.pipelineCreationCacheControl;
+  caps.api_version = p.apiVersion;
+  caps.dynamic_state12 = p.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0);
+#if defined(REX_UI_VULKAN_DYNAMIC_STATE3)
+  caps.dynamic_state3 = device.extensions().ext_EXT_extended_dynamic_state3 &&
+                        p.extendedDynamicState3ColorBlendEnable && p.extendedDynamicState3ColorBlendEquation &&
+                        p.extendedDynamicState3ColorWriteMask;
+#endif
+  const auto& ifn = device.vulkan_instance()->functions();
+  const VkPhysicalDevice physical = device.physical_device();
+  uint32_t families = 0;
+  ifn.vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, nullptr);
+  std::vector<VkQueueFamilyProperties> queues(families);
+  ifn.vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, queues.data());
+  VkPhysicalDeviceProperties physical_properties{};
+  ifn.vkGetPhysicalDeviceProperties(physical, &physical_properties);
+  if (queue_family < families && queues[queue_family].timestampValidBits &&
+      physical_properties.limits.timestampPeriod > 0.0f) {
+    caps.timestamp_period_ns = physical_properties.limits.timestampPeriod;
+  }
+  // Attachment, copy and clear source and destination, and sampling of the resolved ones (shadows).
+  const VkFormatFeatureFlags kUsesDepth = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                          VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                          VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+  // Drawing the shadow map smaller needs a blit on depth to scale it up when resolving it.
+  const VkFormatFeatureFlags kUsesScaled = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+  VkFormatFeatureFlags uses_chosen = 0;
+  for (const VkFormat candidate : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT}) {
+    VkFormatProperties properties{};
+    ifn.vkGetPhysicalDeviceFormatProperties(physical, candidate, &properties);
+    const VkFormatFeatureFlags uses = properties.optimalTilingFeatures & kUsesDepth;
+    if (!(uses & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+      continue;
+    }
+    if (caps.depth_format == VK_FORMAT_UNDEFINED || uses == kUsesDepth) {
+      caps.depth_format = candidate;
+      uses_chosen = uses;
+      caps.depth_scalable = (properties.optimalTilingFeatures & kUsesScaled) == kUsesScaled;
+    }
+    if (uses == kUsesDepth) {
+      break;
+    }
+  }
+  caps.depth_sampled = (uses_chosen & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+  caps.depth_copy_source = (uses_chosen & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) != 0;
+  caps.depth_copy_target = (uses_chosen & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0;
+  return caps;
+}
+
 }  // namespace vulkan
 
 }  // namespace bo2zm::native::gpu
