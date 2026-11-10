@@ -93,6 +93,8 @@ foreach(_f IN LISTS _sdk_graphics_inputs)
     file(SHA256 ${_f} _h)
     string(APPEND _sdk_fingerprint "${_f}:${_h}\n")
 endforeach()
+# Edits to these sources must refresh the private copy, not only added or removed files.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_sdk_graphics_inputs})
 foreach(_p IN LISTS _metal_patches)
     file(SHA256 ${_metal_dir}/patches/${_p} _h)
     string(APPEND _sdk_fingerprint "${_p}:${_h}\n")
