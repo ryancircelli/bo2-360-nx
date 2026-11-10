@@ -9761,36 +9761,27 @@ class VulkanDrawsImpl final : public VulkanDraws {
     vcache_sum_ab_ = REXCVAR_GET(bo2zm_native_vertex_cache_sum_ab);
     const VkDeviceSize size = VkDeviceSize(std::clamp(REXCVAR_GET(bo2zm_native_vertex_cache_mb), 4, 256)) << 20;
     for (VertexPool& pool : vpools_) {
-      VkBufferCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-      info.size = size;
-      info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;  // index cache
-      info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-      if (dfn_.vkCreateBuffer(device_, &info, nullptr, &pool.buffer) != VK_SUCCESS) {
+      // In the upload buffer's memory type (written by the CPU, read by the GPU as vertices); index cache too.
+      gpu::vulkan::HostBuffer created;
+      const gpu::vulkan::HostBufferResult result = gpu::vulkan::CreateHostBuffer(
+          dfn_, device_, nullptr, size, gpu::kBufferVertex | gpu::kBufferIndex, upload_type_, created);
+      pool.buffer = created.buffer;
+      pool.memory = created.memory;
+      if (result == gpu::vulkan::HostBufferResult::kNoBuffer) {
         REXLOG_WARN("[native] C6 vertex cache: vkCreateBuffer failed; the cache is off");
         return;
       }
-      VkMemoryRequirements requirements;
-      dfn_.vkGetBufferMemoryRequirements(device_, pool.buffer, &requirements);
-      // The upload buffer's memory type (written by the CPU, read by the GPU as vertices).
-      if (!((requirements.memoryTypeBits >> upload_type_) & 1)) {
+      if (result == gpu::vulkan::HostBufferResult::kWrongMemory) {
         REXLOG_WARN("[native] C6 vertex cache: the upload memory type does not fit a vertex buffer; the cache is off");
         return;
       }
-      VkMemoryAllocateInfo reserve{};
-      reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-      reserve.allocationSize = requirements.size;
-      reserve.memoryTypeIndex = upload_type_;
-      void* mapped = nullptr;
-      if (dfn_.vkAllocateMemory(device_, &reserve, nullptr, &pool.memory) != VK_SUCCESS ||
-          dfn_.vkBindBufferMemory(device_, pool.buffer, pool.memory, 0) != VK_SUCCESS ||
-          dfn_.vkMapMemory(device_, pool.memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+      if (result != gpu::vulkan::HostBufferResult::kDone) {
         REXLOG_WARN("[native] C6 vertex cache: no memory for {} MB; the cache is off", size >> 20);
         return;
       }
-      pool.data = static_cast<uint8_t*>(mapped);
+      pool.data = created.data;
       pool.size = size;
-      pool.size_real = requirements.size;
+      pool.size_real = created.size_real;
     }
     vcache_coherent_ = upload_coherent_;
     vcache_ready_ = true;
@@ -9996,39 +9987,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // A host-visible buffer the shader reaches by its address (the upload buffer's memory type).
   bool CreateSkinBuffer(VkDeviceSize size, VkBuffer& buffer, VkDeviceMemory& memory, uint8_t*& data,
                         VkDeviceAddress& address) {
-    VkBufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = size;
-    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &buffer) != VK_SUCCESS) {
-      return false;
-    }
-    VkMemoryRequirements requirements;
-    dfn_.vkGetBufferMemoryRequirements(device_, buffer, &requirements);
-    if (!((requirements.memoryTypeBits >> upload_type_) & 1)) {
-      return false;
-    }
-    VkMemoryAllocateFlagsInfo flags{};
-    flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    VkMemoryAllocateInfo reserve{};
-    reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    reserve.pNext = &flags;
-    reserve.allocationSize = requirements.size;
-    reserve.memoryTypeIndex = upload_type_;
-    void* mapped = nullptr;
-    if (dfn_.vkAllocateMemory(device_, &reserve, nullptr, &memory) != VK_SUCCESS ||
-        dfn_.vkBindBufferMemory(device_, buffer, memory, 0) != VK_SUCCESS ||
-        dfn_.vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
-      return false;
-    }
-    data = static_cast<uint8_t*>(mapped);
-    VkBufferDeviceAddressInfo where{};
-    where.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-    where.buffer = buffer;
-    address = address_buffer_(device_, &where);
-    return address != 0;
+    gpu::vulkan::HostBuffer created;
+    const gpu::vulkan::HostBufferResult result = gpu::vulkan::CreateHostBuffer(
+        dfn_, device_, address_buffer_, size, gpu::kBufferStorage | gpu::kBufferAddress, upload_type_, created);
+    buffer = created.buffer;
+    memory = created.memory;
+    if (created.data) data = created.data;
+    address = created.address;
+    return result == gpu::vulkan::HostBufferResult::kDone;
   }
 
   void CreateGpuSkin() {

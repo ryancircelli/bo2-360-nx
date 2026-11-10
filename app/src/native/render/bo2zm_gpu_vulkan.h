@@ -240,6 +240,72 @@ class Recorder {
   Loaded loaded_;
 };
 
+// A buffer the CPU writes and the GPU reads, in its own allocation, mapped for as long as it lives.
+struct HostBuffer {
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  uint8_t* data = nullptr;
+  VkDeviceSize size_real = 0;  // of the allocation (the memory requirements' size)
+  VkDeviceAddress address = 0;  // with kBufferAddress
+};
+
+// The step at which CreateHostBuffer stopped.
+enum class HostBufferResult : uint8_t {
+  kDone,
+  kNoBuffer,      // vkCreateBuffer failed
+  kWrongMemory,   // the memory type cannot hold this buffer
+  kNoMemory,      // vkAllocateMemory, vkBindBufferMemory or vkMapMemory failed
+  kNoAddress,     // the device address is 0
+};
+
+// vkCreateBuffer of `size` bytes for `usage`, then its memory from type `type` (with
+// VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT if usage has kBufferAddress), bound, mapped whole, and with kBufferAddress
+// its device address through `address_of`. What was made before a failure stays in `out`, for the caller to destroy.
+inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                         PFN_vkGetBufferDeviceAddress address_of, VkDeviceSize size,
+                                         BufferUsage usage, uint32_t type, HostBuffer& out) {
+  VkBufferCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  info.size = size;
+  info.usage = usage;
+  info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  if (dfn.vkCreateBuffer(device, &info, nullptr, &out.buffer) != VK_SUCCESS) {
+    return HostBufferResult::kNoBuffer;
+  }
+  VkMemoryRequirements requirements;
+  dfn.vkGetBufferMemoryRequirements(device, out.buffer, &requirements);
+  if (!((requirements.memoryTypeBits >> type) & 1)) {
+    return HostBufferResult::kWrongMemory;
+  }
+  const bool addressed = (usage & kBufferAddress) != 0;
+  VkMemoryAllocateFlagsInfo flags{};
+  flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+  flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+  VkMemoryAllocateInfo reserve{};
+  reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  reserve.pNext = addressed ? &flags : nullptr;
+  reserve.allocationSize = requirements.size;
+  reserve.memoryTypeIndex = type;
+  void* mapped = nullptr;
+  if (dfn.vkAllocateMemory(device, &reserve, nullptr, &out.memory) != VK_SUCCESS ||
+      dfn.vkBindBufferMemory(device, out.buffer, out.memory, 0) != VK_SUCCESS ||
+      dfn.vkMapMemory(device, out.memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+    return HostBufferResult::kNoMemory;
+  }
+  out.data = static_cast<uint8_t*>(mapped);
+  out.size_real = requirements.size;
+  if (addressed) {
+    VkBufferDeviceAddressInfo where{};
+    where.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    where.buffer = out.buffer;
+    out.address = address_of(device, &where);
+    if (!out.address) {
+      return HostBufferResult::kNoAddress;
+    }
+  }
+  return HostBufferResult::kDone;
+}
+
 }  // namespace vulkan
 
 }  // namespace bo2zm::native::gpu
