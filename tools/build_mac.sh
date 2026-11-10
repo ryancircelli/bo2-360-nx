@@ -26,7 +26,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BO2_BUILD="${BO2_BUILD:-$HOME/Games/Xbox360/bo2-build}"
 BO2_ISO="${BO2_ISO:-$HOME/Games/Xbox360/roms/Call of Duty - Black Ops II (World).iso}"
 DATA="$BO2_BUILD/data"
-OUT="$BO2_BUILD/out/mac-arm64"
+OUT="${BO2_OUT:-$BO2_BUILD/out/mac-arm64}"
 HOST="$ROOT/out/host-mac"
 RUN="$BO2_BUILD/run"
 PY="${PYTHON:-python3}"
@@ -155,7 +155,7 @@ if want app; then
     "-DCMAKE_C_FLAGS_RELEASE=$RELEASE" "-DCMAKE_CXX_FLAGS_RELEASE=$RELEASE" \
     "-DCMAKE_BUILD_RPATH=@executable_path" \
     "-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out" \
-    -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
+    -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_METAL=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
     "-DBO2ZM_BUILD_ID=mac-arm64-$(date +%Y%m%d-%H%M%S)" "-DREXSDK_DIR=$ROOT/sdk" > /dev/null
   G="$ROOT/app/generated/default_mp"
   "$PY" "$ROOT/tools/direct_calls.py" --check --gen "$G"

@@ -14,6 +14,7 @@
 //                    not wait for them).
 //   draws            draws read from the ring.
 #include "bo2zm_perf_log.h"
+#include <rex/graphics/swap_hook.h>
 
 #include "bo2zm_cheats.h"
 
@@ -51,6 +52,13 @@ REXCVAR_DEFINE_STRING(bo2zm_perf_log, "", "BO2",
 
 namespace bo2zm::perf_log {
 namespace {
+// The renderer line of the header; InstallSwapHook changes it for the emulated GPU plugins.
+const char* g_renderer =
+#if defined(__APPLE__)
+    "native-moltenvk";
+#else
+    "native-vulkan";
+#endif
 
 using Clock = std::chrono::steady_clock;
 
@@ -235,11 +243,7 @@ class Log {
       }
     };
     meta("build", BO2ZM_BUILD_ID);
-#if defined(__APPLE__)
-    meta("renderer", "native-moltenvk");
-#else
-    meta("renderer", "native-vulkan");
-#endif
+    meta("renderer", g_renderer);
     for (const auto& [k, v] : meta_) {
       meta(k, v);
     }
@@ -374,6 +378,21 @@ void OnPresent(const Counters& counters) {
   if (Enabled()) {
     TheLog().OnPresent(counters);
   }
+}
+
+void InstallSwapHook(std::string_view renderer) {
+  if (!Enabled()) {
+    return;
+  }
+  static std::string name;
+  name = std::string(renderer);
+  g_renderer = name.c_str();
+  rex::graphics::SetSwapHook([](uint32_t width, uint32_t height) {
+    Counters c;  // frame time only: the emulated GPU plugins keep no cumulative counters in this format
+    c.width = width;
+    c.height = height;
+    OnPresent(c);
+  });
 }
 
 void NoteGpuJob(uint64_t order, uint64_t ns, bool measured) {

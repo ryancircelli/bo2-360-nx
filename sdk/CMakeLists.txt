@@ -47,6 +47,15 @@ else()
     option(REXGLUE_USE_VULKAN "Enable Vulkan graphics backend" ON)
 endif()
 
+# Metal: optional native Metal GPU plugin (rexgpu-metal), macOS on Apple
+# Silicon only, OFF by default. Built in addition to rexgpu-xenos; select it
+# at run time with gpu_plugin = "metal". Needs the Xcode Metal toolchain.
+if(APPLE)
+    option(REXGLUE_USE_METAL "Build the native Metal GPU plugin (rexgpu-metal)" OFF)
+else()
+    set(REXGLUE_USE_METAL OFF)
+endif()
+
 if(NOT REXGLUE_USE_D3D12 AND NOT REXGLUE_USE_VULKAN)
     message(FATAL_ERROR "At least one graphics backend must be enabled (REXGLUE_USE_D3D12 or REXGLUE_USE_VULKAN)")
 endif()
@@ -315,7 +324,7 @@ message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSIO
 message(STATUS "  Configurations: ${CMAKE_CONFIGURATION_TYPES}")
 message(STATUS "  Output Dir: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "  C++ Standard: C++${CMAKE_CXX_STANDARD}")
-message(STATUS "  Graphics: D3D12=${REXGLUE_USE_D3D12} Vulkan=${REXGLUE_USE_VULKAN}")
+message(STATUS "  Graphics: D3D12=${REXGLUE_USE_D3D12} Vulkan=${REXGLUE_USE_VULKAN} Metal=${REXGLUE_USE_METAL}")
 message(STATUS "  FidelityFX: ${REXGLUE_ENABLE_FIDELITYFX}")
 message(STATUS "  Tracy: ${REXGLUE_ENABLE_TRACY}")
 message(STATUS "  Perf Counters: ${REXGLUE_ENABLE_PERF_COUNTERS}")

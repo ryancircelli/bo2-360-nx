@@ -1,0 +1,25 @@
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+index f39bebc..0e8b6e8 100644
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -170,6 +170,20 @@ class TextureCache {
+            (binding->texture_signed &&
+             binding->texture_signed->key().scaled_resolve);
+   }
++  // [ssmask] Whether the texture this fetch constant addresses now is a
++  // resolution-scaled resolve texture: the host key RequestTextures would
++  // look up for it (GetHostTextureKey), before the textures are requested.
++  // Scaled-resolve ranges change only with resolves, so it is the value
++  // IsActiveTextureResolutionScaled reports after this draw's request.
++  bool IsFetchConstantScaledResolve(
++      uint32_t fetch_constant_index,
++      const xenos::xe_gpu_texture_fetch_t& fetch) const {
++    TextureKey key;
++    uint8_t swizzled_signs;
++    BindingInfoFromFetchConstantMemo(fetch_constant_index, fetch, key,
++                                     &swizzled_signs);
++    return key.is_valid && GetHostTextureKey(key).scaled_resolve;
++  }
+   template <swcache::PrefetchTag tag>
+   void PrefetchTextureBinding(uint32_t fetch_constant_index) const {
+     swcache::Prefetch<tag>(&texture_bindings_[fetch_constant_index]);

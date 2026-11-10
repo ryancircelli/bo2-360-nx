@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <rex/graphics/swap_hook.h>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -2290,6 +2291,7 @@ extern "C" bool RexSwitchPerfSkip(unsigned bit);
 void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                                        uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
+  rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
 #if REX_PLATFORM_SWITCH
   RexSwitchPerfCount(0);
   const bool has_video_native = RexNativeVideoBeginSwap && RexNativeVideoBeginSwap();

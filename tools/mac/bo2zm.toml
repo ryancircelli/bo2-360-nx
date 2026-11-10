@@ -8,11 +8,14 @@
 
 # ---- Graphics ----------------------------------------------------------------------------------------------------
 
-# The renderer. "native" sends the game's drawing to your GPU through Vulkan, using the shader library
-# bo2zm_shaders.spvpack next to this file; the first start with a new library saves an index beside it
-# (bo2zm_shaders.spvidx). "xenos" emulates the Xbox 360's GPU instead: faithful, but far too slow to play.
-gpu_plugin = "xenos"
-bo2zm_renderer = "native"
+# The renderer. The default draws with Metal directly (gpu_plugin = "metal", bo2zm_renderer = "xenos": the Xbox 360's
+# GPU, translated to Metal). To fall back to the "native" renderer, which sends the drawing through Vulkan on MoltenVK
+# using the shader library bo2zm_shaders.spvpack next to this file, set these two lines instead (or put them in
+# ~/Library/Application Support/bo2-360-nx/args.txt, which wins over this file):
+#   gpu_plugin = "xenos"
+#   bo2zm_renderer = "native"
+gpu_plugin = "metal"
+bo2zm_renderer = "xenos"
 
 # Window or full screen.
 # fullscreen = true
@@ -29,6 +32,11 @@ bo2zm_show_fps = false
 # Start in the Zombies menu, and bring every mode switch back to Zombies (the only mode in this port).
 bo2zm_boot_zombies = true
 bo2zm_zombies_only = true
+
+# ---- Controllers -------------------------------------------------------------------------------------------------
+
+# A controller that drops out (battery, sleep, out of range) gets its player back when it comes back on.
+input_remember_slots = true
 
 # ---- Logs --------------------------------------------------------------------------------------------------------
 

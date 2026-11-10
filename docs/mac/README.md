@@ -31,7 +31,13 @@ Tested only on a dummy binary so far.
 
     tools/mac/boot_test.sh --app "Black Ops II.app" --route town_benchmark [--baseline old/perf.tsv] [--reference ref.mp4] [--video]
 
-Exit 0 pass, 1 regression, 2 setup error, 3 crash or no stats. Output in `/tmp/bo2-boot-test/<route>-<time>/`.
+Exit 0 pass, 1 regression or log-check failure, 2 setup error, 3 crash or no stats.
+Every route gets `BO2ZM_TEST_EXIT_ON_ERROR=true`; an in-game error, a `[relaunch] restarting` line (unless the route
+says `allow_relaunch = true`) or an error pattern in the log (unregistered function, MISMATCH, lost wake, ...) fails the
+run. Pads: by default the SDK's scripted pads run the route (`REX_HID_VIRTUAL_PAD_SCRIPT`, SDK branch mac-input) and
+`BO2ZM_TEST_BUTTONS*` are not exported; `--pads game` uses the game's own test pads. Missing perf log or video is
+printed as NOT MEASURED. Routes: smoke, town_benchmark, town4, splitscreen4, teardown (menu sequence is a guess).
+`tools/mac/test_harness.sh` self-tests the harness with fake games (pass, crash, error exit, relaunch, pad env). Output in `/tmp/bo2-boot-test/<route>-<time>/`.
 
 ## What the build agent must hook in
 

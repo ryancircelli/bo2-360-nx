@@ -10,6 +10,7 @@ copyright and license notices, exactly as they are, and every one of those licen
 | Project | Used for | License |
 |---|---|---|
 | [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) v0.10.0 (commit `c94f5eb`) by Tom Clay, with portions from [Xenia](https://xenia.jp) (Ben Vanik and the Xenia contributors) | `sdk/`: code generator, Xbox 360 kernel and runtime, GPU command processing. See `sdk/README.md` for which files are the official release and which are changed | BSD-3-Clause (`sdk/LICENSE`) |
+| [Fable II Recomp for macOS](https://github.com/andrew17182/Fable-2-Recomp-macOS) by andrew17182 (commit `6f5459e`), adapting the [XeniOS](https://github.com/xenios-jp/XeniOS) Metal backend (commit `87b176a`) | `sdk/src/graphics/metal/`: the optional native Metal GPU plugin for macOS (`REXGLUE_USE_METAL`, off by default). Its `licenses/` folder holds every notice; `provenance.json` records the sources | MIT (Fable II), BSD-3-Clause (XeniOS, Xenia), MIT (D3D11 tessellator) |
 | [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) by hedge-dev and contributors | `tools/xenosrecomp/translator/`: Xenos microcode to HLSL translator | MIT (`tools/xenosrecomp/translator/LICENSE.md`) |
 | [mesa-switch](https://github.com/danfromtico/mesa-switch) by danfromtico (commit `1a8c1a66d6f`), on top of [Mesa](https://mesa3d.org) | The Vulkan driver (NVK) and shader compiler (NAK) for Horizon, linked into the NRO. The official base is fetched by `tools/build_mesa.sh`; this project's changes are `patches/mesa-bo2zm.patch` | MIT (Mesa's licenses per file) |
 
