@@ -1097,14 +1097,20 @@ bool MetalTextureCache::RequestTextureDataRange(Texture&,
   }
   TexTrace(source == TextureDataRangeSource::kBase ? "tr_tex_not_resident_base"
                                                    : "tr_tex_not_resident_mips");
-  static bool range_not_resident_logged = false;
-  if (!range_not_resident_logged) {
-    range_not_resident_logged = true;
-    REXLOG_ERROR(
-        "Metal texture load range was not resident after residency request "
-        "(source={} start=0x{:08X} length={}); skipping texture load",
+  // The range was uploaded by PrepareTextureDataLoadRanges, so it is normally
+  // only invalid here when a guest CPU thread wrote to it since (a streaming
+  // thread filling the texture while it is drawn). Skipping keeps the texture
+  // outdated and it is loaded again by the next draw that uses it; loading
+  // now would read half-written data and mark the texture up to date.
+  static std::atomic<uint64_t> range_not_resident_count{0};
+  const uint64_t count = ++range_not_resident_count;
+  if (count == 1 || (count & (count - 1)) == 0) {
+    REXLOG_WARN(
+        "Metal texture load range was invalidated after its upload, most "
+        "likely by a CPU write (source={} start=0x{:08X} length={}, {} so far); loading on a later "
+        "draw",
         source == TextureDataRangeSource::kBase ? "base" : "mips", start,
-        length);
+        length, count);
   }
   return false;
 }
