@@ -114,7 +114,11 @@ std::string Device::FunctionName(bool vertex, uint64_t hash, bool early_z) {
   return name;
 }
 
-void* Device::Function(std::string_view name) {
+void* Device::Function(std::string_view name) { return Specialized(name, false, 0); }
+
+void* Device::SpecializedFunction(std::string_view name, uint32_t constant) { return Specialized(name, true, constant); }
+
+void* Device::Specialized(std::string_view name, bool specialized, uint32_t constant) {
   // vs_ or ps_, then the hash: the shard is the hash's first hex digit.
   if (name.size() < 4) {
     return nullptr;
@@ -126,7 +130,12 @@ void* Device::Function(std::string_view name) {
   }
   State& s = *state_;
   std::lock_guard<std::mutex> guard(s.lock);
-  const std::string key(name);
+  std::string key(name);
+  if (specialized) {
+    char suffix[16];
+    std::snprintf(suffix, sizeof(suffix), "#%08x", constant);
+    key += suffix;
+  }
   if (auto found = s.functions.find(key); found != s.functions.end()) {
     return (__bridge void*)found->second;
   }
@@ -147,7 +156,23 @@ void* Device::Function(std::string_view name) {
     if (!s.libraries[shard]) {
       return nullptr;
     }
-    id<MTLFunction> function = [s.libraries[shard] newFunctionWithName:[NSString stringWithUTF8String:key.c_str()]];
+    NSString* function_name = [[NSString alloc] initWithBytes:name.data()
+                                                       length:name.size()
+                                                     encoding:NSUTF8StringEncoding];
+    id<MTLFunction> function = nil;
+    if (specialized) {
+      // The pack shaders' one specialization constant (id 0, g_SpecConstants) as function constant 0.
+      MTLFunctionConstantValues* values = [[MTLFunctionConstantValues alloc] init];
+      [values setConstantValue:&constant type:MTLDataTypeUInt atIndex:0];
+      NSError* error = nil;
+      function = [s.libraries[shard] newFunctionWithName:function_name constantValues:values error:&error];
+      if (!function) {
+        REXLOG_WARN("[native] Metal: {} not specialized with {:#x}: {}", std::string(name), constant,
+                    error ? [[error localizedDescription] UTF8String] : "not in the library");
+      }
+    } else {
+      function = [s.libraries[shard] newFunctionWithName:function_name];
+    }
     if (!function) {
       return nullptr;
     }

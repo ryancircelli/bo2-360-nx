@@ -1522,6 +1522,15 @@ std::atomic<uint32_t> g_syncs_ring{0};
 std::atomic<bool> g_syncs_on_flush_waits{false};
 namespace {
 
+// Tells the Metal mirror (bo2zm_native_metal_mirror) which pack shader a module is, so its pipelines use the
+// shader's function in the Metal libraries. Nothing without the mirror.
+void MirrorTag([[maybe_unused]] gpu::Shader module, [[maybe_unused]] const bo2zm::shaderlib::Shader& shader,
+               [[maybe_unused]] bool early_z) {
+  if (module != nullptr) {
+    BO2ZM_MIRROR(ShaderTagged(module, shader.vertices, shader.hash, early_z));
+  }
+}
+
 /*
  * A pass's category from its render target, in one place.
  *
@@ -13963,6 +13972,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!gpu::vulkan::CreateShader(dfn_, device_, spirv.data(), spirv.size() * sizeof(uint32_t), shader_module)) {
       shader_module = nullptr;
     }
+    MirrorTag(shader_module, *input.shader, false);
     modules_.emplace(&input, shader_module);
     return shader_module;
   }
@@ -13984,6 +13994,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     REXLOG_INFO("[native] C5a: PS n{} without color writes: {} removed, {} words of {} ({})",
                 input.number, removed, pruned.size(), input.shader->spirv_words,
                 shader_module != nullptr ? "module created" : "the normal one is used");
+    MirrorTag(shader_module, *input.shader, false);
     modules_only_alpha_.emplace(&input, shader_module);
     return shader_module != nullptr ? shader_module : ModuleOf(input);
   }
@@ -14010,6 +14021,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                     ? std::string("tests depth before shading")
                     : fmt::format("stays as it was: {}", reason),
                 input.kills, input.shader->spirv_words);
+    MirrorTag(shader_module, *input.shader, true);
     modules_z_early_.emplace(&input, shader_module);
     if (shader_module == nullptr) {
       ++z_early_no_module_;
@@ -15445,6 +15457,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (it == modules_.end()) {
         const auto& spirv = bo2zm::shaderlib::Spirv(*e.shader);
         it = modules_.emplace(e.number, Create(spirv.data(), spirv.size() * sizeof(uint32_t))).first;
+        MirrorTag(it->second, *e.shader, false);
       }
       return it->second;
     }
@@ -15481,6 +15494,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
           if (!patched.empty()) {
             shader_module = Create(patched.data(), patched.size() * sizeof(uint32_t));
           }
+        }
+        if (variant >= 3) {
+          MirrorTag(shader_module, *e.shader, variant == 4);
         }
         it = modules_.emplace(key_module, shader_module).first;
       }

@@ -136,6 +136,10 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_metal_present, false, "BO2",
                     "Vulkan presenter. The game image is not shown yet (a plain colour is), and the debug UI is "
                     "not drawn")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(bo2zm_native_metal_mirror, false, "BO2",
+                    "Native renderer, Metal backend (work in progress): repeat the Vulkan renderer's work on Metal. "
+                    "With bo2zm_native_metal_present the Metal copy of the frame is shown")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_diag_lut, false, "BO2",
@@ -457,6 +461,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_deferred_reports, true, "BO2",
 #include "../../bo2zm_perf_log.h"
 #if BO2ZM_NATIVE_METAL
 #include "metal/bo2zm_gpu_metal.h"
+#include "metal/bo2zm_gpu_metal_mirror.h"
 #include "metal/bo2zm_metal_presenter.h"
 #endif
 
@@ -1107,6 +1112,10 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     // The Metal libraries made ahead of time (tools/metal) sit in metal/ next to the executable.
     if (!metal_) {
       metal_ = gpu::metal::Device::Create(rex::filesystem::GetExecutableFolder() / "metal");
+    }
+    // Before the renderer makes anything, so the mirror sees every object made.
+    if (metal_ && REXCVAR_GET(bo2zm_native_metal_mirror)) {
+      gpu::metal::Mirror::Enable(*metal_);
     }
     const bool metal_present = metal_ && REXCVAR_GET(bo2zm_native_metal_present);
 #else
@@ -5209,6 +5218,22 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       return;
     }
 #if BO2ZM_NATIVE_METAL
+    if (metal_presenter_ && targets_ && gpu::metal::Mirror::Get()) {
+      // The frame the mirror drew on Metal (the Vulkan renderer's work, repeated); the clear below if none.
+      if (version_ramp_submitted_ != version_ramp_) {
+        version_ramp_submitted_ = version_ramp_;
+        targets_->RampGamma(ramp_gamma_);
+      }
+      if (targets_->Present(nullptr, GetSwapTexture(), swap_width_.load(std::memory_order_relaxed),
+                            swap_height_.load(std::memory_order_relaxed))) {
+        uint32_t w = 0;
+        uint32_t h = 0;
+        if (void* image = gpu::metal::Mirror::Get()->Shown(w, h)) {
+          metal_presenter_->RefreshWithImage(image, w, h);
+          return;
+        }
+      }
+    }
     if (metal_presenter_) {
       // The first Metal-drawn frames: a clear whose colour moves (so a frozen paint shows), until the renderer
       // draws on Metal. The Vulkan renderer still draws, off screen.

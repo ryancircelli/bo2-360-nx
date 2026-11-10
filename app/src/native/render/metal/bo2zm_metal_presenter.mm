@@ -27,6 +27,9 @@ struct Presenter::State {
   // Scales the guest output into the drawable (Apple's prebuilt kernel: no shader is compiled for it). Used
   // from the paint thread only.
   MPSImageBilinearScale* scale = nil;
+  // Copies a frame drawn on Metal into the guest output, converting its format. Used from the refreshing
+  // thread only.
+  MPSImageBilinearScale* copy = nil;
 };
 
 Presenter::Presenter(Device& device, HostGpuLossCallback host_gpu_loss_callback)
@@ -35,6 +38,7 @@ Presenter::Presenter(Device& device, HostGpuLossCallback host_gpu_loss_callback)
   state_->queue = (__bridge id<MTLCommandQueue>)device.queue();
   if (MPSSupportsMTLDevice(state_->device)) {
     state_->scale = [[MPSImageBilinearScale alloc] initWithDevice:state_->device];
+    state_->copy = [[MPSImageBilinearScale alloc] initWithDevice:state_->device];
   }
 }
 
@@ -142,6 +146,31 @@ bool Presenter::RefreshWithClear(uint32_t width, uint32_t height, const float rg
       pass.colorAttachments[0].clearColor = MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]);
       id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
       [encoder endEncoding];
+      [commands commit];
+    }
+    context.SetIs8bpc(true);
+    return true;
+  });
+}
+
+bool Presenter::RefreshWithImage(void* image, uint32_t width, uint32_t height) {
+  State& s = *state_;
+  if (!image || !s.copy) {
+    return false;
+  }
+  return RefreshGuestOutput(width, height, width, height, [&s, image](GuestOutputRefreshContext& base) {
+    auto& context = static_cast<RefreshContext&>(base);
+    @autoreleasepool {
+      id<MTLTexture> source = (__bridge id<MTLTexture>)image;
+      id<MTLTexture> target = (__bridge id<MTLTexture>)context.texture();
+      id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)context.queue();
+      id<MTLCommandBuffer> commands = [queue commandBuffer];
+      // Same size, so the scale is 1: only the format changes.
+      MPSScaleTransform transform{double(target.width) / double(source.width),
+                                  double(target.height) / double(source.height), 0.0, 0.0};
+      s.copy.scaleTransform = &transform;
+      [s.copy encodeToCommandBuffer:commands sourceTexture:source destinationTexture:target];
+      s.copy.scaleTransform = nullptr;
       [commands commit];
     }
     context.SetIs8bpc(true);

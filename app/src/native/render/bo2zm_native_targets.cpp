@@ -2374,6 +2374,27 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     OwnedImage* const source_front = FrontOnPresent(base, width, height);
     const bool tiled =
         ui_presenter && REXCVAR_GET(bo2zm_native_diag_resolved) && ComposeTiled(base);
+#if BO2ZM_NATIVE_METAL
+    // The Metal mirror (bo2zm_native_metal_mirror) presents its own copy of the frame: the work is submitted,
+    // which repeats it on Metal, and the image the output would draw is named to it.
+    if (ui_presenter == nullptr) {
+      auto* mirror = gpu::metal::Mirror::Get();
+      if (mirror == nullptr || !SubmitJob(false)) {
+        return false;
+      }
+      const auto it = resolved_.find(base);
+      const OwnedImage* shown = source_front;
+      if (shown == nullptr && it != resolved_.end() && it->second.image.prepared) {
+        shown = &it->second.image;
+      }
+      if (shown == nullptr) {
+        return false;
+      }
+      mirror->Showed(shown->view);
+      ++presented_;
+      return true;
+    }
+#endif
     // Without waiting for the GPU: the output goes after the work on the same queue.
     if (!ui_presenter || !SubmitJob(false)) {
       return false;
