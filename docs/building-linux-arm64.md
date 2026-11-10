@@ -53,6 +53,24 @@ bash app/build_linux.sh
 On Ubuntu use `clang-20 lld-20`. The binary then needs the build machine's glibc or newer; set `BO2_LINUX_SYSROOT`
 for the same binary as a cross build.
 
+## Generating the C++ on Linux
+
+`rexglue` builds and runs on Linux (x86_64 and ARM64), so the whole chain can run there:
+
+```bash
+python3 tools/fetch_thirdparty.py
+bash tools/linux/build_host.sh                # rexglue and xexdump, about 2 minutes on 16 threads
+export REXGLUE_BIN_DIR=$PWD/sdk/out/linux-arm64 LD_LIBRARY_PATH=$PWD/sdk/out/linux-arm64 PYTHON=python3
+# (sdk/out/linux-x86_64 on an x86_64 machine; the build script prints the path)
+bash tools/codegen.sh
+```
+
+Steps 1 and 3 of docs/building.md (game files, the decrypted image) need nothing else: `tools/install/xiso.py` reads the
+disc image and `tools/inspect/stfs_extract.py` the title update. The shader library needs `dxc` and `spirv-val`: on
+Ubuntu 24.04 arm64 `spirv-tools` is packaged but `dxc` is not, so build it from the DirectXShaderCompiler sources
+(about 25 minutes) and give `tools/xenosrecomp/run.sh` the paths with `DXC=` and `VAL=` (plus `LD_LIBRARY_PATH` for
+`libdxcompiler.so`).
+
 ## Build options
 
 | Variable | Default | What it does |
@@ -112,7 +130,7 @@ None has been tried on real hardware.
   Raspberry Pi 5, add `kernel=kernel8.img` to `/boot/firmware/config.txt`.
 - **glibc 2.38**: Ubuntu 22.04, Debian 12 and L4T are too old.
 - **No console mode**: an X11 or Wayland desktop is required.
-- **No code generator on Linux yet**: generate the C++ on Windows.
+- **Code generation on Linux**: see the next section. The generated C++ is the same on every platform.
 
 ## What has been verified
 
