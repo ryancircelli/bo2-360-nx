@@ -1646,3 +1646,55 @@ inline uint32_t MakePacketType3(Type3Opcode opcode, uint16_t count, bool predica
 
 }  // namespace xenos
 }  // namespace rex::graphics
+
+namespace rex::graphics::xenos {
+static uint32_t GpuSwapInline(uint32_t value, Endian endianness) {
+  switch (endianness) {
+    default:
+    case Endian::kNone:
+      // No swap.
+      return value;
+    case Endian::k8in16:
+      // Swap bytes in half words.
+      return ((value << 8) & 0xFF00FF00) | ((value >> 8) & 0x00FF00FF);
+    case Endian::k8in32:
+      // Swap bytes.
+      // NOTE: we are likely doing two swaps here. Wasteful. Oh well.
+      return rex::byte_swap(value);
+    case Endian::k16in32:
+      // Swap half words.
+      return ((value >> 16) & 0xFFFF) | (value << 16);
+  }
+}
+}
+
+namespace rex::graphics::xenos {
+static const char* const g_primtype_human_names[] = {"none",
+                                                     "point list",
+                                                     "line list",
+                                                     "line strip",
+                                                     "triangle list",
+                                                     "triangle fan",
+                                                     "triangle strip",
+                                                     "triangle with flags",
+                                                     "rectangle list",
+                                                     "unused1",
+                                                     "unused2",
+                                                     "unused3",
+                                                     "line loop",
+                                                     "quad list",
+                                                     "quad strip",
+                                                     "polygon",
+                                                     "2D copy rect list v0",
+                                                     "2D copy rect list v1",
+                                                     "2D copy rect list v2",
+                                                     "2D copy rect list v3",
+                                                     "2D fillrect list",
+                                                     "2D line strip",
+                                                     "2D triangle strip"};
+
+inline const char* GetPrimitiveTypeEnglishDescription(xenos::PrimitiveType prim_type) {
+  auto index = static_cast<uint32_t>(prim_type);
+  return index < std::size(g_primtype_human_names) ? g_primtype_human_names[index] : "patch/unknown";
+}
+}

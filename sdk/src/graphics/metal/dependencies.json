@@ -1,0 +1,23 @@
+[
+  {
+    "name": "metal-cpp",
+    "url": "https://codeload.github.com/bkaradzic/metal-cpp/tar.gz/9a8bc57c0318b84863bec2faf6605594877c5f5d",
+    "sha256": "46736574f7afd977d7d35a13aa781edb595a43650d437b50f5779ec750879530",
+    "commit": "9a8bc57c0318b84863bec2faf6605594877c5f5d",
+    "license": "Apache-2.0"
+  },
+  {
+    "name": "metal-shader-converter",
+    "url": "https://codeload.github.com/xenios-jp/metal-shader-converter/tar.gz/2bbd3665b0143c1f18043ddd9a20de77ba65e834",
+    "sha256": "057156e3f6c22e8c71b050f6117d51fe621981a3cbb66a4ed6a33264115bfabc",
+    "commit": "2bbd3665b0143c1f18043ddd9a20de77ba65e834",
+    "license": "Apple Metal Shader Converter runtime headers (Apache-2.0); no library is linked"
+  },
+  {
+    "name": "xenios-source",
+    "url": "https://codeload.github.com/xenios-jp/xenios/tar.gz/87b176a078c316fde3adf67a217f0c44615b0e0d",
+    "sha256": "af2eccbd79053709a84c097cf01bc28633575b352c09e286dd2723e20e61dbd6",
+    "commit": "87b176a078c316fde3adf67a217f0c44615b0e0d",
+    "license": "BSD-3-Clause (XeniOS), built-in helper shader sources only"
+  }
+]

@@ -167,8 +167,24 @@ inline uint8_t tzcnt(int64_t v) {
 // Search the value from least significant bit (LSB) to the most significant bit
 // (MSB) for a set bit (1).
 // Returns false if no bits are set and the output index is invalid.
+#if !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+// Inline (was out of line in math_gcc.cpp): the hot per-bit loops of the GPU
+// backend called it across the librexruntime dylib boundary for every set bit.
+// Same results as before, including *out = UINT32_MAX when v == 0.
+inline bool bit_scan_forward(uint32_t v, uint32_t* out_first_set_index) {
+  int i = __builtin_ffs(static_cast<int>(v));
+  *out_first_set_index = static_cast<uint32_t>(i - 1);
+  return i != 0;
+}
+inline bool bit_scan_forward(uint64_t v, uint32_t* out_first_set_index) {
+  int i = __builtin_ffsll(static_cast<long long>(v));
+  *out_first_set_index = static_cast<uint32_t>(i - 1);
+  return i != 0;
+}
+#else
 bool bit_scan_forward(uint32_t v, uint32_t* out_first_set_index);
 bool bit_scan_forward(uint64_t v, uint32_t* out_first_set_index);
+#endif
 inline bool bit_scan_forward(int32_t v, uint32_t* out_first_set_index) {
   return bit_scan_forward(static_cast<uint32_t>(v), out_first_set_index);
 }
