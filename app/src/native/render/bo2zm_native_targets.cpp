@@ -911,7 +911,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       dfn_.vkDestroyDescriptorPool(device_, pool_descriptors_, nullptr);
     if (layout_descriptors_ != VK_NULL_HANDLE)
       dfn_.vkDestroyDescriptorSetLayout(device_, layout_descriptors_, nullptr);
-    if (sampler_ != VK_NULL_HANDLE) dfn_.vkDestroySampler(device_, sampler_, nullptr);
+    if (sampler_ != VK_NULL_HANDLE) gpu::vulkan::DestroySampler(dfn_, device_, sampler_);
     if (vs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, vs_);
     if (fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_);
     if (render_pass_output_ != VK_NULL_HANDLE)
@@ -1084,15 +1084,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                                   : "not available");
     }
 
-    VkSamplerCreateInfo info_sampler{};
-    info_sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info_sampler.magFilter = VK_FILTER_LINEAR;
-    info_sampler.minFilter = VK_FILTER_LINEAR;
-    info_sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    info_sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info_sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info_sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (dfn_.vkCreateSampler(device_, &info_sampler, nullptr, &sampler_) != VK_SUCCESS) {
+    gpu::SamplerDesc info_sampler;
+    info_sampler.mag = gpu::kFilterLinear;
+    info_sampler.min = gpu::kFilterLinear;
+    info_sampler.mip = gpu::kFilterNearest;
+    info_sampler.u = info_sampler.v = info_sampler.w = gpu::kAddressClampToEdge;
+    if (!gpu::vulkan::CreateSampler(dfn_, device_, info_sampler, sampler_)) {
       return false;
     }
 

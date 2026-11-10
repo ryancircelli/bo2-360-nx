@@ -129,4 +129,33 @@ enum class QueryKind : uint8_t {
   kPipelineStatistics,  // vertex shader invocations, clipped primitives and fragment shader invocations, in that order
 };
 
+// A sampler. The values are in Vulkan's numbering (VkFilter, VkSamplerMipmapMode, VkSamplerAddressMode,
+// VkBorderColor); Metal's MTLSamplerDescriptor has a counterpart for each.
+enum Filter : uint32_t { kFilterNearest = 0, kFilterLinear = 1 };
+enum AddressMode : uint32_t {
+  kAddressRepeat = 0,
+  kAddressMirroredRepeat = 1,
+  kAddressClampToEdge = 2,
+  kAddressClampToBorder = 3,
+  kAddressMirrorClampToEdge = 4,
+};
+enum BorderColor : uint32_t { kBorderTransparentBlack = 0, kBorderOpaqueWhite = 4 };
+// No upper limit on the level of detail (VK_LOD_CLAMP_NONE).
+inline constexpr float kLodUnclamped = 1000.0f;
+
+struct SamplerDesc {
+  Filter mag = kFilterNearest;
+  Filter min = kFilterNearest;
+  Filter mip = kFilterNearest;
+  AddressMode u = kAddressRepeat;
+  AddressMode v = kAddressRepeat;
+  AddressMode w = kAddressRepeat;
+  float lod_bias = 0.0f;
+  bool anisotropy = false;
+  float anisotropy_max = 0.0f;
+  float lod_min = 0.0f;
+  float lod_max = 0.0f;
+  BorderColor border = kBorderTransparentBlack;
+};
+
 }  // namespace bo2zm::native::gpu

@@ -2944,7 +2944,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       DestroyImage(texture.image);
     }
     for (auto& [key, pair] : samplers_) {
-      dfn_.vkDestroySampler(device_, pair.first, nullptr);
+      gpu::vulkan::DestroySampler(dfn_, device_, pair.first);
     }
     for (NativeImage& empty : empty_) {
       DestroyImage(empty);
@@ -2952,7 +2952,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // The pool's slabs are released after destroying every image that lives in them. The other way round
     // would free memory that the VkImages still have bound.
     pool_textures_.Finish();
-    if (sampler_empty_ != VK_NULL_HANDLE) dfn_.vkDestroySampler(device_, sampler_empty_, nullptr);
+    if (sampler_empty_ != VK_NULL_HANDLE) gpu::vulkan::DestroySampler(dfn_, device_, sampler_empty_);
     if (layout_pipeline_ != VK_NULL_HANDLE)
       dfn_.vkDestroyPipelineLayout(device_, layout_pipeline_, nullptr);
     bo2zm::gpu_skin::SetRendererReady(false);
@@ -10901,12 +10901,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
       empty_[i].format = VK_FORMAT_R8G8B8A8_UNORM;
       WriteImage(i, 0, empty_[i].view);
     }
-    VkSamplerCreateInfo sampler{};
-    sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW =
-        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampler.maxLod = VK_LOD_CLAMP_NONE;
-    if (dfn_.vkCreateSampler(device_, &sampler, nullptr, &sampler_empty_) != VK_SUCCESS) {
+    gpu::SamplerDesc sampler;
+    sampler.u = sampler.v = sampler.w = gpu::kAddressClampToEdge;
+    sampler.lod_max = gpu::kLodUnclamped;
+    if (!gpu::vulkan::CreateSampler(dfn_, device_, sampler, sampler_empty_)) {
       return false;
     }
     WriteSampler(0, sampler_empty_);
@@ -13381,36 +13379,29 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (const auto it = samplers_.find(key); it != samplers_.end()) {
       return it->second.second;
     }
-    static constexpr VkSamplerAddressMode kModes[8] = {
-        VK_SAMPLER_ADDRESS_MODE_REPEAT,          VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,   VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
-        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,   VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
-        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE};
+    static constexpr gpu::AddressMode kModes[8] = {
+        gpu::kAddressRepeat,          gpu::kAddressMirroredRepeat,
+        gpu::kAddressClampToEdge,     gpu::kAddressMirrorClampToEdge,
+        gpu::kAddressClampToEdge,     gpu::kAddressMirrorClampToEdge,
+        gpu::kAddressClampToBorder,   gpu::kAddressMirrorClampToEdge};
     const bool mirror = vulkan_device_->properties().samplerMirrorClampToEdge;
     const auto mode = [&](uint32_t value) {
-      const VkSamplerAddressMode m = kModes[value & 0x7];
-      return m == VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE && !mirror
-                 ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-                 : m;
+      const gpu::AddressMode m = kModes[value & 0x7];
+      return m == gpu::kAddressMirrorClampToEdge && !mirror ? gpu::kAddressClampToEdge : m;
     };
-    VkSamplerCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter =
-        ((f[3] >> 19) & 0x3) == 1 && !point ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-    info.minFilter =
-        ((f[3] >> 21) & 0x3) == 1 && !point ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    gpu::SamplerDesc info;
+    info.mag = ((f[3] >> 19) & 0x3) == 1 && !point ? gpu::kFilterLinear : gpu::kFilterNearest;
+    info.min = ((f[3] >> 21) & 0x3) == 1 && !point ? gpu::kFilterLinear : gpu::kFilterNearest;
     const uint32_t mip = (field_filters >> 4) & 0x3;  // already includes the point mip test
-    info.mipmapMode =
-        mip == 1 && !point ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    info.addressModeU = mode(f[0] >> 10);
-    info.addressModeV = mode(f[0] >> 13);
-    info.addressModeW = mode(f[0] >> 16);
-    info.minLod = float(field_mips & 0xF);  // with the mip diagnostic if it is enabled
+    info.mip = mip == 1 && !point ? gpu::kFilterLinear : gpu::kFilterNearest;
+    info.u = mode(f[0] >> 10);
+    info.v = mode(f[0] >> 13);
+    info.w = mode(f[0] >> 16);
+    info.lod_min = float(field_mips & 0xF);  // with the mip diagnostic if it is enabled
     // With real mips, the fetch constant's maximum level also limits (like the emulation's sampler);
     // single-level textures are not affected.
-    info.maxLod = mip == 2 ? info.minLod + 0.25f : std::max(info.minLod, float((f[4] >> 6) & 0xF));
-    info.borderColor = (f[5] & 0x3) == 1 ? VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE
-                                         : VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    info.lod_max = mip == 2 ? info.lod_min + 0.25f : std::max(info.lod_min, float((f[4] >> 6) & 0xF));
+    info.border = (f[5] & 0x3) == 1 ? gpu::kBorderOpaqueWhite : gpu::kBorderTransparentBlack;
     // The game's own filtering, as Xenia's samplers apply it. The LOD bias goes to mipLodBias (Vulkan
     // adds it to explicit LODs too, like D3D's MipLODBias). Anisotropy: the fetch constant's aniso_filter (word 3,
     // bits 25-27: 0 off, 1 = 1:1, 2 = 2:1, 3 = 4:1 ...) gives at most 2^(n-1) samples; BO2 asks 2:1 and 4:1 on most
@@ -13418,12 +13409,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const auto& properties_game = vulkan_device_->properties();
     if (!point) {
       // +-15: maxSamplerLodBias of desktop NVIDIA and of NVK (the SDK's Properties do not carry the limit).
-      info.mipLodBias = std::clamp(float(bias_lod) / 32.0f, -15.0f, 15.0f);
+      info.lod_bias = std::clamp(float(bias_lod) / 32.0f, -15.0f, 15.0f);
       const uint32_t aniso_game = (f[3] >> 25) & 0x7;
       if (aniso_game >= 2 && aniso_game <= 5 && properties_game.samplerAnisotropy &&
-          info.minFilter == VK_FILTER_LINEAR && info.maxLod > info.minLod) {
-        info.anisotropyEnable = VK_TRUE;
-        info.maxAnisotropy = std::min(float(1u << (aniso_game - 1)), properties_game.maxSamplerAnisotropy);
+          info.min == gpu::kFilterLinear && info.lod_max > info.lod_min) {
+        info.anisotropy = true;
+        info.anisotropy_max = std::min(float(1u << (aniso_game - 1)), properties_game.maxSamplerAnisotropy);
       }
     }
     // bo2zm_native_anisotropic. Only linear samplers with mips (maxLod above minLod); the value is read at
@@ -13431,27 +13422,27 @@ class VulkanDrawsImpl final : public VulkanDraws {
     {
       static const uint32_t aniso_requested = uint32_t(std::max(0, int32_t(REXCVAR_GET(bo2zm_native_anisotropic))));
       const auto& properties = vulkan_device_->properties();
-      if (aniso_requested > 1 && properties.samplerAnisotropy && info.minFilter == VK_FILTER_LINEAR &&
-          info.mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR && info.maxLod > info.minLod) {
-        info.anisotropyEnable = VK_TRUE;
-        info.maxAnisotropy = std::max(info.maxAnisotropy,
+      if (aniso_requested > 1 && properties.samplerAnisotropy && info.min == gpu::kFilterLinear &&
+          info.mip == gpu::kFilterLinear && info.lod_max > info.lod_min) {
+        info.anisotropy = true;
+        info.anisotropy_max = std::max(info.anisotropy_max,
                                       std::max(1.0f, std::min(float(aniso_requested), properties.maxSamplerAnisotropy)));
         if (!aniso_annotated_) {
           aniso_annotated_ = true;
           REXLOG_INFO("[native] C4 anisotropic filtering {} on the linear samplers with mips (requested {}, device cap "
                       "{}); single-level and point ones unchanged",
-                      info.maxAnisotropy, aniso_requested, properties.maxSamplerAnisotropy);
+                      info.anisotropy_max, aniso_requested, properties.maxSamplerAnisotropy);
         }
       }
     }
     VkSampler sampler;
-    if (dfn_.vkCreateSampler(device_, &info, nullptr, &sampler) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateSampler(dfn_, device_, info, sampler)) {
       Warn(36, "could not create a sampler");
       return 0;
     }
     const uint32_t slot = ReserveSlot(3);
     if (!slot) {
-      dfn_.vkDestroySampler(device_, sampler, nullptr);
+      gpu::vulkan::DestroySampler(dfn_, device_, sampler);
       Warn(37, "sampler heap full");
       return 0;
     }
