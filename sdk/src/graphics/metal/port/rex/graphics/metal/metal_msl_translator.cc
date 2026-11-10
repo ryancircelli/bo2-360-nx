@@ -2593,7 +2593,11 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
         Line("{}.{} = ({} * {}).{};", c, m, coord.Vec(), size, m);
       }
     }
-    Line("{}.{} = xe_frc({}).{};", res, m, c, m);
+    // getWeights runs in the texture unit on fixed-point texel coordinates,
+    // so its lerp factors are always in [0, 1), never NaN. xe_frc (the ALU
+    // frc) gives NaN for an infinite coordinate, which shadow-map PCF
+    // shaders produce when they project with rcp(w) and w is 0.
+    Line("{}.{} = xe_weights_frc({}).{};", res, m, c, m);
   } else {
     // Signs.
     std::string signs = NewTemp("sg");
@@ -3527,6 +3531,12 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
   // +-Infinity). MSL fract() compiled from source returns 0 there.
   s += "template <typename T> static inline T xe_frc(T x) { return x - "
        "fast::floor(x); }\n";
+  // getWeights lerp factors: non-finite coordinates give 0 (a saturated
+  // fixed-point coordinate has no fraction); finite ones are unchanged.
+  // Bit tests, not isnan, so fast math cannot drop the guard.
+  s += "static inline float4 xe_weights_frc(float4 x) { "
+       "x = select(x, float4(0.0f), (as_type<uint4>(x) & 0x7FFFFFFFu) >= 0x7F800000u); "
+       "return x - floor(x); }\n";
   s += "struct XeTex2DA { uint64_t va; texture2d_array<float> t; uint64_t meta; };\n";
   s += "struct XeTex3D { uint64_t va; texture3d<float> t; uint64_t meta; };\n";
   s += "struct XeTexCube { uint64_t va; texturecube<float> t; uint64_t meta; };\n";
