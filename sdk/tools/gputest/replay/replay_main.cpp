@@ -127,6 +127,15 @@ int main(int argc, char** argv) {
   if (label.empty()) {
     label = plugin + ":" + backend;
   }
+  if (flags & kRexGpuTraceReplayTexCheck) {
+    // The texture check compares each draw's bound textures with guest memory
+    // as the draw is executed. The Metal plugin queues draws and loads their
+    // textures at the queue flush, so a guest write recorded between two
+    // queued draws would be checked before the load that serves it (a false
+    // "stale"). Materialize every draw at once, as the other backends do.
+    // An explicit REX_METAL_NO_DRAW_QUEUE in the environment wins.
+    setenv("REX_METAL_NO_DRAW_QUEUE", "1", 0);
+  }
 
   char arg0[] = "rexgpu-replay";
   char* fake_argv[] = {arg0, nullptr};
