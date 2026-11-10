@@ -111,6 +111,40 @@ class Recorder {
     dfn_.vkCmdSetStencilWriteMask(c, VK_STENCIL_FACE_BACK_BIT, (back >> 16) & 0xFF);
   }
 
+  // Binding and drawing. The handles are still Vulkan's (VkPipeline, VkPipelineLayout, VkDescriptorSet, VkBuffer)
+  // until the resources move behind the layer.
+  void BindGraphicsPipeline(VkCommandBuffer c, VkPipeline p) const {
+    dfn_.vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+  }
+  void BindComputePipeline(VkCommandBuffer c, VkPipeline p) const {
+    dfn_.vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, p);
+  }
+  // Graphics descriptor sets first .. first + count - 1, with the dynamic offsets of their dynamic UBOs.
+  void BindSets(VkCommandBuffer c, VkPipelineLayout layout, uint32_t first, uint32_t count, const VkDescriptorSet* sets,
+                uint32_t n_offsets = 0, const uint32_t* offsets = nullptr) const {
+    dfn_.vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, first, count, sets, n_offsets, offsets);
+  }
+  // stages: VkShaderStageFlags (vertex 0x1, fragment 0x10, compute 0x20).
+  void PushConstants(VkCommandBuffer c, VkPipelineLayout layout, uint32_t stages, uint32_t offset, uint32_t size,
+                     const void* data) const {
+    dfn_.vkCmdPushConstants(c, layout, VkShaderStageFlags(stages), offset, size, data);
+  }
+  void BindVertexBuffers(VkCommandBuffer c, uint32_t count, const VkBuffer* buffers,
+                         const VkDeviceSize* offsets) const {
+    dfn_.vkCmdBindVertexBuffers(c, 0, count, buffers, offsets);
+  }
+  void BindIndexBuffer(VkCommandBuffer c, VkBuffer buffer, bool indices_16) const {
+    dfn_.vkCmdBindIndexBuffer(c, buffer, 0, indices_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+  }
+  // One instance, first instance 0: the renderer never instances.
+  void Draw(VkCommandBuffer c, uint32_t count, uint32_t first_vertex) const {
+    dfn_.vkCmdDraw(c, count, 1, first_vertex, 0);
+  }
+  void DrawIndexed(VkCommandBuffer c, uint32_t count, uint32_t first_index, int32_t vertex_offset) const {
+    dfn_.vkCmdDrawIndexed(c, count, 1, first_index, vertex_offset, 0);
+  }
+  void Dispatch(VkCommandBuffer c, uint32_t x, uint32_t y, uint32_t z) const { dfn_.vkCmdDispatch(c, x, y, z); }
+
   void SetCullMode(VkCommandBuffer c, CullMode v) const { dynamic_.cull_mode(c, VkCullModeFlags(v)); }
   void SetFrontFace(VkCommandBuffer c, FrontFace v) const { dynamic_.front_face(c, VkFrontFace(v)); }
   void SetTopology(VkCommandBuffer c, Topology v) const { dynamic_.topology(c, VkPrimitiveTopology(v)); }
