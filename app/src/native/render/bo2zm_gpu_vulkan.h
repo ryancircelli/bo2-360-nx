@@ -14,6 +14,18 @@ static_assert(std::is_same_v<bo2zm::native::gpu::CommandList, VkCommandBuffer>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Image, VkImage>);
 static_assert(std::is_same_v<bo2zm::native::gpu::ImageView, VkImageView>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Memory, VkDeviceMemory>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Sampler, VkSampler>);
+static_assert(std::is_same_v<bo2zm::native::gpu::SetLayout, VkDescriptorSetLayout>);
+static_assert(bo2zm::native::gpu::kStageVertex == VK_SHADER_STAGE_VERTEX_BIT &&
+              bo2zm::native::gpu::kStageFragment == VK_SHADER_STAGE_FRAGMENT_BIT &&
+              bo2zm::native::gpu::kStageCompute == VK_SHADER_STAGE_COMPUTE_BIT);
+static_assert(bo2zm::native::gpu::kDescriptorSampler == VK_DESCRIPTOR_TYPE_SAMPLER &&
+              bo2zm::native::gpu::kDescriptorSampledImage == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+              bo2zm::native::gpu::kDescriptorUniformBuffer == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
+              bo2zm::native::gpu::kDescriptorUniformBufferDynamic == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+static_assert(sizeof(bo2zm::native::gpu::PushRange) == sizeof(VkPushConstantRange) &&
+              offsetof(bo2zm::native::gpu::PushRange, offset) == offsetof(VkPushConstantRange, offset) &&
+              offsetof(bo2zm::native::gpu::PushRange, size) == offsetof(VkPushConstantRange, size));
 
 static_assert(bo2zm::native::gpu::kFilterLinear == VK_FILTER_LINEAR &&
               bo2zm::native::gpu::kFilterLinear == VK_SAMPLER_MIPMAP_MODE_LINEAR);
@@ -504,6 +516,54 @@ inline bool CreateFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& df
 inline void DestroyFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
                                VkFramebuffer framebuffer) {
   dfn.vkDestroyFramebuffer(device, framebuffer, nullptr);
+}
+
+// A descriptor set layout with `count` bindings (at most 8): true and the layout in `out` if created.
+// `bindless` for the heaps: every binding partially bound, updated after bind and while unused but pending,
+// and the layout for update-after-bind pools.
+inline bool CreateSetLayout(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                            const SetBinding* bindings, uint32_t count, bool bindless, VkDescriptorSetLayout& out) {
+  VkDescriptorSetLayoutBinding vk[8]{};
+  VkDescriptorBindingFlags flags_binding[8]{};
+  if (count > 8) {
+    return false;
+  }
+  for (uint32_t i = 0; i < count; ++i) {
+    vk[i].binding = bindings[i].binding;
+    vk[i].descriptorType = VkDescriptorType(bindings[i].kind);
+    vk[i].descriptorCount = bindings[i].count;
+    vk[i].stageFlags = bindings[i].stages;
+    vk[i].pImmutableSamplers = bindings[i].immutable_samplers;
+    flags_binding[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+                       VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+  }
+  VkDescriptorSetLayoutBindingFlagsCreateInfo flags{};
+  flags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+  flags.bindingCount = count;
+  flags.pBindingFlags = flags_binding;
+  VkDescriptorSetLayoutCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  if (bindless) {
+    info.pNext = &flags;
+    info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+  }
+  info.bindingCount = count;
+  info.pBindings = vk;
+  return dfn.vkCreateDescriptorSetLayout(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+// A pipeline layout: `set_count` set layouts and `range_count` push constant ranges. True and the layout in
+// `out` if created. Metal has no pipeline layout: the binding contract of tools/metal fixes the slots.
+inline bool CreatePipelineLayout(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                 uint32_t set_count, const VkDescriptorSetLayout* sets, uint32_t range_count,
+                                 const PushRange* ranges, VkPipelineLayout& out) {
+  VkPipelineLayoutCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  info.setLayoutCount = set_count;
+  info.pSetLayouts = sets;
+  info.pushConstantRangeCount = range_count;
+  info.pPushConstantRanges = reinterpret_cast<const VkPushConstantRange*>(ranges);
+  return dfn.vkCreatePipelineLayout(device, &info, nullptr, &out) == VK_SUCCESS;
 }
 
 // A descriptor pool for `counts`: true and the pool in `out` if created. The sizes are listed in a fixed
