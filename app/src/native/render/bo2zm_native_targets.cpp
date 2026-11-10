@@ -1179,27 +1179,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
     }
 
-    VkAttachmentDescription attachment{};
-    attachment.format = VulkanPresenter::kGuestOutputFormat;
-    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachment.finalLayout = VulkanPresenter::kGuestOutputInternalLayout;
-    VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &reference;
-    VkRenderPassCreateInfo info_rp{};
-    info_rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info_rp.attachmentCount = 1;
-    info_rp.pAttachments = &attachment;
-    info_rp.subpassCount = 1;
-    info_rp.pSubpasses = &subpass;
-    if (dfn_.vkCreateRenderPass(device_, &info_rp, nullptr, &render_pass_output_) != VK_SUCCESS) {
+    gpu::PassDesc pass_output{};
+    pass_output.color_count = 1;
+    gpu::PassAttachment& attachment = pass_output.colors[0];
+    attachment.format = gpu::Format(VulkanPresenter::kGuestOutputFormat);
+    attachment.load = gpu::kLoadDontCare;
+    attachment.store = gpu::kStoreStore;
+    attachment.initial = gpu::kLayoutUndefined;
+    attachment.used = gpu::kLayoutColorAttachment;
+    attachment.final = gpu::ImageLayout(VulkanPresenter::kGuestOutputInternalLayout);
+    if (!gpu::vulkan::CreatePass(dfn_, device_, pass_output, render_pass_output_)) {
       return false;
     }
 
@@ -3629,27 +3618,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // Render pass and pipeline for this destination format.
     VkRenderPass& pass = conv_passes_[gpu::ToVkFormat(target.format)];
     if (pass == VK_NULL_HANDLE) {
-      VkAttachmentDescription attachment{};
-      attachment.format = gpu::ToVkFormat(target.format);
-      attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-      attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-      attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-      attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-      attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-      attachment.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-      attachment.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
-      VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_GENERAL};
-      VkSubpassDescription subpass{};
-      subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-      subpass.colorAttachmentCount = 1;
-      subpass.pColorAttachments = &reference;
-      VkRenderPassCreateInfo info_rp{};
-      info_rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-      info_rp.attachmentCount = 1;
-      info_rp.pAttachments = &attachment;
-      info_rp.subpassCount = 1;
-      info_rp.pSubpasses = &subpass;
-      if (dfn_.vkCreateRenderPass(device_, &info_rp, nullptr, &pass) != VK_SUCCESS) {
+      gpu::PassDesc desc{};
+      desc.color_count = 1;
+      desc.colors[0].format = target.format;
+      desc.colors[0].load = gpu::kLoadLoad;
+      desc.colors[0].store = gpu::kStoreStore;
+      if (!gpu::vulkan::CreatePass(dfn_, device_, desc, pass)) {
         pass = VK_NULL_HANDLE;
         return false;
       }
