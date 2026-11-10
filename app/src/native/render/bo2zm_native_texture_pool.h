@@ -154,6 +154,8 @@ class SlabMemory {
   // nullptr if the device refuses.
   virtual gpu::Memory Allocate(gpu::Size bytes, uint32_t type) = 0;
   virtual void Release(gpu::Memory memory) = 0;
+  // The pool's allocation unit: textures take whole units, placed at multiples of max(unit, alignment).
+  virtual gpu::Size Unit() const { return kUnitPoolBytes; }
 };
 
 // The Vulkan slabs (vkAllocateMemory without a dedicated image, see Start).
@@ -253,6 +255,7 @@ class TexturePool {
   uint32_t type_memory_ = UINT32_MAX;
   uint64_t slab_bytes_ = 0;
   uint32_t slab_units_ = 0;
+  uint64_t unit_ = kUnitPoolBytes;  // memory_->Unit()
   uint32_t slabs_cap_ = 0;
   uint64_t last_growth_ = 0;
   std::vector<Slab> slabs_;
