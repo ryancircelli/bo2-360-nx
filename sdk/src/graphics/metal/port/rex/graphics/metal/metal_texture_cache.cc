@@ -5050,6 +5050,33 @@ static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
 
   parameters.mip_base_map = mip_base_map ? 1 : 0;
 
+  // Diagnostic only: hold every sampler at the first or last mip selected by
+  // the fetch constant. This separates mip-content/streaming faults from
+  // distance-driven LOD selection without changing texture uploads.
+  enum class ForcedMipMode { kOff, kBase, kLowest };
+  static const ForcedMipMode forced_mip_mode = [] {
+    const char* value = MetalDebugEnv("FORCE_MIP_LEVEL");
+    if (value && std::strcmp(value, "base") == 0) {
+      REXLOG_INFO("[mip-force] sampler LOD clamped to base mip");
+      return ForcedMipMode::kBase;
+    }
+    if (value && std::strcmp(value, "lowest") == 0) {
+      REXLOG_INFO("[mip-force] sampler LOD clamped to lowest fetch mip");
+      return ForcedMipMode::kLowest;
+    }
+    if (value && value[0]) {
+      REXLOG_WARN(
+          "[mip-force] ignoring unknown REX_METAL_FORCE_MIP_LEVEL='{}'",
+          value);
+    }
+    return ForcedMipMode::kOff;
+  }();
+  if (forced_mip_mode != ForcedMipMode::kOff) {
+    parameters.mip_min_level = static_cast<uint32_t>(
+        forced_mip_mode == ForcedMipMode::kBase ? 0 : mip_max_level);
+    parameters.mip_base_map = 1;
+  }
+
   return parameters;
 }
 
