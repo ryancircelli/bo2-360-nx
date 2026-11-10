@@ -2969,17 +2969,17 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (layout != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, layout);
     }
     for (const UploadBuffer& s : shared_bufs_) {
-      if (s.data) dfn_.vkUnmapMemory(device_, s.guest_memory);
+      if (s.data) gpu::vulkan::Unmap(dfn_, device_, s.guest_memory);
       if (s.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
       if (s.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
     }
     for (const UploadBuffer& s : uploads_) {
-      if (s.data) dfn_.vkUnmapMemory(device_, s.guest_memory);
+      if (s.data) gpu::vulkan::Unmap(dfn_, device_, s.guest_memory);
       if (s.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
       if (s.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
     }
     for (const VertexPool& v : vpools_) {  // bo2zm_native_vertex_cache
-      if (v.data) dfn_.vkUnmapMemory(device_, v.memory);
+      if (v.data) gpu::vulkan::Unmap(dfn_, device_, v.memory);
       if (v.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, v.buffer);
       if (v.memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, v.memory);
     }
@@ -10300,11 +10300,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         continue;
       }
       if (!invalidated) {
-        VkMappedMemoryRange range{};
-        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        range.memory = u.guest_memory;
-        range.size = VK_WHOLE_SIZE;
-        dfn_.vkInvalidateMappedMemoryRanges(device_, 1, &range);
+        gpu::vulkan::Invalidate(dfn_, device_, u.guest_memory);
         invalidated = true;
       }
       bo2zm::gpu_skin::Compare(u.data + it->gpu, u.data + it->cpu, it->vertices, it->kernel, it->physical);
@@ -10689,7 +10685,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         continue;
       }
       void* mapped = nullptr;
-      if (dfn_.vkMapMemory(device_, guest_memory, 0, VK_WHOLE_SIZE, 0, &mapped) == VK_SUCCESS) {
+      if (gpu::vulkan::Map(dfn_, device_, guest_memory, mapped)) {
         using Clock = std::chrono::steady_clock;
         std::memcpy(mapped, source.data(), size_t(kBytes));  // first pass: pages and caches
         const auto before = Clock::now();
@@ -10697,11 +10693,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         const auto copied = Clock::now();
         const bool coherent = (types.host_coherent >> type) & 1;
         if (!coherent) {
-          VkMappedMemoryRange range{};
-          range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-          range.memory = guest_memory;
-          range.size = VK_WHOLE_SIZE;
-          dfn_.vkFlushMappedMemoryRanges(device_, 1, &range);
+          gpu::vulkan::Flush(dfn_, device_, guest_memory);
         }
         const auto published = Clock::now();
         const double seconds = std::chrono::duration<double>(copied - before).count();
@@ -10712,7 +10704,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
             coherent ? std::string()
                       : fmt::format(", publish {:.2f} ms",
                                     std::chrono::duration<double, std::milli>(published - copied).count()));
-        dfn_.vkUnmapMemory(device_, guest_memory);
+        gpu::vulkan::Unmap(dfn_, device_, guest_memory);
       }
       gpu::vulkan::Free(dfn_, device_, guest_memory);
     }

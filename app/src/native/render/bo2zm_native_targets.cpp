@@ -1168,7 +1168,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
               vulkan_device_, sizeof(ramp_values_) + sizeof(bo2zm::native::output::Crosshairs), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
               rex::ui::vulkan::util::MemoryPurpose::kUpload, ramp.buffer, ramp.guest_memory, &type) ||
-          dfn_.vkMapMemory(device_, ramp.guest_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+          !gpu::vulkan::Map(dfn_, device_, ramp.guest_memory, mapped)) {
         REXLOG_WARN("[native] C2: could not create the gamma ramp buffer: the output goes without it");
         ramp_gamma_ = false;
         break;
@@ -1391,13 +1391,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
             vulkan_device_, picture->rgba.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             rex::ui::vulkan::util::MemoryPurpose::kUpload, c.staging, c.staging_memory, &type) ||
-        dfn_.vkMapMemory(device_, c.staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+        !gpu::vulkan::Map(dfn_, device_, c.staging_memory, mapped)) {
       REXLOG_ERROR("[native] credits: could not create the upload buffer: no credits line");
       return false;
     }
     std::memcpy(mapped, picture->rgba.data(), picture->rgba.size());
     rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, c.staging_memory, type);
-    dfn_.vkUnmapMemory(device_, c.staging_memory);
+    gpu::vulkan::Unmap(dfn_, device_, c.staging_memory);
     const VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
                                            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
     VkDescriptorPoolCreateInfo info_pool{};
@@ -2657,7 +2657,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     } else if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
                    vulkan_device_, kProbeBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    rex::ui::vulkan::util::MemoryPurpose::kReadback, target, target_memory, &target_type) ||
-               dfn_.vkMapMemory(device_, target_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+               !gpu::vulkan::Map(dfn_, device_, target_memory, mapped)) {
       failed = "the readback buffer";
     } else if (dfn_.vkCreateCommandPool(device_, &info_pool, nullptr, &pool) != VK_SUCCESS ||
                (info_commands.commandPool = pool,
@@ -2694,10 +2694,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         failed = "the GPU copy (submit or wait)";
       } else {
         if (!((types.host_coherent >> target_type) & 1)) {
-          VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-          range.memory = target_memory;
-          range.size = VK_WHOLE_SIZE;
-          dfn_.vkInvalidateMappedMemoryRanges(device_, 1, &range);
+          gpu::vulkan::Invalidate(dfn_, device_, target_memory);
         }
         const uint8_t* read = static_cast<const uint8_t*>(mapped);
         match = std::memcmp(read, host, size_t(kProbeBytes)) == 0;
@@ -2717,7 +2714,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                : fmt::format("DIFFERENT from byte {}", first_difference));
     if (fence != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, fence);
     if (pool != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool);
-    if (mapped) dfn_.vkUnmapMemory(device_, target_memory);
+    if (mapped) gpu::vulkan::Unmap(dfn_, device_, target_memory);
     if (target != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, target);
     if (target_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, target_memory);
     if (source != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, source);
@@ -6707,7 +6704,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         return;
       }
       void* mapped = nullptr;
-      if (dfn_.vkMapMemory(device_, read.guest_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+      if (!gpu::vulkan::Map(dfn_, device_, read.guest_memory, mapped)) {
         DestroyRead(read);
         Reject(16, "could not create a readback buffer for a resolved texture");
         return;
@@ -6866,11 +6863,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       ++reads_written_;
       texels_written_ += uint64_t(p.width) * p.height;
       if (!read.coherent) {
-        VkMappedMemoryRange range{};
-        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        range.memory = read.guest_memory;
-        range.size = VK_WHOLE_SIZE;
-        dfn_.vkInvalidateMappedMemoryRanges(device_, 1, &range);
+        gpu::vulkan::Invalidate(dfn_, device_, read.guest_memory);
       }
       // 64-bit destinations (16_16_16_16 and its FLOAT) have their own packing.
       if (bo2zm_formats::Log2BytesCopy((p.info >> 7) & 0x3F) == 3) {
@@ -6926,7 +6919,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   void DestroyRead(Readback& read) {
     if (read.guest_memory != VK_NULL_HANDLE) {
       if (read.data) {
-        dfn_.vkUnmapMemory(device_, read.guest_memory);
+        gpu::vulkan::Unmap(dfn_, device_, read.guest_memory);
       }
       gpu::vulkan::Free(dfn_, device_, read.guest_memory);
     }
