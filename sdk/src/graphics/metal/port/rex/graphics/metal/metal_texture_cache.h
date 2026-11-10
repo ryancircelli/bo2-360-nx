@@ -78,7 +78,29 @@ class MetalTextureCache : public TextureCache {
   uint32_t GetBindlessSRVIndexForBinding(
       uint32_t fetch_constant, xenos::FetchOpDimension dimension,
       bool is_signed, MTL::Texture** texture_for_encoder_out = nullptr,
-      uint32_t view_levels = 0);
+      uint32_t view_levels = 0, Texture** used_texture_out = nullptr);
+  // [bindless-memo] Lets the command processor hold texture pointers.
+  using TextureCache::Texture;
+  // [bindless-memo] Repeats the per-texture side effects of
+  // GetBindlessSRVIndexForBinding (LRU use mark, tile resolve bind serial)
+  // for textures whose bindless indices the caller reused from a memo.
+  void MarkBindlessTexturesUsed(Texture* const* textures, size_t count);
+  // [bindless-memo] Changes whenever a cached texture is created or
+  // destroyed or the anisotropic override cvar changes. With the same SRV
+  // keys (texture key, swizzle, signs, view levels) a binding resolves to the
+  // same texture object, hence the same bindless index, until then.
+  uint64_t BindlessBindingGeneration() const;
+  // [bindless-memo] The texture GetBindlessSRVIndexForBinding would bind for a
+  // binding (nullptr for the null texture), and a check that memoized textures
+  // still match: the same fetch constant can resolve to a different texture
+  // (for example a resolve ping-pong pair with identical fetch dwords).
+  Texture* SelectBindlessTexture(uint32_t fetch_constant,
+                                 xenos::FetchOpDimension dimension,
+                                 bool is_signed,
+                                 const TextureBinding** binding_out) const;
+  bool AreBindlessTexturesCurrent(const DxbcShader::TextureBinding* bindings,
+                                  size_t count,
+                                  Texture* const* used_textures) const;
   // Returns the persistent sampler_bindless_heap_ slot for the sampler that
   // would be created for the given binding.  Falls back to
   // null_sampler_bindless_index_ when no sampler can be resolved.
@@ -567,6 +589,7 @@ class MetalTextureCache : public TextureCache {
   std::unordered_map<MTL::ComputePipelineState*, MTL::ComputePipelineState*>
       rtt_fused_pipelines_;
   uint64_t tres_bind_serial_counter_ = 0;
+  uint64_t bindless_binding_generation_ = 1;
   uint64_t tres_encoder_end_serial_ = 0;
   uint64_t miplod_epoch_ = 1;
   struct MipLodTraceEntry {

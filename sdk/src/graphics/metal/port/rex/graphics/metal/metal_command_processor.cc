@@ -2494,6 +2494,8 @@ void MetalCommandProcessor::ShutdownContext() {
 }
 
 uint32_t MetalCommandProcessor::AllocateViewBindlessIndex() {
+  // [bindless-memo] any slot change invalidates memoized index tables.
+  ++view_bindless_slot_serial_;
   if (!view_bindless_heap_free_.empty()) {
     uint32_t idx = view_bindless_heap_free_.back();
     view_bindless_heap_free_.pop_back();
@@ -2538,6 +2540,7 @@ uint32_t MetalCommandProcessor::AllocateViewBindlessIndex() {
 }
 
 void MetalCommandProcessor::ReleaseViewBindlessIndex(uint32_t index) {
+  ++view_bindless_slot_serial_;
   if (index >= kViewBindlessHeapSize || !view_bindless_heap_) {
     return;
   }
@@ -2549,6 +2552,9 @@ void MetalCommandProcessor::ReleaseViewBindlessIndex(uint32_t index) {
 }
 
 void MetalCommandProcessor::RetireViewBindlessIndex(uint32_t index) {
+  // [bindless-memo] a renamed texture gets new slots; memoized tables that
+  // hold the retired ones must not be reused.
+  ++view_bindless_slot_serial_;
   if (index >= kViewBindlessHeapSize || !view_bindless_heap_) {
     return;
   }
@@ -6886,6 +6892,130 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     }
   }
 
+  // [bindless-memo] See metal_bindless_index_memo. Sampler parameters only
+  // depend on the fetch constants, the shader's sampler bindings (fixed per
+  // sampler layout) and the anisotropic override, so while none of those
+  // changed the per-sampler checks can be skipped. Built index tables are
+  // remembered per binding layout and reused when the active SRV keys and
+  // sampler parameters match and no texture or binding changed since.
+  const bool bindless_memo = REXCVAR_GET(metal_bindless_index_memo) &&
+                             REXCVAR_GET(metal_fetch_constants_shared);
+  static const bool bindless_memo_verify = [] {
+    const char* v = MetalDebugEnv("BINDLESS_MEMO_VERIFY");  // getenv-ok: once
+    return v && *v && *v != '0';
+  }();
+  const uint64_t bindless_binding_generation =
+      bindless_memo ? (texture_cache_->BindlessBindingGeneration() ^
+                       (view_bindless_slot_serial_ * 0x9E3779B97F4A7C15ull))
+                    : 0;
+  std::vector<MetalTextureCache::Texture*> memo_check_used_textures;
+  // The slot also hashes the bound fetch constants and sampler parameters, so
+  // one binding layout used with many texture sets keeps several entries.
+  auto bindless_memo_entry =
+      [&](uint32_t stage, size_t texture_layout_uid, size_t sampler_layout_uid,
+          const std::vector<DxbcShader::TextureBinding>& texture_bindings,
+          const MetalTextureCache::SamplerParameters* sampler_params,
+          size_t sampler_count) -> BindlessIndexMemoEntry& {
+    uint64_t h = uint64_t(texture_layout_uid) * 0x9E3779B97F4A7C15ull;
+    h ^= uint64_t(sampler_layout_uid) + 0x632BE59BD9B4E019ull + (h << 6) +
+         (h >> 2);
+    const uint32_t* fetch_dwords =
+        &register_file_->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0];
+    for (const DxbcShader::TextureBinding& binding : texture_bindings) {
+      const uint32_t* fd = fetch_dwords + binding.fetch_constant * 6;
+      for (uint32_t d = 0; d < 6; ++d) {
+        h = (h ^ fd[d]) * 0x100000001B3ull;
+      }
+    }
+    for (size_t i = 0; i < sampler_count; ++i) {
+      h = (h ^ sampler_params[i].value) * 0x100000001B3ull;
+    }
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 31;
+    return bindless_index_memo_[stage][h & (kBindlessIndexMemoSize - 1)];
+  };
+  // Returns true and fills the outputs from the memo on a hit.
+  auto bindless_memo_lookup =
+      [&](uint32_t stage, size_t texture_layout_uid, size_t sampler_layout_uid,
+          const std::vector<DxbcShader::TextureBinding>& texture_bindings,
+          const MetalTextureCache::SamplerParameters* sampler_params,
+          size_t sampler_count, const uint8_t* view_levels,
+          std::vector<uint32_t>& texture_indices_out,
+          std::vector<MTL::Texture*>& texture_resources_out,
+          std::vector<uint32_t>& sampler_indices_out) -> bool {
+    const BindlessIndexMemoEntry& entry =
+        bindless_memo_entry(stage, texture_layout_uid, sampler_layout_uid,
+                            texture_bindings, sampler_params, sampler_count);
+    const BindlessIndexKey key{texture_layout_uid, sampler_layout_uid, 1,
+                               bindless_binding_generation};
+    if (!(entry.key == key) ||
+        entry.texture_indices.size() != texture_bindings.size() ||
+        entry.sampler_params.size() != sampler_count) {
+      return false;
+    }
+    if (!texture_bindings.empty() &&
+        !texture_cache_->AreActiveTextureSRVKeysUpToDate(
+            entry.srv_keys.data(), texture_bindings.data(),
+            texture_bindings.size(), view_levels)) {
+      return false;
+    }
+    for (size_t i = 0; i < sampler_count; ++i) {
+      if (entry.sampler_params[i] != sampler_params[i]) {
+        return false;
+      }
+    }
+    if (entry.used_textures.size() != texture_bindings.size() ||
+        !texture_cache_->AreBindlessTexturesCurrent(
+            texture_bindings.data(), texture_bindings.size(),
+            entry.used_textures.data())) {
+      return false;
+    }
+    texture_indices_out.assign(entry.texture_indices.begin(),
+                               entry.texture_indices.end());
+    texture_resources_out.assign(entry.texture_resources.begin(),
+                                 entry.texture_resources.end());
+    sampler_indices_out.assign(entry.sampler_indices.begin(),
+                               entry.sampler_indices.end());
+    texture_cache_->MarkBindlessTexturesUsed(entry.used_textures.data(),
+                                             entry.used_textures.size());
+    memo_check_used_textures.assign(entry.used_textures.begin(),
+                                    entry.used_textures.end());
+    return true;
+  };
+  auto bindless_memo_store =
+      [&](uint32_t stage, size_t texture_layout_uid, size_t sampler_layout_uid,
+          const std::vector<DxbcShader::TextureBinding>& texture_bindings,
+          const MetalTextureCache::SamplerParameters* sampler_params,
+          size_t sampler_count, const uint8_t* view_levels,
+          const std::vector<uint32_t>& texture_indices,
+          const std::vector<MTL::Texture*>& texture_resources,
+          const std::vector<uint32_t>& sampler_indices) {
+    BindlessIndexMemoEntry& entry =
+        bindless_memo_entry(stage, texture_layout_uid, sampler_layout_uid,
+                            texture_bindings, sampler_params, sampler_count);
+    entry.key = BindlessIndexKey{texture_layout_uid, sampler_layout_uid, 1,
+                                 bindless_binding_generation};
+    entry.srv_keys.resize(texture_bindings.size());
+    if (!texture_bindings.empty()) {
+      texture_cache_->WriteActiveTextureSRVKeys(
+          entry.srv_keys.data(), texture_bindings.data(),
+          texture_bindings.size(), view_levels);
+    }
+    entry.texture_indices.assign(texture_indices.begin(),
+                                 texture_indices.end());
+    entry.texture_resources.assign(texture_resources.begin(),
+                                   texture_resources.end());
+    entry.used_textures.assign(scratch_bindless_used_textures_.begin(),
+                               scratch_bindless_used_textures_.end());
+    entry.sampler_params.assign(sampler_params, sampler_params + sampler_count);
+    entry.sampler_indices.assign(sampler_indices.begin(),
+                                 sampler_indices.end());
+  };
+  // Verify mode: rebuilds on every hit and counts differences.
+  std::vector<uint32_t> memo_check_texture_indices;
+  std::vector<MTL::Texture*> memo_check_texture_resources;
+  std::vector<uint32_t> memo_check_sampler_indices;
+
   const auto& texture_bindings_vertex =
       metal_vertex_shader->GetTextureBindingsAfterTranslation();
   const auto& sampler_bindings_vertex =
@@ -6911,19 +7041,60 @@ bool MetalCommandProcessor::PrepareDrawConstants(
       current_sampler_layout_uid_vertex_ = sampler_layout_uid_vertex;
       cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
     }
-    current_samplers_vertex_.resize(
-        std::max(current_samplers_vertex_.size(), sampler_count_vertex));
-    for (size_t i = 0; i < sampler_count_vertex; ++i) {
-      auto parameters =
-          texture_cache_->GetSamplerParameters(sampler_bindings_vertex[i]);
-      if (current_samplers_vertex_[i] != parameters) {
-        current_samplers_vertex_[i] = parameters;
-        cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+    const BindlessIndexKey sampler_key{
+        size_t(reinterpret_cast<uintptr_t>(&sampler_bindings_vertex)),
+        sampler_layout_uid_vertex,
+                                       fetch_constants_generation_,
+                                       bindless_binding_generation};
+    if (bindless_memo && !bindless_memo_verify &&
+        current_samplers_vertex_.size() >= sampler_count_vertex &&
+        bindless_samplers_validated_[0] == sampler_key) {
+      ++backend_telemetry_.bindless_sampler_checks_skipped;
+    } else {
+      current_samplers_vertex_.resize(
+          std::max(current_samplers_vertex_.size(), sampler_count_vertex));
+      bool sampler_changed = false;
+      for (size_t i = 0; i < sampler_count_vertex; ++i) {
+        auto parameters =
+            texture_cache_->GetSamplerParameters(sampler_bindings_vertex[i]);
+        if (current_samplers_vertex_[i] != parameters) {
+          if (bindless_memo_verify &&
+              bindless_samplers_validated_[0] == sampler_key) {
+            static uint32_t sampler_diag_logged = 0;
+            if (sampler_diag_logged < 24) {
+              ++sampler_diag_logged;
+              const uint32_t fc = sampler_bindings_vertex[i].fetch_constant;
+              const uint32_t* fd =
+                  &register_file_->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 +
+                                          fc * 6];
+              REXLOG_INFO(
+                  "[bindless-memo] {} sampler {} fetch {} params {:08X} -> {:08X} "
+                  "gen {} fetch {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                  "vertex", i, fc, current_samplers_vertex_[i].value, parameters.value,
+                  fetch_constants_generation_, fd[0], fd[1], fd[2], fd[3], fd[4],
+                  fd[5]);
+            }
+          }
+          current_samplers_vertex_[i] = parameters;
+          cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+          sampler_changed = true;
+        }
+      }
+      if (bindless_memo_verify && sampler_changed &&
+          bindless_samplers_validated_[0] == sampler_key) {
+        ++backend_telemetry_.bindless_sampler_verify_mismatches;
+      }
+      bindless_samplers_validated_[0] = sampler_key;
+      if (!bindless_memo) {
+        bindless_samplers_validated_[0].fetch_generation = 0;
       }
     }
-  } else if (current_sampler_layout_uid_vertex_ != sampler_layout_uid_vertex) {
-    current_sampler_layout_uid_vertex_ = sampler_layout_uid_vertex;
-    cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+  } else {
+    bindless_samplers_validated_[0].fetch_generation = 0;
+    if (current_sampler_layout_uid_vertex_ != sampler_layout_uid_vertex) {
+      current_sampler_layout_uid_vertex_ = sampler_layout_uid_vertex;
+      cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+    }
   }
   bool vertex_texture_layout_changed =
       current_texture_layout_uid_vertex_ != texture_layout_uid_vertex;
@@ -6940,16 +7111,41 @@ bool MetalCommandProcessor::PrepareDrawConstants(
       cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
     }
   }
-  if (!cbuffer_binding_descriptor_indices_vertex_.up_to_date) {
+  bool vertex_memo_hit = false;
+  if (!cbuffer_binding_descriptor_indices_vertex_.up_to_date && bindless_memo) {
+    vertex_memo_hit = bindless_memo_lookup(
+        0, texture_layout_uid_vertex, sampler_layout_uid_vertex,
+        texture_bindings_vertex, current_samplers_vertex_.data(),
+        sampler_count_vertex, nullptr, next_texture_bindless_indices_vertex,
+        next_texture_bindless_resources_vertex,
+        next_sampler_bindless_indices_vertex);
+    if (vertex_memo_hit) {
+      ++backend_telemetry_.bindless_index_memo_hits;
+      if (bindless_memo_verify) {
+        memo_check_texture_indices.swap(next_texture_bindless_indices_vertex);
+        memo_check_texture_resources.swap(
+            next_texture_bindless_resources_vertex);
+        memo_check_sampler_indices.swap(next_sampler_bindless_indices_vertex);
+        next_texture_bindless_indices_vertex.clear();
+        next_texture_bindless_resources_vertex.clear();
+        next_sampler_bindless_indices_vertex.clear();
+      }
+    }
+  }
+  if (!cbuffer_binding_descriptor_indices_vertex_.up_to_date &&
+      (!vertex_memo_hit || bindless_memo_verify)) {
+    scratch_bindless_used_textures_.clear();
     next_texture_bindless_indices_vertex.reserve(texture_count_vertex);
     next_texture_bindless_resources_vertex.reserve(texture_count_vertex);
     for (const auto& binding : texture_bindings_vertex) {
       MTL::Texture* texture_for_encoder = nullptr;
+      MetalTextureCache::Texture* used_texture = nullptr;
       next_texture_bindless_indices_vertex.push_back(
           texture_cache_->GetBindlessSRVIndexForBinding(
               binding.fetch_constant, binding.dimension, binding.is_signed,
-              &texture_for_encoder));
+              &texture_for_encoder, 0, &used_texture));
       next_texture_bindless_resources_vertex.push_back(texture_for_encoder);
+      scratch_bindless_used_textures_.push_back(used_texture);
     }
     next_sampler_bindless_indices_vertex.reserve(sampler_count_vertex);
     // [draw-prep-lite] current_samplers_vertex_ holds this draw's parameters
@@ -6962,6 +7158,24 @@ bool MetalCommandProcessor::PrepareDrawConstants(
                     current_samplers_vertex_[i])
               : texture_cache_->GetBindlessSamplerIndexForBinding(
                     sampler_bindings_vertex[i]));
+    }
+    if (vertex_memo_hit) {
+      if (memo_check_texture_indices != next_texture_bindless_indices_vertex ||
+          memo_check_texture_resources !=
+              next_texture_bindless_resources_vertex ||
+          memo_check_sampler_indices != next_sampler_bindless_indices_vertex) {
+        ++backend_telemetry_.bindless_memo_verify_mismatches;
+      }
+    } else if (bindless_memo) {
+      ++backend_telemetry_.bindless_index_builds;
+      bindless_memo_store(0, texture_layout_uid_vertex,
+                          sampler_layout_uid_vertex, texture_bindings_vertex,
+                          current_samplers_vertex_.data(), sampler_count_vertex,
+                          nullptr, next_texture_bindless_indices_vertex,
+                          next_texture_bindless_resources_vertex,
+                          next_sampler_bindless_indices_vertex);
+    } else {
+      ++backend_telemetry_.bindless_index_builds;
     }
   }
 
@@ -6996,19 +7210,60 @@ bool MetalCommandProcessor::PrepareDrawConstants(
         current_sampler_layout_uid_pixel_ = sampler_layout_uid_pixel;
         cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
       }
-      current_samplers_pixel_.resize(
-          std::max(current_samplers_pixel_.size(), sampler_count_pixel));
-      for (size_t i = 0; i < sampler_count_pixel; ++i) {
-        auto parameters =
-            texture_cache_->GetSamplerParameters(sampler_bindings_pixel[i]);
-        if (current_samplers_pixel_[i] != parameters) {
-          current_samplers_pixel_[i] = parameters;
-          cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+      const BindlessIndexKey sampler_key{
+        size_t(reinterpret_cast<uintptr_t>(&sampler_bindings_pixel)),
+        sampler_layout_uid_pixel,
+                                         fetch_constants_generation_,
+                                         bindless_binding_generation};
+      if (bindless_memo && !bindless_memo_verify &&
+          current_samplers_pixel_.size() >= sampler_count_pixel &&
+          bindless_samplers_validated_[1] == sampler_key) {
+        ++backend_telemetry_.bindless_sampler_checks_skipped;
+      } else {
+        current_samplers_pixel_.resize(
+            std::max(current_samplers_pixel_.size(), sampler_count_pixel));
+        bool sampler_changed = false;
+        for (size_t i = 0; i < sampler_count_pixel; ++i) {
+          auto parameters =
+              texture_cache_->GetSamplerParameters(sampler_bindings_pixel[i]);
+          if (current_samplers_pixel_[i] != parameters) {
+            if (bindless_memo_verify &&
+                bindless_samplers_validated_[1] == sampler_key) {
+              static uint32_t sampler_diag_logged = 0;
+              if (sampler_diag_logged < 24) {
+                ++sampler_diag_logged;
+                const uint32_t fc = sampler_bindings_pixel[i].fetch_constant;
+                const uint32_t* fd =
+                    &register_file_->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 +
+                                            fc * 6];
+                REXLOG_INFO(
+                    "[bindless-memo] {} sampler {} fetch {} params {:08X} -> {:08X} "
+                    "gen {} fetch {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                    "pixel", i, fc, current_samplers_pixel_[i].value, parameters.value,
+                    fetch_constants_generation_, fd[0], fd[1], fd[2], fd[3], fd[4],
+                    fd[5]);
+              }
+            }
+            current_samplers_pixel_[i] = parameters;
+            cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+            sampler_changed = true;
+          }
+        }
+        if (bindless_memo_verify && sampler_changed &&
+            bindless_samplers_validated_[1] == sampler_key) {
+          ++backend_telemetry_.bindless_sampler_verify_mismatches;
+        }
+        bindless_samplers_validated_[1] = sampler_key;
+        if (!bindless_memo) {
+          bindless_samplers_validated_[1].fetch_generation = 0;
         }
       }
-    } else if (current_sampler_layout_uid_pixel_ != sampler_layout_uid_pixel) {
-      current_sampler_layout_uid_pixel_ = sampler_layout_uid_pixel;
-      cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+    } else {
+      bindless_samplers_validated_[1].fetch_generation = 0;
+      if (current_sampler_layout_uid_pixel_ != sampler_layout_uid_pixel) {
+        current_sampler_layout_uid_pixel_ = sampler_layout_uid_pixel;
+        cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+      }
     }
     bool pixel_texture_layout_changed =
         current_texture_layout_uid_pixel_ != texture_layout_uid_pixel;
@@ -7026,18 +7281,45 @@ bool MetalCommandProcessor::PrepareDrawConstants(
         cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
       }
     }
-    if (!cbuffer_binding_descriptor_indices_pixel_.up_to_date) {
+    bool pixel_memo_hit = false;
+    if (!cbuffer_binding_descriptor_indices_pixel_.up_to_date && bindless_memo) {
+      pixel_memo_hit = bindless_memo_lookup(
+          1, texture_layout_uid_pixel, sampler_layout_uid_pixel,
+          texture_bindings_pixel, current_samplers_pixel_.data(),
+          sampler_count_pixel, texture_cache_->miplod_view_levels_,
+          next_texture_bindless_indices_pixel,
+          next_texture_bindless_resources_pixel,
+          next_sampler_bindless_indices_pixel);
+      if (pixel_memo_hit) {
+        ++backend_telemetry_.bindless_index_memo_hits;
+        if (bindless_memo_verify) {
+          memo_check_texture_indices.swap(next_texture_bindless_indices_pixel);
+          memo_check_texture_resources.swap(
+              next_texture_bindless_resources_pixel);
+          memo_check_sampler_indices.swap(next_sampler_bindless_indices_pixel);
+          next_texture_bindless_indices_pixel.clear();
+          next_texture_bindless_resources_pixel.clear();
+          next_sampler_bindless_indices_pixel.clear();
+        }
+      }
+    }
+    if (!cbuffer_binding_descriptor_indices_pixel_.up_to_date &&
+        (!pixel_memo_hit || bindless_memo_verify)) {
+      scratch_bindless_used_textures_.clear();
       next_texture_bindless_indices_pixel.reserve(texture_count_pixel);
       next_texture_bindless_resources_pixel.reserve(texture_count_pixel);
       for (const auto& binding : texture_bindings_pixel) {
         MTL::Texture* texture_for_encoder = nullptr;
+        MetalTextureCache::Texture* used_texture = nullptr;
         next_texture_bindless_indices_pixel.push_back(
             texture_cache_->GetBindlessSRVIndexForBinding(
                 binding.fetch_constant, binding.dimension, binding.is_signed,
                 &texture_for_encoder,
                 texture_cache_->miplod_view_levels_[binding.fetch_constant &
-                                                    31]));
+                                                    31],
+                &used_texture));
         next_texture_bindless_resources_pixel.push_back(texture_for_encoder);
+        scratch_bindless_used_textures_.push_back(used_texture);
       }
       next_sampler_bindless_indices_pixel.reserve(sampler_count_pixel);
       // [draw-prep-lite] current_samplers_pixel_ holds this draw's parameters
@@ -7050,6 +7332,65 @@ bool MetalCommandProcessor::PrepareDrawConstants(
                       current_samplers_pixel_[i])
                 : texture_cache_->GetBindlessSamplerIndexForBinding(
                       sampler_bindings_pixel[i]));
+      }
+      if (pixel_memo_hit) {
+        if (memo_check_texture_indices != next_texture_bindless_indices_pixel ||
+            memo_check_texture_resources !=
+                next_texture_bindless_resources_pixel ||
+            memo_check_sampler_indices != next_sampler_bindless_indices_pixel) {
+          ++backend_telemetry_.bindless_memo_verify_mismatches;
+          static uint32_t logged = 0;
+          if (logged < 40) {
+            ++logged;
+            for (size_t i = 0; i < next_texture_bindless_indices_pixel.size() &&
+                               i < memo_check_texture_indices.size();
+                 ++i) {
+              if (memo_check_texture_indices[i] !=
+                      next_texture_bindless_indices_pixel[i] ||
+                  memo_check_texture_resources[i] !=
+                      next_texture_bindless_resources_pixel[i]) {
+                const auto& b = texture_bindings_pixel[i];
+                REXLOG_INFO(
+                    "[bindless-memo] pixel tex {} fetch {} dim {} signed {} "
+                    "idx {} -> {} res {} -> {} lvl {} f {} tex {} -> {} "
+                    "gen {:X}",
+                    i, b.fetch_constant, uint32_t(b.dimension), b.is_signed,
+                    memo_check_texture_indices[i],
+                    next_texture_bindless_indices_pixel[i],
+                    static_cast<void*>(memo_check_texture_resources[i]),
+                    static_cast<void*>(next_texture_bindless_resources_pixel[i]),
+                    uint32_t(texture_cache_->miplod_view_levels_[b.fetch_constant & 31]),
+                    frame_log::CurrentFrame(),
+                    static_cast<void*>(i < memo_check_used_textures.size()
+                                           ? memo_check_used_textures[i]
+                                           : nullptr),
+                    static_cast<void*>(scratch_bindless_used_textures_[i]),
+                    bindless_binding_generation);
+              }
+            }
+            for (size_t i = 0; i < next_sampler_bindless_indices_pixel.size() &&
+                               i < memo_check_sampler_indices.size();
+                 ++i) {
+              if (memo_check_sampler_indices[i] !=
+                  next_sampler_bindless_indices_pixel[i]) {
+                REXLOG_INFO("[bindless-memo] pixel smp {} {} -> {}", i,
+                            memo_check_sampler_indices[i],
+                            next_sampler_bindless_indices_pixel[i]);
+              }
+            }
+          }
+        }
+      } else if (bindless_memo) {
+        ++backend_telemetry_.bindless_index_builds;
+        bindless_memo_store(
+            1, texture_layout_uid_pixel, sampler_layout_uid_pixel,
+            texture_bindings_pixel, current_samplers_pixel_.data(),
+            sampler_count_pixel, texture_cache_->miplod_view_levels_,
+            next_texture_bindless_indices_pixel,
+            next_texture_bindless_resources_pixel,
+            next_sampler_bindless_indices_pixel);
+      } else {
+        ++backend_telemetry_.bindless_index_builds;
       }
     }
   }
@@ -10664,7 +11005,19 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   if (valid_register) {
     old_value = register_file_->values[index];
   }
-  CommandProcessor::WriteRegister(index, value);
+  // [reg-fast] Only the scratch, coherency and gamma ramp registers have side
+  // effects in the generic handler; everything else is a plain store (plus a
+  // debug log for unknown registers).
+  if (valid_register && REXCVAR_GET(metal_register_write_fast_path) &&
+      !((index >= XE_GPU_REG_SCRATCH_REG0 &&
+         index <= XE_GPU_REG_SCRATCH_REG7) ||
+        index == XE_GPU_REG_COHER_STATUS_HOST ||
+        (index >= XE_GPU_REG_DC_LUT_RW_INDEX &&
+         index <= XE_GPU_REG_DC_LUT_30_COLOR))) {
+    const_cast<volatile uint32_t&>(register_file_->values[index]) = value;
+  } else {
+    CommandProcessor::WriteRegister(index, value);
+  }
   if (!valid_register) {
     return;
   }
@@ -10675,6 +11028,37 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
                 value);
   }
   bool value_changed = old_value != value;
+  if (REXCVAR_GET(metal_backend_telemetry)) {
+    const size_t category =
+        (index >= XE_GPU_REG_SHADER_CONSTANT_000_X &&
+         index <= XE_GPU_REG_SHADER_CONSTANT_511_W)
+            ? 0
+            : (index >= XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 &&
+               index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5)
+                  ? 1
+                  : (index >= XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031 &&
+                     index <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31)
+                        ? 2
+                        : 3;
+    ++backend_telemetry_.register_writes[category];
+    if (!value_changed) {
+      ++backend_telemetry_.register_writes_same[category];
+    }
+    static const bool reg_write_stats = [] {
+      const char* v = MetalDebugEnv("REG_WRITE_STATS");  // getenv-ok: once
+      return v && *v && *v != '0';
+    }();
+    if (reg_write_stats) {
+      if (register_write_stats_.empty()) {
+        register_write_stats_.resize(RegisterFile::kRegisterCount);
+        register_write_same_stats_.resize(RegisterFile::kRegisterCount);
+      }
+      ++register_write_stats_[index];
+      if (!value_changed) {
+        ++register_write_same_stats_[index];
+      }
+    }
+  }
 
   if (index >= XE_GPU_REG_SHADER_CONSTANT_000_X &&
       index <= XE_GPU_REG_SHADER_CONSTANT_511_W) {
@@ -11236,13 +11620,54 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
       "descriptor_index_uploads={{ {} }} "
       "root_allocations={{ {} }} root_reuse={{ {} }} "
       "root_rebuild_reasons={{ {} }} frame_slot_waits={} "
-      "waited_submissions={} last_wait_submission={}",
+      "waited_submissions={} last_wait_submission={} "
+      "bindless_index_builds={} bindless_index_memo_hits={} "
+      "bindless_sampler_checks_skipped={} bindless_memo_verify_mismatches={} "
+      "bindless_sampler_verify_mismatches={}",
       reason, cbv_uploads, cbv_reuse_hits, cbv_upload_bytes,
       descriptor_index_uploads,
       bindless_root_allocations, bindless_root_reuse_hits,
       bindless_root_rebuild_reasons, backend_telemetry_.frame_slot_waits,
       backend_telemetry_.frame_slot_wait_submission_count,
-      backend_telemetry_.frame_slot_wait_submission_last);
+      backend_telemetry_.frame_slot_wait_submission_last,
+      backend_telemetry_.bindless_index_builds,
+      backend_telemetry_.bindless_index_memo_hits,
+      backend_telemetry_.bindless_sampler_checks_skipped,
+      backend_telemetry_.bindless_memo_verify_mismatches,
+      backend_telemetry_.bindless_sampler_verify_mismatches);
+  REXLOG_INFO(
+      "MetalTelemetry[{}]: register_writes float={} ({} same) fetch={} ({} "
+      "same) bool_loop={} ({} same) other={} ({} same)",
+      reason, backend_telemetry_.register_writes[0],
+      backend_telemetry_.register_writes_same[0],
+      backend_telemetry_.register_writes[1],
+      backend_telemetry_.register_writes_same[1],
+      backend_telemetry_.register_writes[2],
+      backend_telemetry_.register_writes_same[2],
+      backend_telemetry_.register_writes[3],
+      backend_telemetry_.register_writes_same[3]);
+  if (!register_write_stats_.empty()) {
+    std::vector<uint32_t> order;
+    for (uint32_t i = 0; i < register_write_stats_.size(); ++i) {
+      if (register_write_stats_[i]) {
+        order.push_back(i);
+      }
+    }
+    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+      return register_write_stats_[a] > register_write_stats_[b];
+    });
+    std::string top;
+    for (size_t i = 0; i < std::min(order.size(), size_t(40)); ++i) {
+      top += fmt::format("{:04X}={}/{} ", order[i],
+                         register_write_stats_[order[i]],
+                         register_write_same_stats_[order[i]]);
+    }
+    REXLOG_INFO("MetalTelemetry[{}]: register_write_top (index=writes/same) {}",
+                reason, top);
+    std::fill(register_write_stats_.begin(), register_write_stats_.end(), 0);
+    std::fill(register_write_same_stats_.begin(),
+              register_write_same_stats_.end(), 0);
+  }
   REXLOG_INFO(
       "MetalTelemetry[{}]: binding_cache constant_payload hits={{ {} }} "
       "misses={{ {} }} bytes_saved={{ {} }} descriptor_payload hits={{ {} }} "

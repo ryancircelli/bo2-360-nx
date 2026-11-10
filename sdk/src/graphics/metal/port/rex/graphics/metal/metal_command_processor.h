@@ -1000,6 +1000,15 @@ class MetalCommandProcessor final : public CommandProcessor {
     std::array<uint64_t, kCbvSlotCount> cbv_uploads = {};
     std::array<uint64_t, kCbvSlotCount> cbv_reuse_hits = {};
     std::array<uint64_t, kCbvSlotCount> cbv_upload_bytes = {};
+    uint64_t bindless_index_builds = 0;
+    uint64_t bindless_index_memo_hits = 0;
+    uint64_t bindless_sampler_checks_skipped = 0;
+    uint64_t bindless_memo_verify_mismatches = 0;
+    uint64_t bindless_sampler_verify_mismatches = 0;
+    // Single-register writes (WriteRegister) by range: float, fetch,
+    // bool/loop, other; and how many kept the same value.
+    std::array<uint64_t, 4> register_writes = {};
+    std::array<uint64_t, 4> register_writes_same = {};
     std::array<uint64_t, kStageCount> descriptor_index_uploads = {};
     std::array<uint64_t, kCbvSlotCount> constant_payload_cache_hits = {};
     std::array<uint64_t, kCbvSlotCount> constant_payload_cache_misses = {};
@@ -1639,6 +1648,41 @@ class MetalCommandProcessor final : public CommandProcessor {
   // register changes value; the last fetch upload is shared by every stage
   // and draw while the generation and frame still match.
   uint64_t fetch_constants_generation_ = 1;
+  // [bindless-memo] Bindless texture/sampler index tables keyed by the
+  // shader binding layouts, the fetch constant generation and the texture
+  // cache binding generation; see metal_bindless_index_memo.
+  struct BindlessIndexKey {
+    size_t texture_layout_uid = 0;
+    size_t sampler_layout_uid = 0;
+    uint64_t fetch_generation = 0;  // 0 = invalid
+    uint64_t binding_generation = 0;
+    bool operator==(const BindlessIndexKey& other) const {
+      return texture_layout_uid == other.texture_layout_uid &&
+             sampler_layout_uid == other.sampler_layout_uid &&
+             fetch_generation == other.fetch_generation &&
+             binding_generation == other.binding_generation;
+    }
+  };
+  struct BindlessIndexMemoEntry {
+    BindlessIndexKey key;
+    std::vector<MetalTextureCache::TextureSRVKey> srv_keys;
+    std::vector<uint32_t> texture_indices;
+    std::vector<MTL::Texture*> texture_resources;
+    std::vector<MetalTextureCache::Texture*> used_textures;
+    std::vector<MetalTextureCache::SamplerParameters> sampler_params;
+    std::vector<uint32_t> sampler_indices;
+  };
+  static constexpr size_t kBindlessIndexMemoSize = 1024;
+  std::array<std::array<BindlessIndexMemoEntry, kBindlessIndexMemoSize>, 2>
+      bindless_index_memo_;
+  // Key whose sampler parameters current_samplers_{vertex,pixel}_ hold.
+  std::array<BindlessIndexKey, 2> bindless_samplers_validated_;
+  // Bumped on every view bindless slot allocation or release.
+  uint64_t view_bindless_slot_serial_ = 0;
+  std::vector<MetalTextureCache::Texture*> scratch_bindless_used_textures_;
+  // REX_METAL_REG_WRITE_STATS=1: per-register single write counts.
+  std::vector<uint32_t> register_write_stats_;
+  std::vector<uint32_t> register_write_same_stats_;
   uint64_t shared_fetch_generation_ = 0;
   ConstantBufferBinding shared_fetch_binding_;
   ConstantBufferBinding cbuffer_binding_descriptor_indices_vertex_;
