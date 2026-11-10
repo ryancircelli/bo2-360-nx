@@ -26,11 +26,12 @@
       Runs a build under the shared token pool. ninja and `cmake --build` (Ninja generator) take tokens job by job
       through the GNU make jobserver protocol (a fifo); their -j/--parallel is removed so the pool decides. Any other
       command takes N tokens (-t, default 1) for its whole run. The command runs at nice 15 (--ship: normal priority,
-      for the integrator's ship build only). Pool size: idle_cap (16) when no game runs, game_cap (4) while runq
-      runs a game. Each build also holds one token for its own first job, so the floor is one job per running build.
+      for the integrator's ship build only). Pool size (adaptive, every change logged in daemon.log): game_cap (4)
+      while a measured job runs (solo, a timed benchmark, or --measured), run_cap (12) while only unmeasured games run
+      (map sweeps, captures), idle_cap (16) when no game runs. Each build also holds one token for its own first job, so the floor is one job per running build.
 
 Spool: ~/Games/Xbox360/bo2-build/runq/{queue,running,done,jobs,builds,bin}; config.json there overrides slots (3),
-idle_cap (16), game_cap (4). A single detached daemon (lock file daemon.lock) runs at most `slots` jobs at normal
+idle_cap (16), run_cap (12), game_cap (4). A single detached daemon (lock file daemon.lock) runs at most `slots` jobs at normal
 priority, in class order with owner turns (see submit), enforces timeouts, kills only its own children (each job's own process group),
 and holds back build tokens while a game runs. Any runq/buildq command starts it when it is not running.
 result.json records the slot count, solo, and the games running during the job (conditions.games_start / games_mean /
@@ -46,7 +47,7 @@ DAEMON_LOCK = os.path.join(SPOOL, 'daemon.lock')
 STATE = os.path.join(SPOOL, 'state.json')
 DLOG = os.path.join(SPOOL, 'daemon.log')
 HERE = os.path.dirname(os.path.realpath(__file__))
-DEFAULTS = {'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'port_base': 60000, 'kill_grace_s': 15}
+DEFAULTS = {'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'run_cap': 12, 'port_base': 60000, 'kill_grace_s': 15}
 COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift-frontend|metal|metallib|'
                        r'dxc|rustc|cc|c\+\+)$')
 
@@ -258,9 +259,23 @@ class Daemon:
             fcntl.flock(lk, fcntl.LOCK_UN)
             os.close(lk)
 
+    def cap_now(self):
+        """(cap, why): game_cap while a measured job runs, run_cap while only unmeasured games run (games started
+        outside runq count as unmeasured), idle_cap with no game."""
+        measured = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if is_measured(j['job'])]
+        if measured:
+            return self.c['game_cap'], 'measured: ' + ', '.join(measured)
+        if self.jobs or self.outside:
+            return min(self.c.get('run_cap', 12), self.c['idle_cap']), \
+                f'{len(self.jobs) + len(self.outside)} unmeasured game(s)'
+        return self.c['idle_cap'], 'no game'
+
     def throttle(self):
-        games = len(self.jobs) + len(self.outside)
-        target = max(0, self.c['idle_cap'] - self.c['game_cap']) if games else 0
+        cap, why = self.cap_now()
+        if cap != getattr(self, 'cap', None):
+            self.log(f'build cap {getattr(self, "cap", "-")} -> {cap} ({why})')
+            self.cap, self.cap_why = cap, why
+        target = max(0, self.c['idle_cap'] - cap)
         while self.held < target:
             try:
                 b = os.read(self.fifo, target - self.held)
@@ -351,9 +366,9 @@ class Daemon:
         la = loadavg()
         ab = active_builds()
         cp = compile_procs()
-        cap = self.c['game_cap'] if self.jobs else self.c['idle_cap']
+        cap = self.cap_now()[0]
         games = len(self.jobs) + len(self.outside)
-        j['samples'].append((la[0], ab, cp, games))
+        j['samples'].append((la[0], ab, cp, games, cap))
         with open(os.path.join(j['job']['out'], 'conditions.tsv'), 'a') as f:
             f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\t{games}\n')
 
@@ -375,7 +390,7 @@ class Daemon:
 
     def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None, games_start=None):
         out = job['out']
-        res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code,
+        res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code, 'measured': is_measured(job),
                'submitted': job.get('submitted'), 'started': time.strftime('%Y-%m-%d %H:%M:%S',
                                                                            time.localtime(start)),
                'ended': now_s(), 'wall_s': round(time.time() - start, 1),
@@ -389,7 +404,8 @@ class Daemon:
                                      builds_max=max(s[1] for s in samples),
                                      compile_procs_mean=round(sum(s[2] for s in samples) / len(samples), 1),
                                      compile_procs_max=max(s[2] for s in samples),
-                                     build_cap=self.c['game_cap'])
+                                     build_cap=max(s[4] if len(s) > 4 else self.c['game_cap'] for s in samples),
+                                     build_cap_min=min(s[4] if len(s) > 4 else self.c['game_cap'] for s in samples))
             gs = [s[3] for s in samples if len(s) > 3]
             if gs:
                 res['conditions'].update(games_mean=round(sum(gs) / len(gs), 2), games_max=max(gs))
@@ -421,6 +437,7 @@ class Daemon:
                 f'->{res["conditions"].get("load_mean", "?")} builds {res["conditions"].get("builds_mean", "?")}'
                 f' games max {max(res["conditions"].get("games_max") or 0, games_start or 0)}/{res["slots"]}'
                 + (' solo' if res['solo'] else '')
+                + (f' build cap {res["conditions"]["build_cap"]}' if 'build_cap' in res['conditions'] else '')
                 + (f' fps {res["fps"].get("fps_avg")}/{res["fps"].get("fps_1pct_low")}' if res.get('fps') else '')
                 + (f' scene {extra.get("verdict")}' if extra else '') + (f' ({note})' if note else ''))
         with open(os.path.join(out, 'result.txt'), 'w') as f:
@@ -467,7 +484,8 @@ class Daemon:
     def write_state(self):
         wjson(STATE, {'pid': os.getpid(), 'updated': now_s(), 'nice': os.getpriority(os.PRIO_PROCESS, 0),
                       'slots': self.c['slots'], 'idle_cap': self.c['idle_cap'], 'game_cap': self.c['game_cap'],
-                      'build_cap_now': self.c['game_cap'] if self.jobs else self.c['idle_cap'],
+                      'run_cap': self.c.get('run_cap', 12), 'build_cap_now': self.cap_now()[0],
+                      'build_cap_why': self.cap_now()[1],
                       'tokens_held_back': self.held, 'games_outside_runq': self.outside,
                       'paused_until': self.c.get('paused_until') if paused(self.c) else None,
                       'running': {k: {'slot': v['slot'], 'pid': v['proc'].pid, 'name': v['job'].get('name'),
@@ -507,7 +525,7 @@ class Daemon:
                         pass
         self.pool_open()
         self.log(f'daemon up pid {os.getpid()}, slots {self.c["slots"]}, build cap {self.c["idle_cap"]} idle / '
-                 f'{self.c["game_cap"]} with a game')
+                 f'{self.c.get("run_cap", 12)} unmeasured games / {self.c["game_cap"]} measured')
         try:
             while True:
                 self.c = cfg()
@@ -636,6 +654,25 @@ def load_queue():
             sorted(f for f in os.listdir(D['queue']) if f.endswith('.json'))]
 
 
+def is_measured(j):
+    """A measured job (its FPS or timing is the result) gets the machine with builds at game_cap: solo jobs, timed
+    benchmarks (BENCHMARK true in the route or scene), or --measured. Other games only need builds kept at run_cap."""
+    if j.get('measured') is not None:
+        return bool(j['measured'])
+    if is_solo(j):
+        return True
+    try:
+        if j.get('scene'):
+            r = (rjson(j['scene']) or {}).get('route', {})
+            return str(r.get('BO2ZM_BENCHMARK', r.get('REX_BO2ZM_BENCHMARK', ''))).lower() in ('true', '1')
+        for c in j.get('cmd', []):
+            if str(c).endswith('.route') and os.path.isfile(c):
+                return any(re.match(r'\s*(REX_)?BO2ZM_BENCHMARK\s*=\s*(true|1)\b', l, re.I) for l in open(c))
+    except Exception:
+        pass
+    return False
+
+
 def is_solo(j):
     """Solo jobs run with no other game on the machine; class perf is solo unless submitted with --no-solo."""
     return bool(j.get('solo', job_class(j) == CLASSES['perf']))
@@ -704,6 +741,9 @@ def cmd_submit(argv):
                     help='run with no other game on the machine (default for class perf); for FPS numbers and '
                          'timing-dependent bug proofs')
     ap.add_argument('--no-solo', dest='solo', action='store_false')
+    ap.add_argument('--measured', action='store_true', default=None,
+                    help='keep builds at game_cap (4) during the run (default: solo jobs and timed benchmarks)')
+    ap.add_argument('--no-measured', dest='measured', action='store_false')
     ap.add_argument('--timeout', type=int)
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
@@ -727,6 +767,8 @@ def cmd_submit(argv):
     solo = a.solo if a.solo is not None else klass == CLASSES['perf']
     job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
            'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'env': env}
+    if a.measured is not None:
+        job['measured'] = a.measured
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
         scene = rjson(sp)
@@ -818,8 +860,8 @@ def cmd_status(_argv):
     up = bool(st.get('pid')) and daemon_running()
     print(f'daemon: {"up pid " + str(st["pid"]) if up else "down"} nice {st.get("nice")}  updated {st.get("updated")}  '
           f'load {loadavg()}')
-    print(f'build throttle: cap now {st.get("build_cap_now")} (idle {st.get("idle_cap")}, with a game '
-          f'{st.get("game_cap")}), tokens held back {st.get("tokens_held_back")}, active buildq builds '
+    print(f'build throttle: cap now {st.get("build_cap_now")} ({st.get("build_cap_why", "")}; idle {st.get("idle_cap")}, '
+          f'unmeasured games {st.get("run_cap")}, measured {st.get("game_cap")}), tokens held back {st.get("tokens_held_back")}, active buildq builds '
           f'{active_builds()}, compiler processes {compile_procs()}')
     if st.get('games_outside_runq'):
         print(f'games running outside runq (they take slots): pids {st["games_outside_runq"]}')
