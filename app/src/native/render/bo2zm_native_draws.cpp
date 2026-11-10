@@ -47,6 +47,7 @@
 #include "bo2zm_graphics_settings.h"
 #include "../../bo2zm_preset.h"  // the graphics presets' texture detail
 #include "../../bo2zm_benchmark.h"  // the benchmark A/B (bo2zm_native_nvk_copy_engine_b)
+#include "../../bo2zm_perf_log.h"  // bo2zm_perf_log: synchronous compiles
 #include "../../bo2zm_debug_options.h"  // the DEBUG page turns shortcuts off
 #include "../../bo2zm_debug_watch.h"
 #include "../../bo2zm_page_writes.h"  // write stamps for the vertex cache  // PC diagnostics, who writes the lighting volume
@@ -15076,6 +15077,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // From the driver's cache only (it answers VK_PIPELINE_COMPILE_REQUIRED instead of compiling); one
     // that needs compiling goes to the compile thread and this draw is skipped.
     VkResult created = VK_ERROR_UNKNOWN;
+    bool compiled_here = false;  // bo2zm_perf_log: the ring compiled it (not a creation from the driver's cache)
     if (AsyncCompiles()) {
       static const bool all = REXCVAR_GET(bo2zm_native_test_async_all);
       created = all ? VK_PIPELINE_COMPILE_REQUIRED
@@ -15088,6 +15090,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     } else {
       created = CreatePipelineVulkan(key, input, vs, ps, pass_rp_, true, pipeline, n_colors);
+      compiled_here = true;
     }
     if (created != VK_SUCCESS) {
       Reject(53, "could not create a pipeline");
@@ -15099,6 +15102,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                               std::chrono::steady_clock::now() - start_creation)
                                               .count());
     ns_pipelines_ += ns_creation;
+    if (compiled_here) {
+      bo2zm::perf_log::NoteCompile(ns_creation, hash);
+    }
     AnnotatePipelineCreated(key, input, p.vs, key.ps ? p.ps : nullptr, pipeline, ns_creation);  // List and measurement
     pipelines_.emplace(hash, std::make_pair(key, pipeline));
     ++pipelines_per_mode_[key.padding2 & 3];  // Dynamic state report
