@@ -52,7 +52,9 @@ DEFAULTS = {'views': 4, 'max_gun_green': 40, 'max_green_blocks': 4, 'max_sheet_c
             'ignore': [[0.76, 0.55, 1.00, 0.92], [0.40, 0.25, 0.60, 0.40]],
             # a frame is in play when every view is at least ready_luma of its best golden's brightness and its ssim
             # against it is at least ready_ssim (the loading card scores 0.12-0.24, the fade from black is half as bright)
-            'ready_luma': 0.8, 'ready_ssim': 0.35, 'need': 0,
+            'ready_luma': 0.8, 'ready_ssim': 0.35, 'need': 0,  # need -1: every frame from the first in play
+            # in-play frames to drop before scoring: the first one can still show low-res textures streaming in
+            'settle': 0,
             'block': 16, 'sheet_rgb': 30, 'max_spread': 60, 'green_ratio': 1.12, 'green_block_px': 6}
 W, H = 1280, 720
 
@@ -190,13 +192,16 @@ def score_view(v, gold, o):
     moved = np.abs(mv - med).sum(-1)
     stable = spread <= o['max_spread']
     by, bx = stable.shape
+    hud = np.ones_like(stable)                                 # False on the HUD boxes in o['ignore']
     for x0_, y0_, x1_, y1_ in o['ignore']:
-        stable[int(y0_ * by):int(np.ceil(y1_ * by)), int(x0_ * bx):int(np.ceil(x1_ * bx))] = False
+        hud[int(y0_ * by):int(np.ceil(y1_ * by)), int(x0_ * bx):int(np.ceil(x1_ * bx))] = False
+    stable &= hud
     lost = dv <= gdet.min(0) * 0.85 + 0.3                      # fine detail gone (a see-through mesh filled in)
     sheet_b = stable & lost & (moved >= o['sheet_rgb'] + spread)
     dark_b = sheet_b & (mv.sum(-1) < med.sum(-1))
     green_g = np.stack([blocks(green_mask(x, o['green_ratio']).astype(np.float32), n, np.sum) for x in gs]).max(0)
     green_b = blocks(gm.astype(np.float32), n, np.sum) - green_g
+    green_b[~hud] = 0                                          # the HUD points are drawn in each player's colour
     res.update(match=gold.names[idx[0]], group=len(gs), ssim=round(ssim(lv, luma(g)), 3),
                mad=round(float(np.abs(v - g).mean()), 1), stable_pct=round(float(stable.mean()) * 100),
                green_blocks=int((green_b >= o['green_block_px']).sum()), sheet_blocks=int(sheet_b.sum()),
@@ -241,11 +246,15 @@ def pick_frames(scene, caps, gold, o):
     need = o.get('need') or 0
     if not need:
         return [(l, n, p, True) for l, n, p in fs]
-    out, started = [], False
+    out, started, settle = [], False, o.get('settle') or 0
     for l, n, p in fs:
         if not started and p and in_play(load(p), gold, o):
             started = True
-        take = bool(started and p) and sum(1 for x in out if x[3]) < need
+        if started and p and settle:
+            settle -= 1
+            out.append((l, n, p, False))
+            continue
+        take = bool(started and p) and (need < 0 or sum(1 for x in out if x[3]) < need)
         out.append((l, n, p, take))
     return out
 

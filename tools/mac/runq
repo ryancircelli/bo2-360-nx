@@ -909,8 +909,8 @@ def cmd_scene(argv):
     env.setdefault('SHOT_EVERY_S', '100000')
     if scene.get('end_on_ready') and not a.no_diff:
         sd_ = os.path.join(HERE, 'scenediff.py')
-        gd_ = a.golden or next((g for g in (os.path.join(os.path.dirname(a.scene), 'golden', scene['name']),
-                                            os.path.join(SPOOL, 'golden', scene['name'])) if os.path.isdir(g)), '')
+        gd_ = a.golden or next((g for g in (os.path.join(os.path.dirname(a.scene), 'golden', scene.get('golden_name', scene['name'])),
+                                            os.path.join(SPOOL, 'golden', scene.get('golden_name', scene['name']))) if os.path.isdir(g)), '')
         cmd = scene_diff_cmd(sd_, a.scene, os.path.join(run, 'logs'), gd_, a.out)
         cmd = cmd[:cmd.index('diff')] + ['ready', a.scene, os.path.join(run, 'logs')] + ([gd_] if gd_ else [])
         env['END_ON_CMD'] = ' '.join(shlex.quote(c) for c in cmd)
@@ -948,9 +948,9 @@ def cmd_scene(argv):
         verdict = 'FAIL'
     if not a.no_diff and scene.get('golden') is not None:
         # golden frames: --golden, else <scene dir>/golden/<name>, else <spool>/golden/<name> (outside git)
-        gd = a.golden or next((g for g in (os.path.join(os.path.dirname(a.scene), 'golden', scene['name']),
-                                           os.path.join(SPOOL, 'golden', scene['name'])) if os.path.isdir(g)),
-                              os.path.join(SPOOL, 'golden', scene['name']))
+        gd = a.golden or next((g for g in (os.path.join(os.path.dirname(a.scene), 'golden', scene.get('golden_name', scene['name'])),
+                                           os.path.join(SPOOL, 'golden', scene.get('golden_name', scene['name']))) if os.path.isdir(g)),
+                              os.path.join(SPOOL, 'golden', scene.get('golden_name', scene['name'])))
         sd = os.path.join(HERE, 'scenediff.py')
     if not a.no_diff and scene.get('golden') is not None and not (os.path.isdir(gd) and os.path.exists(sd)):
         res['diff'] = {'verdict': 'NO_GOLDEN', 'golden': gd}
