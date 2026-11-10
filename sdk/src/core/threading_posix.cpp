@@ -1724,6 +1724,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
       return;
     }
 
+    // A thread that has finished (returned, or is inside Terminate on its way to pthread_exit) never
+    // runs another callback. Signalling it only risks landing in its teardown, and once it is gone
+    // pthread_kill fails with ESRCH ("signal delivery failed (3)" at every quit).
+    {
+      std::unique_lock<std::mutex> lock(state_mutex_);
+      if (state_ == State::kFinished) {
+        return;
+      }
+    }
+
 #if defined(__SWITCH__)
     // Horizon does not deliver signals, so there is no way to interrupt another
     // thread to make it run the call. The callback is queued and runs when the
