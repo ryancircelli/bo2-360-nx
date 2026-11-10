@@ -21,20 +21,25 @@ RegisterFile::RegisterFile() {
 }
 
 const RegisterInfo* RegisterFile::GetRegisterInfo(uint32_t index) {
-  switch (index) {
-#define XE_GPU_REGISTER(index, type, name) \
-  case index: {                            \
-    static const RegisterInfo reg_info = { \
-        RegisterInfo::Type::type,          \
-        #name,                             \
-    };                                     \
-    return &reg_info;                      \
+  // CommandProcessor::WriteRegister asks this for every register the guest
+  // writes, thousands of times per draw. A switch with one function-local
+  // static per case paid a guard check on every hit (about 5 percent of the
+  // command processor thread with four-player split screen), so the table is
+  // built once and looked up by index.
+  static const RegisterInfo* const* const table = [] {
+    static const RegisterInfo* entries[kRegisterCount] = {};
+#define XE_GPU_REGISTER(index, type, name)                                  \
+  {                                                                         \
+    static const RegisterInfo reg_info = {RegisterInfo::Type::type, #name}; \
+    if ((index) < kRegisterCount) {                                         \
+      entries[(index)] = &reg_info;                                         \
+    }                                                                       \
   }
 #include <rex/graphics/register_table.inc>
 #undef XE_GPU_REGISTER
-    default:
-      return nullptr;
-  }
+    return entries;
+  }();
+  return index < kRegisterCount ? table[index] : nullptr;
 }
 
 }  // namespace rex::graphics
