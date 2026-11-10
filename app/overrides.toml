@@ -88,6 +88,12 @@ vector_scratch_as_local = true
 # Setter right after the bctr of the jump-table function that ends at 0x8249AD04;
 # the wrapper at 0x82534100 loads a per-thread object (r13) and tail-branches here.
 "0x8249AD08" = { }   # stw r4,0x20(r3); blr                                  <- 0x82534110
+#
+# Slot 7 of the allocator function table at 0x829873F0 (dispatched by 0x8249AB70 and
+# 0x8249AC68..0x8249ACE0): the release entry, a lone 4-byte tail branch that
+# tools/codegen_gaps.py skips (it ignores segments under 8 bytes). Reached when a
+# match ends, the map changes or a split-screen player leaves.
+"0x8249A9C0" = { size = 4 }   # b 0x8248EB80   <- table 0x829873F0[7]
 
 # --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
 "0x827C0590" = { }   # lwz r3, 0(r3); b 0x827c2250   <- 0x8279F90C
