@@ -106,65 +106,108 @@ uint32_t LargerGap(const std::vector<uint64_t>& map, uint32_t units_totals) {
 
 TexturePool::~TexturePool() { Finish(); }
 
-bool TexturePool::ChooseMemoryType(uint32_t& type_out, uint64_t& alignment_view_out) const {
-  /*
-   * A sample image with the same usage and tiling as the real textures, only to ask the
-   * driver which memory types it accepts and with what alignment. It is destroyed right
-   * away; it does not allocate memory.
-   */
-  const auto& dfn = vulkan_device_->functions();
-  VkImageCreateInfo info{};
-  info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-  info.imageType = VK_IMAGE_TYPE_2D;
-  info.format = VK_FORMAT_R8G8B8A8_UNORM;
-  info.extent = {256, 256, 1};
-  info.mipLevels = 1;
-  info.arrayLayers = 1;
-  info.samples = VK_SAMPLE_COUNT_1_BIT;
-  info.tiling = VK_IMAGE_TILING_OPTIMAL;
-  info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-  info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+namespace {
 
-  VkImage sample = VK_NULL_HANDLE;
-  if (dfn.vkCreateImage(device_, &info, nullptr, &sample) != VK_SUCCESS) {
-    return false;
-  }
-  VkMemoryRequirements requirements{};
-  dfn.vkGetImageMemoryRequirements(device_, sample, &requirements);
-  dfn.vkDestroyImage(device_, sample, nullptr);
+class VulkanSlabs final : public SlabMemory {
+ public:
+  explicit VulkanSlabs(const rex::ui::vulkan::VulkanDevice* vulkan_device)
+      : vulkan_device_(vulkan_device), device_(vulkan_device->device()) {}
 
-  // The same criterion CreateDedicatedAllocationImage uses for textures, so the slab lands
-  // in the same memory type the dedicated allocation would.
-  const uint32_t type = rex::ui::vulkan::util::ChooseMemoryType(
-      vulkan_device_->memory_types(), requirements.memoryTypeBits,
-      rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal);
-  if (type == UINT32_MAX) {
-    return false;
+  bool Choose(uint32_t& type_out, gpu::Size& alignment_view_out) override {
+    /*
+     * A sample image with the same usage and tiling as the real textures, only to ask the
+     * driver which memory types it accepts and with what alignment. It is destroyed right
+     * away; it does not allocate memory.
+     */
+    const auto& dfn = vulkan_device_->functions();
+    VkImageCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    info.extent = {256, 256, 1};
+    info.mipLevels = 1;
+    info.arrayLayers = 1;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkImage sample = VK_NULL_HANDLE;
+    if (dfn.vkCreateImage(device_, &info, nullptr, &sample) != VK_SUCCESS) {
+      return false;
+    }
+    VkMemoryRequirements requirements{};
+    dfn.vkGetImageMemoryRequirements(device_, sample, &requirements);
+    dfn.vkDestroyImage(device_, sample, nullptr);
+
+    // The same criterion CreateDedicatedAllocationImage uses for textures, so the slab lands
+    // in the same memory type the dedicated allocation would.
+    const uint32_t type = rex::ui::vulkan::util::ChooseMemoryType(
+        vulkan_device_->memory_types(), requirements.memoryTypeBits,
+        rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal);
+    if (type == UINT32_MAX) {
+      return false;
+    }
+    type_out = type;
+    alignment_view_out = requirements.alignment;
+    return true;
   }
-  type_out = type;
-  alignment_view_out = requirements.alignment;
-  return true;
+
+  gpu::Memory Allocate(gpu::Size bytes, uint32_t type) override {
+    /*
+     * Without VkMemoryDedicatedAllocateInfo on purpose: that way the nvkmd_mem is created with
+     * pte_kind = 0 and tile_mode = 0, its layout.valid stays false
+     * (nvkmd/switch/nvkmd_switch_dev.c:787-795) and the block accepts aliased images with any
+     * pte_kind (horizon/nouveau_horizon_memory.c:1056-1073).
+     */
+    VkMemoryAllocateInfo reserve{};
+    reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    reserve.allocationSize = bytes;
+    reserve.memoryTypeIndex = type;
+
+    VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+    if (vulkan_device_->functions().vkAllocateMemory(device_, &reserve, nullptr, &guest_memory) != VK_SUCCESS) {
+      return nullptr;
+    }
+    return guest_memory;
+  }
+
+  void Release(gpu::Memory memory) override {
+    vulkan_device_->functions().vkFreeMemory(device_, memory, nullptr);
+  }
+
+ private:
+  const rex::ui::vulkan::VulkanDevice* vulkan_device_;
+  VkDevice device_;
+};
+
+}  // namespace
+
+std::unique_ptr<SlabMemory> VulkanSlabMemory(const rex::ui::vulkan::VulkanDevice* vulkan_device) {
+  return std::make_unique<VulkanSlabs>(vulkan_device);
 }
 
 bool TexturePool::Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max) {
+  return Start(vulkan_device ? VulkanSlabMemory(vulkan_device) : nullptr, mb_cache_max);
+}
+
+bool TexturePool::Start(std::unique_ptr<SlabMemory> memory, int32_t mb_cache_max) {
   if (!REXCVAR_GET(bo2zm_native_texture_pool)) {
     REXLOG_INFO("[native] C3: texture pool (bo2zm_native_texture_pool) = no; each texture will ask for its dedicated "
                 "allocation, as before");
     return false;
   }
-  if (vulkan_device == nullptr) {
+  if (!memory) {
     return false;
   }
-  vulkan_device_ = vulkan_device;
-  device_ = vulkan_device->device();
+  memory_ = std::move(memory);
 
-  uint64_t alignment_view = 0;
-  if (!ChooseMemoryType(type_memory_, alignment_view)) {
+  gpu::Size alignment_view = 0;
+  if (!memory_->Choose(type_memory_, alignment_view)) {
     REXLOG_WARN("[native] C3: texture pool: there is no valid local memory type; continuing with a dedicated allocation "
                 "per texture");
-    vulkan_device_ = nullptr;
-    device_ = VK_NULL_HANDLE;
+    memory_.reset();
     return false;
   }
 
@@ -208,8 +251,7 @@ bool TexturePool::Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int3
                 "allocation per texture",
                 slab_mb);
     active_ = false;
-    vulkan_device_ = nullptr;
-    device_ = VK_NULL_HANDLE;
+    memory_.reset();
     return false;
   }
 
@@ -225,19 +267,8 @@ bool TexturePool::CreateSlab(bool in_hot) {
   if (!active_ || slabs_.size() >= slabs_cap_ || slabs_.size() >= kMaxSlabs) {
     return false;
   }
-  /*
-   * Without VkMemoryDedicatedAllocateInfo on purpose: that way the nvkmd_mem is created with
-   * pte_kind = 0 and tile_mode = 0, its layout.valid stays false
-   * (nvkmd/switch/nvkmd_switch_dev.c:787-795) and the block accepts aliased images with any
-   * pte_kind (horizon/nouveau_horizon_memory.c:1056-1073).
-   */
-  VkMemoryAllocateInfo reserve{};
-  reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  reserve.allocationSize = slab_bytes_;
-  reserve.memoryTypeIndex = type_memory_;
-
-  VkDeviceMemory guest_memory = VK_NULL_HANDLE;
-  if (vulkan_device_->functions().vkAllocateMemory(device_, &reserve, nullptr, &guest_memory) != VK_SUCCESS) {
+  const gpu::Memory guest_memory = memory_->Allocate(slab_bytes_, type_memory_);
+  if (guest_memory == nullptr) {
     ++slabs_failed_;
     return false;
   }
@@ -257,29 +288,27 @@ bool TexturePool::CreateSlab(bool in_hot) {
 }
 
 void TexturePool::Finish() {
-  if (device_ != VK_NULL_HANDLE) {
-    const auto& dfn = vulkan_device_->functions();
+  if (memory_) {
     for (Slab& slab : slabs_) {
-      if (slab.guest_memory != VK_NULL_HANDLE) {
-        dfn.vkFreeMemory(device_, slab.guest_memory, nullptr);
+      if (slab.guest_memory != nullptr) {
+        memory_->Release(slab.guest_memory);
       }
     }
   }
   slabs_.clear();
   active_ = false;
-  vulkan_device_ = nullptr;
-  device_ = VK_NULL_HANDLE;
+  memory_.reset();
 }
 
-bool TexturePool::Reserve(const VkMemoryRequirements& requirements, VkDeviceMemory& memory_out,
-                            VkDeviceSize& offset_out, uint32_t& block_out) {
+bool TexturePool::Reserve(const gpu::Requirements& requirements, gpu::Memory& memory_out, gpu::Size& offset_out,
+                          uint32_t& block_out) {
   if (!active_) {
     return false;
   }
   // The slab's type must be among the ones this image accepts. On NVK for Tegra it always
   // is, but if some format said otherwise, falling back to the dedicated path is better than
   // binding something invalid.
-  if (((requirements.memoryTypeBits >> type_memory_) & 1u) == 0u) {
+  if (((requirements.types >> type_memory_) & 1u) == 0u) {
     return false;
   }
   if (requirements.size == 0) {
@@ -316,7 +345,7 @@ bool TexturePool::Reserve(const VkMemoryRequirements& requirements, VkDeviceMemo
     slab.units_in_use += units;
 
     memory_out = slab.guest_memory;
-    offset_out = VkDeviceSize(start) * kUnitPoolBytes;
+    offset_out = gpu::Size(start) * kUnitPoolBytes;
     block_out = (s << 24) | start;
     ++textures_live_;
     ++textures_placed_;
