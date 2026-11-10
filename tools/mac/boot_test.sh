@@ -140,13 +140,15 @@ if [ -f "$out/game.log" ]; then
     lobby_s=$(( $(sec "$tl") - $(sec "$t0") ))
     first_join="$(grep -E '^BO2ZM_TEST_BUTTONS_P[2-4]' "$route" | sed -E 's/^[^=]*= *//; s/:.*//; s/-.*//' | sort -n | head -1)"
     echo "event: Local lobby open at ${lobby_s} s on the script clock (log start to lobby)"
+    grep -q wait_log "$route" && first_join=""   # event routes wait for the lobby themselves
     [ -n "$first_join" ] && [ "$first_join" -le "$lobby_s" ] && echo "WARN: first join at ${first_join} s is not after the lobby opened (${lobby_s} s): raise the join times in the route"
   fi
   grep -q '\[benchmark\] [0-9]* frames in' "$out/game.log" && echo "route reached its end: benchmark summary written"
   known="$(grep -Ec "$KNOWN_PATTERNS" "$out/game.log")"
   if [ "${known:-0}" -gt 0 ]; then echo "known defects: $known log lines ($KNOWN_PATTERNS)"; [ "$strict" = 1 ] && logfail=1; fi
-  hits="$(grep -Ec "$CHECK_PATTERNS" "$out/game.log")"
-  if [ "${hits:-0}" -gt 0 ]; then echo "FAIL: $hits log lines match: $CHECK_PATTERNS"; grep -E "$CHECK_PATTERNS" "$out/game.log" | sort | uniq -c | sort -rn | head -5; logfail=1; fi
+  # "verify mismatches 0" is an info line of the Metal plugin, not an error
+  hits="$(grep -E "$CHECK_PATTERNS" "$out/game.log" | grep -Evic "mismatches 0")"
+  if [ "${hits:-0}" -gt 0 ]; then echo "FAIL: $hits log lines match: $CHECK_PATTERNS"; grep -E "$CHECK_PATTERNS" "$out/game.log" | grep -Evi "mismatches 0" | sort | uniq -c | sort -rn | head -5; logfail=1; fi
 fi
 
 # ---- results ----
