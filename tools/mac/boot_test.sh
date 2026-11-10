@@ -16,7 +16,7 @@
 # Exit: 0 pass, 1 regression, compare or log-check failure, 2 setup error, 3 the game crashed or never produced frames.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-app=""; exe=""; data=""; route="$here/routes/smoke.route"; out=""; ref=""; base=""; video=0; useopen=0; keep=0; pads=sdk; strict=0; portoff=${BO2_NET_PORT_OFFSET:-42000}
+app=""; exe=""; data=""; route="$here/routes/smoke.route"; out=""; ref=""; base=""; video=0; useopen=0; keep=0; pads=sdk; strict=0; portoff=${BO2_NET_PORT_OFFSET:-}
 while [ $# -gt 0 ]; do case "$1" in
   --app) app="$2"; shift 2;; --exe) exe="$2"; shift 2;; --data) data="$2"; shift 2;; --route) route="$2"; shift 2;;
   --out) out="$2"; shift 2;; --reference) ref="$2"; shift 2;; --baseline) base="$2"; shift 2;;
@@ -48,7 +48,7 @@ envs+=(LOG_LEVEL=info BO2ZM_TEST_EXIT_ON_ERROR=true AUDIO_MUTE=true WINDOW_START
 [ "$video" = 1 ] && envs+=(BO2ZM_VIDEO_RGBA="$out/capture.rgba")   # hook for the build agent, see docs/mac/README.md
 fullenv=(); for e in "${envs[@]}"; do fullenv+=("REX_$e"); done
 [ "$pads" = sdk ] && [ "$scripted" = 1 ] && fullenv+=(REX_HID_VIRTUAL_PAD_SCRIPT="$(cd "$(dirname "$route")" && pwd)/$(basename "$route")")
-fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$portoff")   # other instances bind UDP 31000/31001; each test run uses its own ports
+[ -n "$portoff" ] && fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$portoff")   # explicit offset; otherwise a free one is picked below. other instances bind UDP 31000/31001; each test run uses its own ports
 fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
           MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs"
           BO2ZM_ROUTE="$rname" BO2ZM_PLAYERS="$players")   # the perf log's route and players header lines
@@ -118,6 +118,16 @@ if [ -f "$out/game.log" ]; then
   if [ "$allow_relaunch" = 0 ] && grep -q '\[relaunch\] restarting' "$out/game.log"; then echo "FAIL: the game relaunched itself"; logfail=1; fi
   # STUB lines for the sign-in calls fail a run (join test plan, splitscreen-signin.md)
   if grep -E 'XamUserGetAgeGroup|XamUserGetMembershipTier' "$out/game.log" | grep -q 'STUB'; then echo "FAIL: STUB line for XamUserGetAgeGroup/XamUserGetMembershipTier"; logfail=1; fi
+  # event check: pads run on a clock from process start, so say when a join landed before its event
+  t0="$(head -1 "$out/game.log" | sed -n 's/^\[[0-9-]* \([0-9:]*\)\..*/\1/p')"
+  tl="$(grep -m1 'Local lobby open' "$out/game.log" | sed -n 's/^\[[0-9-]* \([0-9:]*\)\..*/\1/p')"
+  if [ -n "$t0" ] && [ -n "$tl" ]; then
+    sec() { IFS=: read -r h m x <<<"$1"; echo $((10#$h*3600+10#$m*60+10#$x)); }
+    lobby_s=$(( $(sec "$tl") - $(sec "$t0") ))
+    first_join="$(grep -E '^BO2ZM_TEST_BUTTONS_P[2-4]' "$route" | sed -E 's/^[^=]*= *//; s/:.*//; s/-.*//' | sort -n | head -1)"
+    echo "event: Local lobby open at ${lobby_s} s on the script clock (log start to lobby)"
+    [ -n "$first_join" ] && [ "$first_join" -le "$lobby_s" ] && echo "WARN: first join at ${first_join} s is not after the lobby opened (${lobby_s} s): raise the join times in the route"
+  fi
   grep -q '\[benchmark\] [0-9]* frames in' "$out/game.log" && echo "route reached its end: benchmark summary written"
   known="$(grep -Ec "$KNOWN_PATTERNS" "$out/game.log")"
   if [ "${known:-0}" -gt 0 ]; then echo "known defects: $known log lines ($KNOWN_PATTERNS)"; [ "$strict" = 1 ] && logfail=1; fi
