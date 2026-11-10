@@ -357,6 +357,14 @@ struct ImageDesc {
   ImageUsage usage = kImageSampled | kImageCopyTarget;
 };
 
+// What memory an image needs: its size, its alignment and the memory types it can live in (a bit per type; Metal has
+// one type, bit 0). The layout of VkMemoryRequirements.
+struct Requirements {
+  Size size = 0;
+  Size alignment = 0;
+  uint32_t types = 0;
+};
+
 // A view of an image: its type, format, aspect, mips and layers, and the channel swizzle (Vulkan numbering:
 // 0 identity, 1 zero, 2 one, 3 to 6 red to alpha). Metal makes a texture view with the same swizzle.
 enum ViewType : uint32_t { kView2D = 1, kView3D = 2, kViewCube = 3 };

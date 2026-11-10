@@ -7447,7 +7447,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!gpu::vulkan::CreateImage(dfn_, device_, info, image)) {
       return false;
     }
-    const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image);
+    const gpu::Requirements req = gpu::vulkan::Requirements(dfn_, device_, image);
     gpu::Memory block = nullptr;
     gpu::Size offset = 0;
     uint32_t id_block = 0xFFFFFFFFu;
@@ -12948,7 +12948,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (pool_textures_.IsActive()) {
       gpu::Image image_pool = nullptr;
       if (gpu::vulkan::CreateImage(dfn_, device_, info, image_pool)) {
-        const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image_pool);
+        const gpu::Requirements req = gpu::vulkan::Requirements(dfn_, device_, image_pool);
         gpu::Memory block = nullptr;
         gpu::Size offset = 0;
         uint32_t id_block = 0xFFFFFFFFu;
