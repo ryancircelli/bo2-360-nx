@@ -53,6 +53,7 @@ BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, layers, i
 BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, offset, imageOffset);
 BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, extent, imageExtent);
 static_assert(sizeof(bo2zm::native::gpu::BufferCopy) == sizeof(VkBufferCopy));
+static_assert(sizeof(bo2zm::native::gpu::ClearValue) == sizeof(VkClearValue));
 BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferCopy, VkBufferCopy, target_offset, dstOffset);
 BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferCopy, VkBufferCopy, size, size);
 #undef BO2ZM_GPU_SAME
@@ -259,13 +260,31 @@ class Recorder {
 
   // Render passes, clears, copies, barriers and queries. These still take the Vulkan structures (the images,
   // buffers and passes are Vulkan objects until the resources move behind the layer); each is the same call.
-  void BeginPass(VkCommandBuffer c, const VkRenderPassBeginInfo& begin) const {
+  // Opens the pass over area, with the clear values of its CLEAR attachments (in attachment order).
+  void BeginPass(VkCommandBuffer c, Pass pass, Framebuffer framebuffer, const Rect& area, uint32_t n_clears = 0,
+                 const ClearValue* clears = nullptr) const {
+    VkRenderPassBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    begin.renderPass = pass;
+    begin.framebuffer = framebuffer;
+    begin.renderArea = ToVk(area);
+    begin.clearValueCount = n_clears;
+    begin.pClearValues = reinterpret_cast<const VkClearValue*>(clears);
     dfn_.vkCmdBeginRenderPass(c, &begin, VK_SUBPASS_CONTENTS_INLINE);
   }
   void EndPass(VkCommandBuffer c) const { dfn_.vkCmdEndRenderPass(c); }
-  void ClearAttachments(VkCommandBuffer c, uint32_t count, const VkClearAttachment* attachments, uint32_t rects,
-                        const VkClearRect* rectangles) const {
-    dfn_.vkCmdClearAttachments(c, count, attachments, rects, rectangles);
+  // Clears area (layer 0) of one attachment of the open pass: color attachment color_index, or depth and stencil.
+  void ClearAttachment(VkCommandBuffer c, Aspects aspects, uint32_t color_index, const ClearValue& value,
+                       const Rect& area) const {
+    VkClearAttachment attachment{};
+    attachment.aspectMask = ToVk(aspects);
+    attachment.colorAttachment = color_index;
+    attachment.clearValue = ToVk(value);
+    VkClearRect rectangle{};
+    rectangle.rect = ToVk(area);
+    rectangle.baseArrayLayer = 0;
+    rectangle.layerCount = 1;
+    dfn_.vkCmdClearAttachments(c, 1, &attachment, 1, &rectangle);
   }
   void ClearColorImage(VkCommandBuffer c, VkImage image, Layout layout, const ClearColor* color, uint32_t count,
                        const Range* ranges) const {

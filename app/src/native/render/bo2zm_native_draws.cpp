@@ -7019,17 +7019,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (framebuffer == nullptr) {
       return false;
     }
-    VkClearValue clear{};
-    clear.depthStencil = {depth, stencil};
-    VkRenderPassBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    start.renderPass = pass;
-    start.framebuffer = framebuffer;
-    start.renderArea.extent = {image.width, image.height};
-    start.clearValueCount = 1;
-    start.pClearValues = &clear;
+    gpu::ClearValue clear{};
+    clear.depth_stencil = {depth, stencil};
     PassBarrier(commands);
-    gpu_.BeginPass(commands, start);
+    gpu_.BeginPass(commands, pass, framebuffer, gpu::Rect{0, 0, image.width, image.height}, 1, &clear);
     gpu_.EndPass(commands);
     PassBarrier(commands);
     ++clears_depth_in_pass_;
@@ -7041,11 +7034,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // rectangle. What lies outside is not touched (Vulkan only loads and stores the renderArea).
   bool ClearColorInPass(gpu::CommandList commands, const NativeImage& image, const gpu::ClearColor& clear_color,
                         const gpu::Rect& clear_area) override {
-    const VkClearColorValue color = gpu::ToVk(clear_color);
-    const VkRect2D area = gpu::ToVk(clear_area);
-    if (commands == nullptr || image.view == nullptr || !area.extent.width || !area.extent.height ||
-        area.offset.x < 0 || area.offset.y < 0 || uint32_t(area.offset.x) + area.extent.width > image.width ||
-        uint32_t(area.offset.y) + area.extent.height > image.height) {
+    const gpu::Rect& area = clear_area;
+    if (commands == nullptr || image.view == nullptr || !area.width || !area.height || area.x < 0 || area.y < 0 ||
+        uint32_t(area.x) + area.width > image.width || uint32_t(area.y) + area.height > image.height) {
       return false;
     }
     FinishPass();  // a pass cannot be opened inside another
@@ -7060,17 +7051,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (framebuffer == nullptr) {
       return false;
     }
-    VkClearValue clear{};
-    clear.color = color;
-    VkRenderPassBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    start.renderPass = pass;
-    start.framebuffer = framebuffer;
-    start.renderArea = area;
-    start.clearValueCount = 1;
-    start.pClearValues = &clear;
+    gpu::ClearValue clear{};
+    clear.color = clear_color;
     PassBarrier(commands);
-    gpu_.BeginPass(commands, start);
+    gpu_.BeginPass(commands, pass, framebuffer, area, 1, &clear);
     gpu_.EndPass(commands);
     PassBarrier(commands);
     return true;
@@ -7081,17 +7065,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // writes only the rectangle and the aspects requested.
   bool ClearAttachmentInPass(gpu::CommandList commands, const NativeImage& image, gpu::Aspects clear_aspects,
                              const gpu::ClearValue& clear_value, const gpu::Rect& clear_area) override {
-    const VkImageAspectFlags aspects = gpu::ToVk(clear_aspects);
-    const VkClearValue value = gpu::ToVk(clear_value);
-    const VkRect2D area = gpu::ToVk(clear_area);
-    if (commands == nullptr || image.view == nullptr || !aspects || !area.extent.width ||
-        !area.extent.height || area.offset.x < 0 || area.offset.y < 0 ||
-        uint32_t(area.offset.x) + area.extent.width > image.width ||
-        uint32_t(area.offset.y) + area.extent.height > image.height) {
+    const gpu::Aspects aspects = clear_aspects;
+    const gpu::Rect& area = clear_area;
+    if (commands == nullptr || image.view == nullptr || !aspects || !area.width || !area.height || area.x < 0 ||
+        area.y < 0 || uint32_t(area.x) + area.width > image.width || uint32_t(area.y) + area.height > image.height) {
       return false;
     }
     FinishPass();  // a pass cannot be opened inside another
-    const uint32_t slot = (aspects & VK_IMAGE_ASPECT_COLOR_BIT) ? 0 : 4;
+    const uint32_t slot = (aspects & gpu::kAspectColor) ? 0 : 4;
     uint32_t formats[5] = {};
     formats[slot] = uint32_t(image.format);
     const gpu::Pass pass = PassOf(formats, kLoadRead);
@@ -7104,22 +7085,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (framebuffer == nullptr) {
       return false;
     }
-    VkRenderPassBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    start.renderPass = pass;
-    start.framebuffer = framebuffer;
-    start.renderArea = area;
     PassBarrier(commands);
-    gpu_.BeginPass(commands, start);
-    VkClearAttachment attachment{};
-    attachment.aspectMask = aspects;
-    attachment.colorAttachment = 0;
-    attachment.clearValue = value;
-    VkClearRect rectangle{};
-    rectangle.rect = area;
-    rectangle.baseArrayLayer = 0;
-    rectangle.layerCount = 1;
-    gpu_.ClearAttachments(commands, 1, &attachment, 1, &rectangle);
+    gpu_.BeginPass(commands, pass, framebuffer, area);
+    gpu_.ClearAttachment(commands, aspects, 0, clear_value, area);
     gpu_.EndPass(commands);
     PassBarrier(commands);
     return true;
@@ -13557,10 +13525,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!cmd) {
       return false;
     }
-    VkRenderPassBeginInfo start{};
-    start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    start.renderPass = pass;
-    start.framebuffer = framebuffer;
     // Only the rectangle the game uses (see bo2zm_native_useful_area_pass).
     uint32_t height_pass = height;
     if (area_util_) {
@@ -13569,7 +13533,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
         height_pass = it->second;
       }
     }
-    start.renderArea.extent = {width, height_pass};
     // bo2zm_native_diag_clears. What this pass loads and stores of each render target, to compare with
     // what is cleared of it (C2 clears per target). Before opening the pass.
     for (const NativeImage* image : images) {
@@ -13581,7 +13544,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     stats_pass_ = context_->BeginStats(category_pass_);
     const auto before_start = std::chrono::steady_clock::now();
     PassBarrier(cmd);
-    gpu_.BeginPass(cmd, start);
+    gpu_.BeginPass(cmd, pass, framebuffer, gpu::Rect{0, 0, width, height_pass});
     ns_render_pass_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - before_start).count());
     if (time_) {
