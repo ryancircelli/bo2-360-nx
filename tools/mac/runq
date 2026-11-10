@@ -929,6 +929,9 @@ def cmd_scene(argv):
         os.makedirs(run, exist_ok=True)
         subprocess.run(['cp', '-cR', seed, os.path.join(run, 'support')])
         seeded = True
+    # render the route now, not at submit, so a queued job runs the scene as it is when its turn comes
+    scene['_path'] = a.scene
+    scene_route(scene, a.renderer, os.path.join(a.out, 'scene.route'))
     bt = [os.path.join(HERE, 'boot_test.sh'), '--app', a.app, '--route', os.path.join(a.out, 'scene.route'), '--out',
           run, '--port-offset', a.port]
     rc = subprocess.run(bt, env=env).returncode

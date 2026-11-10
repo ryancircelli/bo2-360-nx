@@ -119,7 +119,7 @@ for ((i = 0; i < duration; i++)); do
   sleep 1
   if [ -n "${END_ON_CMD:-}" ]; then
     elog="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"
-    n="$( [ -n "$elog" ] && grep -cF -- '[capture] /' "$elog" || echo 0)"
+    n=0; [ -n "$elog" ] && n="$(grep -cF -- '[capture] /' "$elog" 2>/dev/null)"; n="${n:-0}"
     if [ "$n" -gt "$ncap" ]; then
       ncap=$n
       if /bin/sh -c "$END_ON_CMD" >>"$out/end_on_cmd.txt" 2>&1; then
