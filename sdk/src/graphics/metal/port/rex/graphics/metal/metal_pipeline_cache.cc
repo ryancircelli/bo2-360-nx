@@ -1984,7 +1984,7 @@ bool MetalPipelineCache::InitializePipelineBinaryArchive(
   set.segments.clear();
 
   // Find the segments of this archive key.
-  constexpr size_t kMaxArchiveSegments = 8;
+  constexpr size_t kMaxArchiveSegments = 16;
   const std::string prefix = archive_prefix.filename().string() + ".seg";
   const std::string suffix = ".binarchive";
   struct Segment {
@@ -2216,8 +2216,16 @@ bool MetalPipelineCache::MaybeSavePipelineBinaryArchiveAsync(bool force,
     return false;
   }
   auto now = std::chrono::steady_clock::now();
-  if (!force &&
-      now - pipeline_binary_archive_last_save_ < std::chrono::seconds(interval)) {
+  // Every save closes the current segment and starts a new one, and a launch
+  // that finds kMaxArchiveSegments segments compacts them all into one. A
+  // fixed 30 s period filled the segment budget every few sessions, so the
+  // period doubles after each periodic save (30, 60, 120, 240 s, then stays):
+  // pipelines met early still reach disk quickly, a long session adds only a
+  // few segments.
+  const int64_t effective_interval =
+      int64_t(interval) << std::min(pipeline_binary_archive_save_backoff_, 3u);
+  if (!force && now - pipeline_binary_archive_last_save_ <
+                    std::chrono::seconds(effective_interval)) {
     return false;
   }
   {
@@ -2235,6 +2243,9 @@ bool MetalPipelineCache::MaybeSavePipelineBinaryArchiveAsync(bool force,
   // A single-set save does not move the periodic schedule of the others.
   if (only_set < 0) {
     pipeline_binary_archive_last_save_ = now;
+    if (!force) {
+      ++pipeline_binary_archive_save_backoff_;
+    }
   }
   if (pipeline_binary_archive_save_thread_.joinable()) {
     pipeline_binary_archive_save_thread_.join();

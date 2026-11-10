@@ -601,6 +601,8 @@ class MetalPipelineCache {
   std::thread pipeline_binary_archive_save_thread_;
   std::atomic<bool> pipeline_binary_archive_saving_{false};
   std::chrono::steady_clock::time_point pipeline_binary_archive_last_save_{};
+  // Number of periodic saves so far; doubles the save period (capped at 8x).
+  uint32_t pipeline_binary_archive_save_backoff_ = 0;
   // only_set >= 0: save just that set (the NS2 settle save).
   bool MaybeSavePipelineBinaryArchiveAsync(bool force, int only_set = -1);
   void JoinPipelineBinaryArchiveSave();
