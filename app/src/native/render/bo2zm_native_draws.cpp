@@ -2464,21 +2464,19 @@ bool IsDepth(gpu::Format format) {
 }
 
 // GuestToHostSwizzle: the fetch constant's swizzle, mapped through the channels the host format has.
-VkComponentMapping MappingComponents(uint32_t swizzle_guest, uint16_t swizzle_host) {
-  VkComponentMapping mapping{};
-  VkComponentSwizzle* output[4] = {&mapping.r, &mapping.g, &mapping.b, &mapping.a};
+// Written as gpu::ViewDesc::swizzle (Vulkan numbering).
+void MappingComponents(uint32_t swizzle_guest, uint16_t swizzle_host, uint32_t output[4]) {
   for (uint32_t i = 0; i < 4; ++i) {
     const uint32_t value = (swizzle_guest >> (i * 3)) & 0x7;
     if (value <= 3) {
       const uint32_t host = (swizzle_host >> (value * 3)) & 0x7;
-      *output[i] = VkComponentSwizzle(VK_COMPONENT_SWIZZLE_R + host);
+      output[i] = VK_COMPONENT_SWIZZLE_R + host;
     } else if (value == 4) {
-      *output[i] = VK_COMPONENT_SWIZZLE_ZERO;
+      output[i] = VK_COMPONENT_SWIZZLE_ZERO;
     } else {
-      *output[i] = VK_COMPONENT_SWIZZLE_ONE;
+      output[i] = VK_COMPONENT_SWIZZLE_ONE;
     }
   }
-  return mapping;
 }
 
 struct VertexAttribute {
@@ -10803,8 +10801,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // Slot 0 of each heap: a transparent black texture and a basic sampler, as the emulation does for an
   // invalid fetch constant.
   bool CreateEmpty() {
-    const std::array<std::pair<VkImageViewType, uint32_t>, 3> types = {
-        {{VK_IMAGE_VIEW_TYPE_2D, 1}, {VK_IMAGE_VIEW_TYPE_3D, 1}, {VK_IMAGE_VIEW_TYPE_CUBE, 6}}};
+    const std::array<std::pair<gpu::ViewType, uint32_t>, 3> types = {
+        {{gpu::kView2D, 1}, {gpu::kView3D, 1}, {gpu::kViewCube, 6}}};
     for (uint32_t i = 0; i < 3; ++i) {
       VkImageCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -10824,13 +10822,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
               empty_[i].image, empty_[i].guest_memory)) {
         return false;
       }
-      VkImageViewCreateInfo view{};
-      view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-      view.image = empty_[i].image;
-      view.viewType = types[i].first;
+      gpu::ViewDesc view;
+      view.type = types[i].first;
       view.format = VK_FORMAT_R8G8B8A8_UNORM;
-      view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, types[i].second};
-      if (dfn_.vkCreateImageView(device_, &view, nullptr, &empty_[i].view) != VK_SUCCESS) {
+      view.layers = types[i].second;
+      if (gpu::vulkan::CreateView(dfn_, device_, empty_[i].image, view, empty_[i].view) != VK_SUCCESS) {
         return false;
       }
       empty_[i].width = empty_[i].height = 1;
@@ -13189,19 +13185,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // A texture's view, the same for SlotView and for the deferred views of CollectBindings.
   VkResult CreateViewTexture(VkImage image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap,
                              VkImageView& view) {
-    VkImageViewCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    info.image = image;
-    info.viewType = heap == 2   ? VK_IMAGE_VIEW_TYPE_CUBE
-                    : heap == 1 ? VK_IMAGE_VIEW_TYPE_3D
-                                  : VK_IMAGE_VIEW_TYPE_2D;
-    info.format = format;
-    info.components = MappingComponents(swizzle, swizzle_host);
-    info.subresourceRange = {IsDepth(format)
-                                 ? VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT)
-                                 : VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
-                             0, VK_REMAINING_MIP_LEVELS, 0, heap == 2 ? 6u : 1u};  // with its mips
-    return dfn_.vkCreateImageView(device_, &info, nullptr, &view);
+    gpu::ViewDesc desc;
+    desc.type = heap == 2 ? gpu::kViewCube : heap == 1 ? gpu::kView3D : gpu::kView2D;
+    desc.format = format;
+    MappingComponents(swizzle, swizzle_host, desc.swizzle);
+    desc.aspects = IsDepth(format) ? gpu::kAspectDepth : gpu::kAspectColor;
+    desc.levels = gpu::kAllLevels;  // with its mips
+    desc.layers = heap == 2 ? 6u : 1u;
+    return gpu::vulkan::CreateView(dfn_, device_, image, desc, view);
   }
 
   // The views_ key (image, heap and both swizzles), factored out for CollectBindings.
