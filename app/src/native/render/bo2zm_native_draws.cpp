@@ -32,6 +32,7 @@
 //   equivalent.
 
 #include "bo2zm_native_draws.h"
+#include "bo2zm_gpu_vulkan.h"
 #include "bo2zm_native_blend.h"
 #include "../bo2zm_render_formats.h"
 #include "../bo2zm_native_system.h"
@@ -7063,8 +7064,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // bo2zm_native_clear_useful_area. Clears only the `area` rectangle of a color image with a
   // loadOp = CLEAR pass: what NVK does internally for vkCmdClearColorImage (nvk_cmd_clear.c), over that
   // rectangle. What lies outside is not touched (Vulkan only loads and stores the renderArea).
-  bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& image, const VkClearColorValue& color,
-                         const VkRect2D& area) override {
+  bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& image, const gpu::ClearColor& clear_color,
+                        const gpu::Rect& clear_area) override {
+    const VkClearColorValue color = gpu::ToVk(clear_color);
+    const VkRect2D area = gpu::ToVk(clear_area);
     if (commands == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || !area.extent.width || !area.extent.height ||
         area.offset.x < 0 || area.offset.y < 0 || uint32_t(area.offset.x) + area.extent.width > image.width ||
         uint32_t(area.offset.y) + area.extent.height > image.height) {
@@ -7101,8 +7104,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // BO2's Direct3D Clear() is a draw (a rectangle with D3D's own shaders), so it can clear part of a
   // render target, or only its stencil. The pass loads the image (loadOp = LOAD) and vkCmdClearAttachments
   // writes only the rectangle and the aspects requested.
-  bool ClearAttachmentInPass(VkCommandBuffer commands, const NativeImage& image, VkImageAspectFlags aspects,
-                           const VkClearValue& value, const VkRect2D& area) override {
+  bool ClearAttachmentInPass(VkCommandBuffer commands, const NativeImage& image, gpu::Aspects clear_aspects,
+                             const gpu::ClearValue& clear_value, const gpu::Rect& clear_area) override {
+    const VkImageAspectFlags aspects = gpu::ToVk(clear_aspects);
+    const VkClearValue value = gpu::ToVk(clear_value);
+    const VkRect2D area = gpu::ToVk(clear_area);
     if (commands == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || !aspects || !area.extent.width ||
         !area.extent.height || area.offset.x < 0 || area.offset.y < 0 ||
         uint32_t(area.offset.x) + area.extent.width > image.width ||
