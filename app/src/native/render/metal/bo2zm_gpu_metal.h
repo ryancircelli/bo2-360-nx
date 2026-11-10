@@ -91,6 +91,8 @@ class Device {
  private:
   struct State;
   void* Specialized(std::string_view name, bool specialized, uint32_t constant);
+  // id<MTLLibrary> made from msl/<name>.metal, or nil; cached. Called with the lock held.
+  void* Source(std::string_view name);
   explicit Device(std::unique_ptr<State> state);
   std::unique_ptr<State> state_;
   std::string name_;
