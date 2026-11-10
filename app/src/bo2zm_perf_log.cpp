@@ -387,8 +387,15 @@ void InstallSwapHook(std::string_view renderer) {
   static std::string name;
   name = std::string(renderer);
   g_renderer = name.c_str();
+  rex::graphics::SetGpuJobHook([](uint64_t order, uint64_t ns, bool measured) { NoteGpuJob(order, ns, measured); });
   rex::graphics::SetSwapHook([](uint32_t width, uint32_t height) {
-    Counters c;  // frame time only: the emulated GPU plugins keep no cumulative counters in this format
+    // Cumulative counters of the GPU plugin (Metal fills them; the Xenos path leaves them at zero).
+    auto& st = rex::graphics::GetPerfStats();
+    Counters c;
+    c.ns_working = st.ns_working.load(std::memory_order_relaxed);
+    c.ns_present_wait = st.ns_present_wait.load(std::memory_order_relaxed);
+    c.draws = st.draws.load(std::memory_order_relaxed);
+    c.jobs_submitted = st.jobs_submitted.load(std::memory_order_relaxed);
     c.width = width;
     c.height = height;
     OnPresent(c);
