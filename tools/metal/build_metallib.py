@@ -29,7 +29,7 @@ def compile_one(out_dir, name):
     if os.path.exists(air) and os.path.getmtime(air) >= os.path.getmtime(src):
         return name, "ok", ""
     r = subprocess.run(
-        ["xcrun", "-sdk", "macosx", "metal", "-c", f"-std={STD}", f"-mmacosx-version-min={MIN_MACOS}", "-O2",
+        ["xcrun", "-sdk", "macosx", "metal", "-c", f"-std={STD}", f"-mmacosx-version-min={MIN_MACOS}", "-O2", "-fno-fast-math",
          "-Wno-unused-variable", "-o", air, src],
         capture_output=True, text=True)
     if r.returncode == 0:

@@ -33,6 +33,8 @@ struct Device::State {
   std::array<id<MTLLibrary>, 16> libraries{};
   std::array<bool, 16> missing{};
   std::unordered_map<std::string, id<MTLFunction>> functions;
+  // Development only: functions missing from the libraries, compiled from msl/<name>.metal (see Specialized).
+  std::unordered_map<std::string, id<MTLLibrary>> sources;
 };
 
 Device::Device(std::unique_ptr<State> state) : state_(std::move(state)) {
@@ -118,6 +120,36 @@ void* Device::Function(std::string_view name) { return Specialized(name, false, 
 
 void* Device::SpecializedFunction(std::string_view name, uint32_t constant) { return Specialized(name, true, constant); }
 
+void* Device::Source(std::string_view name) {
+  State& s = *state_;
+  const std::string key(name);
+  if (auto found = s.sources.find(key); found != s.sources.end()) {
+    return (__bridge void*)found->second;
+  }
+  id<MTLLibrary> library = nil;
+  const std::filesystem::path path = s.folder / "msl" / (key + ".metal");
+  NSError* error = nil;
+  NSString* text = [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:path.c_str()]
+                                             encoding:NSUTF8StringEncoding
+                                                error:&error];
+  if (text) {
+    MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+    options.languageVersion = MTLLanguageVersion3_1;
+    options.mathMode = MTLMathModeSafe;  // as the libraries (and MoltenVK): the game expects IEEE results
+    library = [s.device newLibraryWithSource:text options:options error:&error];
+    if (library) {
+      REXLOG_WARN("[native] Metal: {} is not in the libraries, compiled from its MSL", key);
+    } else {
+      REXLOG_ERROR("[native] Metal: {} did not compile: {}", key,
+                   error ? [[error localizedDescription] UTF8String] : "unknown error");
+    }
+  } else {
+    REXLOG_ERROR("[native] Metal: {} is not in the libraries, and {} is not there", key, path.string());
+  }
+  s.sources.emplace(key, library);
+  return (__bridge void*)library;
+}
+
 void* Device::Specialized(std::string_view name, bool specialized, uint32_t constant) {
   // vs_ or ps_, then the hash: the shard is the hash's first hex digit.
   if (name.size() < 4) {
@@ -153,25 +185,31 @@ void* Device::Specialized(std::string_view name, bool specialized, uint32_t cons
                      error ? [[error localizedDescription] UTF8String] : "unknown error");
       }
     }
-    if (!s.libraries[shard]) {
-      return nullptr;
-    }
     NSString* function_name = [[NSString alloc] initWithBytes:name.data()
                                                        length:name.size()
                                                      encoding:NSUTF8StringEncoding];
+    id<MTLLibrary> library = s.libraries[shard];
+    if (!library || ![[library functionNames] containsObject:function_name]) {
+      // Development only: a shader that is not in the libraries (made from an older pack) is compiled from
+      // its MSL in msl/ next to them, if there, and logged: the shipped libraries must hold every shader.
+      library = (__bridge id<MTLLibrary>)Source(name);
+    }
+    if (!library) {
+      return nullptr;
+    }
     id<MTLFunction> function = nil;
     if (specialized) {
       // The pack shaders' one specialization constant (id 0, g_SpecConstants) as function constant 0.
       MTLFunctionConstantValues* values = [[MTLFunctionConstantValues alloc] init];
       [values setConstantValue:&constant type:MTLDataTypeUInt atIndex:0];
       NSError* error = nil;
-      function = [s.libraries[shard] newFunctionWithName:function_name constantValues:values error:&error];
+      function = [library newFunctionWithName:function_name constantValues:values error:&error];
       if (!function) {
         REXLOG_WARN("[native] Metal: {} not specialized with {:#x}: {}", std::string(name), constant,
                     error ? [[error localizedDescription] UTF8String] : "not in the library");
       }
     } else {
-      function = [s.libraries[shard] newFunctionWithName:function_name];
+      function = [library newFunctionWithName:function_name];
     }
     if (!function) {
       return nullptr;
