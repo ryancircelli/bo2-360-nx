@@ -58,4 +58,41 @@ enum Aspect : uint32_t {
 };
 using Aspects = uint32_t;
 
+// A viewport (Vulkan's VkViewport, Metal's MTLViewport with znear and zfar).
+struct Viewport {
+  float x = 0.0f;
+  float y = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+  float min_depth = 0.0f;
+  float max_depth = 1.0f;
+};
+
+// The faces a stencil state applies to (the bits are Vulkan's VkStencilFaceFlagBits).
+enum StencilFace : uint32_t {
+  kStencilFront = 1u << 0,
+  kStencilBack = 1u << 1,
+  kStencilBoth = kStencilFront | kStencilBack,
+};
+
+// The fixed function state the renderer sets per draw is kept as plain numbers in Vulkan's numbering (VkCullModeFlags,
+// VkFrontFace, VkPrimitiveTopology, VkCompareOp, VkStencilOp, VkBlendFactor, VkBlendOp, VkColorComponentFlags): the
+// Vulkan backend passes them through and the Metal backend maps them with small tables.
+using CullMode = uint32_t;
+using FrontFace = uint32_t;
+using Topology = uint32_t;
+using CompareOp = uint32_t;
+using StencilOp = uint32_t;
+using ColorMask = uint32_t;
+
+// One color target's blend equation (layout of VkColorBlendEquationEXT).
+struct BlendEquation {
+  uint32_t src_color = 0;
+  uint32_t dst_color = 0;
+  uint32_t color_op = 0;
+  uint32_t src_alpha = 0;
+  uint32_t dst_alpha = 0;
+  uint32_t alpha_op = 0;
+};
+
 }  // namespace bo2zm::native::gpu
