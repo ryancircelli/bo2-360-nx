@@ -57,6 +57,7 @@
 #include <cstring>
 
 #include <rex/platform.h>
+#include <rex/system/xmemory.h>
 
 namespace bo2zm::native::microcode {
 
@@ -99,14 +100,10 @@ inline uint32_t SlotOf(uint32_t physical) {
   return ((physical >> 2) * 0x9E3779B1u) >> (32 - kBitsSlot);
 }
 
-// A guest word read from a hook (on Win32 the area from 0xE0000000 is 0x1000 higher, like
+// A guest word read from a hook (on Win32 and macOS arm64 the area from 0xE0000000 is 0x1000 higher, like
 // REX_PHYS_HOST_OFFSET in the generated code's precompiled header).
 inline uint32_t ReadGuest32(const uint8_t* base, uint32_t address) {
-#if REX_PLATFORM_WIN32
-  const uint32_t displacement = address >= 0xE0000000u ? 0x1000u : 0u;
-#else
-  const uint32_t displacement = 0u;
-#endif
+  const uint32_t displacement = rex::memory::detail::PhysicalHostOffset(address);
   uint32_t value;
   std::memcpy(&value, base + address + displacement, 4);
   return __builtin_bswap32(value);

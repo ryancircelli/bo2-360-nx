@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include <rex/platform.h>
+#include <rex/system/xmemory.h>
 
 namespace bo2zm::jobs {
 
@@ -76,11 +77,9 @@ constexpr uint32_t kChooseHelp2 = BO2_GAME_ADDR(0x8284B548, 0x8262E5F8);
 constexpr uint32_t kChooseWait1 = BO2_GAME_ADDR(0x8284B80C, 0x8262E8BC);      // "wait for a job type" sub_8284B730
 constexpr uint32_t kChooseWait2 = BO2_GAME_ADDR(0x8284BA64, 0x8262EB14);
 
-// Guest words are big-endian. On Win32 the area from 0xE0000000 is 0x1000 higher, as in the recompiled code.
+// Guest words are big-endian. On Win32 and macOS arm64 the area from 0xE0000000 is 0x1000 higher, as in the recompiled code.
 inline uint32_t Read32(const uint8_t* base, uint32_t dir) {
-#if REX_PLATFORM_WIN32
-  dir += dir >= 0xE0000000u ? 0x1000u : 0u;
-#endif
+  dir += rex::memory::detail::PhysicalHostOffset(dir);
   uint32_t v;
   std::memcpy(&v, base + dir, sizeof(v));
   return __builtin_bswap32(v);
