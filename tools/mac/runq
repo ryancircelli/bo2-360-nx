@@ -409,7 +409,7 @@ class Daemon:
                                     'frames') if k in s}
         caps = os.path.join(run, 'captures')
         if os.path.isdir(caps):
-            res['captures'] = sorted(os.listdir(caps))
+            res['captures'] = sorted(f for f in os.listdir(caps) if f.endswith('.png'))
         extra = rjson(os.path.join(out, 'scene_result.json'))
         if extra:
             res['scene'] = extra
@@ -876,7 +876,10 @@ def cmd_install(_argv):
               'scenes_gate.sh'):
         s = os.path.join(HERE, f)
         if os.path.exists(s):
-            shutil.copy2(s, os.path.join(D['bin'], f))
+            # copy then rename: bash reads a running script as it goes, so never rewrite boot_test.sh in place
+            t = os.path.join(D['bin'], f'.{f}.{os.getpid()}')
+            shutil.copy2(s, t)
+            os.replace(t, os.path.join(D['bin'], f))
     if os.path.isdir(os.path.join(HERE, 'scenes')):
         shutil.copytree(os.path.join(HERE, 'scenes'), os.path.join(D['bin'], 'scenes'), dirs_exist_ok=True)
     b = os.path.join(D['bin'], 'buildq')

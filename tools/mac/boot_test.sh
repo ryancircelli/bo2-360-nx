@@ -132,7 +132,11 @@ if [ "$keep" = 0 ]; then
   kill_game -TERM; for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(game_pids)" ] && break; sleep 1; done
   kill_game -KILL
 fi
-[ -d "$exedir/captures" ] && cp -R "$exedir/captures/." "$out/captures/" && echo "captures: $(ls "$out/captures" | wc -l) in $out/captures"
+# builds since early November write captures under the log dir (BO2_LOG_DIR/captures), older ones next to the exe
+for c in "$exedir/captures" "$out/logs/captures"; do
+  [ -d "$c" ] && cp -R "$c/." "$out/captures/"
+done
+echo "captures: $(ls "$out/captures" | grep -c '\.png$') png in $out/captures"
 log="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"; [ -n "$log" ] && cp "$log" "$out/game.log"
 for r in ~/Library/Logs/DiagnosticReports/*bo2zm* ~/Library/Logs/DiagnosticReports/*Black*Ops*; do
   [ -f "$r" ] || continue
