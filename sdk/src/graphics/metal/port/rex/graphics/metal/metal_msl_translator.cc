@@ -140,6 +140,7 @@ void MslShaderTranslator::Reset() {
   jump_skip_targets_.clear();
   pending_flag_targets_.clear();
   loops_.clear();
+  backward_jump_ends_.clear();
   loop_counter_ = 0;
   declared_flag_targets_.clear();
   flag_guard_open_ = false;
@@ -336,6 +337,26 @@ MslTranslationResult MslShaderTranslator::Translate(DxbcShader& shader,
 void MslShaderTranslator::StartTranslation() {
   const Shader& shader = current_shader();
   Modification m = modification();
+  // Backward jumps become `while (true)` loops from the target label to the
+  // last backward jump to it; find them before the label is reached.
+  for (uint32_t i = 0; i < shader.cf_pair_index_bound(); ++i) {
+    ucode::ControlFlowInstruction cf_ab[2];
+    ucode::UnpackControlFlowInstructions(shader.ucode_data().data() + i * 3,
+                                         cf_ab);
+    for (uint32_t j = 0; j < 2; ++j) {
+      uint32_t cf_index = i * 2 + j;
+      uint32_t target;
+      if (cf_ab[j].opcode() == ucode::ControlFlowOpcode::kCondJmp) {
+        target = cf_ab[j].cond_jmp.address();
+      } else {
+        continue;
+      }
+      if (target <= cf_index) {
+        uint32_t& end = backward_jump_ends_[target];
+        end = std::max(end, cf_index);
+      }
+    }
+  }
   if (shader.uses_register_dynamic_addressing()) {
     Fail("dynamic register addressing");
   }
@@ -529,7 +550,11 @@ void MslShaderTranslator::CloseFlagGuard() {
 }
 
 void MslShaderTranslator::ProcessLabel(uint32_t cf_index) {
+  auto backward = backward_jump_ends_.find(cf_index);
   if (cf_index == 0) {
+    if (backward != backward_jump_ends_.end()) {
+      OpenBackwardLoop(cf_index, backward->second);
+    }
     return;
   }
   CloseExecConditionals();
@@ -539,7 +564,17 @@ void MslShaderTranslator::ProcessLabel(uint32_t cf_index) {
         std::remove(pending_flag_targets_.begin(), pending_flag_targets_.end(),
                     cf_index),
         pending_flag_targets_.end());
+    // Inside a loop the jump may run again: a flag set in one iteration must
+    // not skip the next one.
+    if (!loops_.empty() &&
+        std::find(declared_flag_targets_.begin(), declared_flag_targets_.end(),
+                  cf_index) != declared_flag_targets_.end()) {
+      Line("xe_j{} = false;", cf_index);
+    }
     OpenFlagGuard();
+    if (backward != backward_jump_ends_.end()) {
+      OpenBackwardLoop(cf_index, backward->second);
+    }
     return;
   }
   // Close the forward-jump blocks that end here. A label that is the target
@@ -555,6 +590,51 @@ void MslShaderTranslator::ProcessLabel(uint32_t cf_index) {
       Fail("crossing forward jumps");
     }
   }
+  if (backward != backward_jump_ends_.end()) {
+    OpenBackwardLoop(cf_index, backward->second);
+  }
+}
+
+void MslShaderTranslator::OpenBackwardLoop(uint32_t cf_index,
+                                           uint32_t end_address) {
+  // Like a counted loop (ProcessLoopStartInstruction): forward jumps pending
+  // here must end after the loop, and in flag mode the loop gets its own flag
+  // scope. Every backward jump to this label is `continue`; the last one also
+  // leaves the loop when not taken.
+  std::vector<uint32_t> outer_flags;
+  bool outer_guard_open = false;
+  if (jump_flags_mode_) {
+    for (uint32_t t : pending_flag_targets_) {
+      if (t <= end_address) {
+        Fail("forward jump into a backward-jump loop");
+        return;
+      }
+    }
+    CloseFlagGuard();
+    OpenFlagGuard();
+    outer_flags = pending_flag_targets_;
+    outer_guard_open = flag_guard_open_;
+    pending_flag_targets_.clear();
+    flag_guard_open_ = false;
+  }
+  for (uint32_t t : jump_skip_targets_) {
+    if (t <= end_address) {
+      Fail("forward jump into a backward-jump loop");
+      return;
+    }
+  }
+  LoopFrame f;
+  f.id = uint32_t(loops_.size() + loop_counter_++);
+  f.constant = UINT32_MAX;
+  f.skip_address = end_address + 1;
+  f.body_address = cf_index;
+  f.jump_depth = uint32_t(jump_skip_targets_.size());
+  f.outer_flags = std::move(outer_flags);
+  f.outer_guard_open = outer_guard_open;
+  f.backward = true;
+  f.end_address = end_address;
+  Open("while (true)");
+  loops_.push_back(f);
 }
 
 void MslShaderTranslator::ProcessExecInstructionBegin(
@@ -635,7 +715,8 @@ void MslShaderTranslator::ProcessLoopStartInstruction(
 void MslShaderTranslator::ProcessLoopEndInstruction(
     const ParsedLoopEndInstruction& instr) {
   CloseExecConditionals();
-  if (loops_.empty() || loops_.back().constant != instr.loop_constant_index ||
+  if (loops_.empty() || loops_.back().backward ||
+      loops_.back().constant != instr.loop_constant_index ||
       loops_.back().body_address != instr.loop_body_address ||
       loops_.back().skip_address != current_cf_index_ + 1) {
     Fail("unstructured loop");
@@ -680,12 +761,9 @@ void MslShaderTranslator::ProcessReturnInstruction(
 
 void MslShaderTranslator::ProcessJumpInstruction(
     const ParsedJumpInstruction& instr) {
-  // Only forward jumps; the skipped range becomes `if (!taken) { ... }` (or a
-  // flag guard in flag mode).
-  if (instr.target_address <= current_cf_index_) {
-    Fail("backward jump");
-    return;
-  }
+  // Forward jumps: the skipped range becomes `if (!taken) { ... }` (or a flag
+  // guard in flag mode). Backward jumps: `continue` in the `while (true)`
+  // opened at the target label (OpenBackwardLoop).
   CloseExecConditionals();
   std::string taken;
   switch (instr.type) {
@@ -699,6 +777,44 @@ void MslShaderTranslator::ProcessJumpInstruction(
     case ParsedJumpInstruction::Type::kPredicated:
       taken = fmt::format("{}p0", instr.condition ? "" : "!");
       break;
+  }
+  if (instr.target_address <= current_cf_index_) {
+    if (loops_.empty() || !loops_.back().backward ||
+        loops_.back().body_address != instr.target_address) {
+      Fail("unstructured backward jump");
+      return;
+    }
+    LoopFrame& f = loops_.back();
+    if (current_cf_index_ != f.end_address) {
+      // An earlier backward jump to the same label: inside forward-jump
+      // blocks of the loop is fine for `continue`, but not in flag mode,
+      // where the flags of the loop scope would not be reset.
+      if (jump_flags_mode_ && !pending_flag_targets_.empty()) {
+        Fail("backward jump under a jump flag");
+        return;
+      }
+      Line("if ({}) {{ continue; }}", taken);
+      return;
+    }
+    if (jump_flags_mode_ ? !pending_flag_targets_.empty()
+                         : jump_skip_targets_.size() != f.jump_depth) {
+      Fail("forward jump out of a backward-jump loop");
+      return;
+    }
+    if (jump_flags_mode_ && flag_guard_open_) {
+      Close();
+      flag_guard_open_ = false;
+    }
+    LoopFrame done = f;
+    loops_.pop_back();
+    Line("if ({}) {{ continue; }}", taken);
+    Line("break;");
+    Close();  // while
+    if (jump_flags_mode_) {
+      pending_flag_targets_ = done.outer_flags;
+      flag_guard_open_ = done.outer_guard_open;
+    }
+    return;
   }
   if (jump_flags_mode_) {
     // Evaluated where the jump is (inside the current guard).

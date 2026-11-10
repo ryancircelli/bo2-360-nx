@@ -19,6 +19,7 @@
 #define REX_GRAPHICS_METAL_METAL_MSL_TRANSLATOR_H_
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -257,8 +258,17 @@ class MslShaderTranslator : public ShaderTranslator {
     uint32_t jump_depth;
     std::vector<uint32_t> outer_flags;
     bool outer_guard_open;
+    // Backward-jump loop: `while (true)` opened at the label `skip_address`
+    // is unused; body_address is the label, end_address the last backward
+    // jump to it (the loop closes there).
+    bool backward = false;
+    uint32_t end_address = 0;
   };
   std::vector<LoopFrame> loops_;
+  // Backward jump targets (labels) to the CF index of the last backward jump
+  // to them; found before translation.
+  std::map<uint32_t, uint32_t> backward_jump_ends_;
+  void OpenBackwardLoop(uint32_t cf_index, uint32_t end_address);
   uint32_t loop_counter_ = 0;
   bool jump_flags_mode_ = false;
   std::vector<uint32_t> pending_flag_targets_;
