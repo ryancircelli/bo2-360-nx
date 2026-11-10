@@ -8,7 +8,7 @@
                --priority (= --class ship)  --wait (block until done, exit with the job's exit code)
                --solo (wait until no other game runs, then hold the machine alone; the default for class perf,
                --no-solo turns it off). Use --solo for FPS numbers and for proofs of timing-dependent bugs.
-               --quiet-machine stops builds, waits for load < 8, and records avg/min FPS.
+               --quiet-machine stops builds, waits for load < 16 for at most 300 s, and records the load and avg/min FPS.
       classes, first to run first: ship (0, ship-gate smokes), harness (1, harness/golden captures),
                proof (2, bug proof runs), sweep (3, scene sweeps; the default), perf (4, perf A/B), or a number.
       Within a class, jobs take turns by owner (--owner, else $RUNQ_OWNER, else the --name up to its first '-'):
@@ -51,6 +51,8 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 DEFAULTS = {'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'run_cap': 12, 'port_base': 60000, 'kill_grace_s': 15}
 COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift-frontend|metal|metallib|'
                        r'dxc|rustc|cc|c\+\+)$')
+QUIET_LOAD_LIMIT = 16
+QUIET_WAIT_CAP_S = 300
 
 
 def cfg():
@@ -472,8 +474,24 @@ class Daemon:
         res['slots'] = self.c['slots']
         res['solo'] = is_solo(job)
         if job.get('quiet_machine'):
-            res['quiet_machine'] = {'stopped_build_pids': job.get('quiet_build_pids', []), 'load_limit': 8,
+            res['quiet_machine'] = {'stopped_build_pids': job.get('quiet_build_pids', []),
+                                    'load_limit': QUIET_LOAD_LIMIT, 'wait_cap_s': QUIET_WAIT_CAP_S,
                                     'fps_valid_threshold': 30}
+            qlog = os.path.join(out, 'runq.log')
+            try:
+                with open(qlog, errors='replace') as f:
+                    for line in f:
+                        if not line.startswith('quiet-machine gate: '):
+                            continue
+                        fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
+                        if all(k in fields for k in ('waited_s', 'load1', 'limit', 'cap_s', 'capped')):
+                            res['quiet_machine'].update(waited_s=float(fields['waited_s']),
+                                                        load1=float(fields['load1']),
+                                                        load_limit=int(fields['limit']),
+                                                        wait_cap_s=int(fields['cap_s']),
+                                                        cap_reached=fields['capped'] == 'true')
+            except OSError:
+                pass
         if games_start is not None:
             res['conditions']['games_start'] = games_start
         g = max([x for x in (res['conditions'].get('games_max'), games_start) if x is not None], default=None)
@@ -836,7 +854,9 @@ def cmd_submit(argv):
     ap.add_argument('--measured', action='store_true', default=None,
                     help='keep builds at game_cap (4) during the run (default: solo jobs and timed benchmarks)')
     ap.add_argument('--no-measured', dest='measured', action='store_false')
-    ap.add_argument('--quiet-machine', action='store_true', help='stop active builds, wait for load < 8, record avg/min FPS')
+    ap.add_argument('--quiet-machine', action='store_true',
+                    help=f'stop active builds, wait for load < {QUIET_LOAD_LIMIT} for at most '
+                         f'{QUIET_WAIT_CAP_S} s, record actual load and avg/min FPS')
     ap.add_argument('--timeout', type=int)
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
@@ -1295,8 +1315,18 @@ def main():
             argv = argv[1:]
         if not argv:
             sys.exit('runq _quiet-wait: missing command')
-        while loadavg()[0] >= 8:
-            time.sleep(2)
+        start = time.monotonic()
+        capped = False
+        while loadavg()[0] >= QUIET_LOAD_LIMIT:
+            remaining = QUIET_WAIT_CAP_S - (time.monotonic() - start)
+            if remaining <= 0:
+                capped = True
+                break
+            time.sleep(min(2, remaining))
+        waited = round(time.monotonic() - start, 1)
+        load = loadavg()[0]
+        print(f'quiet-machine gate: waited_s={waited} load1={load:.2f} limit={QUIET_LOAD_LIMIT} '
+              f'cap_s={QUIET_WAIT_CAP_S} capped={str(capped).lower()}', flush=True)
         os.execvpe(argv[0], argv, os.environ)
     elif sub == '_scene':
         sys.exit(cmd_scene(argv))
