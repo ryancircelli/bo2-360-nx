@@ -25,7 +25,7 @@
     "count": 1,
     "grace_s": 2
   },
-  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{renderer}",
+  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
   "route": {
     "BO2ZM_TEST_START": "zm_prison prison zclassic zclassic",
     "BO2ZM_TEST_START_WAIT_S": "10",

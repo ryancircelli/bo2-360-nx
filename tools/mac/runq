@@ -4,12 +4,18 @@
   runq submit [options] --app APP --scene SCENE.json [--renderer metal|native]   a scene (scenes/*.json) run
   runq submit [options] --app APP --route ROUTE.route                            a boot_test.sh route run
   runq submit [options] [--app APP] -- CMD ARGS...                                any command ({APP} {OUT} {PORT})
-      options: --name N  --out DIR  --priority (ship-gate smoke: ahead of the FIFO)  --timeout S
-               --env K=V (repeatable)  --wait (block until done, exit with the job's exit code)
+      options: --name N  --out DIR  --class C  --owner O  --timeout S  --env K=V (repeatable)
+               --priority (= --class ship)  --wait (block until done, exit with the job's exit code)
+      classes, first to run first: ship (0, ship-gate smokes), harness (1, harness/golden captures),
+               proof (2, bug proof runs), sweep (3, scene sweeps; the default), perf (4, perf A/B), or a number.
+      Within a class, jobs take turns by owner (--owner, else $RUNQ_OWNER, else the --name up to its first '-'):
+      the owner with the fewest running jobs, then the one served longest ago; FIFO within an owner.
       prints:  "job <id> out <dir>"   (the result dir; <dir>/result.json and result.txt once done)
   runq wait ID [ID...]      block until the jobs are done (no polling needed on the caller's side); exit = worst exit
-  runq status               the queue, running jobs, build throttle
+  runq status               the queue in run order with estimated start times, running jobs, build throttle
   runq cancel ID            dequeue, or stop a running job (its own process group only)
+  runq priority ID CLASS    move a queued job to another class (name or number)
+  runq bump ID              run a queued job next within its class (ahead of the owner turns)
   runq result ID            print result.txt
   runq install              copy runq, buildq and the boot_test tools to the spool's bin/ (a path that outlives worktrees)
 
@@ -22,7 +28,7 @@
 
 Spool: ~/Games/Xbox360/bo2-build/runq/{queue,running,done,jobs,builds,bin}; config.json there overrides slots (2),
 idle_cap (16), game_cap (4). A single detached daemon (lock file daemon.lock) runs at most `slots` jobs at normal
-priority, FIFO with --priority first, enforces timeouts, kills only its own children (each job's own process group),
+priority, in class order with owner turns (see submit), enforces timeouts, kills only its own children (each job's own process group),
 and holds back build tokens while a game runs. Any runq/buildq command starts it when it is not running.
 """
 import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, time
@@ -178,6 +184,7 @@ class Daemon:
         self.jobs = {}          # id -> {proc, job, slot, start, samples, cancel}
         self.last_repair = 0.0
         self.outside = []
+        self.last_start = (rjson(STATE) or {}).get('last_start_by_owner') or {}
 
     def log(self, msg):
         print(f'[{now_s()}] {msg}', flush=True)
@@ -187,7 +194,9 @@ class Daemon:
         if not os.path.exists(FIFO):
             os.mkfifo(FIFO, 0o666)
         self.fifo = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)  # keeps the fifo's contents alive while the daemon runs
-        self.refill(force=True)
+        # Never block here: with builds running (pool.lock shared) their open fifo kept the tokens of the last daemon,
+        # which returned the ones it held back; the 30 s repair evens the pool out once the builds are done.
+        self.refill()
 
     def drain(self):
         n = 0
@@ -239,6 +248,17 @@ class Daemon:
     def queued(self):
         return sorted(f for f in os.listdir(D['queue']) if f.endswith('.json'))
 
+    def pick(self, q):
+        """The next job: lowest class, then bumped jobs, then the owner with the fewest running jobs who was served
+        longest ago, then FIFO."""
+        rbo = {}
+        for j in self.jobs.values():
+            o = job_owner(j['job'])
+            rbo[o] = rbo.get(o, 0) + 1
+        jobs = [(f, rjson(os.path.join(D['queue'], f)) or {}) for f in q]
+        jobs.sort(key=lambda fj: sched_key(fj[1], rbo, self.last_start))
+        return jobs[0][0]
+
     def launch(self, qfile):
         src = os.path.join(D['queue'], qfile)
         job = rjson(src)
@@ -287,6 +307,7 @@ class Daemon:
         wjson(os.path.join(D['running'], job['id'] + '.run.json'), rec)
         with open(os.path.join(out, 'conditions.tsv'), 'w') as f:
             f.write('t_s\tload1\tload5\tactive_builds\tcompile_procs\tbuild_cap\n')
+        self.last_start[job_owner(job)] = time.time()
         self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
                                 'next_sample': 0.0, 'load_start': la, 'killing': 0.0}
         self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
@@ -401,7 +422,7 @@ class Daemon:
                       'paused_until': self.c.get('paused_until') if paused(self.c) else None,
                       'running': {k: {'slot': v['slot'], 'pid': v['proc'].pid, 'name': v['job'].get('name'),
                                       'since_s': round(time.time() - v['start'])} for k, v in self.jobs.items()},
-                      'queued': self.queued()})
+                      'queued': self.queued(), 'last_start_by_owner': self.last_start})
 
     def run(self):
         mkdirs()
@@ -435,13 +456,127 @@ class Daemon:
                 self.outside = games_outside({j['proc'].pid for j in self.jobs.values()})
                 free = self.c['slots'] - len(self.outside)
                 while q and not paused(self.c) and len(self.jobs) < free:
-                    self.launch(q.pop(0))
+                    qf = self.pick(q)
+                    q.remove(qf)
+                    self.launch(qf)
                 self.throttle()
                 self.write_state()
                 time.sleep(1)
         finally:
             if self.held:
                 os.write(self.fifo, b'+' * self.held)
+
+
+# ------------------------------------------------------------------ scheduling
+CLASSES = {'ship': 0, 'harness': 1, 'proof': 2, 'sweep': 3, 'perf': 4}
+CLASS_NAMES = {v: k for k, v in CLASSES.items()}
+
+
+def parse_class(v):
+    v = str(v).strip().lower()
+    if v in CLASSES:
+        return CLASSES[v]
+    try:
+        return int(v)
+    except ValueError:
+        sys.exit(f'runq: unknown class {v} (ship, harness, proof, sweep, perf or a number)')
+
+
+def job_class(j):
+    if 'class' in j:
+        return int(j['class'])
+    return 0 if j.get('priority') else 3
+
+
+def job_owner(j):
+    return j.get('owner') or (j.get('name') or 'anon').split('-')[0]
+
+
+def sched_key(j, running_by_owner, last_start):
+    o = job_owner(j)
+    return (job_class(j), 0 if j.get('bump') else 1, -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
+            last_start.get(o, 0.0), j.get('submitted_t', 0.0))
+
+
+def history_wall():
+    """Median wall time of finished jobs, by name (a trailing -N dropped) and by owner."""
+    by_name, by_owner = {}, {}
+    try:
+        files = sorted(os.listdir(D['done']), key=lambda f: os.path.getmtime(os.path.join(D['done'], f)))[-300:]
+    except OSError:
+        files = []
+    for f in files:
+        r = rjson(os.path.join(D['done'], f)) or {}
+        if r.get('status') not in ('done', 'timeout') or not r.get('wall_s'):
+            continue
+        by_name.setdefault(re.sub(r'-\d+$', '', r.get('name') or ''), []).append(r['wall_s'])
+        by_owner.setdefault(job_owner(r), []).append(r['wall_s'])
+    med = lambda v: sorted(v)[len(v) // 2]
+    return {k: med(v) for k, v in by_name.items()}, {k: med(v) for k, v in by_owner.items()}
+
+
+def estimate_s(j, hist):
+    by_name, by_owner = hist
+    n = re.sub(r'-\d+$', '', j.get('name') or '')
+    if n in by_name:
+        return by_name[n]
+    if j.get('scene') or j.get('run_dir'):
+        return max(60, j.get('timeout_s', 600) - 240 + 60)   # the duration plus the boot
+    if job_owner(j) in by_owner:
+        return by_owner[job_owner(j)]
+    return min(j.get('timeout_s', 600), 600)
+
+
+def plan(queued, running, slots, last_start, now=None, hist=None):
+    """Simulate the scheduler. queued: [(qfile, job)]; running: [(job, started_t)]; slots: slots free of games
+    outside runq. -> [(qfile, job, est_start_t, est_s)] in run order (the daemon picks the first)."""
+    now = now or time.time()
+    hist = hist or history_wall()
+    busy = [(max(now + 30, t + estimate_s(j, hist)), job_owner(j)) for j, t in running]
+    free_at = [now] * max(0, slots - len(busy)) + [e for e, _ in busy]
+    if not free_at:
+        free_at = [now + 3600]
+    free_at = sorted(free_at)[:max(1, slots)]
+    ls = dict(last_start)
+    pending = list(queued)
+    out = []
+    while pending:
+        t = min(free_at)
+        busy = [(e, o) for e, o in busy if e > t]
+        rbo = {}
+        for _, o in busy:
+            rbo[o] = rbo.get(o, 0) + 1
+        pending.sort(key=lambda qj: sched_key(qj[1], rbo, ls))
+        qf, j = pending.pop(0)
+        est = estimate_s(j, hist)
+        out.append((qf, j, t, est))
+        free_at.remove(t)
+        free_at.append(t + est)
+        busy.append((t + est, job_owner(j)))
+        ls[job_owner(j)] = t
+    return out
+
+
+def load_queue():
+    return [(f, rjson(os.path.join(D['queue'], f)) or {}) for f in
+            sorted(f for f in os.listdir(D['queue']) if f.endswith('.json'))]
+
+
+def cmd_priority(argv, bump=False):
+    if (bump and len(argv) < 1) or (not bump and len(argv) != 2):
+        sys.exit('runq: priority ID CLASS | bump ID')
+    jid = argv[0]
+    for f, j in load_queue():
+        if f.endswith(jid + '.json'):
+            if bump:
+                j['bump'], j['bump_t'] = True, time.time()
+            else:
+                j['class'] = parse_class(argv[1])
+            wjson(os.path.join(D['queue'], f), j)
+            print(f'{jid}: class {CLASS_NAMES.get(job_class(j), job_class(j))}{" bumped" if j.get("bump") else ""}')
+            return 0
+    print(f'{jid}: not queued')
+    return 1
 
 
 # ------------------------------------------------------------------ client side
@@ -470,7 +605,9 @@ def cmd_submit(argv):
     ap.add_argument('--route')
     ap.add_argument('--name')
     ap.add_argument('--out')
-    ap.add_argument('--priority', action='store_true')
+    ap.add_argument('--priority', action='store_true', help='= --class ship')
+    ap.add_argument('--class', dest='klass', help='ship, harness, proof, sweep (default), perf, or a number')
+    ap.add_argument('--owner', help='fair-share owner (default $RUNQ_OWNER, else the name up to its first -)')
     ap.add_argument('--timeout', type=int)
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
@@ -490,7 +627,8 @@ def cmd_submit(argv):
         if not os.path.isdir(a.app):
             sys.exit(f'runq: no app at {a.app}')
     bt = os.path.join(HERE, 'boot_test.sh')
-    job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority,
+    klass = 0 if a.priority else parse_class(a.klass) if a.klass else 3
+    job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
            'app': a.app, 'clone_app': not a.no_clone, 'env': env}
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
@@ -530,6 +668,9 @@ def cmd_submit(argv):
     else:
         sys.exit('runq submit: give --scene, --route or -- CMD')
     os.makedirs(job['out'], exist_ok=True)
+    owner = a.owner or os.environ.get('RUNQ_OWNER')
+    if owner:
+        job['owner'] = owner
     wjson(os.path.join(job['out'], 'job.json'), job)
     wjson(os.path.join(D['queue'], f'{0 if a.priority else 1}-{time.time():.6f}-{jid}.json'), job)
     ensure_daemon()
@@ -588,9 +729,21 @@ def cmd_status(_argv):
         print(f'queue paused until {st["paused_until"]} (config.json paused_until)')
     for jid, r in (st.get('running') or {}).items():
         print(f'running {jid} slot {r["slot"]} pid {r["pid"]} {r["name"]} {r["since_s"]} s')
-    for q in sorted(os.listdir(D['queue'])):
-        j = rjson(os.path.join(D['queue'], q)) or {}
-        print(f'queued  {j.get("id")} {j.get("name")} {"PRIORITY" if j.get("priority") else ""}')
+    now = time.time()
+    running = []
+    for jid, r in (st.get('running') or {}).items():
+        jj = rjson(os.path.join(D['running'], jid + '.json')) or {'name': r.get('name')}
+        running.append((jj, now - r.get('since_s', 0)))
+    slots = (cfg().get('slots', 2)) - len(st.get('games_outside_runq') or [])
+    start = now
+    if st.get('paused_until'):
+        hh, mm = map(int, st['paused_until'].split(':'))
+        lt = time.localtime(now)
+        start = max(now, time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1)))
+    for qf, j, t, est in plan(load_queue(), running, max(1, slots), st.get('last_start_by_owner') or {}, now=start):
+        k = job_class(j)
+        print(f'queued  {j.get("id")} {j.get("name")}  class {CLASS_NAMES.get(k, k)}{" bumped" if j.get("bump") else ""}'
+              f'  owner {job_owner(j)}  est start {time.strftime("%H:%M", time.localtime(t))} (~{int(est // 60)} min)')
     done = sorted(os.listdir(D['done']), key=lambda f: os.path.getmtime(os.path.join(D['done'], f)))[-5:]
     for f in done:
         r = rjson(os.path.join(D['done'], f)) or {}
@@ -605,7 +758,8 @@ def cmd_cancel(ids):
                 os.unlink(os.path.join(D['queue'], q))
                 if job:
                     wjson(os.path.join(D['done'], jid + '.json'),
-                          {'id': jid, 'status': 'cancelled', 'exit': 2, 'out': job['out']})
+                          {'id': jid, 'name': job.get('name'), 'status': 'cancelled', 'exit': 2, 'out': job['out'],
+                           'note': f'dequeued by runq cancel (pid {os.getppid()}) at {now_s()} before it started'})
                     with open(os.path.join(job['out'], 'result.txt'), 'w') as f:
                         f.write(f'{jid} cancelled before start\n')
                 print(f'{jid}: dequeued')
@@ -659,7 +813,7 @@ def cmd_scene(argv):
     # support_seed: a warm support folder (shader and pipeline caches, console id, launch options) cloned in before
     # the run; "{renderer}" in the path picks one per renderer. A missing seed is made from the first run that passes.
     support_seed = scene.get('support_seed')
-    seed = os.path.expanduser(support_seed.replace('{renderer}', a.renderer)) if support_seed else None
+    seed = os.path.expanduser(support_seed.replace('{renderer}', a.renderer).replace('{scene}', scene.get('name', 'scene'))) if support_seed else None
     seeded = False
     t0 = time.time()
     if seed and os.path.isdir(seed) and not os.environ.get('RUNQ_COLD'):
@@ -879,6 +1033,10 @@ def main():
         cmd_status(argv)
     elif sub == 'cancel':
         cmd_cancel(argv)
+    elif sub == 'priority':
+        sys.exit(cmd_priority(argv))
+    elif sub == 'bump':
+        sys.exit(cmd_priority(argv, bump=True))
     elif sub == 'result':
         for jid in argv:
             r = rjson(find_done(jid))
