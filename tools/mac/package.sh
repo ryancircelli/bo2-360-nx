@@ -20,7 +20,7 @@ put() {  # put <source> <destination>: a fresh file (new inode) every time
   cp -R "$1" "$2"
 }
 put "$OUT/bo2zm" "$RUN/bo2zm"
-for lib in librexruntime.dylib librexgpu-xenos.dylib libTracyClient.dylib; do
+for lib in librexruntime.dylib librexgpu-xenos.dylib librexgpu-metal.dylib libTracyClient.dylib; do
   src="$OUT/$lib"
   [ -f "$src" ] || src="$OUT/sdk-out/$lib"
   if [ -f "$src" ]; then
