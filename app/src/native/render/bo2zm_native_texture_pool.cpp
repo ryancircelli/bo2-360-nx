@@ -5,6 +5,10 @@
 
 #include "bo2zm_native_texture_pool.h"
 
+#if BO2ZM_NATIVE_METAL
+#include "metal/bo2zm_gpu_metal.h"
+#endif
+
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ui/vulkan/util.h>
@@ -187,6 +191,43 @@ class VulkanSlabs final : public SlabMemory {
 std::unique_ptr<SlabMemory> VulkanSlabMemory(const rex::ui::vulkan::VulkanDevice* vulkan_device) {
   return std::make_unique<VulkanSlabs>(vulkan_device);
 }
+
+#if BO2ZM_NATIVE_METAL
+namespace {
+
+class MetalSlabs final : public SlabMemory {
+ public:
+  explicit MetalSlabs(gpu::metal::Device& device) : device_(device) {}
+
+  bool Choose(uint32_t& type_out, gpu::Size& alignment_view_out) override {
+    // The same sample texture as the Vulkan side asks about.
+    gpu::ImageDesc sample;
+    sample.format = VK_FORMAT_R8G8B8A8_UNORM;
+    sample.width = 256;
+    sample.height = 256;
+    const gpu::Requirements requirements = device_.TextureRequirements(sample);
+    if (requirements.size == 0) {
+      return false;
+    }
+    type_out = 0;
+    alignment_view_out = requirements.alignment;
+    return true;
+  }
+
+  gpu::Memory Allocate(gpu::Size bytes, uint32_t) override { return device_.CreateHeap(bytes); }
+
+  void Release(gpu::Memory memory) override { gpu::metal::Device::ReleaseHeap(memory); }
+
+ private:
+  gpu::metal::Device& device_;
+};
+
+}  // namespace
+
+std::unique_ptr<SlabMemory> MetalSlabMemory(gpu::metal::Device& device) {
+  return std::make_unique<MetalSlabs>(device);
+}
+#endif
 
 bool TexturePool::Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max) {
   return Start(vulkan_device ? VulkanSlabMemory(vulkan_device) : nullptr, mb_cache_max);
