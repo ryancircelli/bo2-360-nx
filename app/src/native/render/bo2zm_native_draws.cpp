@@ -4640,7 +4640,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (count_changes_pipeline_) {  // Measurement only (bo2zm_native_count_pipeline_changes)
         CountChangePipeline(key, pipeline_bound_ == VK_NULL_HANDLE);
       }
-      BO2ZM_SUB(0, dfn_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline));
+      BO2ZM_SUB(0, gpu_.BindGraphicsPipeline(cmd, pipeline));
       pipeline_bound_ = pipeline;
     }
     // Phases 1 and 2. The state that is not baked into the pipeline, before the draw. If the guard sees a
@@ -4650,13 +4650,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (pipeline == VK_NULL_HANDLE) {
         return false;
       }
-      BO2ZM_SUB(0, dfn_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline));
+      BO2ZM_SUB(0, gpu_.BindGraphicsPipeline(cmd, pipeline));
       pipeline_bound_ = pipeline;
       key_bound_valid_ = false;  // the counter does not classify this bind
     }
     if (!sets_bound_) {
-      BO2ZM_SUB(1, dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 4,
-                                                sets_.data(), 0, nullptr));
+      BO2ZM_SUB(1, gpu_.BindSets(cmd, layout_pipeline_, 0, 4, sets_.data()));
       sets_bound_ = true;
     }
     // Dynamic state and push constants repeat a lot between consecutive draws: they are only recorded if
@@ -4678,8 +4677,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                 upload_address_ + constants_ps_offset_,
                                 upload_address_ + offset_shared};
       if (!recorded || std::memcmp(push, push_recorded_, sizeof(push)) != 0) {
-        dfn_.vkCmdPushConstants(cmd, layout_pipeline_,
-                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        gpu_.PushConstants(cmd, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                 sizeof(push), push);
         std::memcpy(push_recorded_, push, sizeof(push));
       }
@@ -4702,8 +4700,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                           (offsets_ubo[1] != offsets_ubo_bound_[1] ? 2u : 0u) |
                           (offsets_ubo[2] != offsets_ubo_bound_[2] ? 4u : 0u)];
         }
-        BO2ZM_SUB(2, dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 4, 1,
-                                                  &sets_ubo_[slot_current_], 3, offsets_ubo.data()));
+        BO2ZM_SUB(2, gpu_.BindSets(cmd, layout_pipeline_, 4, 1, &sets_ubo_[slot_current_], 3, offsets_ubo.data()));
         offsets_ubo_bound_ = offsets_ubo;
         slot_ubo_bound_ = slot_current_;
         ubo_bound_ = true;
@@ -4788,7 +4785,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         equal = a_bind[i] == offsets_recorded_[i] && bind_buffers[i] == buffers_vertices_[i];
       }
       if (!equal) {
-        BO2ZM_SUB(8, dfn_.vkCmdBindVertexBuffers(cmd, 0, n_bindings, bind_buffers.data(), a_bind));
+        BO2ZM_SUB(8, gpu_.BindVertexBuffers(cmd, n_bindings, bind_buffers.data(), a_bind));
         ++base_zero_bindings_recorded_;
         bindings_recorded_ = n_bindings;
         for (uint32_t i = 0; i < n_bindings; ++i) {
@@ -4908,18 +4905,17 @@ class VulkanDrawsImpl final : public VulkanDraws {
       VkDeviceSize at_indices = offset_indices;
       ResolveVertexBinding(offset_indices, upload_, buffer_indices, at_indices);
       if (type_indices != type_indices_recorded_ || buffer_indices != buffer_indices_recorded_) {
-        BO2ZM_SUB(9, dfn_.vkCmdBindIndexBuffer(cmd, buffer_indices, 0, type_indices));
+        BO2ZM_SUB(9, gpu_.BindIndexBuffer(cmd, buffer_indices, indices_16));
         type_indices_recorded_ = type_indices;
         buffer_indices_recorded_ = buffer_indices;
       }
       // On the base-zero path, vertexOffset also carries where the copy starts (in vertices).
       const int32_t offset_vertices =
           base_cero ? int32_t(int64_t(first_vertex) - int64_t(vmin)) : -int32_t(vmin);
-      BO2ZM_SUB(10, dfn_.vkCmdDrawIndexed(cmd, uint32_t(indices_16 ? indices16_.size() : indices_.size()),
-                                          1, uint32_t(at_indices / (indices_16 ? 2 : 4)),
-                                          offset_vertices, 0));
+      BO2ZM_SUB(10, gpu_.DrawIndexed(cmd, uint32_t(indices_16 ? indices16_.size() : indices_.size()),
+                                     uint32_t(at_indices / (indices_16 ? 2 : 4)), offset_vertices));
     } else {
-      BO2ZM_SUB(10, dfn_.vkCmdDraw(cmd, count, 1, base_cero ? first_vertex : 0, 0));  // firstVertex
+      BO2ZM_SUB(10, gpu_.Draw(cmd, count, base_cero ? first_vertex : 0));  // firstVertex
     }
     if (query_visibility != UINT32_MAX) {
       context_->FinishQueryVisibility(query_visibility);
@@ -4959,7 +4955,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const uint64_t position = draws_in_pass_ - c.draws_on_postpone;
     sky_position_sum_ += position;
     sky_position_max_ = std::max(sky_position_max_, position);
-    dfn_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipeline);
+    gpu_.BindGraphicsPipeline(cmd, c.pipeline);
     pipeline_bound_ = c.pipeline;
     if (c.eds_mode) {  // phases 1 and 2: all the state its pipeline lacks
       EmitStateDynamic(cmd, c.eds, true, c.eds_mode);
@@ -4967,17 +4963,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
     eds_valid_ = false;  // the next draw sets all of its own again
     key_bound_valid_ = false;  // The sky does not keep its key (CountChangePipeline)
     if (!sets_bound_) {
-      dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 4,
-                                   sets_.data(), 0, nullptr);
+      gpu_.BindSets(cmd, layout_pipeline_, 0, 4, sets_.data());
       sets_bound_ = true;
     }
     if (!c.uses_ubo) {
-      dfn_.vkCmdPushConstants(cmd, layout_pipeline_,
-                              VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+      gpu_.PushConstants(cmd, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                               sizeof(c.push), c.push);
     }
-    dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 4, 1,
-                                 &sets_ubo_[c.slot_ubo], 3, c.offsets_ubo.data());
+    gpu_.BindSets(cmd, layout_pipeline_, 4, 1, &sets_ubo_[c.slot_ubo], 3, c.offsets_ubo.data());
     gpu_.SetViewport(cmd, c.viewport);
     gpu_.SetScissor(cmd, gpu::FromVk(c.scissor));
     gpu_.SetBlendConstants(cmd, c.blend);
@@ -4991,19 +4984,18 @@ class VulkanDrawsImpl final : public VulkanDraws {
       for (uint32_t i = 0; i < c.n_bindings; ++i) {
         ResolveVertexBinding(c.offsets_vertices[i], c.buffer, buffers[i], offsets[i]);  // bo2zm_native_vertex_cache
       }
-      dfn_.vkCmdBindVertexBuffers(cmd, 0, c.n_bindings, buffers.data(), offsets.data());
+      gpu_.BindVertexBuffers(cmd, c.n_bindings, buffers.data(), offsets.data());
       bindings_recorded_ = 0;  // the next draw binds again
     }
     const uint32_t query = !diag_stats_draw_
                                   ? UINT32_MAX
                                   : context_->BeginStatsDraw(c.ps_more_one, c.category);
     if (c.with_indices) {
-      const VkIndexType type = c.indices_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-      dfn_.vkCmdBindIndexBuffer(cmd, c.index_buffer, 0, type);
+      gpu_.BindIndexBuffer(cmd, c.index_buffer, c.indices_16);
       buffer_indices_recorded_ = VK_NULL_HANDLE;
-      dfn_.vkCmdDrawIndexed(cmd, c.indices, 1, c.first_index, -int32_t(c.vmin), 0);
+      gpu_.DrawIndexed(cmd, c.indices, c.first_index, -int32_t(c.vmin));
     } else {
-      dfn_.vkCmdDraw(cmd, c.count, 1, 0, 0);
+      gpu_.Draw(cmd, c.count, 0);
     }
     if (query != UINT32_MAX) {
       context_->FinishStatsDraw(query);
@@ -10317,14 +10309,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
       pool.dirty_hi = 0;
     }
     if (!skin_bound_) {
-      dfn_.vkCmdBindPipeline(upload, VK_PIPELINE_BIND_POINT_COMPUTE, skin_pipeline_);
+      gpu_.BindComputePipeline(upload, skin_pipeline_);
       skin_bound_ = true;
     }
     const VkDeviceAddress base = skin_table_address_ + slot_current_ * kSkinTableBytes;
     const SkinPush push{base, base + VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord) +
                                   VkDeviceSize(table.dispatched) * 8};
-    dfn_.vkCmdPushConstants(upload, skin_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-    dfn_.vkCmdDispatch(upload, table.groups - table.dispatched, 1, 1);
+    gpu_.PushConstants(upload, skin_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    gpu_.Dispatch(upload, table.groups - table.dispatched, 1, 1);
     table.dispatched = table.groups;
     bo2zm::gpu_skin::Counts().submit_dispatches.fetch_add(1, std::memory_order_relaxed);
     VkMemoryBarrier barrier{};
