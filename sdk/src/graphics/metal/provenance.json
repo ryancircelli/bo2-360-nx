@@ -1,0 +1,21 @@
+{
+  "fable2_recomp_macos": {
+    "url": "https://github.com/andrew17182/Fable-2-Recomp-macOS",
+    "commit": "6f5459e640bd52fe8a4a72ef49e9ab15c72d3c60",
+    "license": "MIT (licenses/Fable2-Recomp-macOS-LICENSE)",
+    "scope": "backends/metal of that repository: port/, compat.h, xenia_helpers.h, metal_flags.*, plugin_main.cpp, shaders/, third_party/, tools/msl_xlate_tool.cc, tools/compile_metal_helpers.py (adapted), the sdk-metal*.patch series and src/diagnostics/fable2_trace_api.h"
+  },
+  "xenios": {
+    "url": "https://github.com/xenios-jp/XeniOS",
+    "commit": "87b176a078c316fde3adf67a217f0c44615b0e0d",
+    "scope": "Adapted Metal/UI sources under port; built-in helper shader source downloaded at build time"
+  },
+  "rexglue": {
+    "url": "https://github.com/rexglue/rexglue-sdk",
+    "commit": "f5337cdc947ff6d4c4196737e2c807a48f2a1fc2",
+    "scope": "Fable II adapted the graphics sources of this commit. In this tree the shared, additive hunks (xenos.h, texture/info.h, the inline bit_scan_forward in math.h) are committed to the SDK itself; the rest of the sdk-metal*.patch series is applied at configure time to a private copy of the graphics sources that only rexgpu-metal compiles. Graphics sources are unchanged between that commit and v0.10.1."
+  },
+  "morph_readback_reference": "https://github.com/just-harry/unofficial-xenia-femtofork-for-fable-ii",
+  "original_work": "ReXGlue compatibility adapters and plugin integration, register batching, geometry retry backoff, selective Metal readback/completion handling, build scripts and tests.",
+  "distribution": "Source only; no generated guest code, game-derived shaders, game files, saves or compiled dependencies included."
+}
