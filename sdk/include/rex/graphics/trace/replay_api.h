@@ -34,6 +34,10 @@ enum RexGpuTraceReplayFlags : uint32_t {
   // texture inside that texture's load window, after the copy and before the
   // cache marks it up to date.
   kRexGpuTraceReplayRace = 1u << 4,
+  // CP benchmark: no readback, no per-draw records. Replays the trace
+  // bench_iterations times and writes bench.json with the command processor
+  // thread CPU time of each pass (packet execution only).
+  kRexGpuTraceReplayBench = 1u << 5,
 };
 
 struct RexGpuTraceReplayOptions {
@@ -55,6 +59,9 @@ struct RexGpuTraceReplayOptions {
   // Race mode: how many frames ahead of the current one a recorded write may
   // be pulled into a load window. 0 = default (1).
   uint32_t race_frames;
+  // Bench mode: number of passes over the trace (0 = default 6). Pass 1 warms
+  // the shader, pipeline and texture caches and is reported apart.
+  uint32_t bench_iterations;
 };
 
 // Returns 0 on success, nonzero on failure.
