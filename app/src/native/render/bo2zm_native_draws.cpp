@@ -2893,6 +2893,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                     TargetContext* context)
       : vulkan_device_(vulkan_device),
         dfn_(deferred::Table(*vulkan_device)),  // the device's, with the vkCmd* calls queued (deferred.h)
+        gpu_(dfn_),
         device_(vulkan_device->device()),
         memory_(guest_memory),
         context_(context) {}
@@ -4186,7 +4187,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
      * PA_SU_POLY_OFFSET_*, RB_DEPTH_INFO and the primitive type, which do not bump that generation.
      */
     const uint32_t vte = r[gr::XE_GPU_REG_PA_CL_VTE_CNTL];
-    VkViewport viewport{};
+    gpu::Viewport viewport{};
     float ndc[4] = {1.0f, 1.0f, 0.0f, 0.0f};
     VkRect2D scissor{};
     uint32_t framing_empty = 0;
@@ -4709,21 +4710,21 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     }
     if (!recorded || std::memcmp(&viewport, &viewport_recorded_, sizeof(viewport)) != 0) {
-      BO2ZM_SUB(3, dfn_.vkCmdSetViewport(cmd, 0, 1, &viewport));
+      BO2ZM_SUB(3, gpu_.SetViewport(cmd, viewport));
       viewport_recorded_ = viewport;
     }
     if (!recorded || std::memcmp(&scissor_final, &scissor_recorded_, sizeof(scissor_final)) != 0) {
-      BO2ZM_SUB(4, dfn_.vkCmdSetScissor(cmd, 0, 1, &scissor_final));
+      BO2ZM_SUB(4, gpu_.SetScissor(cmd, gpu::FromVk(scissor_final)));
       scissor_recorded_ = scissor_final;
     }
     if (!recorded ||
         std::memcmp(blend_constant, blend_recorded_, sizeof(blend_constant)) != 0) {
-      BO2ZM_SUB(5, dfn_.vkCmdSetBlendConstants(cmd, blend_constant));
+      BO2ZM_SUB(5, gpu_.SetBlendConstants(cmd, blend_constant));
       std::memcpy(blend_recorded_, blend_constant, sizeof(blend_constant));
     }
     // Also without bias: the state is dynamic in every pipeline and has to be recorded.
     if (!recorded || std::memcmp(bias, bias_recorded_, sizeof(bias)) != 0) {
-      BO2ZM_SUB(6, dfn_.vkCmdSetDepthBias(cmd, bias[0], 0.0f, bias[1]));
+      BO2ZM_SUB(6, gpu_.SetDepthBias(cmd, bias[0], bias[1]));
       std::memcpy(bias_recorded_, bias, sizeof(bias));
     }
     if (!recorded) {
@@ -4735,14 +4736,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       const uint32_t backface = stencil_backface;
       if (!stencil_recorded_valid_ || frontface != stencil_recorded_[0] ||
           backface != stencil_recorded_[1]) {
-        BO2ZM_SUB(7, {
-          dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, frontface & 0xFF);
-          dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_BACK_BIT, backface & 0xFF);
-          dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (frontface >> 8) & 0xFF);
-          dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_BACK_BIT, (backface >> 8) & 0xFF);
-          dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (frontface >> 16) & 0xFF);
-          dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_BACK_BIT, (backface >> 16) & 0xFF);
-        });
+        BO2ZM_SUB(7, gpu_.SetStencilValues(cmd, frontface, backface));
         stencil_recorded_[0] = frontface;
         stencil_recorded_[1] = backface;
         stencil_recorded_valid_ = true;
@@ -4823,7 +4817,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                   warnings_occlusion_draw_, query_occlusion_ == UINT32_MAX ? -1 : int64_t(query_occlusion_),
                   p.vs->number, ps ? int(ps->number) : -1, type, count, pitch, masks, control_depth,
                   (control_depth >> 2) & 0x1, (control_depth >> 1) & 0x1, (control_depth >> 4) & 0x7,
-                  viewport.x, viewport.y, viewport.width, viewport.height, viewport.minDepth, viewport.maxDepth,
+                  viewport.x, viewport.y, viewport.width, viewport.height, viewport.min_depth, viewport.max_depth,
                   scissor.offset.x, scissor.offset.y, scissor.extent.width, scissor.extent.height, with_indices);
       // Diagnostic: positions of the first vertices and VS constants c0-c6, to compute the sun's z against
       // the scene depth.
@@ -4984,17 +4978,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     dfn_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 4, 1,
                                  &sets_ubo_[c.slot_ubo], 3, c.offsets_ubo.data());
-    dfn_.vkCmdSetViewport(cmd, 0, 1, &c.viewport);
-    dfn_.vkCmdSetScissor(cmd, 0, 1, &c.scissor);
-    dfn_.vkCmdSetBlendConstants(cmd, c.blend);
-    dfn_.vkCmdSetDepthBias(cmd, c.bias[0], 0.0f, c.bias[1]);
+    gpu_.SetViewport(cmd, c.viewport);
+    gpu_.SetScissor(cmd, gpu::FromVk(c.scissor));
+    gpu_.SetBlendConstants(cmd, c.blend);
+    gpu_.SetDepthBias(cmd, c.bias[0], c.bias[1]);
     if (c.with_stencil) {
-      dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, c.stencil[0] & 0xFF);
-      dfn_.vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_BACK_BIT, c.stencil[1] & 0xFF);
-      dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (c.stencil[0] >> 8) & 0xFF);
-      dfn_.vkCmdSetStencilCompareMask(cmd, VK_STENCIL_FACE_BACK_BIT, (c.stencil[1] >> 8) & 0xFF);
-      dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_BIT, (c.stencil[0] >> 16) & 0xFF);
-      dfn_.vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_BACK_BIT, (c.stencil[1] >> 16) & 0xFF);
+      gpu_.SetStencilValues(cmd, c.stencil[0], c.stencil[1]);
     }
     if (c.n_bindings) {
       std::array<VkBuffer, 16> buffers{};
@@ -5565,7 +5554,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * multiplications GCC could fuse with an add or subtract (width * 0.5 and height * 0.5) are exact, so
    * fused or not they give the same bits.
    */
-  uint32_t ComputeFraming(const uint32_t* r, uint32_t vte, bool no_clip, uint32_t mode_sc, VkViewport& viewport,
+  uint32_t ComputeFraming(const uint32_t* r, uint32_t vte, bool no_clip, uint32_t mode_sc, gpu::Viewport& viewport,
                             float ndc[4], VkRect2D& scissor) {
     float scale_x = (vte & 0x1) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XSCALE]) : 1.0f;
     float center_x = (vte & 0x2) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET]) : 0.0f;
@@ -5589,7 +5578,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       scale_y *= pass_scale_;
       center_y *= pass_scale_;
     }
-    viewport = VkViewport{};
+    viewport = gpu::Viewport{};
     viewport.x = center_x - std::abs(scale_x);
     viewport.width = 2.0f * std::abs(scale_x);
     // A negative YSCALE (the D3D norm) gives a positive height; a positive one, an inverted height.
@@ -5598,8 +5587,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!((r[gr::XE_GPU_REG_PA_CL_CLIP_CNTL] >> 19) & 0x1)) {
       Warn(14, "OpenGL clip space (dx_clip_space_def = 0): Z not adjusted");
     }
-    viewport.minDepth = std::clamp(center_z, 0.0f, 1.0f);
-    viewport.maxDepth = std::clamp(center_z + scale_z, 0.0f, 1.0f);
+    viewport.min_depth = std::clamp(center_z, 0.0f, 1.0f);
+    viewport.max_depth = std::clamp(center_z + scale_z, 0.0f, 1.0f);
     // g_NdcScale (x, y) and g_NdcOffset (x, y): identity when clipping is on.
     ndc[0] = 1.0f;
     ndc[1] = 1.0f;
@@ -5650,7 +5639,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // The C1 guard. The current computation against the saved one, byte by byte.
-  void CompareFraming(const VkViewport& viewport, const float ndc[4], const VkRect2D& scissor, uint32_t empty) {
+  void CompareFraming(const gpu::Viewport& viewport, const float ndc[4], const VkRect2D& scissor, uint32_t empty) {
     ++framing_checked_;
     const bool equal = empty == framing_empty_ &&
                        std::memcmp(&viewport, &framing_viewport_, sizeof(viewport)) == 0 &&
@@ -14769,9 +14758,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint32_t ahead[4] = {};  // failOp, passOp, depthFailOp (VkStencilOp) and compareOp (VkCompareOp)
     uint32_t behind[4] = {};   // the same for the back face
     uint32_t n_colors = 0;                    // phase 2: the pass's color targets, compacted as in PipelineOf
-    VkBool32 blend_active[4] = {};            // blendEnable
-    VkColorBlendEquationEXT equation[4] = {};  // color and alpha factors and operations
-    VkColorComponentFlags mask[4] = {};     // colorWriteMask
+    uint32_t blend_active[4] = {};            // blendEnable
+    gpu::BlendEquation equation[4] = {};  // color and alpha factors and operations
+    gpu::ColorMask mask[4] = {};     // colorWriteMask
   };
 
   // Without EDS3 the dynamic topology must be of the same class as the pipeline's: the lookup key carries
@@ -14842,13 +14831,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
         const uint32_t source_kind_a = (m >> 16) & 0x1F, op_a = (m >> 21) & 0x7, target_a = (m >> 24) & 0x1F;
         e.mask[a] = mask;
         e.blend_active[a] = ColorBlendEnabled(mask, m) ? VK_TRUE : VK_FALSE;
-        VkColorBlendEquationEXT& q = e.equation[a];
-        q.srcColorBlendFactor = kFactorsBlend[source_kind];
-        q.dstColorBlendFactor = kFactorsBlend[target];
-        q.colorBlendOp = OperationBlend(op);
-        q.srcAlphaBlendFactor = kFactorsBlend[source_kind_a];
-        q.dstAlphaBlendFactor = kFactorsBlend[target_a];
-        q.alphaBlendOp = OperationBlend(op_a);
+        gpu::BlendEquation& q = e.equation[a];
+        q.src_color = kFactorsBlend[source_kind];
+        q.dst_color = kFactorsBlend[target];
+        q.color_op = OperationBlend(op);
+        q.src_alpha = kFactorsBlend[source_kind_a];
+        q.dst_alpha = kFactorsBlend[target_a];
+        q.alpha_op = OperationBlend(op_a);
       }
     }
   }
@@ -14865,65 +14854,62 @@ class VulkanDrawsImpl final : public VulkanDraws {
     eds_calls_[kEdsEverything] += everything ? 1 : 0;
     if (mode & kEds12) {
       if (everything || d.face != g.face) {
-        set_face_(cmd, VkCullModeFlags(d.face));
+        gpu_.SetCullMode(cmd, d.face);
         g.face = d.face;
         ++eds_calls_[kEdsFace];
       }
       if (everything || d.frontface != g.frontface) {
-        set_frontface_(cmd, VkFrontFace(d.frontface));
+        gpu_.SetFrontFace(cmd, d.frontface);
         g.frontface = d.frontface;
         ++eds_calls_[kEdsFrontface];
       }
       if (everything || d.topology != g.topology) {
-        set_topology_(cmd, VkPrimitiveTopology(d.topology));
+        gpu_.SetTopology(cmd, d.topology);
         g.topology = d.topology;
         ++eds_calls_[kEdsTopology];
       }
       if (everything || d.restart != g.restart) {
-        set_restart_(cmd, VkBool32(d.restart));
+        gpu_.SetPrimitiveRestart(cmd, d.restart != 0);
         g.restart = d.restart;
         ++eds_calls_[kEdsRestart];
       }
       if (everything || d.bias != g.bias) {
-        set_bias_(cmd, VkBool32(d.bias));
+        gpu_.SetDepthBiasEnable(cmd, d.bias != 0);
         g.bias = d.bias;
         ++eds_calls_[kEdsBias];
       }
       if (everything || d.test_z != g.test_z) {
-        set_test_z_(cmd, VkBool32(d.test_z));
+        gpu_.SetDepthTest(cmd, d.test_z != 0);
         g.test_z = d.test_z;
         ++eds_calls_[kEdsTestZ];
       }
       if (everything || d.writes_z != g.writes_z) {
-        set_writes_z_(cmd, VkBool32(d.writes_z));
+        gpu_.SetDepthWrite(cmd, d.writes_z != 0);
         g.writes_z = d.writes_z;
         ++eds_calls_[kEdsWritesZ];
       }
       if (everything || (d.test_z && d.function_z != g.function_z)) {
-        set_function_z_(cmd, VkCompareOp(d.function_z));
+        gpu_.SetDepthCompare(cmd, d.function_z);
         g.function_z = d.function_z;
         ++eds_calls_[kEdsFunctionZ];
       }
       if (everything || d.has_stencil != g.has_stencil) {
-        set_stencil_(cmd, VkBool32(d.has_stencil));
+        gpu_.SetStencilTest(cmd, d.has_stencil != 0);
         g.has_stencil = d.has_stencil;
         ++eds_calls_[kEdsStencil];
       }
       const bool ahead = everything || (d.has_stencil && std::memcmp(d.ahead, g.ahead, sizeof(d.ahead)) != 0);
       const bool behind = everything || (d.has_stencil && std::memcmp(d.behind, g.behind, sizeof(d.behind)) != 0);
       if (ahead && behind && std::memcmp(d.ahead, d.behind, sizeof(d.ahead)) == 0) {
-        set_stencil_ops_(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, VkStencilOp(d.ahead[0]), VkStencilOp(d.ahead[1]),
-                          VkStencilOp(d.ahead[2]), VkCompareOp(d.ahead[3]));
+        gpu_.SetStencilOps(cmd, gpu::kStencilBoth, d.ahead);
         ++eds_calls_[kEdsStencilOps];
       } else {
         if (ahead) {
-          set_stencil_ops_(cmd, VK_STENCIL_FACE_FRONT_BIT, VkStencilOp(d.ahead[0]), VkStencilOp(d.ahead[1]),
-                            VkStencilOp(d.ahead[2]), VkCompareOp(d.ahead[3]));
+          gpu_.SetStencilOps(cmd, gpu::kStencilFront, d.ahead);
           ++eds_calls_[kEdsStencilOps];
         }
         if (behind) {
-          set_stencil_ops_(cmd, VK_STENCIL_FACE_BACK_BIT, VkStencilOp(d.behind[0]), VkStencilOp(d.behind[1]),
-                            VkStencilOp(d.behind[2]), VkCompareOp(d.behind[3]));
+          gpu_.SetStencilOps(cmd, gpu::kStencilBack, d.behind);
           ++eds_calls_[kEdsStencilOps];
         }
       }
@@ -14949,28 +14935,28 @@ class VulkanDrawsImpl final : public VulkanDraws {
           active = active || d.blend_active[a] != g.blend_active[a];
           mask = mask || d.mask[a] != g.mask[a];
           if (!equation && d.blend_active[a]) {  // without blending the equation does not count; each half, with its channels
-            const VkColorBlendEquationEXT& x = d.equation[a];
-            const VkColorBlendEquationEXT& y = g.equation[a];
+            const gpu::BlendEquation& x = d.equation[a];
+            const gpu::BlendEquation& y = g.equation[a];
             equation = ((d.mask[a] & 0x7) != 0 &&
-                        (x.srcColorBlendFactor != y.srcColorBlendFactor ||
-                         x.dstColorBlendFactor != y.dstColorBlendFactor || x.colorBlendOp != y.colorBlendOp)) ||
+                        (x.src_color != y.src_color ||
+                         x.dst_color != y.dst_color || x.color_op != y.color_op)) ||
                        ((d.mask[a] & 0x8) != 0 &&
-                        (x.srcAlphaBlendFactor != y.srcAlphaBlendFactor ||
-                         x.dstAlphaBlendFactor != y.dstAlphaBlendFactor || x.alphaBlendOp != y.alphaBlendOp));
+                        (x.src_alpha != y.src_alpha ||
+                         x.dst_alpha != y.dst_alpha || x.alpha_op != y.alpha_op));
           }
         }
         if (active) {
-          set_blend_active_(cmd, 0, n, d.blend_active);
+          gpu_.SetBlendEnable(cmd, n, d.blend_active);
           std::memcpy(g.blend_active, d.blend_active, sizeof(g.blend_active));
           ++eds_calls_[kEdsBlendActive];
         }
         if (equation) {
-          set_equation_(cmd, 0, n, d.equation);
+          gpu_.SetBlendEquations(cmd, n, d.equation);
           std::memcpy(g.equation, d.equation, sizeof(g.equation));
           ++eds_calls_[kEdsEquation];
         }
         if (mask) {
-          set_mask_(cmd, 0, n, d.mask);
+          gpu_.SetColorMasks(cmd, n, d.mask);
           std::memcpy(g.mask, d.mask, sizeof(g.mask));
           ++eds_calls_[kEdsMask];
         }
@@ -15031,18 +15017,18 @@ class VulkanDrawsImpl final : public VulkanDraws {
       look("attachmentCount", g.n_colors, fixed.n_colors);
       for (uint32_t a = 0; a < fixed.n_colors && a < 4; ++a) {
         const VkPipelineColorBlendAttachmentState& s = fixed.blends[a];
-        const VkColorBlendEquationEXT& q = g.equation[a];
+        const gpu::BlendEquation& q = g.equation[a];
         look("colorWriteMask", g.mask[a], s.colorWriteMask);
         look("blendEnable", g.blend_active[a], s.blendEnable);
         if (s.blendEnable && (s.colorWriteMask & 0x7)) {
-          look("srcColorBlendFactor", q.srcColorBlendFactor, s.srcColorBlendFactor);
-          look("dstColorBlendFactor", q.dstColorBlendFactor, s.dstColorBlendFactor);
-          look("colorBlendOp", q.colorBlendOp, s.colorBlendOp);
+          look("srcColorBlendFactor", q.src_color, s.srcColorBlendFactor);
+          look("dstColorBlendFactor", q.dst_color, s.dstColorBlendFactor);
+          look("colorBlendOp", q.color_op, s.colorBlendOp);
         }
         if (s.blendEnable && (s.colorWriteMask & 0x8)) {
-          look("srcAlphaBlendFactor", q.srcAlphaBlendFactor, s.srcAlphaBlendFactor);
-          look("dstAlphaBlendFactor", q.dstAlphaBlendFactor, s.dstAlphaBlendFactor);
-          look("alphaBlendOp", q.alphaBlendOp, s.alphaBlendOp);
+          look("srcAlphaBlendFactor", q.src_alpha, s.srcAlphaBlendFactor);
+          look("dstAlphaBlendFactor", q.dst_alpha, s.dstAlphaBlendFactor);
+          look("alphaBlendOp", q.alpha_op, s.alphaBlendOp);
         }
       }
     }
@@ -15100,33 +15086,33 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const auto request = [&](const char* label) {
       return deferred::Wrap(label, ifn.vkGetDeviceProcAddr(device_, label));
     };
-    set_face_ = reinterpret_cast<PFN_vkCmdSetCullMode>(request("vkCmdSetCullMode"));
-    set_frontface_ = reinterpret_cast<PFN_vkCmdSetFrontFace>(request("vkCmdSetFrontFace"));
-    set_topology_ = reinterpret_cast<PFN_vkCmdSetPrimitiveTopology>(request("vkCmdSetPrimitiveTopology"));
-    set_restart_ = reinterpret_cast<PFN_vkCmdSetPrimitiveRestartEnable>(request("vkCmdSetPrimitiveRestartEnable"));
-    set_bias_ = reinterpret_cast<PFN_vkCmdSetDepthBiasEnable>(request("vkCmdSetDepthBiasEnable"));
-    set_test_z_ = reinterpret_cast<PFN_vkCmdSetDepthTestEnable>(request("vkCmdSetDepthTestEnable"));
-    set_writes_z_ = reinterpret_cast<PFN_vkCmdSetDepthWriteEnable>(request("vkCmdSetDepthWriteEnable"));
-    set_function_z_ = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(request("vkCmdSetDepthCompareOp"));
-    set_stencil_ = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(request("vkCmdSetStencilTestEnable"));
-    set_stencil_ops_ = reinterpret_cast<PFN_vkCmdSetStencilOp>(request("vkCmdSetStencilOp"));
+    gpu_.dynamic().cull_mode = reinterpret_cast<PFN_vkCmdSetCullMode>(request("vkCmdSetCullMode"));
+    gpu_.dynamic().front_face = reinterpret_cast<PFN_vkCmdSetFrontFace>(request("vkCmdSetFrontFace"));
+    gpu_.dynamic().topology = reinterpret_cast<PFN_vkCmdSetPrimitiveTopology>(request("vkCmdSetPrimitiveTopology"));
+    gpu_.dynamic().restart = reinterpret_cast<PFN_vkCmdSetPrimitiveRestartEnable>(request("vkCmdSetPrimitiveRestartEnable"));
+    gpu_.dynamic().depth_bias = reinterpret_cast<PFN_vkCmdSetDepthBiasEnable>(request("vkCmdSetDepthBiasEnable"));
+    gpu_.dynamic().depth_test = reinterpret_cast<PFN_vkCmdSetDepthTestEnable>(request("vkCmdSetDepthTestEnable"));
+    gpu_.dynamic().depth_write = reinterpret_cast<PFN_vkCmdSetDepthWriteEnable>(request("vkCmdSetDepthWriteEnable"));
+    gpu_.dynamic().depth_compare = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(request("vkCmdSetDepthCompareOp"));
+    gpu_.dynamic().stencil_test = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(request("vkCmdSetStencilTestEnable"));
+    gpu_.dynamic().stencil_op = reinterpret_cast<PFN_vkCmdSetStencilOp>(request("vkCmdSetStencilOp"));
     const uint32_t api = vulkan_device_->properties().apiVersion;
-    eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && set_face_ && set_frontface_ && set_topology_ &&
-                        set_restart_ && set_bias_ && set_test_z_ && set_writes_z_ && set_function_z_ &&
-                        set_stencil_ && set_stencil_ops_;
+    eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && gpu_.dynamic().cull_mode && gpu_.dynamic().front_face && gpu_.dynamic().topology &&
+                        gpu_.dynamic().restart && gpu_.dynamic().depth_bias && gpu_.dynamic().depth_test && gpu_.dynamic().depth_write && gpu_.dynamic().depth_compare &&
+                        gpu_.dynamic().stencil_test && gpu_.dynamic().stencil_op;
     REXLOG_INFO("[native] C6 dynamic state: EDS1/EDS2 {} (device API {}.{}.{})",
                 eds12_available_ ? "available (core 1.3)" : "NOT available: phase 1 is not used",
                 VK_API_VERSION_MAJOR(api), VK_API_VERSION_MINOR(api), VK_API_VERSION_PATCH(api));
 #if defined(REX_UI_VULKAN_DYNAMIC_STATE3)
     // Phase 2. The driver only provides these three if the SDK enabled the extension; the SDK records the
     // three features in its device properties.
-    set_blend_active_ = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(request("vkCmdSetColorBlendEnableEXT"));
-    set_equation_ = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(request("vkCmdSetColorBlendEquationEXT"));
-    set_mask_ = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(request("vkCmdSetColorWriteMaskEXT"));
+    gpu_.dynamic().blend_enable = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(request("vkCmdSetColorBlendEnableEXT"));
+    gpu_.dynamic().blend_equation = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(request("vkCmdSetColorBlendEquationEXT"));
+    gpu_.dynamic().color_mask = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(request("vkCmdSetColorWriteMaskEXT"));
     const auto& p3 = vulkan_device_->properties();
     eds3_available_ = vulkan_device_->extensions().ext_EXT_extended_dynamic_state3 &&
                        p3.extendedDynamicState3ColorBlendEnable && p3.extendedDynamicState3ColorBlendEquation &&
-                       p3.extendedDynamicState3ColorWriteMask && set_blend_active_ && set_equation_ && set_mask_;
+                       p3.extendedDynamicState3ColorWriteMask && gpu_.dynamic().blend_enable && gpu_.dynamic().blend_equation && gpu_.dynamic().color_mask;
     REXLOG_INFO("[native] C6 dynamic state: EDS3 (blend, equation and color mask) {}",
                 eds3_available_ ? "available"
                                  : "NOT available (the device does not provide it or it is not enabled): phase 2 is not "
@@ -16549,6 +16535,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   const VulkanDevice* vulkan_device_;
   const VulkanDevice::Functions& dfn_;
+  gpu::vulkan::Recorder gpu_;  // the layer's recording calls (bo2zm_gpu_vulkan.h), through dfn_
   VkDevice device_;
   rex::memory::Memory* memory_;
   TargetContext* context_;
@@ -16869,16 +16856,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     kEdsEverything,          // times everything is set (not a call)
     kEdsN
   };
-  PFN_vkCmdSetCullMode set_face_ = nullptr;  // core in Vulkan 1.3 (LoadStateDynamic)
-  PFN_vkCmdSetFrontFace set_frontface_ = nullptr;
-  PFN_vkCmdSetPrimitiveTopology set_topology_ = nullptr;
-  PFN_vkCmdSetPrimitiveRestartEnable set_restart_ = nullptr;
-  PFN_vkCmdSetDepthBiasEnable set_bias_ = nullptr;
-  PFN_vkCmdSetDepthTestEnable set_test_z_ = nullptr;
-  PFN_vkCmdSetDepthWriteEnable set_writes_z_ = nullptr;
-  PFN_vkCmdSetDepthCompareOp set_function_z_ = nullptr;
-  PFN_vkCmdSetStencilTestEnable set_stencil_ = nullptr;
-  PFN_vkCmdSetStencilOp set_stencil_ops_ = nullptr;
   bool eds12_available_ = false;  // API 1.3 and the ten functions
   bool eds_off_ = false;       // the guard saw a difference: for the rest of the run, everything in the pipeline
   bool eds_mode_annotated_ = false;
@@ -16920,9 +16897,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
       VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA,
       VK_BLEND_FACTOR_SRC_ALPHA_SATURATE,
   };
-  PFN_vkCmdSetColorBlendEnableEXT set_blend_active_ = nullptr;
-  PFN_vkCmdSetColorBlendEquationEXT set_equation_ = nullptr;
-  PFN_vkCmdSetColorWriteMaskEXT set_mask_ = nullptr;
   bool eds3_available_ = false;  // the SDK enables the extension and its three features; the driver provides the functions
   std::unordered_map<uint64_t, VkRenderPass> passes_;
   std::unordered_map<uint64_t, VkFramebuffer> framebuffers_;
@@ -16979,7 +16953,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // Dynamic state already recorded in the current command buffer and pass.
   bool state_recorded_ = false;
   uint64_t push_recorded_[3] = {};
-  VkViewport viewport_recorded_{};
+  gpu::Viewport viewport_recorded_{};
   VkRect2D scissor_recorded_{};
   float blend_recorded_[4] = {};
   float bias_recorded_[2] = {};  // depth bias: constant and slope
@@ -17078,7 +17052,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint64_t framing_generation_ = 0;
   uint64_t framing_pass_series_ = 0;
   uint64_t pass_series_ = 0;                // incremented on every BeginPass
-  VkViewport framing_viewport_{};
+  gpu::Viewport framing_viewport_{};
   VkRect2D framing_scissor_{};
   float framing_ndc_[4] = {};
   uint32_t framing_empty_ = 0;
@@ -17135,7 +17109,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint64_t push[3] = {};             // only with constants through pointers
     std::array<uint32_t, 3> offsets_ubo{};
     uint32_t slot_ubo = 0;
-    VkViewport viewport{};
+    gpu::Viewport viewport{};
     VkRect2D scissor{};
     float blend[4] = {};
     float bias[2] = {};
