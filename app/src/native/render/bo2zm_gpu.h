@@ -109,6 +109,61 @@ struct Range {
   uint32_t layers;
 };
 
+// One mip level and some array layers of an image, what a copy reads or writes (layout of VkImageSubresourceLayers).
+struct Layers {
+  Aspects aspects;
+  uint32_t level;
+  uint32_t base_layer;
+  uint32_t layers;
+};
+
+struct Offset3 {
+  int32_t x;
+  int32_t y;
+  int32_t z;
+};
+
+struct Extent3 {
+  uint32_t width;
+  uint32_t height;
+  uint32_t depth;
+};
+
+// A region copied between two images of compatible formats (layout of VkImageCopy).
+struct ImageCopy {
+  Layers source;
+  Offset3 source_offset;
+  Layers target;
+  Offset3 target_offset;
+  Extent3 extent;
+};
+
+// A region scaled from one image into another, corner to corner (layout of VkImageBlit).
+struct ImageBlit {
+  Layers source;
+  Offset3 source_offsets[2];
+  Layers target;
+  Offset3 target_offsets[2];
+};
+
+// A region copied between a buffer and an image (layout of VkBufferImageCopy). row_length and image_height are in
+// texels, 0 for tightly packed.
+struct BufferImageCopy {
+  uint64_t buffer_offset;
+  uint32_t row_length;
+  uint32_t image_height;
+  Layers layers;
+  Offset3 offset;
+  Extent3 extent;
+};
+
+// A range copied between two buffers (layout of VkBufferCopy).
+struct BufferCopy {
+  uint64_t source_offset;
+  uint64_t target_offset;
+  uint64_t size;
+};
+
 // Ordering between commands, in Vulkan's numbering: pipeline stages, memory accesses and image layouts. Metal tracks
 // most hazards itself, so there a barrier becomes an encoder boundary or a memory barrier on the encoder, and image
 // layouts mean nothing.
