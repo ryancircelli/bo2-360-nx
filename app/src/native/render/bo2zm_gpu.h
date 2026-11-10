@@ -487,6 +487,7 @@ struct Caps {
   bool pipeline_statistics = false;
   float timestamp_period_ns = 0.0f;  // 0: the queue has no timestamps
   // Pipelines.
+  bool pipeline_cache = false;  // a pipeline cache kept on disk (Metal: an MTLBinaryArchive)
   bool pipeline_cache_control = false;  // creating a pipeline can be asked to fail instead of compiling
   uint32_t api_version = 0;  // Vulkan's packed version (0 on Metal)
   bool dynamic_state12 = false;  // cull, winding, topology, restart, depth and stencil state set while recording

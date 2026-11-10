@@ -2906,7 +2906,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       gpu::vulkan::Destroy(dfn_, device_, pair.second);
     }
     if (cache_pipelines_ != nullptr) {
-      destroy_cache_(device_, cache_pipelines_, nullptr);
+      gpu::vulkan::DestroyPipelineCache(cache_functions_, device_, cache_pipelines_);
     }
     for (auto& [key, framebuffer] : framebuffers_) {
       gpu::vulkan::DestroyFramebuffer(dfn_, device_, framebuffer);
@@ -9366,14 +9366,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // On-disk pipeline cache (derived from the game's shaders: not distributed). If the driver rejects it
   // (another driver or corrupt data), it starts from scratch.
   void LoadCachePipelines() {
-    const auto& ifn = vulkan_device_->vulkan_instance()->functions();
-    const auto create = reinterpret_cast<FnCreatePipelineCache>(
-        ifn.vkGetDeviceProcAddr(device_, "vkCreatePipelineCache"));
-    data_cache_ = reinterpret_cast<FnPipelineCacheData>(
-        ifn.vkGetDeviceProcAddr(device_, "vkGetPipelineCacheData"));
-    destroy_cache_ = reinterpret_cast<FnDestroyPipelineCache>(
-        ifn.vkGetDeviceProcAddr(device_, "vkDestroyPipelineCache"));
-    if (!create || !data_cache_ || !destroy_cache_) {
+    cache_functions_ = gpu::vulkan::LoadPipelineCache(*vulkan_device_);
+    if (!caps_.pipeline_cache) {
       REXLOG_WARN("[native] C6: no pipeline cache (the driver does not provide its functions)");
       return;
     }
@@ -9392,15 +9386,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
                   data.size() >> 10);
       data.clear();
     }
-    VkPipelineCacheCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-    info.initialDataSize = data.size();
-    info.pInitialData = data.empty() ? nullptr : data.data();
-    if (create(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
-      info.initialDataSize = 0;
-      info.pInitialData = nullptr;
+    if (!gpu::vulkan::CreatePipelineCache(cache_functions_, device_, data.data(), data.size(), cache_pipelines_)) {
       data.clear();
-      if (create(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreatePipelineCache(cache_functions_, device_, nullptr, 0, cache_pipelines_)) {
         cache_pipelines_ = nullptr;
       }
     }
@@ -9502,13 +9490,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // it is not rewritten), or always for a test resave; empty otherwise.
   std::vector<uint8_t> TakeCacheData(bool always) {
     size_t bytes = 0;
-    if (cache_pipelines_ == nullptr || data_cache_(device_, cache_pipelines_, &bytes, nullptr) != VK_SUCCESS ||
+    if (cache_pipelines_ == nullptr ||
+        !gpu::vulkan::PipelineCacheData(cache_functions_, device_, cache_pipelines_, bytes, nullptr) ||
         !bytes || (bytes == bytes_cache_saved_ && !always)) {
       return {};
     }
     std::vector<uint8_t> data(bytes);
-    const VkResult result = data_cache_(device_, cache_pipelines_, &bytes, data.data());
-    if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || !bytes) {
+    if (!gpu::vulkan::PipelineCacheData(cache_functions_, device_, cache_pipelines_, bytes, data.data()) || !bytes) {
       return {};
     }
     data.resize(bytes);
@@ -17356,14 +17344,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return c.generation_slot == GenerationSlot(c.heap, c.slot);
   }
   // On-disk pipeline cache (LoadCachePipelines and SaveCachePipelines).
-  using FnCreatePipelineCache = VkResult(VKAPI_PTR*)(VkDevice, const VkPipelineCacheCreateInfo*,
-                                                     const VkAllocationCallbacks*,
-                                                     gpu::PipelineCache*);
-  using FnPipelineCacheData = VkResult(VKAPI_PTR*)(VkDevice, gpu::PipelineCache, size_t*, void*);
-  using FnDestroyPipelineCache = void(VKAPI_PTR*)(VkDevice, gpu::PipelineCache,
-                                                    const VkAllocationCallbacks*);
-  FnPipelineCacheData data_cache_ = nullptr;
-  FnDestroyPipelineCache destroy_cache_ = nullptr;
+  gpu::vulkan::PipelineCacheFunctions cache_functions_;
   gpu::PipelineCache cache_pipelines_ = nullptr;
   uint32_t pipelines_no_save_ = 0;
   uint32_t saved_cache_ = 0;
