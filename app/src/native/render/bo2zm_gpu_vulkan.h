@@ -7,6 +7,7 @@
 #include <rex/ui/vulkan/device.h>
 #include <rex/ui/vulkan/util.h>
 
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
@@ -794,6 +795,73 @@ inline VkResult BindImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, V
                           VkDeviceMemory memory, VkDeviceSize offset) {
   return dfn.vkBindImageMemory(device, image, memory, offset);
 }
+
+// A PipelineState as the create infos of a graphics pipeline. blend.pAttachments points into blends, so the
+// structure cannot be copied.
+struct FixedState {
+  VkPipelineInputAssemblyStateCreateInfo assembly{};
+  VkPipelineViewportStateCreateInfo view{};
+  VkPipelineRasterizationStateCreateInfo rasterization{};
+  VkPipelineMultisampleStateCreateInfo sampling{};
+  VkPipelineDepthStencilStateCreateInfo depth{};
+  std::array<VkPipelineColorBlendAttachmentState, 4> blends{};
+  VkPipelineColorBlendStateCreateInfo blend{};
+
+  explicit FixedState(const PipelineState& s) {
+    assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    assembly.topology = VkPrimitiveTopology(s.topology);
+    assembly.primitiveRestartEnable = s.restart ? VK_TRUE : VK_FALSE;
+
+    view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    view.viewportCount = 1;
+    view.scissorCount = 1;
+
+    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterization.cullMode = s.cull;
+    rasterization.frontFace = VkFrontFace(s.front_face);
+    rasterization.lineWidth = 1.0f;
+    rasterization.depthBiasEnable = s.depth_bias ? VK_TRUE : VK_FALSE;
+    rasterization.depthClampEnable = s.depth_clamp ? VK_TRUE : VK_FALSE;
+
+    sampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    sampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    const auto face = [](const StencilOps& o) {
+      VkStencilOpState f{};
+      f.failOp = VkStencilOp(o.fail);
+      f.passOp = VkStencilOp(o.pass);
+      f.depthFailOp = VkStencilOp(o.depth_fail);
+      f.compareOp = VkCompareOp(o.compare);
+      return f;
+    };
+    depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth.depthTestEnable = s.depth_test;
+    depth.depthWriteEnable = s.depth_write;
+    depth.depthCompareOp = VkCompareOp(s.depth_compare);
+    depth.stencilTestEnable = s.stencil_test;
+    depth.front = face(s.front);
+    depth.back = face(s.back);
+
+    for (uint32_t i = 0; i < s.n_colors && i < 4; ++i) {
+      const BlendTarget& t = s.blends[i];
+      VkPipelineColorBlendAttachmentState& b = blends[i];
+      b.blendEnable = t.enable;
+      b.srcColorBlendFactor = VkBlendFactor(t.equation.src_color);
+      b.dstColorBlendFactor = VkBlendFactor(t.equation.dst_color);
+      b.colorBlendOp = VkBlendOp(t.equation.color_op);
+      b.srcAlphaBlendFactor = VkBlendFactor(t.equation.src_alpha);
+      b.dstAlphaBlendFactor = VkBlendFactor(t.equation.dst_alpha);
+      b.alphaBlendOp = VkBlendOp(t.equation.alpha_op);
+      b.colorWriteMask = t.mask;
+    }
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = s.n_colors;
+    blend.pAttachments = blends.data();
+  }
+  FixedState(const FixedState&) = delete;
+  FixedState& operator=(const FixedState&) = delete;
+};
 
 }  // namespace vulkan
 

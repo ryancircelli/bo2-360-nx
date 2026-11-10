@@ -268,4 +268,40 @@ struct SamplerDesc {
   BorderColor border = kBorderTransparentBlack;
 };
 
+// One stencil face's operations (the masks and the reference are dynamic state).
+struct StencilOps {
+  StencilOp fail = 0;
+  StencilOp pass = 0;
+  StencilOp depth_fail = 0;
+  CompareOp compare = 0;
+};
+
+// One colour target's blending: enabled, the equation and the channels written.
+struct BlendTarget {
+  uint32_t enable = 0;
+  BlendEquation equation;
+  ColorMask mask = 0;
+};
+
+// The fixed state a graphics pipeline carries besides its shaders and vertex input, in Vulkan's numbering. One
+// viewport and scissor, one sample, filled polygons and line width 1 are implied. Vulkan bakes all of it into the
+// pipeline; Metal splits it into the render pipeline (blends, masks), a depth stencil state and encoder state
+// (cull, winding, bias, clamp).
+struct PipelineState {
+  Topology topology = 0;
+  uint32_t restart = 0;
+  CullMode cull = 0;
+  FrontFace front_face = 0;
+  uint32_t depth_bias = 0;
+  uint32_t depth_clamp = 0;
+  uint32_t depth_test = 0;
+  uint32_t depth_write = 0;
+  CompareOp depth_compare = 0;
+  uint32_t stencil_test = 0;
+  StencilOps front;
+  StencilOps back;
+  uint32_t n_colors = 0;  // the targets of the pass, compacted: blends[0..n_colors)
+  BlendTarget blends[4];
+};
+
 }  // namespace bo2zm::native::gpu
