@@ -308,6 +308,9 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
     return X_ERROR_NO_SUCH_USER;
   }
 
+  REXKRNL_INFO("XamUserWriteProfileSettings: user {} ({}), {} setting(s), first {:08X}", user_index,
+               user_profile->name(), setting_count, (uint32_t)settings[0].setting_id);
+
   // Update and save settings.
   for (uint32_t n = 0; n < setting_count; ++n) {
     const X_USER_PROFILE_SETTING& setting = settings[n];
