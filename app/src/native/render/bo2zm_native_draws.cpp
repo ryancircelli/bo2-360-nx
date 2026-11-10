@@ -2905,7 +2905,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     StopWriterCache();  // writes whatever is still pending
     ClosePsoRecord();
     for (auto& [key, pair] : pipelines_) {
-      dfn_.vkDestroyPipeline(device_, pair.second, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, pair.second);
     }
     if (cache_pipelines_ != VK_NULL_HANDLE) {
       destroy_cache_(device_, cache_pipelines_, nullptr);
@@ -2917,7 +2917,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       gpu::vulkan::DestroyFramebuffer(dfn_, device_, framebuffer);
     }
     for (auto& [key, pass] : passes_) {
-      dfn_.vkDestroyRenderPass(device_, pass, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, pass);
     }
     for (auto& [input, shader_module] : modules_) {
       gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
@@ -2938,7 +2938,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     }
     for (auto& [key, view] : views_) {
-      dfn_.vkDestroyImageView(device_, view.view, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, view.view);
     }
     for (auto& [key, texture] : textures_) {
       DestroyImage(texture.image);
@@ -2954,34 +2954,34 @@ class VulkanDrawsImpl final : public VulkanDraws {
     pool_textures_.Finish();
     if (sampler_empty_ != VK_NULL_HANDLE) gpu::vulkan::DestroySampler(dfn_, device_, sampler_empty_);
     if (layout_pipeline_ != VK_NULL_HANDLE)
-      dfn_.vkDestroyPipelineLayout(device_, layout_pipeline_, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, layout_pipeline_);
     bo2zm::gpu_skin::SetRendererReady(false);
-    if (skin_pipeline_ != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, skin_pipeline_, nullptr);
-    if (skin_layout_ != VK_NULL_HANDLE) dfn_.vkDestroyPipelineLayout(device_, skin_layout_, nullptr);
-    if (skin_table_buffer_ != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, skin_table_buffer_, nullptr);
-    if (skin_table_memory_ != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, skin_table_memory_, nullptr);
-    if (skin_pool_buffer_ != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, skin_pool_buffer_, nullptr);
-    if (skin_pool_memory_ != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, skin_pool_memory_, nullptr);
-    if (pool_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, pool_, nullptr);
-    if (pool_ubo_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, pool_ubo_, nullptr);
-    if (layout_ubo_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorSetLayout(device_, layout_ubo_, nullptr);
+    if (skin_pipeline_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_pipeline_);
+    if (skin_layout_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_layout_);
+    if (skin_table_buffer_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_table_buffer_);
+    if (skin_table_memory_ != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, skin_table_memory_);
+    if (skin_pool_buffer_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_pool_buffer_);
+    if (skin_pool_memory_ != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, skin_pool_memory_);
+    if (pool_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool_);
+    if (pool_ubo_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool_ubo_);
+    if (layout_ubo_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, layout_ubo_);
     for (VkDescriptorSetLayout layout : layouts_) {
-      if (layout != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorSetLayout(device_, layout, nullptr);
+      if (layout != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, layout);
     }
     for (const UploadBuffer& s : shared_bufs_) {
       if (s.data) dfn_.vkUnmapMemory(device_, s.guest_memory);
-      if (s.buffer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, s.buffer, nullptr);
-      if (s.guest_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, s.guest_memory, nullptr);
+      if (s.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
+      if (s.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
     }
     for (const UploadBuffer& s : uploads_) {
       if (s.data) dfn_.vkUnmapMemory(device_, s.guest_memory);
-      if (s.buffer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, s.buffer, nullptr);
-      if (s.guest_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, s.guest_memory, nullptr);
+      if (s.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
+      if (s.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
     }
     for (const VertexPool& v : vpools_) {  // bo2zm_native_vertex_cache
       if (v.data) dfn_.vkUnmapMemory(device_, v.memory);
-      if (v.buffer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, v.buffer, nullptr);
-      if (v.memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, v.memory, nullptr);
+      if (v.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, v.buffer);
+      if (v.memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, v.memory);
     }
   }
 
@@ -6844,7 +6844,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
           RetireSlot(v->second.heap, v->second.slot);  // only the cache entries that point at it
           WriteImage(v->second.heap, v->second.slot, empty_[v->second.heap].view);
           heaps_[v->second.heap].free.push_back(v->second.slot);
-          dfn_.vkDestroyImageView(device_, v->second.view, nullptr);
+          gpu::vulkan::Destroy(dfn_, device_, v->second.view);
           views_.erase(v);
         }
         views_per_image_.erase(index);
@@ -6949,7 +6949,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       RetireSlot(it->second.heap, it->second.slot);  // only the cache entries that point at it
       WriteImage(it->second.heap, it->second.slot, empty_[it->second.heap].view);
       heaps_[it->second.heap].free.push_back(it->second.slot);
-      dfn_.vkDestroyImageView(device_, it->second.view, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, it->second.view);
       views_per_image_.erase(it->second.image);  // all views of that image go
       it = views_.erase(it);
     }
@@ -7205,7 +7205,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       RetireSlot(it->second.heap, it->second.slot);  // the sampler cache entries that point at it
       WriteImage(it->second.heap, it->second.slot, empty_[it->second.heap].view);
       heaps_[it->second.heap].free.push_back(it->second.slot);
-      dfn_.vkDestroyImageView(device_, it->second.view, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, it->second.view);
       views_.erase(it);
     }
     views_per_image_.erase(index);
@@ -7492,12 +7492,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     VkDeviceSize offset = 0;
     uint32_t id_block = 0xFFFFFFFFu;
     if (!pool_textures_.Reserve(req, block, offset, id_block)) {
-      dfn_.vkDestroyImage(device_, image, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, image);
       return false;  // no room in the pool: CreateTexture, which can take the dedicated path
     }
     uint64_t ticket = 0;
     if (!EnqueueBinding(image, block, offset, ticket)) {
-      dfn_.vkDestroyImage(device_, image, nullptr);  // before the chunk, as the pool requires (not bound yet)
+      gpu::vulkan::Destroy(dfn_, device_, image);  // before the chunk, as the pool requires (not bound yet)
       pool_textures_.Free(id_block);
       return false;
     }
@@ -7672,7 +7672,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       TurnOffBindings(fmt::format("MISMATCH: vkBindImageMemory returned {} on the thread for a {}x{} texture ({} "
                                 "levels, {} layers)",
                                 int32_t(flight.result), flight.width, flight.height, flight.levels, flight.layers));
-      dfn_.vkDestroyImage(device_, flight.image, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, flight.image);
       pool_textures_.Free(texture.image.pool_block);
       texture.image.image = VK_NULL_HANDLE;
       texture.image.pool_block = 0xFFFFFFFFu;
@@ -10714,7 +10714,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                     std::chrono::duration<double, std::milli>(published - copied).count()));
         dfn_.vkUnmapMemory(device_, guest_memory);
       }
-      dfn_.vkFreeMemory(device_, guest_memory, nullptr);
+      gpu::vulkan::Free(dfn_, device_, guest_memory);
     }
     REXLOG_INFO("[native] C6: CPU write speed per memory type (8 MB): {}",
                 report.empty() ? std::string("no measurable types") : report);
@@ -13090,7 +13090,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
           if (id_block != 0xFFFFFFFFu) {
             pool_textures_.Free(id_block);
           }
-          dfn_.vkDestroyImage(device_, image_pool, nullptr);
+          gpu::vulkan::Destroy(dfn_, device_, image_pool);
           pool_textures_.AnnotateDedicated();
         }
       }
@@ -13287,7 +13287,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     view.slot = ReserveSlot(heap);
     if (!view.slot) {
-      dfn_.vkDestroyImageView(device_, view.view, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, view.view);
       Warn(35, "texture heap full");
       ++slots_full_;
       return 0;
@@ -15638,7 +15638,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
       for (const auto& [key, pass] : passes_) {
         if (pass != VK_NULL_HANDLE) {
-          d_.dfn_.vkDestroyRenderPass(d_.device_, pass, nullptr);
+          gpu::vulkan::Destroy(d_.dfn_, d_.device_, pass);
         }
       }
     }
@@ -15703,7 +15703,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (keep) {
         *keep = pipeline;
       } else {
-        d_.dfn_.vkDestroyPipeline(d_.device_, pipeline, nullptr);
+        gpu::vulkan::Destroy(d_.dfn_, d_.device_, pipeline);
       }
       return kListPrewarm;
     }
@@ -15982,7 +15982,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         ++adopted;
         ++pipelines_per_mode_[key.padding2 & 3];
       } else {
-        dfn_.vkDestroyPipeline(device_, kept[i], nullptr);
+        gpu::vulkan::Destroy(dfn_, device_, kept[i]);
       }
     }
     if (keep) {
@@ -16295,7 +16295,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     std::lock_guard<std::mutex> lock(compile_mutex_);
     for (CompileJob& job : compile_done_) {  // finished but never collected
       if (job.pipeline != VK_NULL_HANDLE) {
-        dfn_.vkDestroyPipeline(device_, job.pipeline, nullptr);
+        gpu::vulkan::Destroy(dfn_, device_, job.pipeline);
       }
     }
     compile_done_.clear();
@@ -16372,12 +16372,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   void DestroyImage(NativeImage& image) {
-    if (image.view != VK_NULL_HANDLE) dfn_.vkDestroyImageView(device_, image.view, nullptr);
-    if (image.image != VK_NULL_HANDLE) dfn_.vkDestroyImage(device_, image.image, nullptr);
+    if (image.view != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.view);
+    if (image.image != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.image);
     // The pool chunk is returned after destroying the image that used it, and in that case `guest_memory` is
     // NULL on purpose: the memory belongs to a shared slab and is not freed on its own.
     if (image.pool_block != 0xFFFFFFFFu) pool_textures_.Free(image.pool_block);
-    if (image.guest_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, image.guest_memory, nullptr);
+    if (image.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, image.guest_memory);
     image = NativeImage{};
   }
 
