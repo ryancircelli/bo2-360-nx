@@ -118,6 +118,9 @@ inline constexpr BufferUsage kBufferIndex = 0x40;
 inline constexpr BufferUsage kBufferVertex = 0x80;
 inline constexpr BufferUsage kBufferAddress = 0x20000;  // the shaders reach it by its GPU address
 
+// An image format, in Vulkan's numbering (VkFormat); the Metal backend maps it to its MTLPixelFormat with a table.
+using Format = uint32_t;
+
 // What a set of queries counts. Metal: timestamps are a counter sample buffer, occlusion counts a visibility result
 // buffer, and pipeline statistics have no equivalent (the renderer only uses them for diagnostics).
 enum class QueryKind : uint8_t {
