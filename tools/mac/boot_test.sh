@@ -86,7 +86,10 @@ fi
 
 # ---- stop leftovers ----
 pat="${app:-$exe}"; pat="$(cd "$(dirname "$pat")" && pwd)/$(basename "$pat")"; [ -n "$app" ] && pat="$pat/Contents/MacOS/bo2zm"
-if pgrep -f "$pat" >/dev/null 2>&1; then echo "stopping a leftover instance"; pkill -f "$pat"; sleep 2; pkill -9 -f "$pat" 2>/dev/null; fi
+# PIDs whose command is exactly the game binary (never kill by name or pattern).
+game_pids() { local p c; for p in $(pgrep -f "$pat" 2>/dev/null); do c="$(ps -o command= -p "$p" 2>/dev/null)"; { [ "$c" = "$pat" ] || [[ "$c" == "$pat "* ]]; } && echo "$p"; done; }
+kill_game() { local sig="$1" p; for p in $(game_pids); do kill "$sig" "$p" 2>/dev/null; done; }
+if [ -n "$(game_pids)" ]; then echo "stopping a leftover instance"; kill_game -TERM; sleep 2; kill_game -KILL; fi
 
 # the game writes captures/ next to the executable (bo2zm_capture_every_s); start clean, collect afterwards
 exedir="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"; rm -rf "$exedir/captures"
@@ -117,8 +120,8 @@ for ((i = 0; i < duration; i++)); do
   fi
 done
 if [ "$keep" = 0 ]; then
-  pkill -TERM -f "$pat" 2>/dev/null; for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
-  pkill -9 -f "$pat" 2>/dev/null
+  kill_game -TERM; for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(game_pids)" ] && break; sleep 1; done
+  kill_game -KILL
 fi
 [ -d "$exedir/captures" ] && cp -R "$exedir/captures/." "$out/captures/" && echo "captures: $(ls "$out/captures" | wc -l) in $out/captures"
 log="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"; [ -n "$log" ] && cp "$log" "$out/game.log"
