@@ -854,11 +854,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     for (auto& [key, volume] : volumes_) {
       Destroy(volume.image);
-      if (volume.gather != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, volume.gather, nullptr);
-      if (volume.gather_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, volume.gather_memory, nullptr);
+      if (volume.gather != nullptr) gpu::vulkan::Destroy(dfn_, device_, volume.gather);
+      if (volume.gather_memory != nullptr) gpu::vulkan::Free(dfn_, device_, volume.gather_memory);
     }
-    if (gather_pipeline_ != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, gather_pipeline_, nullptr);
-    if (gather_layout_ != VK_NULL_HANDLE) dfn_.vkDestroyPipelineLayout(device_, gather_layout_, nullptr);
+    if (gather_pipeline_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, gather_pipeline_);
+    if (gather_layout_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, gather_layout_);
     Destroy(tiled_);
     for (FrontImage& spare : fronts_images_) {  // bo2zm_native_lazy_front
       Destroy(spare.image);
@@ -3690,40 +3690,38 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu_.Barrier(commands_job_,
                  VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                     (v.gather != VK_NULL_HANDLE ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
+                     (v.gather != nullptr ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
                  VK_PIPELINE_STAGE_TRANSFER_BIT, &before, v.image.prepared ? 0 : 1, &first);
     v.image.prepared = true;
     MarkGpu(kGpuCopies);
-    if (v.gather != VK_NULL_HANDLE) {
+    if (v.gather != nullptr) {
       // bo2zm_native_volume_gather: resolve -> buffer, the shader puts each texel in its 3D place, buffer -> 3D.
       // The barrier above already waits for the previous rebuild's reads of the buffer (transfer and compute).
-      const VkDeviceSize bytes_flat = VkDeviceSize(v.texels_flat) * 4;
-      const VkDeviceSize at_src = VkDeviceSize(v.texels) * 4, at_dst = at_src + bytes_flat;
-      VkBufferImageCopy out{};
-      out.bufferOffset = at_src;
-      out.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      out.imageExtent = {flat->width, flat->height, 1};
-      dfn_.vkCmdCopyImageToBuffer(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.gather, 1, &out);
-      VkMemoryBarrier to_compute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-      to_compute.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-      to_compute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-      dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                0, 1, &to_compute, 0, nullptr, 0, nullptr);
+      const gpu::Size bytes_flat = gpu::Size(v.texels_flat) * 4;
+      const gpu::Size at_src = gpu::Size(v.texels) * 4, at_dst = at_src + bytes_flat;
+      gpu::BufferImageCopy out{};
+      out.buffer_offset = at_src;
+      out.layers = {gpu::kAspectColor, 0, 0, 1};
+      out.extent = {flat->width, flat->height, 1};
+      gpu_.CopyImageToBuffer(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.gather, 1, &out);
+      gpu::MemoryBarrier to_compute;
+      to_compute.before = VK_ACCESS_TRANSFER_WRITE_BIT;
+      to_compute.after = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, &to_compute);
       const VolumeGatherPush push{v.gather_address, v.gather_address + at_src, v.gather_address + at_dst, v.texels,
                                   0};
-      dfn_.vkCmdBindPipeline(commands_job_, VK_PIPELINE_BIND_POINT_COMPUTE, gather_pipeline_);
-      dfn_.vkCmdPushConstants(commands_job_, gather_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-      dfn_.vkCmdDispatch(commands_job_, (v.texels + 63) / 64, 1, 1);
-      VkMemoryBarrier to_copy{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-      to_copy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-      to_copy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-      dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                0, 1, &to_copy, 0, nullptr, 0, nullptr);
-      VkBufferImageCopy in{};
-      in.bufferOffset = at_dst;
-      in.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      in.imageExtent = {v.image.width, v.image.height, v.depth3d};
-      dfn_.vkCmdCopyBufferToImage(commands_job_, v.gather, v.image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
+      gpu_.BindComputePipeline(commands_job_, gather_pipeline_);
+      gpu_.PushConstants(commands_job_, gather_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+      gpu_.Dispatch(commands_job_, (v.texels + 63) / 64, 1, 1);
+      gpu::MemoryBarrier to_copy;
+      to_copy.before = VK_ACCESS_SHADER_WRITE_BIT;
+      to_copy.after = VK_ACCESS_TRANSFER_READ_BIT;
+      gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, &to_copy);
+      gpu::BufferImageCopy in{};
+      in.buffer_offset = at_dst;
+      in.layers = {gpu::kAspectColor, 0, 0, 1};
+      in.extent = {v.image.width, v.image.height, v.depth3d};
+      gpu_.CopyBufferToImage(commands_job_, v.gather, v.image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
       ++volumes_gathered_;
     } else {
       gpu_.CopyImage(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.image.image, VK_IMAGE_LAYOUT_GENERAL,
@@ -3744,7 +3742,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   private:
   struct ResolvedVolume;
   struct VolumeGatherPush {
-    VkDeviceAddress table, src, dst;
+    gpu::Address table, src, dst;
     uint32_t count, pad;
   };
 
@@ -3756,33 +3754,19 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       const auto& ifn = vulkan_device_->vulkan_instance()->functions();
       gather_address_fn_ =
           reinterpret_cast<PFN_vkGetBufferDeviceAddress>(ifn.vkGetDeviceProcAddr(device_, "vkGetBufferDeviceAddress"));
-      VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-      info.codeSize = sizeof(shaders::kSpirvBo2zmVolumeGather);
-      info.pCode = shaders::kSpirvBo2zmVolumeGather;
-      VkShaderModule module = VK_NULL_HANDLE;
-      const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(VolumeGatherPush)};
-      VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-      layout.pushConstantRangeCount = 1;
-      layout.pPushConstantRanges = &range;
-      if (gather_address_fn_ && dfn_.vkCreateShaderModule(device_, &info, nullptr, &module) == VK_SUCCESS) {
-        if (dfn_.vkCreatePipelineLayout(device_, &layout, nullptr, &gather_layout_) == VK_SUCCESS) {
-          VkComputePipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-          pipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-          pipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-          pipeline.stage.module = module;
-          pipeline.stage.pName = "main";
-          pipeline.layout = gather_layout_;
-          if (dfn_.vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipeline, nullptr, &gather_pipeline_) !=
-              VK_SUCCESS) {
-            gather_pipeline_ = VK_NULL_HANDLE;
-          }
+      gpu::Shader module = nullptr;
+      const gpu::PushRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(VolumeGatherPush)};
+      if (gather_address_fn_ && gpu::vulkan::CreateShader(dfn_, device_, shaders::kSpirvBo2zmVolumeGather,
+                                                          sizeof(shaders::kSpirvBo2zmVolumeGather), module)) {
+        if (gpu::vulkan::CreatePipelineLayout(dfn_, device_, 0, nullptr, 1, &range, gather_layout_)) {
+          gpu::vulkan::CreateComputePipeline(dfn_, device_, module, gather_layout_, gather_pipeline_);
         }
-        dfn_.vkDestroyShaderModule(device_, module, nullptr);
+        gpu::vulkan::DestroyShader(dfn_, device_, module);
       }
       REXLOG_INFO("[native] C2: 3D textures from resolves by one compute dispatch (bo2zm_native_volume_gather): {}",
-                  gather_pipeline_ != VK_NULL_HANDLE ? "ready" : "the pipeline could not be made, the region copy");
+                  gather_pipeline_ != nullptr ? "ready" : "the pipeline could not be made, the region copy");
     }
-    if (gather_pipeline_ == VK_NULL_HANDLE) {
+    if (gather_pipeline_ == nullptr) {
       return;
     }
     const uint32_t texels = v.image.width * v.image.height * v.depth3d;
@@ -3807,45 +3791,29 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         return;  // a texel no region writes: keep the copy (it leaves it as it is)
       }
     }
-    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    info.size = (VkDeviceSize(texels) * 2 + texels_flat) * 4;
-    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    void* mapped = nullptr;
-    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &buffer) != VK_SUCCESS) {
+    // The same buffer and memory as before (first host-visible type, device address bit); a zero address now falls
+    // back to the region copy too.
+    const uint32_t host_visible = vulkan_device_->memory_types().host_visible;
+    gpu::vulkan::HostBuffer made;
+    const gpu::vulkan::HostBufferResult result = gpu::vulkan::CreateHostBuffer(
+        dfn_, device_, gather_address_fn_, (gpu::Size(texels) * 2 + texels_flat) * 4,
+        gpu::kBufferStorage | gpu::kBufferAddress | gpu::kBufferCopySource | gpu::kBufferCopyTarget,
+        [host_visible](uint32_t bits) {
+          uint32_t type = 0;
+          return rex::bit_scan_forward(bits & host_visible, &type) ? type : UINT32_MAX;
+        },
+        made);
+    if (result != gpu::vulkan::HostBufferResult::kDone) {
+      if (made.buffer != nullptr) gpu::vulkan::Destroy(dfn_, device_, made.buffer);
+      if (made.memory != nullptr) gpu::vulkan::Free(dfn_, device_, made.memory);
       return;
     }
-    VkMemoryRequirements requirements;
-    dfn_.vkGetBufferMemoryRequirements(device_, buffer, &requirements);
-    uint32_t type = 0;
-    VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocate.pNext = &flags;
-    allocate.allocationSize = requirements.size;
-    if (!rex::bit_scan_forward(requirements.memoryTypeBits & vulkan_device_->memory_types().host_visible, &type) ||
-        (allocate.memoryTypeIndex = type,
-         dfn_.vkAllocateMemory(device_, &allocate, nullptr, &memory) != VK_SUCCESS) ||
-        dfn_.vkBindBufferMemory(device_, buffer, memory, 0) != VK_SUCCESS ||
-        dfn_.vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
-      dfn_.vkDestroyBuffer(device_, buffer, nullptr);
-      if (memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, memory, nullptr);
-      return;
-    }
-    std::memcpy(mapped, table.data(), size_t(texels) * 4);
-    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-    range.memory = memory;
-    range.size = VK_WHOLE_SIZE;
-    dfn_.vkFlushMappedMemoryRanges(device_, 1, &range);
-    dfn_.vkUnmapMemory(device_, memory);
-    VkBufferDeviceAddressInfo where{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-    where.buffer = buffer;
-    v.gather = buffer;
-    v.gather_memory = memory;
-    v.gather_address = gather_address_fn_(device_, &where);
+    std::memcpy(made.data, table.data(), size_t(texels) * 4);
+    gpu::vulkan::Flush(dfn_, device_, made.memory);
+    gpu::vulkan::Unmap(dfn_, device_, made.memory);
+    v.gather = made.buffer;
+    v.gather_memory = made.memory;
+    v.gather_address = made.address;
     v.texels = texels;
     v.texels_flat = texels_flat;
   }
@@ -7232,9 +7200,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     std::vector<gpu::ImageCopy> regions;
     // bo2zm_native_volume_gather: one host-visible buffer, by its device address: the table (texels words: the
     // index in the resolve of each 3D texel), the resolve's texels (texels_flat words), the 3D texels (texels words).
-    VkBuffer gather = VK_NULL_HANDLE;
-    VkDeviceMemory gather_memory = VK_NULL_HANDLE;
-    VkDeviceAddress gather_address = 0;
+    gpu::Buffer gather = nullptr;
+    gpu::Memory gather_memory = nullptr;
+    gpu::Address gather_address = 0;
     uint32_t texels = 0;
     uint32_t texels_flat = 0;
   };
@@ -7246,8 +7214,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint64_t volumes_gathered_ = 0;  // of volumes_done_, by bo2zm_native_volume_gather
   bool gather_tried_ = false;
   PFN_vkGetBufferDeviceAddress gather_address_fn_ = nullptr;
-  VkPipelineLayout gather_layout_ = VK_NULL_HANDLE;
-  VkPipeline gather_pipeline_ = VK_NULL_HANDLE;
+  gpu::PipelineLayout gather_layout_ = nullptr;
+  gpu::Pipeline gather_pipeline_ = nullptr;
   uint64_t clears_skipped_ = 0;             // color ones
   uint64_t clears_skipped_depth_ = 0;
   uint64_t pixels_clears_skipped_ = 0;
