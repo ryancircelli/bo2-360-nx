@@ -85,6 +85,29 @@ rex-padtest --hid_virtual_pads=2 --hid_virtual_pad1="1:a, 2-4:stick_up+look_left
             --hid_virtual_pad2="3-5:disconnect"
 ```
 
+### Waiting for the game
+
+Fixed times break when loading takes longer than usual. A wait step pauses
+the script until the game gets somewhere, and the times of later steps count
+from the end of the wait:
+
+* `wait_event <name> [timeout_s]` waits until the game calls
+  `rex::input::SignalScriptEvent("<name>")`
+  (`#include <rex/input/script/script_events.h>`).
+* `wait_log <text> [timeout_s]` waits for a log line containing `<text>`, so
+  the game needs no change. Put text holding `,` or `;` in double quotes.
+
+A wait starts once the steps before it are done (or at `<s>` with
+`<s>:wait_event <name>`). Without a timeout it waits up to 120 s; then it logs a
+warning and the script goes on. A wait ends at the next `,`, `;` or new line.
+Each pad waits on its own, and a signal sent before a pad starts waiting still
+counts for it.
+
+```sh
+rex-padtest --hid_virtual_pads=1 \
+  --hid_virtual_pad1="1:a, wait_log Local lobby open 60, 2:start, 4-6:stick_up"
+```
+
 A script file holds `key = value` lines: `players` (pad count), `pad1` to
 `pad4` (or `p1` to `p4`), and `look_speed`. Route files that use
 `BO2ZM_TEST_BUTTONS` and `BO2ZM_TEST_BUTTONS_P2` to `_P4` also load as is.

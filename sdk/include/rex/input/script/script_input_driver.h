@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -28,12 +29,27 @@ namespace rex::input::script {
 /// One entry of a pad script: "25:a" presses A at 25 s for a quarter second,
 /// "60-90:stick_up+look_right" holds both from 60 s to 90 s, "100-110:disconnect"
 /// unplugs the pad for those ten seconds.
+///
+/// "wait_event <name> [timeout_s]" and "wait_log <text> [timeout_s]" pause the
+/// script once the steps before them are done, until the game signals <name>
+/// (rex::input::SignalScriptEvent) or logs a line containing <text>. Times of
+/// later steps count from the end of the wait. A wait gives up after its
+/// timeout (default kDefaultWaitTimeout) with a warning, and the script goes
+/// on. "30:wait_event x" starts waiting no sooner than 30 s.
 struct Step {
+  enum class Wait { kNone, kEvent, kLog };
+
   double start = 0;
   double end = 0;
   uint32_t controls = 0;  // kControl* bits
   bool disconnect = false;
+  Wait wait = Wait::kNone;
+  std::string target;  // event name or log text
+  double timeout = 0;
+  uint32_t segment = 0;  // waits before this step
 };
+
+constexpr double kDefaultWaitTimeout = 120.0;
 
 // Low 16 bits are X_INPUT_GAMEPAD buttons; the rest are triggers and stick
 // directions.
@@ -48,8 +64,10 @@ constexpr uint32_t kControlLookDown = 1u << 23;
 constexpr uint32_t kControlLookRight = 1u << 24;
 constexpr uint32_t kControlLookLeft = 1u << 25;
 
-/// Steps separated by ',', ';' or spaces. Bad steps are skipped and described
-/// in *error.
+/// Steps separated by ',', ';', new lines or spaces. A wait step runs to the
+/// next ',', ';' or new line, so its log text may hold spaces; put text with
+/// those separators in double quotes. Bad steps are skipped and described in
+/// *error.
 std::vector<Step> ParseScript(std::string_view text, std::string* error = nullptr);
 
 /// A script file: "key = value" lines, '#' comments. pad1..pad4 (or p1..p4)
@@ -68,8 +86,9 @@ struct Frame {
   bool connected = true;
   uint32_t controls = 0;
 };
-/// The pad at `seconds` after the start.
-Frame Evaluate(const std::vector<Step>& steps, double seconds);
+/// The pad at `seconds` after the start of `segment` (the part of the script
+/// after that many waits).
+Frame Evaluate(const std::vector<Step>& steps, double seconds, uint32_t segment = 0);
 
 /// Fills buttons, triggers and sticks. Moves tilt fully, looks by look_percent.
 void ControlsToGamepad(uint32_t controls, int look_percent, X_INPUT_GAMEPAD* out);
@@ -97,6 +116,12 @@ class ScriptInputDriver final : public InputDriver {
  private:
   struct Pad {
     std::vector<Step> steps;
+    std::vector<size_t> waits;  // indexes of wait steps, in order
+    uint32_t segment = 0;
+    double segment_start = 0;
+    bool waiting = false;
+    double wait_start = 0;
+    std::map<std::string, uint64_t, std::less<>> consumed;  // per event key
     bool connected = false;
     bool seen = false;
     uint32_t controls = 0;
@@ -106,6 +131,9 @@ class ScriptInputDriver final : public InputDriver {
   };
   /// Advances one pad to now. Caller holds mutex_. Returns connected.
   bool Update(size_t index);
+  /// Moves past finished segments and waits. Returns seconds into the
+  /// current segment.
+  double Advance(size_t index, double now);
   Pad* PadFor(DeviceId id, size_t* index);
 
   std::vector<Pad> pads_;

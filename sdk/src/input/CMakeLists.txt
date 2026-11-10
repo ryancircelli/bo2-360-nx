@@ -40,7 +40,8 @@ else()
 endif()
 # Scripted virtual pads and Steam Input detection (mac-input): desktop only.
 if(NOT REXGLUE_PLATFORM_SWITCH)
-    target_sources(rexinput PRIVATE script/script_input_driver.cpp steam_detect.cpp)
+    target_sources(rexinput PRIVATE script/script_events.cpp script/script_input_driver.cpp
+        steam_detect.cpp)
 endif()
 
 target_link_libraries(rexinput PUBLIC rexcore rexui)
