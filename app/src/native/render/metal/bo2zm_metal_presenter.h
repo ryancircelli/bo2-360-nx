@@ -57,7 +57,7 @@ class Presenter final : public rex::ui::Presenter {
   // Writes the guest output with a clear of `rgba` (0 to 1): the first Metal-drawn frames, before the
   // renderer draws on Metal.
   bool RefreshWithClear(uint32_t width, uint32_t height, const float rgba[4]);
-  // Writes the guest output from a frame drawn on Metal (an id<MTLTexture>, `width` by `height`).
+  // Writes the guest output from a frame drawn on Metal: the top-left `width` by `height` of an id<MTLTexture>.
   bool RefreshWithImage(void* image, uint32_t width, uint32_t height);
 
  protected:

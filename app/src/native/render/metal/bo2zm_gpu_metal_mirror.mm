@@ -271,8 +271,12 @@ struct Mirror::State {
   std::unordered_map<std::string, id<MTLDepthStencilState>> depth_states;
   std::set<std::string> logged;
   id<MTLTexture> shown = nil;
+  uint32_t shown_width = 0;
+  uint32_t shown_height = 0;
   uint64_t draws = 0;
   uint64_t draws_skipped = 0;
+  uint64_t fans = 0;  // triangle fans, drawn as lists
+  uint64_t clears_part = 0;  // clears of part of an attachment, drawn as rectangles
   uint64_t frames = 0;
 
   void Once(const std::string& what) {
@@ -547,13 +551,15 @@ struct Mirror::State {
       return false;
     }
     PipelineM& p = pi->second;
-    if (p.state.topology > VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP) {
-      Once("primitive topology " + std::to_string(p.state.topology) + " (triangle fans) is not drawn yet");
+    if (p.state.topology > VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+      Once("primitive topology " + std::to_string(p.state.topology) + " is not drawn");
       return false;
     }
     id<MTLRenderPipelineState> made = Pipeline(l, p);
     if (!made) return false;
-    primitive = MTLPrimitiveType(p.state.topology);
+    // Metal has no fans: Draw and DrawIndexed turn them into triangle lists (FanIndices).
+    primitive = p.state.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? MTLPrimitiveTypeTriangle
+                                                                       : MTLPrimitiveType(p.state.topology);
     id<MTLRenderCommandEncoder> e = l.render;
     const Bound& b = l.bound;
     [e setRenderPipelineState:made];
@@ -614,9 +620,173 @@ struct Mirror::State {
     return true;
   }
 
+  bool Fan(const ListM& l) {
+    auto pi = pipelines.find(l.bound.pipeline);
+    return pi != pipelines.end() && pi->second.state.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+  }
+
+  // A triangle fan as a list of 32-bit indices, in a buffer of its own: triangle i is (i + 1, i + 2, 0) of its fan,
+  // Vulkan's order (the same winding as (0, i + 1, i + 2), and the provoking vertex Vulkan has). `source` null: a
+  // draw without indices, vertices 0 to count - 1 (the draw's first vertex goes in as the base vertex). With
+  // `restart`, that index ends the fan and the next index starts a new one. Nil if there is no triangle.
+  id<MTLBuffer> FanIndices(const void* source, bool indices_16, uint32_t count, uint32_t restart,
+                           uint32_t& triangles_out) {
+    std::vector<uint32_t> list;
+    list.reserve(count > 2 ? size_t(count - 2) * 3 : 0);
+    auto at = [&](uint32_t i) -> uint32_t {
+      if (!source) return i;
+      return indices_16 ? static_cast<const uint16_t*>(source)[i] : static_cast<const uint32_t*>(source)[i];
+    };
+    uint32_t start = 0;
+    while (start < count) {
+      uint32_t end = start;
+      while (end < count && !(source && at(end) == restart)) ++end;
+      const uint32_t hub = at(start);
+      for (uint32_t i = start + 1; i + 1 < end; ++i) {
+        list.push_back(at(i));
+        list.push_back(at(i + 1));
+        list.push_back(hub);
+      }
+      start = end + 1;
+    }
+    triangles_out = uint32_t(list.size() / 3);
+    if (list.empty()) return nil;
+    return [mtl newBufferWithBytes:list.data() length:list.size() * sizeof(uint32_t)
+                           options:MTLResourceStorageModeShared];
+  }
+
   id<MTLTexture> Texture(Image image) {
     auto found = images.find(image);
     return found == images.end() ? nil : found->second.texture;
+  }
+
+  // Clears of part of an attachment (vkCmdClearAttachments with a rectangle smaller than the pass, e.g. one
+  // player's view in split screen): a rectangle drawn into the open pass with a pipeline that writes the value.
+  // One small library per color attachment index (the output's [[color(n)]] is fixed in the source).
+  std::unordered_map<std::string, id<MTLRenderPipelineState>> clear_pipelines;
+  std::array<id<MTLLibrary>, 8> clear_libraries{};
+  id<MTLDepthStencilState> clear_depth_states[4] = {};  // bit 0 depth written, bit 1 stencil written
+
+  id<MTLLibrary> ClearLibrary(uint32_t color_index) {
+    if (color_index >= clear_libraries.size()) return nil;
+    if (clear_libraries[color_index]) return clear_libraries[color_index];
+    char source[1024];
+    std::snprintf(source, sizeof(source),
+                  "#include <metal_stdlib>\n"
+                  "using namespace metal;\n"
+                  "struct ClearIn { float4 color; float depth; };\n"
+                  "struct ClearV { float4 position [[position]]; };\n"
+                  "vertex ClearV clear_vs(uint id [[vertex_id]], constant ClearIn& in [[buffer(0)]]) {\n"
+                  "  float2 p = float2((id & 1) ? 1.0 : -1.0, (id & 2) ? 1.0 : -1.0);\n"
+                  "  ClearV v; v.position = float4(p, in.depth, 1.0); return v;\n"
+                  "}\n"
+                  "struct ClearOut { float4 color [[color(%u)]]; };\n"
+                  "fragment ClearOut clear_fs(constant ClearIn& in [[buffer(0)]]) {\n"
+                  "  ClearOut o; o.color = in.color; return o;\n"
+                  "}\n"
+                  "fragment void clear_fs_none() {}\n",
+                  color_index);
+    NSError* error = nil;
+    id<MTLLibrary> library = [mtl newLibraryWithSource:[NSString stringWithUTF8String:source] options:nil
+                                                 error:&error];
+    if (!library) {
+      Once(std::string("clear library not made: ") + (error ? [[error localizedDescription] UTF8String] : "?"));
+      return nil;
+    }
+    clear_libraries[color_index] = library;
+    return library;
+  }
+
+  // Draws the clear of `area` into the pass being recorded. The encoder's pipeline, depth state, viewport and
+  // scissor are changed; Prepare sets all of them again before the next draw.
+  void ClearArea(ListM& l, int color_index, bool depth, bool stencil, const ClearValue& value, const Rect& area) {
+    auto p = passes.find(l.pass);
+    auto f = framebuffers.find(l.framebuffer);
+    if (p == passes.end() || f == framebuffers.end()) return;
+    const PassDesc& desc = p->second.desc;
+    if (color_index >= int(desc.color_count)) return;
+    if (!desc.has_depth) depth = stencil = false;
+    MTLPixelFormat depth_format = MTLPixelFormatInvalid;
+    if (desc.has_depth) depth_format = MTLPixelFormat(PixelFormat(desc.depth.format));
+    if (!HasStencil(depth_format)) stencil = false;
+    if (color_index < 0 && !depth && !stencil) return;
+    // The attachments' sample count (all attachments of a pass share it).
+    NSUInteger samples = 1;
+    if (!f->second.views.empty()) {
+      auto v = views.find(f->second.views[0]);
+      if (v != views.end() && v->second.texture) samples = v->second.texture.sampleCount;
+    }
+    std::string key = std::to_string(color_index) + (depth ? "d" : "") + (stencil ? "s" : "") + "/" +
+                      std::to_string(samples) + "/";
+    for (uint32_t i = 0; i < desc.color_count; ++i) key += std::to_string(desc.colors[i].format) + ",";
+    key += std::to_string(int(depth_format));
+    id<MTLRenderPipelineState> pipeline = nil;
+    auto found = clear_pipelines.find(key);
+    if (found != clear_pipelines.end()) {
+      pipeline = found->second;
+    } else {
+      id<MTLLibrary> library = ClearLibrary(color_index < 0 ? 0 : uint32_t(color_index));
+      if (!library) return;
+      MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+      d.vertexFunction = [library newFunctionWithName:@"clear_vs"];
+      d.fragmentFunction = [library newFunctionWithName:color_index < 0 ? @"clear_fs_none" : @"clear_fs"];
+      d.rasterSampleCount = samples;
+      for (uint32_t i = 0; i < desc.color_count; ++i) {
+        d.colorAttachments[i].pixelFormat = MTLPixelFormat(PixelFormat(desc.colors[i].format));
+        d.colorAttachments[i].writeMask = int(i) == color_index ? MTLColorWriteMaskAll : MTLColorWriteMaskNone;
+      }
+      d.depthAttachmentPixelFormat = depth_format;
+      if (HasStencil(depth_format)) d.stencilAttachmentPixelFormat = depth_format;
+      NSError* error = nil;
+      pipeline = [mtl newRenderPipelineStateWithDescriptor:d error:&error];
+      if (!pipeline) {
+        Once(std::string("clear pipeline not made: ") +
+             (error ? [[error localizedDescription] UTF8String] : "?"));
+      }
+      clear_pipelines.emplace(key, pipeline);  // nil too: not tried again
+    }
+    if (!pipeline) return;
+    const int state = (depth ? 1 : 0) | (stencil ? 2 : 0);
+    if (!clear_depth_states[state]) {
+      MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
+      d.depthCompareFunction = MTLCompareFunctionAlways;
+      d.depthWriteEnabled = depth;
+      if (stencil) {
+        MTLStencilDescriptor* s = [[MTLStencilDescriptor alloc] init];
+        s.stencilCompareFunction = MTLCompareFunctionAlways;
+        s.depthStencilPassOperation = MTLStencilOperationReplace;
+        s.readMask = 0xFF;
+        s.writeMask = 0xFF;
+        d.frontFaceStencil = s;
+        d.backFaceStencil = s;
+      }
+      clear_depth_states[state] = [mtl newDepthStencilStateWithDescriptor:d];
+    }
+    const int64_t x0 = std::clamp<int64_t>(area.x, 0, l.width);
+    const int64_t y0 = std::clamp<int64_t>(area.y, 0, l.height);
+    const int64_t x1 = std::clamp<int64_t>(int64_t(area.x) + area.width, 0, l.width);
+    const int64_t y1 = std::clamp<int64_t>(int64_t(area.y) + area.height, 0, l.height);
+    if (x1 <= x0 || y1 <= y0) return;
+    struct {
+      float color[4];
+      float depth;
+      float pad[3];
+    } in = {{value.color.f[0], value.color.f[1], value.color.f[2], value.color.f[3]}, 0.0f, {}};
+    if (color_index < 0) {
+      in.depth = value.depth_stencil.depth;
+    }
+    id<MTLRenderCommandEncoder> e = l.render;
+    [e setRenderPipelineState:pipeline];
+    [e setDepthStencilState:clear_depth_states[state]];
+    if (stencil) [e setStencilReferenceValue:value.depth_stencil.stencil & 0xFF];
+    [e setCullMode:MTLCullModeNone];
+    [e setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
+    [e setDepthClipMode:MTLDepthClipModeClip];
+    [e setViewport:MTLViewport{double(x0), double(y0), double(x1 - x0), double(y1 - y0), 0.0, 1.0}];
+    [e setScissorRect:MTLScissorRect{NSUInteger(x0), NSUInteger(y0), NSUInteger(x1 - x0), NSUInteger(y1 - y0)}];
+    [e setVertexBytes:&in length:sizeof(in) atIndex:0];
+    [e setFragmentBytes:&in length:sizeof(in) atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
   }
 
   // A render pass that clears one level and layer of `texture`.
@@ -1106,6 +1276,23 @@ void Mirror::Draw(CommandList list, uint32_t count, uint32_t first_vertex) {
     ++s.draws_skipped;
     return;
   }
+  if (s.Fan(l)) {
+    uint32_t triangles = 0;
+    id<MTLBuffer> list_indices = s.FanIndices(nullptr, false, count, 0, triangles);
+    if (list_indices) {
+      [l.render drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                           indexCount:triangles * 3
+                            indexType:MTLIndexTypeUInt32
+                          indexBuffer:list_indices
+                    indexBufferOffset:0
+                        instanceCount:1
+                           baseVertex:first_vertex
+                         baseInstance:0];
+    }
+    ++s.draws;
+    ++s.fans;
+    return;
+  }
   [l.render drawPrimitives:primitive vertexStart:first_vertex vertexCount:count];
   ++s.draws;
 }
@@ -1126,6 +1313,27 @@ void Mirror::DrawIndexed(CommandList list, uint32_t count, uint32_t first_index,
     return;
   }
   const Size size = l.bound.indices_16 ? 2 : 4;
+  if (s.Fan(l)) {
+    // The indices are read on the CPU: the buffer wraps host memory the renderer wrote before recording.
+    const uint8_t* source = static_cast<const uint8_t*>(index->second.buffer.contents) + index->second.offset +
+                            first_index * size;
+    uint32_t triangles = 0;
+    id<MTLBuffer> list_indices =
+        s.FanIndices(source, l.bound.indices_16, count, l.bound.indices_16 ? 0xFFFFu : 0xFFFFFFFFu, triangles);
+    if (list_indices) {
+      [l.render drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                           indexCount:triangles * 3
+                            indexType:MTLIndexTypeUInt32
+                          indexBuffer:list_indices
+                    indexBufferOffset:0
+                        instanceCount:1
+                           baseVertex:vertex_offset
+                         baseInstance:0];
+    }
+    ++s.draws;
+    ++s.fans;
+    return;
+  }
   [l.render drawIndexedPrimitives:primitive
                        indexCount:count
                         indexType:l.bound.indices_16 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32
@@ -1143,12 +1351,15 @@ void Mirror::ClearAttachment(CommandList list, Aspects aspects, uint32_t color_i
   std::lock_guard guard(s.lock);
   ListM& l = s.List(list);
   if (!l.render) return;
+  const bool color = (aspects & kAspectColor) != 0;
   if (area.x != 0 || area.y != 0 || area.width < l.width || area.height < l.height) {
-    s.Once("a clear of part of an attachment is not done yet");
+    // Part of it (one split-screen view, for example): a rectangle drawn with the value.
+    s.ClearArea(l, color ? int(color_index) : -1, (aspects & kAspectDepth) != 0, (aspects & kAspectStencil) != 0,
+                value, area);
+    ++s.clears_part;
     return;
   }
   // The whole attachment: the encoder restarts with a clear load action for it.
-  const bool color = (aspects & kAspectColor) != 0;
   s.StartPass(l, true, 0, nullptr, color ? int(color_index) : -1, (aspects & kAspectDepth) != 0,
               (aspects & kAspectStencil) != 0, &value);
 }
@@ -1313,23 +1524,27 @@ void Mirror::Skipped(const char* what) {
   s.Once(std::string(what) + " (stub)");
 }
 
-void Mirror::Showed(ImageView view) {
+void Mirror::Showed(ImageView view, uint32_t width, uint32_t height) {
   State& s = *state_;
   std::lock_guard guard(s.lock);
   auto found = s.views.find(view);
   s.shown = found == s.views.end() ? nil : found->second.texture;
+  s.shown_width = s.shown ? std::min<uint32_t>(width ? width : uint32_t(s.shown.width), uint32_t(s.shown.width)) : 0;
+  s.shown_height =
+      s.shown ? std::min<uint32_t>(height ? height : uint32_t(s.shown.height), uint32_t(s.shown.height)) : 0;
   if (++s.frames % 600 == 1) {
-    REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made, {} skipped, shown {}x{}", s.frames, s.draws,
-                s.draws_skipped, s.shown ? s.shown.width : 0, s.shown ? s.shown.height : 0);
+    REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made, {} skipped, {} fans, {} part clears, shown {}x{} "
+                "of a {}x{} image", s.frames, s.draws, s.draws_skipped, s.fans, s.clears_part, s.shown_width,
+                s.shown_height, s.shown ? s.shown.width : 0, s.shown ? s.shown.height : 0);
   }
 }
 
 void* Mirror::Shown(uint32_t& width, uint32_t& height) {
   State& s = *state_;
   std::lock_guard guard(s.lock);
-  if (!s.shown) return nullptr;
-  width = uint32_t(s.shown.width);
-  height = uint32_t(s.shown.height);
+  if (!s.shown || !s.shown_width || !s.shown_height) return nullptr;
+  width = s.shown_width;
+  height = s.shown_height;
   return (__bridge void*)s.shown;
 }
 

@@ -2390,7 +2390,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (shown == nullptr) {
         return false;
       }
-      mirror->Showed(shown->view);
+      // The output pass's size: the frame is the top-left of the image (see the Vulkan path below).
+      mirror->Showed(shown->view, std::min(width ? width : shown->width, shown->width),
+                     std::min(height ? height : shown->height, shown->height));
       ++presented_;
       return true;
     }
