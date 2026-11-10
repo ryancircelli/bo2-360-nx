@@ -221,6 +221,26 @@ bool MemexportReadbackMergeEnabled() {
   }();
   return enabled;
 }
+// [readback-global-lock] The hash/merge/memcpy in ApplyCompletedMemexportReadbacks
+// runs under the global critical region. REX_METAL_MEMEXPORT_READBACK_GLOBAL_LOCK=0
+// disables the lock (racy, for negative control testing).
+bool MemexportReadbackGlobalLockEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_READBACK_GLOBAL_LOCK");
+    return !(v && v[0] == '0');
+  }();
+  return enabled;
+}
+// [readback-rebase-snapshot] When a later pending readback is rebased after a
+// merge, its snapshot is refreshed. REX_METAL_MEMEXPORT_READBACK_REBASE_SNAPSHOT=0
+// disables the snapshot refresh (for negative control testing).
+bool MemexportReadbackRebaseSnapshotEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_READBACK_REBASE_SNAPSHOT");
+    return !(v && v[0] == '0');
+  }();
+  return enabled;
+}
 }  // namespace
 
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
@@ -304,6 +324,10 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
   std::vector<size_t> rebase_pending;
   std::vector<size_t> rebase_preserved;
   std::vector<std::pair<uint32_t, uint32_t>> fire_ranges;
+  std::unique_lock<std::recursive_mutex> global_lock;
+  if (MemexportReadbackGlobalLockEnabled()) {
+    global_lock = rex::thread::global_critical_region::AcquireDirect();
+  }
   for (size_t i = 0; i < done; ++i) {
     const PendingReadback& e = pending_readbacks_[i];
     const uint32_t len = e.end - e.start;
@@ -376,6 +400,9 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       l.guest_hash = (l.start == e.start && l.end == e.end)
                          ? new_hash
                          : XXH3_64bits(guest + l.start, l.end - l.start);
+      if (MemexportReadbackRebaseSnapshotEnabled() && !l.snapshot.empty()) {
+        l.snapshot.assign(guest + l.start, guest + l.end);
+      }
     }
     for (size_t j : rebase_preserved) {
       PreservedExport& p = preserved_exports_[j];
@@ -395,8 +422,8 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
           frame_log::CurrentFrame(), new_hash != guest_hash_now ? 1 : 0);
     }
   }
-  pending_readbacks_.erase(pending_readbacks_.begin(),
-                           pending_readbacks_.begin() + done);
+    pending_readbacks_.erase(pending_readbacks_.begin(),
+                             pending_readbacks_.begin() + done);
   for (const auto& r : fire_ranges) {
     FireWatchesForHostWrite(r.first, r.second);
   }
