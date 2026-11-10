@@ -165,9 +165,9 @@ bool Presenter::RefreshWithImage(void* image, uint32_t width, uint32_t height) {
       id<MTLTexture> target = (__bridge id<MTLTexture>)context.texture();
       id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)context.queue();
       id<MTLCommandBuffer> commands = [queue commandBuffer];
-      // Same size, so the scale is 1: only the format changes.
-      MPSScaleTransform transform{double(target.width) / double(source.width),
-                                  double(target.height) / double(source.height), 0.0, 0.0};
+      // The frame is the top-left width x height of the image and the output has that size: the scale is 1,
+      // only the format changes, and the rest of the image falls outside the output.
+      MPSScaleTransform transform{1.0, 1.0, 0.0, 0.0};
       s.copy.scaleTransform = &transform;
       [s.copy encodeToCommandBuffer:commands sourceTexture:source destinationTexture:target];
       s.copy.scaleTransform = nullptr;

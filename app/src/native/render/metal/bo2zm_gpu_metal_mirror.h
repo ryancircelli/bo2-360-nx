@@ -6,8 +6,8 @@
 // Metal frame can be compared with the Vulkan one, and the renderer's logic is not touched while the Metal side
 // grows. Without the cvar Get() is null and the layer makes one test per call.
 //
-// What the mirror does not do yet is logged once and skipped: queries and timestamps (stubs), scaled blits, triangle
-// fans, the renderer's own shaders that are not in the shader pack (output, conversion copies, GPU skinning,
+// What the mirror does not do yet is logged once and skipped: queries and timestamps (stubs), scaled blits, the
+// renderer's own shaders that are not in the shader pack (output, conversion copies, GPU skinning,
 // volume gathers), and anything that writes guest memory back. Barriers are no-ops: Metal tracks the hazards of
 // the objects the mirror makes.
 //
@@ -89,8 +89,10 @@ class Mirror {
   void Skipped(const char* what);
 
   // The image the renderer showed last (its output pass's source), as an id<MTLTexture>, retained until the next
-  // one; nullptr if there is none yet. Presentation reads it.
-  void Showed(ImageView view);
+  // one; nullptr if there is none yet. Presentation reads it. The frame is the top-left width x height of the image
+  // (front buffers and resolve targets can be larger than the frame, as in the Vulkan output pass), and Shown
+  // gives that size, not the image's.
+  void Showed(ImageView view, uint32_t width, uint32_t height);
   void* Shown(uint32_t& width, uint32_t& height);
 
   struct State;
