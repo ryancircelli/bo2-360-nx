@@ -5981,8 +5981,53 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
   ++loaded_texture_data_count_;
   if (load_check_expect_none_) NoteLoadWhileExpectNone(texture, "cpu");
 
+  // [cpu-source-watch] The source pages are invalid in shared memory, so
+  // nothing write-protects them: a CPU write (a guest store, or a file read,
+  // which writes through the unprotected mapping and only reports pages that
+  // are already watched) between the copy below and the watch set up after it
+  // was lost, and the texture kept the old bytes until some later write.
+  // Under BO2's image streaming that is the previous occupant of a recycled
+  // pool block (fences drawn with a normal map's red/green data). Watch the
+  // pages before copying; a write reported during the load leaves the
+  // texture outdated, so the next use reloads it.
+  // REX_METAL_CPU_SOURCE_WATCH_FIRST=0 restores the old order.
+  const bool watch_first = CpuSourceWatchFirst();
+  uint32_t written_during_load = 0;
+  SharedMemory::WatchHandle load_watches[2] = {};
+  const uint32_t base_size = texture.GetGuestBaseSize();
+  const uint32_t mips_size = texture.GetGuestMipsSize();
+  auto end_load_watches = [&](const global_unique_lock_type&) {
+    for (uint32_t i = 0; i < 2; ++i) {
+      if (load_watches[i] && !(written_during_load & (1u << i))) {
+        shared_memory().UnwatchMemoryRange(load_watches[i]);
+      }
+      load_watches[i] = nullptr;
+    }
+  };
+  if (watch_first) {
+    auto global_lock = AcquireGlobalLock();
+    if (base_outdated && base_size) {
+      load_watches[0] = shared_memory().WatchMemoryRange(
+          texture_key.base_page << 12, base_size, CpuSourceWatchThunk,
+          &written_during_load, nullptr, 0);
+      shared_memory().WatchRangeForCpuWrites(texture_key.base_page << 12,
+                                             base_size);
+    }
+    if (mips_outdated && mips_size) {
+      load_watches[1] = shared_memory().WatchMemoryRange(
+          texture_key.mip_page << 12, mips_size, CpuSourceWatchThunk,
+          &written_during_load, nullptr, 1);
+      shared_memory().WatchRangeForCpuWrites(texture_key.mip_page << 12,
+                                             mips_size);
+    }
+  }
+
   if (!TryGpuLoadTexture(texture, base_outdated, mips_outdated,
                          TextureLoadSourceMode::kCpuGuestMemory)) {
+    if (watch_first) {
+      auto global_lock = AcquireGlobalLock();
+      end_load_watches(global_lock);
+    }
     return false;
   }
   TexRenameClearPending(*metal_texture, base_outdated, mips_outdated);
@@ -5990,8 +6035,29 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
 
   {
     auto global_lock = AcquireGlobalLock();
-    texture.MakeLoadedDataUpToDateAndWatch(global_lock, base_outdated,
-                                           mips_outdated);
+    if (watch_first) {
+      end_load_watches(global_lock);
+    }
+    // A written range stays outdated (reloaded on its next use); the other
+    // one is up to date.
+    const bool base_written = (written_during_load & 1u) != 0;
+    const bool mips_written = (written_during_load & 2u) != 0;
+    texture.MakeLoadedDataUpToDateAndWatch(
+        global_lock, base_outdated && !base_written,
+        mips_outdated && !mips_written);
+    if (written_during_load) {
+      static std::atomic<uint32_t> logged{0};
+      const uint32_t n = logged.fetch_add(1, std::memory_order_relaxed);
+      if (n < 32 || (n & (n - 1)) == 0) {
+        REXLOG_INFO(
+            "[cpu-source-watch] write during a CPU-source load (#{}): base "
+            "{:08X} mips {:08X} fmt {} {}x{} ranges {}; reloading on next use",
+            n + 1, uint32_t(texture_key.base_page) << 12,
+            uint32_t(texture_key.mip_page) << 12,
+            uint32_t(texture_key.format), texture_key.GetWidth(),
+            texture_key.GetHeight(), written_during_load);
+      }
+    }
   }
   if (command_processor_) {
     command_processor_->RecordTextureUploadSourceRoute(
@@ -6074,6 +6140,25 @@ void MetalTextureCache::GetMemReportInfo(MemReportInfo& out) const {
     out.retired_bytes += uint64_t(b.buffer->allocatedSize());
     ++out.retired_count;
   }
+}
+
+bool MetalTextureCache::CpuSourceWatchFirst() {
+  static const bool on = [] {
+    const char* v = MetalDebugEnv("CPU_SOURCE_WATCH_FIRST");
+    const bool e = !(v && v[0] == '0');
+    REXLOG_INFO("[cpu-source-watch] {} (FABLE2_CPU_SOURCE_WATCH_FIRST)",
+                e ? "on" : "off");
+    return e;
+  }();
+  return on;
+}
+
+void MetalTextureCache::CpuSourceWatchThunk(
+    const global_unique_lock_type& global_lock, void* context, void* data,
+    uint64_t argument, bool invalidated_by_gpu) {
+  // Fired watches are unlinked by SharedMemory; the bit tells the loader not
+  // to unwatch this one again.
+  *static_cast<uint32_t*>(context) |= uint32_t(1) << (argument & 1);
 }
 
 bool MetalTextureCache::TexLoadDirectVerify() {
