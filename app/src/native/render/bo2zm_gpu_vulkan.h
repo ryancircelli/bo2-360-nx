@@ -270,6 +270,33 @@ class Work {
   // Unsignaled again, for its next submission.
   void Rearm(VkFence fence) const { dfn_.vkResetFences(device_, 1, &fence); }
 
+  // A pool of `count` queries, or VK_NULL_HANDLE if the driver could not make it.
+  VkQueryPool CreateQueries(QueryKind kind, uint32_t count) const {
+    VkQueryPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    switch (kind) {
+      case QueryKind::kTimestamp:
+        info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        break;
+      case QueryKind::kOcclusion:
+        info.queryType = VK_QUERY_TYPE_OCCLUSION;
+        break;
+      case QueryKind::kPipelineStatistics:
+        info.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+        info.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+                                  VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+                                  VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
+        break;
+    }
+    info.queryCount = count;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    if (dfn_.vkCreateQueryPool(device_, &info, nullptr, &pool) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return pool;
+  }
+  void DestroyQueries(VkQueryPool pool) const {
+    if (pool != VK_NULL_HANDLE) dfn_.vkDestroyQueryPool(device_, pool, nullptr);
+  }
+
  private:
   const rex::ui::vulkan::VulkanDevice::Functions& dfn_;
   VkDevice device_;
