@@ -660,6 +660,9 @@ class MetalTextureCache : public TextureCache {
     MTL::Texture* GetOrCreateView(uint32_t host_swizzle,
                                   xenos::FetchOpDimension dimension,
                                   bool is_signed, uint32_t view_levels = 0);
+    // Reloads the 2D wrapper when its guest data was written (cvar
+    // metal_3d_as_2d_refresh); tests check for this macro.
+#define REX_METAL_3D_AS_2D_REFRESH 1
     MTL::Texture* GetOrCreate3DAs2DView(uint32_t host_swizzle,
                                         xenos::FetchOpDimension dimension,
                                         bool is_signed);
@@ -686,6 +689,8 @@ class MetalTextureCache : public TextureCache {
     // view with another texture (no slot changes).
     void SwapBackingForVerify(MTL::Texture*& texture,
                               MTL::Texture*& direct_view);
+    // The 2D wrapper GetOrCreate3DAs2DView made, or null.
+    MetalTexture* texture_3d_as_2d() const { return texture_3d_as_2d_.get(); }
     bool has_3d_as_2d() const {
       return texture_3d_as_2d_ != nullptr || is_3d_as_2d_wrapper_;
     }
