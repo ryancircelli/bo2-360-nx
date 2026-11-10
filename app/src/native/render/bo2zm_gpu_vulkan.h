@@ -240,6 +240,41 @@ class Recorder {
   Loaded loaded_;
 };
 
+// The work around the recorded commands: starting and ending a command buffer, submitting it with a fence, and
+// waiting for or polling that fence. On Metal these are the command buffer's own commit and completion.
+class Work {
+ public:
+  Work(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device) : dfn_(dfn), device_(device) {}
+
+  // Its pool holds only this buffer: the whole pool is reset (the SDK table has no vkResetCommandBuffer).
+  void Reset(VkCommandPool pool) const { dfn_.vkResetCommandPool(device_, pool, 0); }
+  // For one submission.
+  bool Begin(CommandList c) const {
+    VkCommandBufferBeginInfo start{};
+    start.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    start.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    return dfn_.vkBeginCommandBuffer(c, &start) == VK_SUCCESS;
+  }
+  bool End(CommandList c) const { return dfn_.vkEndCommandBuffer(c) == VK_SUCCESS; }
+  // The buffers in order, in one submission that signals `fence`.
+  bool Submit(VkQueue queue, uint32_t count, const CommandList* buffers, VkFence fence) const {
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = count;
+    submit.pCommandBuffers = buffers;
+    return dfn_.vkQueueSubmit(queue, 1, &submit, fence) == VK_SUCCESS;
+  }
+  // Without waiting.
+  bool Finished(VkFence fence) const { return dfn_.vkGetFenceStatus(device_, fence) == VK_SUCCESS; }
+  void Wait(VkFence fence) const { dfn_.vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX); }
+  // Unsignaled again, for its next submission.
+  void Rearm(VkFence fence) const { dfn_.vkResetFences(device_, 1, &fence); }
+
+ private:
+  const rex::ui::vulkan::VulkanDevice::Functions& dfn_;
+  VkDevice device_;
+};
+
 // A buffer the CPU writes and the GPU reads, in its own allocation, mapped for as long as it lives.
 struct HostBuffer {
   VkBuffer buffer = VK_NULL_HANDLE;
