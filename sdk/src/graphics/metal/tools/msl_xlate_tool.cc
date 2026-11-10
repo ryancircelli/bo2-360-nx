@@ -24,7 +24,7 @@ using namespace rex::graphics;
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    std::fprintf(stderr, "usage: %s <ucode.bin> <mod hex> <out.metal> [--scale N] [--gamma-unorm8 0|1] [--points 1|2|3|4] [--rects 1|2] (even: with point coordinates; 3|4: mesh) [--ds-cpu 1] [--snap-uv 1]\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <ucode.bin> <mod hex> <out.metal> [--scale N] [--gamma-unorm8 0|1] [--points 1|2|3|4] [--rects 1|2] (even: with point coordinates; 3|4: mesh) [--ds-cpu 1] [--snap-uv 1] [--disasm]\n", argv[0]);
     return 1;
   }
   uint32_t scale = 1;
@@ -52,6 +52,11 @@ int main(int argc, char** argv) {
                     dwords.data(), dwords.size(), std::endian::little);
   rex::string::StringBuffer disasm;
   shader.AnalyzeUcode(disasm);
+  for (int i = 4; i < argc; ++i) {
+    if (!std::strcmp(argv[i], "--disasm")) {
+      std::fputs(shader.ucode_disassembly().c_str(), stderr);
+    }
+  }
   DxbcShaderTranslator dxbc(rex::ui::GraphicsProvider::GpuVendorID::kApple, true, false,
                             gamma_unorm8, true, scale, scale, false);
   Shader::Translation* t = shader.GetOrCreateTranslation(modification);
