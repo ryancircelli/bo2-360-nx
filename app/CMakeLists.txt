@@ -170,6 +170,14 @@ if(TARGET bo2zm_recomp)
   if(BO2ZM_GUEST_MEMORY_PLAIN)
     target_compile_definitions(bo2zm_recomp PRIVATE BO2ZM_GUEST_MEMORY_PLAIN=1)
   endif()
+  # macOS: the function registration table (1.6 MB, run once at startup) takes Apple clang 30 minutes at -O3 on a
+  # loaded machine. At -O0, without the PCH and without GlobalISel it takes seconds and runs as fast. The idea comes
+  # from the Fable II Recomp for macOS project.
+  if(APPLE)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/generated/default_mp/bo2zm_register.cpp"
+                                TARGET_DIRECTORY bo2zm_recomp
+                                PROPERTIES COMPILE_OPTIONS "-O0;-fno-global-isel" SKIP_PRECOMPILE_HEADERS ON)
+  endif()
 endif()
 
 # Profile-guided optimization of the generated code (app/build_switch.sh, BO2_PGO), and of the app's hot native code
