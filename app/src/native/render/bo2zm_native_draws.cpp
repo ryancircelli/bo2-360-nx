@@ -2459,7 +2459,7 @@ bool FormatTextureOf(uint32_t format, HostTextureFormat& f) {
   }
 }
 
-bool IsDepth(VkFormat format) {
+bool IsDepth(gpu::Format format) {
   return format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D32_SFLOAT_S8_UINT;
 }
 
@@ -3861,7 +3861,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
             continue;
           }
           const uint32_t slot_pair =
-              SlotView(pair->image, pair->format, (f[3] >> 1) & 0xFFF, kSwizzleRRRR);
+              SlotView(pair->image, gpu::ToVkFormat(pair->format), (f[3] >> 1) & 0xFFF, kSwizzleRRRR);
           if (!slot_pair) {
             context_->PartnerShadowOverlay(false, ps->number);  // no view, no minimum: C2 records it
             continue;
@@ -11472,7 +11472,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         if (IsDepth(resolved->format)) {
           // Depth copy (k_24_8): depth comes out in R and the fetch constant's swizzle distributes it. No
           // filtering: it is read as is.
-          slot = SlotView(resolved->image, resolved->format, swizzle, kSwizzleRRRR);
+          slot = SlotView(resolved->image, gpu::ToVkFormat(resolved->format), swizzle, kSwizzleRRRR);
           sampling_point = true;
           // Valid for this frame only, not UINT64_MAX.
           // A resolved texture is a render target the game rewrites every frame. Saying its descriptor slot is
@@ -11486,7 +11486,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         // The emulation writes the copy to memory with copy_dest_swap and loads it as a texture: the fetch
         // constant's swizzle (ZYXW for 8888) undoes that swap. Here the copy is image to image and does not
         // swap channels, so the swap goes into the host channels (without this, Mia came out blue).
-        slot = SlotView(resolved->image, resolved->format, swizzle,
+        slot = SlotView(resolved->image, gpu::ToVkFormat(resolved->format), swizzle,
                              resolved->swap_rb ? kSwizzleBGRA : kSwizzleRGBA);
         valid_until = frame_;  // see the long comment on the depth copy
         return;
@@ -11499,7 +11499,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (const NativeImage* resolved = context_->TextureResolved3D(
               base & 0x1FFFFFFF, f[1] & 0x3F, (f[2] & 0x7FF) + 1, ((f[2] >> 11) & 0x7FF) + 1,
               ((f[2] >> 22) & 0x3FF) + 1, ((f[0] >> 22) & 0x1FF) << 5, (f[0] >> 31) & 0x1)) {
-        slot = SlotView(resolved->image, resolved->format, swizzle,
+        slot = SlotView(resolved->image, gpu::ToVkFormat(resolved->format), swizzle,
                              resolved->swap_rb ? kSwizzleBGRA : kSwizzleRGBA, heap);
         width_host_out = resolved->width;
         height_host_out = resolved->height;
@@ -12360,7 +12360,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return XXH3_64bits_withSeed(shape_parts, sizeof(shape_parts), hash_raw) | 1;
   }
   static uint64_t KeyContent(const CachedTexture& texture) {
-    return KeyContentOf(texture.shape_content, texture.image.format, texture.levels, texture.image.width,
+    return KeyContentOf(texture.shape_content, gpu::ToVkFormat(texture.image.format), texture.levels, texture.image.width,
                         texture.image.height, texture.layers, texture.hash_raw);
   }
 

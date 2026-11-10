@@ -50,6 +50,7 @@ inline ClearValue FromVk(const VkClearValue& v) {
 static_assert(kAspectColor == VK_IMAGE_ASPECT_COLOR_BIT && kAspectDepth == VK_IMAGE_ASPECT_DEPTH_BIT &&
               kAspectStencil == VK_IMAGE_ASPECT_STENCIL_BIT);
 inline VkImageAspectFlags ToVk(Aspects a) { return a; }
+inline VkFormat ToVkFormat(Format f) { return VkFormat(f); }
 
 static_assert(sizeof(Viewport) == sizeof(VkViewport) && offsetof(Viewport, max_depth) == offsetof(VkViewport, maxDepth));
 inline const VkViewport* ToVk(const Viewport* v) { return reinterpret_cast<const VkViewport*>(v); }
