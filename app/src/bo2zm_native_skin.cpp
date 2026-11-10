@@ -141,9 +141,10 @@ inline B16 Perm(B16 a, B16 b, B16 control) {
   return simde_vqtbl2q_u8(ab, simde_vandq_u8(control, simde_vdupq_n_u8(31)));
 }
 
-// vmaddfp a * b + c (see the top of the file).
+// vmaddfp a * b + c (see the top of the file). Only GCC (the Switch) fuses the recompiled add(mul()): clang builds the
+// generated code with -ffp-model=strict (macOS, Linux arm64), which keeps the multiply and the add apart, as on the PC.
 inline F4 Madd(F4 a, F4 b, F4 c) {
-#if defined(__aarch64__)
+#if defined(__aarch64__) && !defined(__clang__)
   return simde_vfmaq_f32(c, a, b);
 #else
   return simde_vaddq_f32(simde_vmulq_f32(a, b), c);

@@ -203,6 +203,15 @@ inline void Rounded(F4& v) {
   asm("" : "+w"(v));
 #endif
 }
+// The recompiled vmaddfp, add(mul()): one fused fmla where GCC contracts it (the Switch), a multiply and an add where
+// clang builds the generated code with -ffp-model=strict (macOS, Linux arm64).
+inline F4 Vmadd(F4 c, F4 a, F4 b) {
+#if defined(__aarch64__) && !defined(__clang__)
+  return simde_vfmaq_f32(c, a, b);
+#else
+  return simde_vaddq_f32(simde_vmulq_f32(a, b), c);
+#endif
+}
 // Guest ranges [a, a + bytes) and [b, b + bytes) that do not overlap.
 inline bool Apart(uint32_t a, uint32_t b, uint32_t bytes) {
   return uint64_t(a) + bytes <= b || uint64_t(b) + bytes <= a;
@@ -837,16 +846,16 @@ void BiquadNative(PPCContext& ctx, uint8_t* base) {
     for (uint32_t i = 0; i < vectors; ++i) {
       uint8_t* at = Host(base, (r6 + 16 * i) & ~15u);
       const F4 u0 = LoadBE(at);
-      const F4 y0 = simde_vfmaq_f32(Dot(c, s), u0, b0v);
+      const F4 y0 = Vmadd(Dot(c, s), u0, b0v);
       const F4 u1 = simde_vaddq_f32(k, u0);
       s = State<0>(s, u1, y0);
-      const F4 y1 = simde_vfmaq_f32(Dot(c, s), u1, b0v);
+      const F4 y1 = Vmadd(Dot(c, s), u1, b0v);
       const F4 u2 = simde_vaddq_f32(k, u1);
       s = State<1>(s, u2, y1);
-      const F4 y2 = simde_vfmaq_f32(Dot(c, s), u2, b0v);
+      const F4 y2 = Vmadd(Dot(c, s), u2, b0v);
       const F4 u3 = simde_vaddq_f32(k, u2);
       s = State<2>(s, u3, y2);
-      const F4 y3 = simde_vfmaq_f32(Dot(c, s), u3, b0v);
+      const F4 y3 = Vmadd(Dot(c, s), u3, b0v);
       const F4 u4 = simde_vaddq_f32(k, u3);
       s = State<3>(s, u4, y3);
       F4 out = simde_vcopyq_laneq_f32(y0, 1, y1, 1);
