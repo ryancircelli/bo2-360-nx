@@ -54,3 +54,6 @@ ls "$OUT"/hlsl/*.hlsl | xargs -P "$JOBS" -I{} bash -c 'compile_one "$@"' _ {} > 
 
 echo "translate: $(grep -c $'\tok\t' "$OUT/hlsl/translate.tsv") ok, $(grep -c $'\tfailed\t' "$OUT/hlsl/translate.tsv") failed, $(grep -c $'\tskipped\t' "$OUT/hlsl/translate.tsv") skipped"
 echo "compile:   $(grep -c $'\tok\t' "$OUT/compile.tsv") ok, $(grep -c $'\tdxc\t' "$OUT/compile.tsv") dxc errors, $(grep -c $'\tspirv-val\t' "$OUT/compile.tsv") invalid SPIR-V"
+# Name every shader left without SPIR-V, with the reason, so a short pack shows which ones and why.
+awk -F'\t' '$3 == "failed" { printf "  translate failed: %s (%s): %s\n", $1, $2, $4 }' "$OUT/hlsl/translate.tsv"
+awk -F'\t' '$2 != "ok" { printf "  %s failed: %s: %s\n", $2, $1, $3 }' "$OUT/compile.tsv"

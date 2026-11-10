@@ -90,7 +90,8 @@ struct Bo2zmBlockVs { float4 v[256]; };
 struct Bo2zmBlockPs { float4 v[256]; };
 // BO2ZM_RECOMP: 35, not 23. The renderer fills 31 (1/size of the 16 slots ends at byte 488) and BO2 adds the
 // slots' fetch scales (bytes 488-551). With 23, slot 2 and up read 1/size past the end of the array.
-struct Bo2zmBlockShared { float4 v[43]; };
+// 54 since the loop counts (bytes 688-719) and the vertex shaders' texture slots (bytes 720-863).
+struct Bo2zmBlockShared { float4 v[54]; };  // kWordsShared / 4 in bo2zm_native_draws.cpp
 [[vk::binding(0, 4)]] ConstantBuffer<Bo2zmBlockVs> g_UboVertex;
 [[vk::binding(1, 4)]] ConstantBuffer<Bo2zmBlockPs> g_UboPixel;
 [[vk::binding(2, 4)]] ConstantBuffer<Bo2zmBlockShared> g_UboShared;
@@ -288,6 +289,14 @@ float4 tfetch2DBicubic(uint resourceDescriptorIndex, uint samplerDescriptorIndex
             g1x * texture.Sample(samplerState, float2(px + h1x, py + h1y) / float2(dimensions)));
 
     return r;
+}
+
+// BO2ZM_RECOMP: 1D fetches (BO2's ExemplarNodeData lookups) read row 0 of the slot's 2D texture, at level 0 so the
+// same code is valid in vertex shaders. The renderer has no 1D textures yet and binds an empty one for them.
+float4 tfetch1D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float texCoord)
+{
+    return g_Texture2DDescriptorHeap[resourceDescriptorIndex].SampleLevel(
+        g_SamplerDescriptorHeap[samplerDescriptorIndex], float2(texCoord, 0.5), 0.0);
 }
 
 float4 tfetch3D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord)

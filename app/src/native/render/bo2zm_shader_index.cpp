@@ -13,6 +13,7 @@
 #include <map>
 #include <system_error>
 #include <tuple>
+#include <utility>
 
 // See bo2zm_native_shaders.cpp: xxHash must read with memcpy, so it is included here with its implementation first.
 #if defined(XXH_IMPLEM_13a8737387)
@@ -53,7 +54,7 @@ constexpr uint32_t kMarkShadowMin = 0x5E3B1A84u;
 // instructions (16 bits each). kIndexVersion changes whenever ReadContainer or what the index keeps changes: an
 // index of another version is made again.
 constexpr std::array<uint8_t, 8> kIndexSignature{'B', 'Z', 'M', 'S', 'I', 'D', 'X', 0};
-constexpr uint32_t kIndexVersion = 1;
+constexpr uint32_t kIndexVersion = 2;  // 2: elements of undeclared vertex fetches (SynthesizeElements)
 constexpr size_t kIndexHeader = 80;
 constexpr size_t kIndexEntry = 72;
 
@@ -77,6 +78,58 @@ uint32_t* StatsField(IndexStats& s, size_t i) {
   return fields[i];
 }
 constexpr size_t kStatsFields = 9;
+
+// Uses given, in this order, to vertex fetches that have no element in the container: the XDK's own vertex shaders
+// (ShadeVertexPassThru, ShadeVertexPassThruPosOnly) declare none. Keep in step with UNDECLARED_FETCH_USES in
+// tools/xenosrecomp/translator/shader_recompiler.cpp, which names the shader inputs the same way.
+constexpr std::array<std::pair<uint8_t, uint8_t>, 6> kUndeclaredFetchUses{
+    {{0, 0}, {3, 0}, {6, 0}, {7, 0}, {10, 0}, {10, 1}}};  // position, normal, tangent, binormal, color 0 and 1
+
+// Adds an element for every vertex fetch without one, in the order the translator meets them: control flow order,
+// each EXEC's instructions in turn. Returns false if a fetch is left without a use.
+bool SynthesizeElements(ShaderInput& e) {
+  const std::vector<uint32_t>& m = e.microcode;
+  const size_t slots = m.size() / 3;
+  size_t end_cf = slots;  // the control flow ends where the first EXEC's instructions start
+  for (size_t s = 0; s < end_cf && s < slots; ++s) {
+    const uint32_t w0 = m[s * 3], w1 = m[s * 3 + 1], w2 = m[s * 3 + 2];
+    const uint64_t pair[2] = {uint64_t(w0) | uint64_t(w1 & 0xFFFF) << 32,
+                              uint64_t((w1 >> 16) | (w2 << 16)) | uint64_t(w2 >> 16) << 32};
+    for (const uint64_t cf : pair) {
+      const uint32_t opcode = uint32_t(cf >> 44) & 0xF;
+      const bool exec = (opcode >= 1 && opcode <= 6) || opcode == 13 || opcode == 14;
+      if (!exec) continue;
+      const uint32_t address = uint32_t(cf) & 0xFFF;
+      const uint32_t count = uint32_t(cf >> 12) & 0x7;
+      uint32_t sequence = uint32_t(cf >> 16) & 0xFFF;
+      end_cf = std::min<size_t>(end_cf, address);
+      for (uint32_t i = 0; i < count; ++i, sequence >>= 2) {
+        const size_t at = size_t(address) + i;
+        if (!(sequence & 0x1) || at >= slots || (m[at * 3] & 0x1F) != 0) continue;  // not a vertex fetch
+        if (std::any_of(e.elements.begin(), e.elements.end(),
+                        [&](const VertexElement& x) { return x.instruction == at; })) {
+          continue;
+        }
+        bool given = false;
+        for (const auto& [use, index] : kUndeclaredFetchUses) {
+          if (std::any_of(e.elements.begin(), e.elements.end(),
+                          [&](const VertexElement& x) { return x.use == use && x.index_use == index; })) {
+            continue;
+          }
+          VertexElement element;
+          element.instruction = uint16_t(at);
+          element.use = use;
+          element.index_use = index;
+          e.elements.push_back(element);
+          given = true;
+          break;
+        }
+        if (!given) return false;
+      }
+    }
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -138,6 +191,11 @@ const char* ReadContainer(const bo2zm::shaderlib::Shader& shader, ShaderInput& e
         return "vertex element points outside the microcode";
       }
       e.elements.push_back(element);
+    }
+    if (!SynthesizeElements(e)) {
+      return "vertex fetch without an element, and no input left for it";
+    }
+    for (const VertexElement& element : e.elements) {
       for (size_t j = 0; j < 3; ++j) {
         e.microcode[size_t(element.instruction) * 3 + j] &= kFetchKeeps[j];
       }

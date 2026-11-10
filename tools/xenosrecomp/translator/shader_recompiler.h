@@ -3,6 +3,8 @@
 #include "shader.h"
 #include "shader_code.h"
 
+#include <set>
+
 struct StringBuffer
 {
     std::string out;
@@ -31,6 +33,10 @@ struct ShaderRecompiler : StringBuffer
     std::unordered_map<uint32_t, const ConstantInfo*> float4Constants;
     std::unordered_map<uint32_t, const char*> boolConstants;
     std::unordered_map<uint32_t, const char*> samplers;
+    std::string undeclaredInputs;     // BO2ZM_RECOMP: inputs of fetches without an element
+    size_t undeclaredInputsAt = 0;
+    std::set<uint32_t> loopsLiteral;  // BO2ZM_RECOMP: loop constants the shader defines
+    std::set<uint32_t> loopsUsed;     // and those its loops read
     std::unordered_map<uint32_t, uint32_t> ifEndLabels;
     uint32_t specConstantsMask = 0;
 
