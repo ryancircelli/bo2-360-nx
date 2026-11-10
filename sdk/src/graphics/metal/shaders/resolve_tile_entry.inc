@@ -1,22 +1,32 @@
 // [tile-resolve] Tile entry, included by resolve_dest_texture.metal through
 // XE_RTT_ENTRY from resolve_tile.metal. See resolve_tile.metal.
 
+// Integer source views (XE_RESOLVE_HOST_COLOR_SOURCE_UINT): the compute resolve
+// reads an RGBA16Uint view of an RGBA16Float render target (the raw bits of a
+// 64bpp EDRAM target). Tile memory holds the attachment in its own format, so
+// read it as half4 and return the bits, which is what the uint view returns.
 #if XE_RESOLVE_HOST_COLOR_SOURCE_UINT
-#error tile resolve: only float source views are covered
-#endif
-
+#define XE_TILE_COMPONENT uint
+struct XeTileColor {
+  half4 color [[color(0)]];
+};
+#define XE_TILE_TO_SOURCE(c) uint4(as_type<ushort4>(c))
+#else
+#define XE_TILE_COMPONENT float
 struct XeTileColor {
   float4 color [[color(0)]];
 };
+#define XE_TILE_TO_SOURCE(c) (c)
+#endif
 
-// Stand-in for texture2d<float>: reads the attachment from tile memory (the
+// Stand-in for texture2d<float> (or <uint>): reads the attachment from tile memory (the
 // implicit imageblock) at the same texel, relative to this Metal tile.
 template <typename T>
 struct XeTileSrc {
   imageblock<XeTileColor, imageblock_layout_implicit> block;
   uint2 origin;
-  float4 read(uint2 position, uint lod) const {
-    return block.read(ushort2(position - origin)).color;
+  vec<XE_TILE_COMPONENT, 4> read(uint2 position, uint lod) const {
+    return XE_TILE_TO_SOURCE(block.read(ushort2(position - origin)).color);
   }
 };
 // Stand-in for texture2d_ms<float>: the same per sample.
@@ -24,11 +34,12 @@ template <typename T>
 struct XeTileSrcMs {
   imageblock<XeTileColor, imageblock_layout_implicit> block;
   uint2 origin;
-  float4 read(uint2 position, uint sample_index) const {
-    return block
-        .read(ushort2(position - origin), ushort(sample_index),
-              imageblock_data_rate::sample)
-        .color;
+  vec<XE_TILE_COMPONENT, 4> read(uint2 position, uint sample_index) const {
+    return XE_TILE_TO_SOURCE(
+        block
+            .read(ushort2(position - origin), ushort(sample_index),
+                  imageblock_data_rate::sample)
+            .color);
   }
 };
 
@@ -125,7 +136,7 @@ kernel void entry_xe(
     return;
   }
 
-  XE_TILE_SRC<float> source{xe_tile_block, tile_origin};
+  XE_TILE_SRC<XE_TILE_COMPONENT> source{xe_tile_block, tile_origin};
   XE_TILE_MAIN(thread_index, xe_resolve_dest, xe_rtt_t0, xe_rtt_t1, xe_rtt_p,
                push_consts_xe, xe_resolve_host_color, source);
   // Half-pixel offset fill (scaled resolves): output rows above
