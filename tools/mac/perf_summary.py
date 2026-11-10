@@ -64,7 +64,7 @@ def parse_log(path):
 
 
 BENCH = re.compile(r'\[benchmark\] (\d+) frames in (\d+) s: ([\d.]+) FPS average, median ([\d.]+) ms \(([\d.]+) FPS\), '
-                   r'p90 ([\d.]+) ms, p99 ([\d.]+) ms, worst ([\d.]+) ms; over 33\.3 ms ([\d.]+) %, over 50 ms ([\d.]+) %')
+                   r'p90 ([\d.]+) ms, p99 ([\d.]+) ms, worst ([\d.]+) ms; over 33\.3 ms ([\d.]+) %, over 50 ms ([\d.]+) %(?:; 1 % low ([\d.]+) ms)?')
 
 
 def parse_benchmark_line(path):
@@ -79,7 +79,7 @@ def parse_benchmark_line(path):
     g = last.groups()
     return {'frames': int(g[0]), 'duration_s': float(g[1]), 'fps_avg': float(g[2]), 'ft_median': float(g[3]),
             'ft_p90': float(g[5]), 'ft_p99': float(g[6]), 'ft_worst': float(g[7]), 'over33_pct': float(g[8]),
-            'over50_pct': float(g[9]), 'source': 'benchmark-line'}
+            'over50_pct': float(g[9]), 'fps_1pct_low_ms': float(g[10]) if g[10] else None, 'source': 'benchmark-line'}
 
 
 def pct(sorted_vals, p):
@@ -166,6 +166,8 @@ def fmt(st, indent=''):
         line(f"{st['frames']} frames in {st['duration_s']:.0f} s (from the [benchmark] line)")
         line(f"fps avg {st['fps_avg']:.1f}   ft median {st['ft_median']:.1f}  p90 {st['ft_p90']:.1f}  p99 {st['ft_p99']:.1f}  worst {st['ft_worst']:.1f} ms")
         line(f"over 33.3 ms {st['over33_pct']:.1f} %   over 50 ms {st['over50_pct']:.1f} %")
+        if st.get('fps_1pct_low_ms'):
+            line(f"1% low {st['fps_1pct_low_ms']:.1f} ms ({1000 / st['fps_1pct_low_ms']:.1f} FPS)")
         return '\n'.join(L)
     line(f"{st['frames']} frames in {st['duration_s']:.1f} s")
     line(f"fps avg {st['fps_avg']:.1f}   1% low {st['fps_1pct_low']:.1f}   0.1% low {st['fps_01pct_low']:.1f}")

@@ -1,0 +1,11 @@
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to signin_four.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
+players = 4
+duration_s = 170
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_START_WAIT_S = 55
+BO2ZM_TEST_BUTTONS_P2 = wait_log Local lobby open 60, 3:a
+BO2ZM_TEST_BUTTONS_P3 = wait_log Local lobby open 60, 5:a
+BO2ZM_TEST_BUTTONS_P4 = wait_log Local lobby open 60, 7:a

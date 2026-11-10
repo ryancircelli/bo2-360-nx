@@ -1,0 +1,10 @@
+# Sign-in join test (research/splitscreen-signin.md). Fails if the log has a STUB line for XamUserGetAgeGroup or XamUserGetMembershipTier.
+# A gap: pads 1, 2 and 4 only. Pad 3 is connected but idle (players = 4 keeps pad 4 alive). Check player 4 stays player 4 or closes the gap (screenshots of the lobby).
+players = 4
+duration_s = 170
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_START_WAIT_S = 55
+BO2ZM_TEST_BUTTONS_P2 = 44:a
+BO2ZM_TEST_BUTTONS_P4 = 48:a
