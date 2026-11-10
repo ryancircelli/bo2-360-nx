@@ -1,0 +1,41 @@
+diff -ru a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -682,6 +682,14 @@
+   virtual bool LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+                                                      bool load_base,
+                                                      bool load_mips) = 0;
++  // Asked under the global lock just before a loaded range is marked up to
++  // date and watched. A backend returns false when the range changed between
++  // the moment its load read it and now (a CPU write that invalidated the
++  // shared memory range before the texture's own watch existed); the range
++  // then stays outdated and is loaded again on its next use.
++  virtual bool LoadedRangeStillCurrent(Texture& texture, bool is_mips) {
++    return true;
++  }
+   global_unique_lock_type AcquireGlobalLock() {
+     return global_critical_region_.Acquire();
+   }
+diff -ru a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
+--- a/src/graphics/pipeline/texture/cache.cpp
++++ b/src/graphics/pipeline/texture/cache.cpp
+@@ -819,7 +819,8 @@
+     const global_unique_lock_type& global_lock, bool loaded_base,
+     bool loaded_mips) {
+   SharedMemory& shared_memory = texture_cache().shared_memory();
+-  if (loaded_base && base_outdated_) {
++  if (loaded_base && base_outdated_ &&
++      texture_cache().LoadedRangeStillCurrent(*this, false)) {
+     assert_not_zero(GetGuestBaseSize());
+     base_outdated_ = false;
+     base_watch_handle_ = shared_memory.WatchMemoryRange(
+@@ -828,7 +829,8 @@
+     shared_memory.WatchRangeForCpuWrites(key().base_page << 12,
+                                          GetGuestBaseSize());
+   }
+-  if (loaded_mips && mips_outdated_) {
++  if (loaded_mips && mips_outdated_ &&
++      texture_cache().LoadedRangeStillCurrent(*this, true)) {
+     assert_not_zero(GetGuestMipsSize());
+     mips_outdated_ = false;
+     mips_watch_handle_ = shared_memory.WatchMemoryRange(

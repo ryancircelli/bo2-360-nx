@@ -5601,6 +5601,9 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       hitch::Scope hitch_tex_scope(hitch::kTex);
       texture_cache_->RequestTextures(used_texture_mask);
     }
+    if (MetalTextureCache::TexContentCheckInterval()) {
+      texture_cache_->TexContentCheck(used_texture_mask);
+    }
     textures_requested_for_draw = true;
     ++telemetry_counter;
     return true;

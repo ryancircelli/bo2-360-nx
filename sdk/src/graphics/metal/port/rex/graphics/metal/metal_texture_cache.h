@@ -674,6 +674,18 @@ class MetalTextureCache : public TextureCache {
     // still equal shared memory over its exact range (diagnostic only).
     bool nx_tracked_ = false;
     bool nx_valid_ = false;
+    // [tex-content-check] hash of the bytes each range was loaded from, the
+    // load route (1 resident shared buffer, 2 CPU guest memory) and the
+    // submission of the load; checked against guest memory at bind time.
+    uint64_t cc_hash_[2] = {};
+    uint64_t cc_load_submission_[2] = {};
+    uint8_t cc_route_[2] = {};
+    bool cc_have_[2] = {};
+    bool cc_stale_at_load_[2] = {};
+    uint64_t cc_window_ = UINT64_MAX;
+    // [resident-load-window] set when a resident load read the range from
+    // the shared memory buffer; consumed by LoadedRangeStillCurrent.
+    bool resident_load_pending_[2] = {};
 
    private:
     bool loaded_once_ = false;
@@ -891,6 +903,27 @@ class MetalTextureCache : public TextureCache {
   // [cpu-source-watch] see LoadTextureDataFromCpuGuestMemory.
   static bool CpuSourceWatchFirst();
   static uint32_t CpuSourceMaxRetries();
+  // [resident-load-window] REX_METAL_RESIDENT_LOAD_RECHECK=0 turns it off.
+  static bool ResidentLoadRecheck();
+  bool LoadedRangeStillCurrent(Texture& texture, bool is_mips) override;
+  // [tex-content-check] REX_METAL_TEX_CONTENT_CHECK=<N>: every N submissions,
+  // hash the guest bytes of each bound, up-to-date texture and compare them
+  // with what it was loaded from. 0 (default) is off.
+  void TexContentRecord(MetalTexture& texture, bool base, bool mips,
+                        uint8_t route);
+  // Takes the reference hash of a range that just became up to date.
+  void TexContentMarkCurrent(MetalTexture& texture, uint32_t i);
+
+ public:
+  static uint32_t TexContentCheckInterval();
+  // Called by the command processor after each draw's texture request.
+  void TexContentCheck(uint32_t used_texture_mask);
+
+ private:
+  uint64_t cc_checked_ = 0;
+  uint64_t cc_mismatch_[3] = {};
+  uint64_t cc_stale_loads_ = 0;
+  uint64_t cc_last_summary_ = 0;
   static void CpuSourceWatchThunk(const global_unique_lock_type& global_lock,
                                   void* context, void* data, uint64_t argument,
                                   bool invalidated_by_gpu);

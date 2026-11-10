@@ -55,6 +55,7 @@ set(REXGPU_METAL_SOURCES
   port/rex/graphics/metal/metal_resolve_to_texture.cc
   port/rex/graphics/metal/metal_tile_resolve.cc
   port/rex/graphics/metal/metal_tex_rename.cc
+  port/rex/graphics/metal/metal_tex_content_check.cc
   port/rex/graphics/metal/metal_miplod_proof.cc
   port/rex/graphics/metal/metal_miplod_draw.cc
   port/rex/graphics/metal/metal_graphics_system.cc
