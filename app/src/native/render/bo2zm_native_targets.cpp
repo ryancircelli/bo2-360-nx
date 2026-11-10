@@ -1302,6 +1302,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     VkPipelineInputAssemblyStateCreateInfo assembly{};
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    // Not indexed, so restart changes nothing; Metal cannot turn it off and MoltenVK warns when it is off.
+    assembly.primitiveRestartEnable = VK_TRUE;
     VkPipelineViewportStateCreateInfo view{};
     view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     view.viewportCount = 1;

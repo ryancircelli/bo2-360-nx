@@ -14168,6 +14168,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     assembly.topology = VkPrimitiveTopology(key.topology);
     assembly.primitiveRestartEnable = (key.rasterization & 0x8) ? VK_TRUE : VK_FALSE;
+#if defined(__APPLE__)
+    // Metal always restarts strips and fans at the all-ones index and cannot turn that off, so MoltenVK warns and
+    // restarts anyway (rexglue-sdk issue #533). Asking for it states what the GPU does; the result is the same.
+    if (key.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || key.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+        key.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+      assembly.primitiveRestartEnable = VK_TRUE;
+    }
+#endif
 
     VkPipelineViewportStateCreateInfo& view = fixed.view;
     view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
