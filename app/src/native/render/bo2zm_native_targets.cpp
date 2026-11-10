@@ -1324,20 +1324,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (!picture) {
       return false;
     }
-    VkImageCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = VK_IMAGE_TYPE_2D;
+    gpu::ImageDesc info;
     info.format = VK_FORMAT_R8G8B8A8_UNORM;
-    info.extent = {picture->width, picture->height, 1};
-    info.mipLevels = 1;
-    info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-            vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, c.image, c.memory)) {
+    info.width = picture->width;
+    info.height = picture->height;
+    if (!gpu::vulkan::CreateDedicatedImage(vulkan_device_, info, c.image, c.memory)) {
       REXLOG_ERROR("[native] credits: could not create the image: no credits line");
       return false;
     }
@@ -3746,21 +3737,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
         return nullptr;
       }
-      VkImageCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-      info.imageType = VK_IMAGE_TYPE_3D;
+      gpu::ImageDesc info;
+      info.volume = true;
       info.format = kFormatColor;
-      info.extent = {width, height, depth3d};
-      info.mipLevels = 1;
-      info.arrayLayers = 1;
-      info.samples = VK_SAMPLE_COUNT_1_BIT;
-      info.tiling = VK_IMAGE_TILING_OPTIMAL;
-      info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-      info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-      info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(vulkan_device_, info,
-                                                                 rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
-                                                                 v.image.image, v.image.guest_memory)) {
+      info.width = width;
+      info.height = height;
+      info.depth = depth3d;
+      if (!gpu::vulkan::CreateDedicatedImage(vulkan_device_, info, v.image.image, v.image.guest_memory)) {
         return nullptr;
       }
       v.image.width = width;
@@ -5802,27 +5785,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   bool Create(OwnedImage& image, uint32_t width, uint32_t height, VkImageUsageFlags use,
              VkFormat format = kFormatColor) {
-    VkImageCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = VK_IMAGE_TYPE_2D;
+    gpu::ImageDesc info;
     info.format = format;
-    info.extent = {width, height, 1};
-    info.mipLevels = 1;
-    info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.width = width;
+    info.height = height;
     info.usage = use;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-            vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image,
-            image.guest_memory)) {
+    if (!gpu::vulkan::CreateDedicatedImage(vulkan_device_, info, image.image, image.guest_memory)) {
       // The GPU can run out of memory here too. Render targets are few and large, so one that does not fit
       // shows up at once: the texture cache is asked to release memory and the allocation is retried once.
       if (!draws_ || !draws_->ReleaseTexturesOnOutOfMemory() ||
-          !rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-              vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image,
-              image.guest_memory)) {
+          !gpu::vulkan::CreateDedicatedImage(vulkan_device_, info, image.image, image.guest_memory)) {
         REXLOG_ERROR("[native] C2: out of GPU memory for a {}x{} target (format {}) and releasing the cache was not "
                      "enough",
                      width, height, uint32_t(format));
