@@ -1526,19 +1526,19 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = credits_.image;
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    dfn_.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                              nullptr, 0, nullptr, 1, &barrier);
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                 nullptr, 0, nullptr, 1, &barrier);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {picture->width, picture->height, 1};
-    dfn_.vkCmdCopyBufferToImage(commands, credits_.staging, credits_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                                &region);
+    gpu_.CopyBufferToImage(commands, credits_.staging, credits_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &region);
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    dfn_.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
-                              nullptr, 0, nullptr, 1, &barrier);
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                 nullptr, 0, nullptr, 1, &barrier);
     credits_.uploaded = true;
   }
 
@@ -1960,8 +1960,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
         // bo2zm_native_clear_useful_area. Only the rows in use; the bottom band, if needed.
         if (!ClearColorAreaUseful(*target_render, color)) {
-          dfn_.vkCmdClearColorImage(commands_job_, target_render->image,
-                                    VK_IMAGE_LAYOUT_GENERAL, &color, 1, &kRangeColor);
+          gpu_.ClearColorImage(commands_job_, target_render->image,
+                               VK_IMAGE_LAYOUT_GENERAL, &color, 1, &kRangeColor);
           RemoveBand(*target_render);
         }
         ++clears_;
@@ -2066,8 +2066,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       constexpr VkPipelineStageFlags kStages =
           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-      dfn_.vkCmdPipelineBarrier(commands_job_, kStages, kStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
-                                &m, 0, nullptr, 0, nullptr);
+      gpu_.Barrier(commands_job_, kStages, kStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
+                   &m, 0, nullptr, 0, nullptr);
     };
     bool done = false;
     if (b.depth || b.stencil) {
@@ -2761,7 +2761,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       dfn_.vkBeginCommandBuffer(commands, &begin);
       VkBufferCopy region{0, 0, kProbeBytes};
-      dfn_.vkCmdCopyBuffer(commands, source, target, 1, &region);
+      gpu_.CopyBuffer(commands, source, target, 1, &region);
       dfn_.vkEndCommandBuffer(commands);
       VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
       submit.commandBufferCount = 1;
@@ -3499,8 +3499,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_upload_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    gpu_.Barrier(commands_upload_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
   }
 
   VkCommandBuffer CommandsUpload() override {
@@ -3647,8 +3647,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     const auto order = [&]() {
-      dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+      gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     };
     order();
     MarkGpu(kGpuClears);
@@ -3825,17 +3825,17 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_job_,
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                              1, &barrier, 0, nullptr, 0, nullptr);
+    gpu_.Barrier(commands_job_,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                 1, &barrier, 0, nullptr, 0, nullptr);
     VkRenderPassBeginInfo start{};
     start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     start.renderPass = pass;
     start.framebuffer = framebuffer;
     start.renderArea = {{int32_t(dx), int32_t(dy)}, {width, height}};
     MarkGpu(kGpuCopies);
-    dfn_.vkCmdBeginRenderPass(commands_job_, &start, VK_SUBPASS_CONTENTS_INLINE);
+    gpu_.BeginPass(commands_job_, start);
     gpu_.BindGraphicsPipeline(commands_job_, pipeline);
     gpu_.BindSets(commands_job_, layout_pipeline_, 0, 1, &set);
     gpu_.SetViewport(commands_job_, gpu::Viewport{float(dx), float(dy), float(width), float(height), 0.0f, 1.0f});
@@ -3864,7 +3864,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu_.PushConstants(commands_job_, layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16,
                             sizeof(constants), &constants);
     gpu_.Draw(commands_job_, 4, 0);
-    dfn_.vkCmdEndRenderPass(commands_job_);
+    gpu_.EndPass(commands_job_);
     // This pass bound its own pipeline, set 0, push constants, viewport and scissor in the same command
     // buffer the draws use, and VulkanDraws only rebinds what it believes changed (sets_bound_, push_recorded_,
     // state_recorded_, the bound pipeline), resetting that belief when the command generation changes. Without this
@@ -3876,10 +3876,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     ++generation_commands_;
     barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                              VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+    gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                   VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              0, 1, &barrier, 0, nullptr, 0, nullptr);
+                 0, 1, &barrier, 0, nullptr, 0, nullptr);
     return true;
   }
 
@@ -3975,12 +3975,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     first.image = v.image.image;
     first.subresourceRange = kRangeColor;
     first.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_job_,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                  (v.gather != VK_NULL_HANDLE ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, v.image.prepared ? 0 : 1,
-                              &first);
+    gpu_.Barrier(commands_job_,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                     VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                     (v.gather != VK_NULL_HANDLE ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, v.image.prepared ? 0 : 1, &first);
     v.image.prepared = true;
     MarkGpu(kGpuCopies);
     if (v.gather != VK_NULL_HANDLE) {
@@ -4022,9 +4021,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     later.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     later.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     later.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
-                              &later, 0, nullptr, 0, nullptr);
+    gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
+                 &later, 0, nullptr, 0, nullptr);
     v.image.swap_rb = flat->swap_rb;
     v.write = write;
     v.source = flat->image;
@@ -5012,8 +5011,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return UINT32_MAX;
     }
     const uint32_t index = slot_ * kOcclusionsPerSlot + uint32_t(slot.occlusions.size());
-    dfn_.vkCmdBeginQuery(commands_job_, occlusions_, index,
-                         occlusion_precise_ ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
+    gpu_.BeginQuery(commands_job_, occlusions_, index,
+                    occlusion_precise_ ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
     slot.occlusions.emplace_back(index, occlusion_open_);
     ++it->second.spans_pending;
     ++stats_occlusion_[0];
@@ -5022,7 +5021,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   void FinishQueryOcclusion(uint32_t index) override {
     if (occlusions_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
-      dfn_.vkCmdEndQuery(commands_job_, occlusions_, index);
+      gpu_.EndQuery(commands_job_, occlusions_, index);
     }
   }
 
@@ -5039,14 +5038,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return UINT32_MAX;
     }
     const uint32_t index = slot_ * kVisibilityPerSlot + uint32_t(slot.visibility.size());
-    dfn_.vkCmdBeginQuery(commands_job_, visibility_, index, 0);
+    gpu_.BeginQuery(commands_job_, visibility_, index, 0);
     slot.visibility.emplace_back(index, witness ? kVisibilityWitness : kVisibilityWater);
     return index;
   }
 
   void FinishQueryVisibility(uint32_t index) override {
     if (visibility_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
-      dfn_.vkCmdEndQuery(commands_job_, visibility_, index);
+      gpu_.EndQuery(commands_job_, visibility_, index);
     }
   }
 
@@ -5070,14 +5069,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     const uint32_t index =
         slot_ * kStatsPerSlot + uint32_t(slot.stats.size());
-    dfn_.vkCmdBeginQuery(commands_job_, stats_, index, 0);
+    gpu_.BeginQuery(commands_job_, stats_, index, 0);
     slot.stats.emplace_back(index, uint8_t(category));
     return index;
   }
 
   void FinishStats(uint32_t index) override {
     if (stats_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
-      dfn_.vkCmdEndQuery(commands_job_, stats_, index);
+      gpu_.EndQuery(commands_job_, stats_, index);
     }
   }
 
@@ -5097,7 +5096,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     const uint32_t index = slot_ * kStatsDrawPerSlot +
                             uint32_t(slot.stats_draw.size());
-    dfn_.vkCmdBeginQuery(commands_job_, stats_draw_, index, 0);
+    gpu_.BeginQuery(commands_job_, stats_draw_, index, 0);
     slot.stats_draw.emplace_back(
         index, uint16_t((category % kGpuCategories) * kLabelsShader + label % kLabelsShader));
     return index;
@@ -5105,7 +5104,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   void FinishStatsDraw(uint32_t index) override {
     if (stats_draw_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
-      dfn_.vkCmdEndQuery(commands_job_, stats_draw_, index);
+      gpu_.EndQuery(commands_job_, stats_draw_, index);
     }
   }
 
@@ -5667,8 +5666,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     constexpr VkPipelineStageFlags kWrites =
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_job_, kWrites, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
-                              nullptr, 0, nullptr);
+    gpu_.Barrier(commands_job_, kWrites, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
+                 nullptr, 0, nullptr);
     VkImageCopy copy{};
     copy.srcSubresource = {aspect, 0, 0, 1};
     copy.dstSubresource = {aspect, 0, 0, 1};
@@ -5683,11 +5682,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+    gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
                                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                              0, 1, &barrier, 0, nullptr, 0, nullptr);
+                 0, 1, &barrier, 0, nullptr, 0, nullptr);
     ++restores_for_resolve_;
     pixels_restored_ += uint64_t(target.width) * target.height;
     AnnotateCopy(target.width, target.height);
@@ -6104,9 +6103,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.image = image.image;
     barrier.subresourceRange = depth ? kRangeDepth : kRangeColor;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                              &barrier);
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                 &barrier);
     if (depth) {
       // ZCULL: images created without TRANSFER_DST (the ones eligible for a ZCULL plane) cannot be
       // cleared with vkCmdClearDepthStencilImage. They are cleared by opening a pass with
@@ -6125,8 +6124,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
     } else {
       const VkClearColorValue cero{};
-      dfn_.vkCmdClearColorImage(commands, image.image, VK_IMAGE_LAYOUT_GENERAL, &cero,
-                                1, &kRangeColor);
+      gpu_.ClearColorImage(commands, image.image, VK_IMAGE_LAYOUT_GENERAL, &cero,
+                           1, &kRangeColor);
     }
     image.prepared = true;
     if (draws_) {
@@ -6171,13 +6170,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     deferred::Begin(commands_job_);  // from here to SubmitJob its vkCmd* calls are queued
     slot.categories.clear();
     if (queries_ != VK_NULL_HANDLE) {
-      dfn_.vkCmdResetQueryPool(commands_job_, queries_, slot_ * kMarksPerSlot,
-                               kMarksPerSlot);
+      gpu_.ResetQueries(commands_job_, queries_, slot_ * kMarksPerSlot,
+                        kMarksPerSlot);
     }
     if (occlusions_ != VK_NULL_HANDLE) {
       DiscardOcclusions(slot);  // Complete already read the last submission's; these were never submitted
-      dfn_.vkCmdResetQueryPool(commands_job_, occlusions_, slot_ * kOcclusionsPerSlot,
-                               kOcclusionsPerSlot);
+      gpu_.ResetQueries(commands_job_, occlusions_, slot_ * kOcclusionsPerSlot,
+                        kOcclusionsPerSlot);
     }
     // Reflection visibility. Any left over belong to work that was never submitted: without a
     // measurement, they count as visible. The reset always happens when there is a pool, even if the
@@ -6187,8 +6186,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         bo2zm::reflection_demand::AnnotateVisible(false);
         slot.visibility.clear();
       }
-      dfn_.vkCmdResetQueryPool(commands_job_, visibility_, slot_ * kVisibilityPerSlot,
-                               kVisibilityPerSlot);
+      gpu_.ResetQueries(commands_job_, visibility_, slot_ * kVisibilityPerSlot,
+                        kVisibilityPerSlot);
     }
     /*
      * Do not reset pools that this frame will not use.
@@ -6212,13 +6211,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     slot.stats_draw.clear();
     if (stats_ != VK_NULL_HANDLE && REXCVAR_GET(bo2zm_native_pipeline_stats) &&
         REXCVAR_GET(bo2zm_native_per_draw_stats_s) <= 0) {
-      dfn_.vkCmdResetQueryPool(commands_job_, stats_,
-                               slot_ * kStatsPerSlot, kStatsPerSlot);
+      gpu_.ResetQueries(commands_job_, stats_,
+                        slot_ * kStatsPerSlot, kStatsPerSlot);
     }
     if (stats_draw_ != VK_NULL_HANDLE && window_diagnostic_) {
-      dfn_.vkCmdResetQueryPool(commands_job_, stats_draw_,
-                               slot_ * kStatsDrawPerSlot,
-                               kStatsDrawPerSlot);
+      gpu_.ResetQueries(commands_job_, stats_draw_,
+                        slot_ * kStatsDrawPerSlot,
+                        kStatsDrawPerSlot);
     }
     // The timestamp mode is decided per whole submission.
     if (alternate_marks_s_ > 0) {
@@ -6575,8 +6574,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     Prepare(tiled_);
     const VkClearColorValue depth3d{{0.12f, 0.0f, 0.12f, 1.0f}};
-    dfn_.vkCmdClearColorImage(commands_job_, tiled_.image, VK_IMAGE_LAYOUT_GENERAL, &depth3d,
-                              1, &kRangeColor);
+    gpu_.ClearColorImage(commands_job_, tiled_.image, VK_IMAGE_LAYOUT_GENERAL, &depth3d,
+                         1, &kRangeColor);
     std::string list;
     for (size_t i = 0; i < bases.size() && i < 16; ++i) {
       const auto it = resolved_.find(bases[i]);
@@ -6834,8 +6833,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.imageOffset = {int32_t(dx), int32_t(dy), 0};
     copy.imageExtent = {width, height, 1};
-    dfn_.vkCmdCopyImageToBuffer(commands_job_, resolved.image.image, VK_IMAGE_LAYOUT_GENERAL,
-                                read.buffer, 1, &copy);
+    gpu_.CopyImageToBuffer(commands_job_, resolved.image.image, VK_IMAGE_LAYOUT_GENERAL,
+                           read.buffer, 1, &copy);
     reads_pending_.push_back({&read, reg.rb_copy_dest_base, x0, y0, width, height,
                                     reg.rb_copy_dest_pitch & 0x3FFF,
                                     (reg.rb_copy_dest_pitch >> 16) & 0x3FFF, reg.rb_copy_dest_info,
@@ -7184,11 +7183,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
       barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
       barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-      dfn_.vkCmdPipelineBarrier(commands_output_[s],
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+      gpu_.Barrier(commands_output_[s],
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     }
-    dfn_.vkCmdBeginRenderPass(commands_output_[s], &pass, VK_SUBPASS_CONTENTS_INLINE);
+    gpu_.BeginPass(commands_output_[s], pass);
     gpu_.SetViewport(commands_output_[s], gpu::Viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f});
     gpu_.SetScissor(commands_output_[s], gpu::Rect{0, 0, width, height});
     VkPipeline pipeline = pipeline_;
@@ -7246,13 +7245,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (draw_credits) {
       DrawCredits(commands_output_[s], credits, width, height);
     }
-    dfn_.vkCmdEndRenderPass(commands_output_[s]);
+    gpu_.EndPass(commands_output_[s]);
     if (since_target) {
       // And nothing submitted later (the next frame draws and clears that image again) writes it before the
       // output has read it.
-      dfn_.vkCmdPipelineBarrier(commands_output_[s], VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                nullptr, 0, nullptr, 0, nullptr);
+      gpu_.Barrier(commands_output_[s], VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                   nullptr, 0, nullptr, 0, nullptr);
     }
     if (dfn_.vkEndCommandBuffer(commands_output_[s]) != VK_SUCCESS) {
       return false;
