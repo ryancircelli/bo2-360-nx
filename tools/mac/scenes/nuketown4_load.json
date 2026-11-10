@@ -8,7 +8,7 @@
   "metal",
   "native"
  ],
- "duration_s": 150,
+ "duration_s": 170,
  "pass_log": [
   "test start: zm_nuked nuked zstandard zsurvival started"
  ],
@@ -17,14 +17,22 @@
   "] [error] "
  ],
  "captures": [
-  "22:a",
-  "28:b"
+  "16:16",
+  "19:19",
+  "22:22",
+  "25:25",
+  "28:28",
+  "31:31",
+  "34:34",
+  "37:37",
+  "40:40",
+  "43:43",
+  "46:46",
+  "49:49",
+  "52:52",
+  "55:55",
+  "58:58"
  ],
- "end_on_log": {
-  "text": "nuketown4_load_b.png",
-  "count": 1,
-  "grace_s": 2
- },
  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
  "route": {
   "BO2ZM_TEST_START": "zm_nuked nuked zstandard zsurvival",
@@ -32,7 +40,7 @@
   "BO2ZM_TEST_ALL_GOD": "true",
   "BO2ZM_BENCHMARK": "false",
   "BO2ZM_LOADING_VIDEO": "false",
-  "BO2ZM_TEST_CONSOLE": "22:png nuketown4_load_a|28:png nuketown4_load_b",
+  "BO2ZM_TEST_CONSOLE": "16:png nuketown4_load_16|19:png nuketown4_load_19|22:png nuketown4_load_22|25:png nuketown4_load_25|28:png nuketown4_load_28|31:png nuketown4_load_31|34:png nuketown4_load_34|37:png nuketown4_load_37|40:png nuketown4_load_40|43:png nuketown4_load_43|46:png nuketown4_load_46|49:png nuketown4_load_49|52:png nuketown4_load_52|55:png nuketown4_load_55|58:png nuketown4_load_58",
   "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
   "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
   "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a"
@@ -55,5 +63,10 @@
    ],
    "note": "Shipped app: the offline DLC licence check ends Nuketown 5 s into the match. Fixed by the hook on branch nuketown-hook (agent a236d82b94fd1da36); remove this entry once it ships."
   }
- ]
+ ],
+ "golden": {
+  "views": 4,
+  "need": 2
+ },
+ "end_on_ready": true
 }

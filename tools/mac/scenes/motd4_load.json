@@ -8,7 +8,7 @@
   "metal",
   "native"
  ],
- "duration_s": 170,
+ "duration_s": 190,
  "pass_log": [
   "test start: zm_prison prison zclassic zclassic started"
  ],
@@ -17,14 +17,26 @@
   "] [error] "
  ],
  "captures": [
-  "25:a",
-  "40:b"
+  "16:16",
+  "19:19",
+  "22:22",
+  "25:25",
+  "28:28",
+  "31:31",
+  "34:34",
+  "37:37",
+  "40:40",
+  "43:43",
+  "46:46",
+  "49:49",
+  "52:52",
+  "55:55",
+  "58:58",
+  "61:61",
+  "64:64",
+  "67:67",
+  "70:70"
  ],
- "end_on_log": {
-  "text": "motd4_load_b.png",
-  "count": 1,
-  "grace_s": 2
- },
  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
  "route": {
   "BO2ZM_TEST_START": "zm_prison prison zclassic zclassic",
@@ -32,7 +44,7 @@
   "BO2ZM_TEST_ALL_GOD": "true",
   "BO2ZM_BENCHMARK": "false",
   "BO2ZM_LOADING_VIDEO": "false",
-  "BO2ZM_TEST_CONSOLE": "25:png motd4_load_a|40:png motd4_load_b",
+  "BO2ZM_TEST_CONSOLE": "16:png motd4_load_16|19:png motd4_load_19|22:png motd4_load_22|25:png motd4_load_25|28:png motd4_load_28|31:png motd4_load_31|34:png motd4_load_34|37:png motd4_load_37|40:png motd4_load_40|43:png motd4_load_43|46:png motd4_load_46|49:png motd4_load_49|52:png motd4_load_52|55:png motd4_load_55|58:png motd4_load_58|61:png motd4_load_61|64:png motd4_load_64|67:png motd4_load_67|70:png motd4_load_70",
   "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
   "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
   "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a"
@@ -46,5 +58,10 @@
    "REX_GPU_PLUGIN": "xenos",
    "REX_BO2ZM_RENDERER": "native"
   }
- }
+ },
+ "golden": {
+  "views": 4,
+  "need": 2
+ },
+ "end_on_ready": true
 }

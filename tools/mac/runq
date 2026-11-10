@@ -907,6 +907,13 @@ def cmd_scene(argv):
     env.update({k: str(v) for k, v in (scene.get('env') or {}).items()})
     env.setdefault('CAPTURE_EVERY_S', str(scene.get('capture_every_s', 0) or 3600))
     env.setdefault('SHOT_EVERY_S', '100000')
+    if scene.get('end_on_ready') and not a.no_diff:
+        sd_ = os.path.join(HERE, 'scenediff.py')
+        gd_ = a.golden or next((g for g in (os.path.join(os.path.dirname(a.scene), 'golden', scene['name']),
+                                            os.path.join(SPOOL, 'golden', scene['name'])) if os.path.isdir(g)), '')
+        cmd = scene_diff_cmd(sd_, a.scene, os.path.join(run, 'logs'), gd_, a.out)
+        cmd = cmd[:cmd.index('diff')] + ['ready', a.scene, os.path.join(run, 'logs')] + ([gd_] if gd_ else [])
+        env['END_ON_CMD'] = ' '.join(shlex.quote(c) for c in cmd)
     eol = scene.get('end_on_log')
     if eol:
         env['END_ON_LOG'] = eol['text']

@@ -113,8 +113,20 @@ crashed=0; early=0; ended=0
 mkdir -p "$out/shots"
 # END_ON_LOG: end the run (as a pass) once the game log has END_ON_LOG_COUNT (default 1) lines containing this
 # text, END_GRACE_S (default 2) seconds later; short scenes end on their last capture instead of the full duration.
+# END_ON_CMD: each time the game logs a new capture, run this command; exit 0 ends the run the same way.
+ncap=0
 for ((i = 0; i < duration; i++)); do
   sleep 1
+  if [ -n "${END_ON_CMD:-}" ]; then
+    elog="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"
+    n="$( [ -n "$elog" ] && grep -cF -- '[capture] /' "$elog" || echo 0)"
+    if [ "$n" -gt "$ncap" ]; then
+      ncap=$n
+      if /bin/sh -c "$END_ON_CMD" >>"$out/end_on_cmd.txt" 2>&1; then
+        sleep "${END_GRACE_S:-2}"; ended=1; echo "ended on END_ON_CMD after $n captures at ${i} s"; break
+      fi
+    fi
+  fi
   if [ -n "${END_ON_LOG:-}" ]; then
     elog="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"
     if [ -n "$elog" ] && [ "$(grep -cF -- "$END_ON_LOG" "$elog")" -ge "${END_ON_LOG_COUNT:-1}" ]; then

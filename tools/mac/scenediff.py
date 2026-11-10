@@ -3,10 +3,16 @@
 
   scenediff.py diff SCENE.json CAPTURES_DIR GOLDEN_DIR [--json OUT]   score a scene run against its golden frames
   scenediff.py score IMAGE [GOLDEN] [--views 4] [--json OUT]         score one frame (golden file or dir optional)
+  scenediff.py ready SCENE.json CAPTURES_DIR [GOLDEN_DIR]            exit 0 once "need" frames are in play
   scenediff.py bless SCENE.json CAPTURES_DIR GOLDEN_DIR [--tag T]     add a run's frames to the golden pool
 
 Frames: the scene's "captures" ("22:a") are <scene name>_<label>.png anywhere under CAPTURES_DIR. Frames are compared
 at 1280x720, split into the scene's views ("golden": {"views": 4} = 2x2, 2 = top/bottom, 1 = whole frame).
+
+Frame timing: the match fades in from black a variable time after the map loads (19 s in one run, over 26 s in
+another), so a scene captures every couple of seconds and sets "golden": {"need": N}: leading frames that are not in
+play yet (black, fading in, the loading card; see in_play) are skipped and the first N in-play frames are scored. runq
+ends the run as soon as N are in (scene key "end_on_ready").
 
 Goldens are a pool: every view of every PNG under GOLDEN_DIR (verified-clean runs of the same scene). Each test view is
 matched to the golden views that look most like it (8x8-block luma distance, best*1.6+2, at most 8), so a shuffled
@@ -44,6 +50,9 @@ DEFAULTS = {'views': 4, 'max_gun_green': 40, 'max_green_blocks': 4, 'max_sheet_c
             # HUD boxes left out of the block scores (fractions of a view): points, ammo and its blood icon, which come
             # and go; the round title in the middle
             'ignore': [[0.76, 0.55, 1.00, 0.92], [0.40, 0.25, 0.60, 0.40]],
+            # a frame is in play when every view is at least ready_luma of its best golden's brightness and its ssim
+            # against it is at least ready_ssim (the loading card scores 0.12-0.24, the fade from black is half as bright)
+            'ready_luma': 0.8, 'ready_ssim': 0.35, 'need': 0,
             'block': 16, 'sheet_rgb': 30, 'max_spread': 60, 'green_ratio': 1.12, 'green_block_px': 6}
 W, H = 1280, 720
 
@@ -210,6 +219,37 @@ def score_view(v, gold, o):
     return res
 
 
+def in_play(img, gold, o):
+    """True when the frame shows the match: not black, not fading in, not a loading card."""
+    for v in views(img, o['views']):
+        lv = luma(v)
+        if gold is None or not gold.views:
+            if lv.mean() < 25:
+                return False
+            continue
+        g = luma(gold.views[gold.group(v)[0][0]])
+        if lv.mean() < o['ready_luma'] * g.mean() or ssim(lv, g) < o['ready_ssim']:
+            return False
+    return True
+
+
+def pick_frames(scene, caps, gold, o):
+    """(label, name, path or None, scored) for the scene's frames. With "need" N, leading frames that are not yet in
+    play (black, fading in, loading) are skipped and the first N from the first in-play frame are scored; without it,
+    every frame is scored."""
+    fs = [(label, name, find(caps, name)) for label, name in frames(scene)]
+    need = o.get('need') or 0
+    if not need:
+        return [(l, n, p, True) for l, n, p in fs]
+    out, started = [], False
+    for l, n, p in fs:
+        if not started and p and in_play(load(p), gold, o):
+            started = True
+        take = bool(started and p) and sum(1 for x in out if x[3]) < need
+        out.append((l, n, p, take))
+    return out
+
+
 def score(img_path, gold, o):
     return [score_view(v, gold, o) for v in views(load(img_path), o['views'])]
 
@@ -256,8 +296,17 @@ def cmd_diff(a):
     ok = True
     gold = golden_pool(a.golden, o)
     report['golden_views'] = len(gold.views) if gold else 0
-    for label, name in frames(scene):
-        cap = find(a.captures, name)
+    picked = pick_frames(scene, a.captures, gold, o)
+    report['skipped'] = [label for label, _, p, take in picked if p and not take]
+    if o.get('need') and sum(1 for x in picked if x[3]) < o['need']:
+        ok = False
+        report['error'] = f'only {sum(1 for x in picked if x[3])} of {o["need"]} frames in play'
+        print(f'FAIL  {report["error"]} (skipped as not in play: {" ".join(report["skipped"]) or "none"})')
+    for label, name, cap, take in picked:
+        if cap and not take:
+            continue
+        if not cap and o.get('need'):
+            continue
         if not cap:
             report['frames'][label] = {'error': f'no capture {name}'}
             print(f'{label}: FAIL  no capture {name} under {a.captures}')
@@ -300,6 +349,17 @@ def cmd_score(a):
     return 0 if all(v['verdict'] == 'PASS' for v in vs) else 1
 
 
+def cmd_ready(a):
+    """Exit 0 once the captures hold the scene's "need" in-play frames (boot_test END_ON_CMD ends the run there)."""
+    scene = json.load(open(a.scene))
+    o = opts(scene)
+    need = o.get('need') or len(frames(scene))
+    o['need'] = need
+    n = sum(1 for x in pick_frames(scene, a.captures, golden_pool(a.golden, o), o) if x[3])
+    print(f'{n}/{need} frames in play')
+    return 0 if n >= need else 1
+
+
 def cmd_bless(a):
     scene = json.load(open(a.scene))
     os.makedirs(a.golden, exist_ok=True)
@@ -321,11 +381,13 @@ def main():
     s = sp.add_parser('score')
     s.add_argument('image'); s.add_argument('golden', nargs='?'); s.add_argument('--views', type=int, default=4)
     s.add_argument('--json')
+    r = sp.add_parser('ready')
+    r.add_argument('scene'); r.add_argument('captures'); r.add_argument('golden', nargs='?')
     b = sp.add_parser('bless')
     b.add_argument('scene'); b.add_argument('captures'); b.add_argument('golden')
     b.add_argument('--tag', help='prefix for the file names, so frames from several clean runs sit side by side')
     a = ap.parse_args()
-    sys.exit({'diff': cmd_diff, 'score': cmd_score, 'bless': cmd_bless}[a.cmd](a))
+    sys.exit({'diff': cmd_diff, 'score': cmd_score, 'ready': cmd_ready, 'bless': cmd_bless}[a.cmd](a))
 
 
 if __name__ == '__main__':
