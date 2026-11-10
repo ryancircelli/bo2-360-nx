@@ -1341,13 +1341,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       REXLOG_ERROR("[native] credits: could not create the image: no credits line");
       return false;
     }
-    VkImageViewCreateInfo info_view{};
-    info_view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    info_view.image = c.image;
-    info_view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    gpu::ViewDesc info_view;
     info_view.format = VK_FORMAT_R8G8B8A8_UNORM;
-    info_view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (dfn_.vkCreateImageView(device_, &info_view, nullptr, &c.view) != VK_SUCCESS) {
+    if (gpu::vulkan::CreateView(dfn_, device_, c.image, info_view, c.view) != VK_SUCCESS) {
       REXLOG_ERROR("[native] credits: could not create the image view: no credits line");
       return false;
     }
@@ -5833,13 +5829,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         return false;
       }
     }
-    VkImageViewCreateInfo info_view{};
-    info_view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    info_view.image = image.image;
-    info_view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    gpu::ViewDesc info_view;
     info_view.format = format;
-    info_view.subresourceRange = IsDepthFormat(format) ? kRangeDepth : kRangeColor;
-    if (dfn_.vkCreateImageView(device_, &info_view, nullptr, &image.view) != VK_SUCCESS) {
+    info_view.aspects = IsDepthFormat(format) ? gpu::kAspectDepth | gpu::kAspectStencil : gpu::kAspectColor;
+    if (gpu::vulkan::CreateView(dfn_, device_, image.image, info_view, image.view) != VK_SUCCESS) {
       Destroy(image);
       return false;
     }

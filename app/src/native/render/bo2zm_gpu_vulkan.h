@@ -500,6 +500,9 @@ inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevic
 inline void Free(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDeviceMemory memory) {
   dfn.vkFreeMemory(device, memory, nullptr);
 }
+static_assert(VkImageViewType(kViewCube) == VK_IMAGE_VIEW_TYPE_CUBE &&
+                  VkImageViewType(kView3D) == VK_IMAGE_VIEW_TYPE_3D && kAllLevels == VK_REMAINING_MIP_LEVELS,
+              "view numbering");
 static_assert(sizeof(void*) == 8, "the Destroy overloads need distinct handle types");
 
 // A render pass for `desc`, one subpass: the colour attachments in order, then the depth one. True and the pass
@@ -733,6 +736,19 @@ inline bool CreateShader(const rex::ui::vulkan::VulkanDevice::Functions& dfn, Vk
 inline void DestroyShader(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
                           VkShaderModule shader) {
   dfn.vkDestroyShaderModule(device, shader, nullptr);
+}
+
+inline VkResult CreateView(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImage image,
+                           const ViewDesc& desc, VkImageView& out) {
+  VkImageViewCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  info.image = image;
+  info.viewType = VkImageViewType(desc.type);
+  info.format = VkFormat(desc.format);
+  info.components = {VkComponentSwizzle(desc.swizzle[0]), VkComponentSwizzle(desc.swizzle[1]),
+                     VkComponentSwizzle(desc.swizzle[2]), VkComponentSwizzle(desc.swizzle[3])};
+  info.subresourceRange = {desc.aspects, 0, desc.levels, 0, desc.layers};
+  return dfn.vkCreateImageView(device, &info, nullptr, &out);
 }
 
 }  // namespace vulkan

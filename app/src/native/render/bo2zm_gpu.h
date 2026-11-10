@@ -219,6 +219,19 @@ struct PoolCounts {
   bool update_after_bind = false;
 };
 
+// A view of an image: its type, format, aspect, mips and layers, and the channel swizzle (Vulkan numbering:
+// 0 identity, 1 zero, 2 one, 3 to 6 red to alpha). Metal makes a texture view with the same swizzle.
+enum ViewType : uint32_t { kView2D = 1, kView3D = 2, kViewCube = 3 };
+constexpr uint32_t kAllLevels = ~0u;
+struct ViewDesc {
+  ViewType type = kView2D;
+  Format format = 0;
+  Aspects aspects = kAspectColor;
+  uint32_t levels = 1;
+  uint32_t layers = 1;
+  uint32_t swizzle[4] = {0, 0, 0, 0};
+};
+
 struct SamplerDesc {
   Filter mag = kFilterNearest;
   Filter min = kFilterNearest;
