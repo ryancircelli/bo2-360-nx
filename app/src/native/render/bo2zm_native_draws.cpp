@@ -4185,7 +4185,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const uint32_t vte = r[gr::XE_GPU_REG_PA_CL_VTE_CNTL];
     gpu::Viewport viewport{};
     float ndc[4] = {1.0f, 1.0f, 0.0f, 0.0f};
-    VkRect2D scissor{};
+    gpu::Rect scissor{};
     uint32_t framing_empty = 0;
     const bool framing_in_cache = framing_cache_ && framing_valid_ &&
                                    p.generation_framing == framing_generation_ && pass_series_ == framing_pass_series_;
@@ -4429,13 +4429,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
      */
     // Scissor test. All the state and the draw are sent as usual; the only change is that there are no
     // pixels to shade. It breaks the image: only for measuring the per-draw floor.
-    VkRect2D scissor_final = scissor;
+    gpu::Rect scissor_final = scissor;
     if (const uint32_t category_scissor = scissor_test_; category_scissor != 0) {
       const uint32_t category = TargetCategory(pitch, keys);
       static constexpr uint32_t kCategoryOf[6] = {0, kGpuShadows, kGpuScene, kGpu320,
                                                    kGpuSceneNoDepth, kGpuReflection};
       if (category_scissor <= 5 && category == kCategoryOf[category_scissor]) {
-        scissor_final.extent = {1, 1};
+        scissor_final.width = 1;
+        scissor_final.height = 1;
       }
     }
     /*
@@ -4443,7 +4444,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
      * smaller than what has already been seen drawn.
      */
     if (area_util_) {
-      const uint32_t until = uint32_t(std::max(0, scissor.offset.y + int32_t(scissor.extent.height)));
+      const uint32_t until = uint32_t(std::max(0, scissor.y + int32_t(scissor.height)));
       const uint32_t rounded = (until + 63u) & ~63u;
       uint32_t& pointed = HeightUsefulOf(pitch);  // without a map lookup on every draw
       if (rounded > pointed) {
@@ -4707,7 +4708,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       viewport_recorded_ = viewport;
     }
     if (!recorded || std::memcmp(&scissor_final, &scissor_recorded_, sizeof(scissor_final)) != 0) {
-      BO2ZM_SUB(4, gpu_.SetScissor(cmd, gpu::FromVk(scissor_final)));
+      BO2ZM_SUB(4, gpu_.SetScissor(cmd, scissor_final));
       scissor_recorded_ = scissor_final;
     }
     if (!recorded ||
@@ -4811,7 +4812,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                   p.vs->number, ps ? int(ps->number) : -1, type, count, pitch, masks, control_depth,
                   (control_depth >> 2) & 0x1, (control_depth >> 1) & 0x1, (control_depth >> 4) & 0x7,
                   viewport.x, viewport.y, viewport.width, viewport.height, viewport.min_depth, viewport.max_depth,
-                  scissor.offset.x, scissor.offset.y, scissor.extent.width, scissor.extent.height, with_indices);
+                  scissor.x, scissor.y, scissor.width, scissor.height, with_indices);
       // Diagnostic: positions of the first vertices and VS constants c0-c6, to compute the sun's z against
       // the scene depth.
       std::string positions;
@@ -4968,7 +4969,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     gpu_.BindSets(cmd, layout_pipeline_, 4, 1, &sets_ubo_[c.slot_ubo], 3, c.offsets_ubo.data());
     gpu_.SetViewport(cmd, c.viewport);
-    gpu_.SetScissor(cmd, gpu::FromVk(c.scissor));
+    gpu_.SetScissor(cmd, c.scissor);
     gpu_.SetBlendConstants(cmd, c.blend);
     gpu_.SetDepthBias(cmd, c.bias[0], c.bias[1]);
     if (c.with_stencil) {
@@ -5543,7 +5544,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * fused or not they give the same bits.
    */
   uint32_t ComputeFraming(const uint32_t* r, uint32_t vte, bool no_clip, uint32_t mode_sc, gpu::Viewport& viewport,
-                            float ndc[4], VkRect2D& scissor) {
+                            float ndc[4], gpu::Rect& scissor) {
     float scale_x = (vte & 0x1) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XSCALE]) : 1.0f;
     float center_x = (vte & 0x2) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_XOFFSET]) : 0.0f;
     float scale_y = (vte & 0x4) ? Float(r[gr::XE_GPU_REG_PA_CL_VPORT_YSCALE]) : 1.0f;
@@ -5595,7 +5596,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       viewport.width = width;
       viewport.height = height;
     }
-    scissor = VkRect2D{};
+    scissor = gpu::Rect{};
     if (viewport.width < 1.0f || std::abs(viewport.height) < 1.0f) {
       return 1;
     }
@@ -5622,12 +5623,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (x1 <= x0 || y1 <= y0) {
       return 2;
     }
-    scissor = VkRect2D{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+    scissor = gpu::Rect{x0, y0, uint32_t(x1 - x0), uint32_t(y1 - y0)};
     return 0;
   }
 
   // The C1 guard. The current computation against the saved one, byte by byte.
-  void CompareFraming(const gpu::Viewport& viewport, const float ndc[4], const VkRect2D& scissor, uint32_t empty) {
+  void CompareFraming(const gpu::Viewport& viewport, const float ndc[4], const gpu::Rect& scissor, uint32_t empty) {
     ++framing_checked_;
     const bool equal = empty == framing_empty_ &&
                        std::memcmp(&viewport, &framing_viewport_, sizeof(viewport)) == 0 &&
@@ -5641,9 +5642,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
                    "recomputed one",
                    framing_checked_, empty, framing_empty_, viewport.x, viewport.y, viewport.width,
                    viewport.height, framing_viewport_.x, framing_viewport_.y, framing_viewport_.width,
-                   framing_viewport_.height, scissor.offset.x, scissor.offset.y, scissor.extent.width,
-                   scissor.extent.height, framing_scissor_.offset.x, framing_scissor_.offset.y,
-                   framing_scissor_.extent.width, framing_scissor_.extent.height);
+                   framing_viewport_.height, scissor.x, scissor.y, scissor.width, scissor.height, framing_scissor_.x,
+                   framing_scissor_.y, framing_scissor_.width, framing_scissor_.height);
     } else if (framing_checked_ == kFramingsACheck) {
       BO2ZM_REPORT_RING("[native] C6 cached framing: {} hits checked against the computation, 0 mismatches; still "
                   "checking 1 in 4096", framing_checked_);
@@ -16547,7 +16547,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool state_recorded_ = false;
   uint64_t push_recorded_[3] = {};
   gpu::Viewport viewport_recorded_{};
-  VkRect2D scissor_recorded_{};
+  gpu::Rect scissor_recorded_{};
   float blend_recorded_[4] = {};
   float bias_recorded_[2] = {};  // depth bias: constant and slope
   float bias_warned_[2] = {};
@@ -16646,7 +16646,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint64_t framing_pass_series_ = 0;
   uint64_t pass_series_ = 0;                // incremented on every BeginPass
   gpu::Viewport framing_viewport_{};
-  VkRect2D framing_scissor_{};
+  gpu::Rect framing_scissor_{};
   float framing_ndc_[4] = {};
   uint32_t framing_empty_ = 0;
   uint64_t framing_hits_ = 0;         // since start-up (the guard)
@@ -16703,7 +16703,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     std::array<uint32_t, 3> offsets_ubo{};
     uint32_t slot_ubo = 0;
     gpu::Viewport viewport{};
-    VkRect2D scissor{};
+    gpu::Rect scissor{};
     float blend[4] = {};
     float bias[2] = {};
     bool with_stencil = false;
