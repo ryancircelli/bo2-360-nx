@@ -140,6 +140,12 @@ class SharedMemory {
   virtual bool UploadRanges(
       const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) = 0;
 
+  // Called at the end of every successful RequestRanges with the merged (start, length) byte
+  // ranges, after any uploads for them were recorded.
+  virtual void OnRangesRequested(const std::vector<std::pair<uint32_t, uint32_t>>& ranges) {
+    (void)ranges;
+  }
+
  private:
   memory::Memory& memory_;
 

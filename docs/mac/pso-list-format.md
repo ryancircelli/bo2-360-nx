@@ -109,6 +109,35 @@ C	<key>	<cs>	<uses>
   the Xenos microcode hash replaces the shader index, and the plugin writes `# renderer	xenos-metal`. The loader refuses
   a list whose `renderer` differs from the running one.
 
+## The native Vulkan renderer (MoltenVK), as built
+
+The native renderer already had its own binary list and driver cache in one file (`bo2zm_native_pipelines.bin`, the
+list plus `vkGetPipelineCacheData`) and a precompile that runs behind a progress screen before the game starts when
+the build, driver or shader pack changed (`app/src/native/render/bo2zm_native_precompile.h`). The text list sits on
+top of that:
+
+* `--bo2zm_pso_record=<path>` or `REX_BO2ZM_PSO_RECORD` writes every pipeline the session creates, once, flushed
+  line by line, so a run the harness stops still leaves a usable list (only the `# end` line is missing then).
+* `bo2zm_pso.psolist` beside the executable, in `Contents/Resources/` or `Contents/Resources/runtime/` (or
+  `--bo2zm_pso_list=<path>`) is read at start-up. Its pipelines join the binary list, so the precompile builds them
+  before the first match. Its name and size are part of the precompile stamp, so a new list triggers a pass.
+* `--bo2zm_pso_verify` or `REX_BO2ZM_PSO_VERIFY=1` logs `[pso] unlisted pipeline <key> (<ms> ms)` and writes a
+  `compile` perf log event with `unlisted=1`.
+* `renderer` is `native-vulkan`. `shaderpack` holds the shader library's 16-hex identity (the same value the
+  pipelines file's stamp uses), not a sha256: the loader checks each pipeline's shader content hashes anyway, so a
+  line whose shaders left the pack is skipped one by one.
+* Each `G` line's state ends in backend extras: `x:spec`, `x:restart` and `x:rec=<hex>`, the renderer's own pipeline
+  record (key, shader hashes, vertex attributes and strides). The loader rebuilds the pipeline from `x:rec`; the
+  standard fields are there for `tools/mac/pso_list.py diff` and for other backends. A record from another build of
+  the renderer (other size) is ignored.
+* The pipeline cache goes to `cache/` beside the executable, or to `~/Library/Caches/bo2-360-nx/` when the game runs
+  from an `.app` bundle (`--bo2zm_native_cache_dir` overrides both).
+* MoltenVK's `VkPipelineCache` only holds the SPIR-V to MSL translation; the Metal pipeline state is made again every
+  time a pipeline is created (about 1 to 10 ms each, from Metal's own shader cache when it is warm). So on macOS the
+  precompile keeps the pipelines it creates and hands them to the ring (`bo2zm_native_precompile_keep`, on by
+  default on macOS), and runs on every start, not only when the stamp changed; with warm caches the pass is short.
+  While recording a list the pipelines are not kept, so the record still sees what the session asks for.
+
 ## Open questions for the renderer author
 
 1. Whether the native renderer creates pipelines lazily at draw time (then recording is a hook in that function) or

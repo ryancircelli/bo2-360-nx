@@ -151,6 +151,11 @@ class VulkanCommandProcessor : public CommandProcessor {
   }
 
   bool submission_open() const { return submission_open_; }
+
+  // Shared memory upload hoisting: whether a render target cache render pass is open, and the
+  // deferred command stream position of its beginning (commands moved there execute before it).
+  bool in_render_pass() const { return in_render_pass_; }
+  size_t render_pass_hoist_position() const { return render_pass_hoist_position_; }
   uint64_t GetCurrentSubmission() const {
     return submission_completed_ + uint64_t(submissions_in_flight_fences_.size()) + 1;
   }
@@ -794,6 +799,7 @@ class VulkanCommandProcessor : public CommandProcessor {
   VkRenderPass current_render_pass_;
   const VulkanRenderTargetCache::Framebuffer* current_framebuffer_;
   bool in_render_pass_ = false;
+  size_t render_pass_hoist_position_ = 0;
 
   // Currently bound graphics pipeline, either from the pipeline cache (with
   // potentially deferred creation - current_external_graphics_pipeline_ is

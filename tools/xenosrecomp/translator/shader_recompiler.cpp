@@ -106,6 +106,18 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
     { DeclUsage::Position, 1, 15 },
 };
 
+// BO2ZM_RECOMP: inputs given, in this order, to vertex fetches without an element in the container. Keep in step
+// with kUndeclaredFetchUses in app/src/native/render/bo2zm_shader_index.cpp.
+static constexpr std::pair<DeclUsage, uint32_t> UNDECLARED_FETCH_USES[] =
+{
+    { DeclUsage::Position, 0 },
+    { DeclUsage::Normal, 0 },
+    { DeclUsage::Tangent, 0 },
+    { DeclUsage::Binormal, 0 },
+    { DeclUsage::Color, 0 },
+    { DeclUsage::Color, 1 },
+};
+
 static constexpr std::pair<DeclUsage, size_t> INTERPOLATORS[] =
 {
     { DeclUsage::TexCoord, 0 },
@@ -207,7 +219,42 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
 
     auto findResult = vertexElements.find(address);
     if (findResult == vertexElements.end())
-        throw std::runtime_error("vertex FETCH without a declared element");
+    {
+        /*
+         * BO2ZM_RECOMP: the XDK's own vertex shaders (ShadeVertexPassThru, ShadeVertexPassThruPosOnly) fetch
+         * without any element in their container. Each such fetch, in program order, takes the next free one of
+         * UNDECLARED_FETCH_USES as its input, and the native renderer (SynthesizeElements in
+         * bo2zm_shader_index.cpp) gives the same fetches the same uses, so it binds their streams like any other.
+         */
+        const VertexElement* element = nullptr;
+        for (auto& [usage, usageIndex] : UNDECLARED_FETCH_USES)
+        {
+            bool taken = false;
+            for (auto& [a, e] : vertexElements)
+                taken |= e.usage == usage && e.usageIndex == usageIndex;
+            if (taken)
+                continue;
+            VertexElement e{};
+            e.address = address;
+            e.usage = usage;
+            e.usageIndex = usageIndex;
+            element = &vertexElements.emplace(address, e).first->second;
+            break;
+        }
+        if (!element)
+            throw std::runtime_error(fmt::format("vertex FETCH at {} without a declared element, and no free input left", address));
+        for (auto& usageLocation : USAGE_LOCATIONS)
+        {
+            if (usageLocation.usage == element->usage && usageLocation.usageIndex == element->usageIndex)
+            {
+                undeclaredInputs += fmt::format("\t[[vk::location({})]] ", usageLocation.location);
+                break;
+            }
+        }
+        undeclaredInputs += fmt::format("in {0} i{1}{2} : {3}{2},\n", USAGE_TYPES[uint32_t(element->usage)],
+            USAGE_VARIABLES[uint32_t(element->usage)], uint32_t(element->usageIndex), USAGE_SEMANTICS[uint32_t(element->usage)]);
+        findResult = vertexElements.find(address);
+    }
 
 #ifdef BO2ZM_RECOMP
     // BO2ZM: D3D patches the fetch swizzle according to the vertex declaration; the
@@ -1308,19 +1355,34 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
 
         case RegisterSet::Sampler:
         {
+            /*
+             * BO2ZM_RECOMP: a vertex shader's sampler k reads fetch constant 16 + k (its tfetch says constIndex
+             * 16 + k). Its words are in their own part of the shared constants (kWordsVsSlots and the functions
+             * after it in bo2zm_native_draws.cpp): indices at byte 720 + dimension * 16 + k * 4, sampler 768 + k * 4,
+             * 1/size 784 + k * 8, fetch scale 816 + k * 4, coordinate scale 832 + k * 8.
+             */
+            const bool slotVs = !isPixelShader;
+            const uint32_t k = constantInfo->registerIndex;
+            if (slotVs && k >= 4)
+                throw std::runtime_error(fmt::format("vertex shader sampler {} past the 4 the renderer gives them", k));
+            auto byteTexture = [&](size_t j) { return slotVs ? uint32_t(720 + j * 16 + k * 4) : uint32_t(j * 64 + k * 4); };
+            const uint32_t byteSampler = slotVs ? 768 + k * 4 : uint32_t(std::size(TEXTURE_DIMENSIONS) * 64 + k * 4);
             for (size_t j = 0; j < std::size(TEXTURE_DIMENSIONS); j++)
             {
                 println("#define {}_Texture{}DescriptorIndex (BO2ZM_UBO ? BO2ZM_SHARED_UINT({}) : vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {}))",
-                    constantName, TEXTURE_DIMENSIONS[j], j * 64 + constantInfo->registerIndex * 4, j * 64 + constantInfo->registerIndex * 4);
+                    constantName, TEXTURE_DIMENSIONS[j], byteTexture(j), byteTexture(j));
             }
+            // BO2ZM_RECOMP: no 1D heap. A 1D fetch reads the slot's 2D texture (tfetch1D in shader_common.h): the
+            // renderer binds there what it has for the fetch constant (an empty texture for 1D data, for now).
+            println("#define {0}_Texture1DDescriptorIndex {0}_Texture2DDescriptorIndex", constantName);
 
             println("#define {}_SamplerDescriptorIndex (BO2ZM_UBO ? BO2ZM_SHARED_UINT({}) : vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {}))",
-                constantName, std::size(TEXTURE_DIMENSIONS) * 64 + constantInfo->registerIndex * 4, std::size(TEXTURE_DIMENSIONS) * 64 + constantInfo->registerIndex * 4);
+                constantName, byteSampler, byteSampler);
 
             // 1/size of the host image of that slot, which the renderer writes at byte
             // 360 + slot * 8 of the shared constants (right after g_InputRemap).
             {
-                const uint32_t invBase = 360 + constantInfo->registerIndex * 8;
+                const uint32_t invBase = slotVs ? 784 + k * 8 : 360 + k * 8;
                 println("#define {}_InvSize (BO2ZM_UBO ? float2(BO2ZM_SHARED_FLOAT({}), BO2ZM_SHARED_FLOAT({})) : vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + {}))",
                     constantName, invBase, invBase + 4, invBase);
             }
@@ -1328,19 +1390,19 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             // num_format is integer), which the renderer writes at byte 488 + slot * 4. BO2's tonemap samples the scene
             // with exp_adjust +1, and its luminance chain reads integer textures with exp_adjust -11.
             {
-                const uint32_t scaleBase = 488 + constantInfo->registerIndex * 4;
+                const uint32_t scaleBase = slotVs ? 816 + k * 4 : 488 + k * 4;
                 println("#define {}_FetchScale (BO2ZM_UBO ? BO2ZM_SHARED_FLOAT({}) : vk::RawBufferLoad<float>(g_PushConstants.SharedConstants + {}))",
                     constantName, scaleBase, scaleBase);
             }
 
             // BO2ZM_RECOMP: normalized 2D coordinate scale of the slot (guest size / host size), at byte 560 + slot * 8.
             {
-                const uint32_t coordBase = 560 + constantInfo->registerIndex * 8;
+                const uint32_t coordBase = slotVs ? 832 + k * 8 : 560 + k * 8;
                 println("#define {}_FetchScaleCoord (BO2ZM_UBO ? float2(BO2ZM_SHARED_FLOAT({}), BO2ZM_SHARED_FLOAT({})) : vk::RawBufferLoad<float2>(g_PushConstants.SharedConstants + {}))",
                     constantName, coordBase, coordBase + 4, coordBase);
             }
 
-            samplers.emplace(constantInfo->registerIndex, constantName);
+            samplers.emplace(slotVs ? 16 + k : k, constantName);
             break;
         }
 
@@ -1505,6 +1567,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             vertexElements.emplace(uint32_t(vertexElement.address), vertexElement);
         }
 
+        undeclaredInputsAt = out.size();  // BO2ZM_RECOMP
+
     #ifdef UNLEASHED_RECOMP
         if (hasIndexCount)
         {
@@ -1574,6 +1638,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
 
                 println("\tint4 i{} = int4({}, {}, {}, {});",
                     (definition->registerIndex - 8992) / 4 + i, u.b.x, u.b.y, u.b.z, u.b.w);
+                loopsLiteral.insert((definition->registerIndex - 8992) / 4 + i);  // BO2ZM_RECOMP
             }
             definitions += 2;
             definitions += definition->count;
@@ -1861,6 +1926,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
                     print("[unroll] ");
                 #endif
                     println("for (aL = 0; aL < i{}.x; aL++)", uint32_t(cfInstr.loopStart.loopId));
+                    loopsUsed.insert(uint32_t(cfInstr.loopStart.loopId));  // BO2ZM_RECOMP
                     indent();
                     out += "{\n";
                     ++indentation;
@@ -1882,6 +1948,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
                 {
                     out += "\t\t\t++aL;\n";
                     println("\t\t\tif (aL < i{}.x)", uint32_t(cfInstr.loopEnd.loopId));
+                    loopsUsed.insert(uint32_t(cfInstr.loopEnd.loopId));  // BO2ZM_RECOMP
                     out += "\t\t\t{\n";
                     println("\t\t\t\tpc = {};", uint32_t(cfInstr.loopEnd.address));
                     out += "\t\t\t\tcontinue;\n";
@@ -2141,5 +2208,19 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         if (usedExtra[i])
             extra += fmt::format("\tfloat4 r{} = 0.0;\n", i);
     }
+    /*
+     * BO2ZM_RECOMP: loop constants with no literal in the shader come from the draw. The renderer writes the
+     * iteration count of loop i (SQ_LOOP_CONST bits 0-7) to byte i % 4 of word 172 + i / 4 of the shared constants.
+     */
+    for (uint32_t loop : loopsUsed)
+    {
+        if (loopsLiteral.count(loop) || loop >= 32)
+            continue;
+        const uint32_t byte = 688 + (loop / 4) * 4;
+        extra += fmt::format("\tint4 i{0} = int4(int(((BO2ZM_UBO ? BO2ZM_SHARED_UINT({1}) : vk::RawBufferLoad<uint>(g_PushConstants.SharedConstants + {1})) >> {2}) & 0xFF), 0, 1, 0);\n",
+            loop, byte, (loop % 4) * 8);
+    }
     out.insert(extraRegistersAt, extra);
+    if (!undeclaredInputs.empty())  // BO2ZM_RECOMP: before the body, which only now knows them
+        out.insert(undeclaredInputsAt, undeclaredInputs);
 }

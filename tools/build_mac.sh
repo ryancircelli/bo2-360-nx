@@ -17,6 +17,9 @@
 #
 # Inputs (override with the variables):
 #   BO2_ISO   the disc image (default: ~/Games/Xbox360/roms/Call of Duty - Black Ops II (World).iso)
+#   BO2_OUT   the app build folder (default: $BO2_BUILD/out/mac-arm64); BO2_RUN the play folder (default:
+#             $BO2_BUILD/run), so parallel worktrees keep their own; BO2_SHADERS the shader pack folder (default:
+#             $BO2_BUILD/shaders, its work files beside it in <folder>-work)
 #   BO2_TU    the Title Update 18 package (default: the only file in $BO2_BUILD/TU/), as dumped from a console
 #             (an STFS/LIVE package holding default_mp.xexp). Its default_mp.xexp must be TU18's.
 #   VULKAN_SDK the LunarG Vulkan SDK's macOS folder, for dxc (default: the newest ~/VulkanSDK/*/macOS)
@@ -26,9 +29,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BO2_BUILD="${BO2_BUILD:-$HOME/Games/Xbox360/bo2-build}"
 BO2_ISO="${BO2_ISO:-$HOME/Games/Xbox360/roms/Call of Duty - Black Ops II (World).iso}"
 DATA="$BO2_BUILD/data"
-OUT="$BO2_BUILD/out/mac-arm64"
+OUT="${BO2_OUT:-$BO2_BUILD/out/mac-arm64}"
 HOST="$ROOT/out/host-mac"
-RUN="$BO2_BUILD/run"
+RUN="${BO2_RUN:-$BO2_BUILD/run}"
+SHADERS="${BO2_SHADERS:-$BO2_BUILD/shaders}"
 PY="${PYTHON:-python3}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"
 
@@ -140,7 +144,7 @@ if want shaders; then
   [ -x "$VULKAN_SDK/bin/dxc" ] ||
     { echo "dxc not found: install the LunarG Vulkan SDK for macOS (vulkan.lunarg.com) or set VULKAN_SDK" >&2; exit 1; }
   "$PY" -I "$ROOT/tools/mac/build_shaders.py" --data "$DATA" --image "$ROOT/work/dump_tu18/default_mp.image.bin" \
-    --work "$BO2_BUILD/shaders-work" --out "$BO2_BUILD/shaders"
+    --work "$SHADERS-work" --out "$SHADERS"
 fi
 
 if want app; then
@@ -155,7 +159,7 @@ if want app; then
     "-DCMAKE_C_FLAGS_RELEASE=$RELEASE" "-DCMAKE_CXX_FLAGS_RELEASE=$RELEASE" \
     "-DCMAKE_BUILD_RPATH=@executable_path" \
     "-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out" \
-    -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
+    -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_METAL=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
     "-DBO2ZM_BUILD_ID=mac-arm64-$(date +%Y%m%d-%H%M%S)" "-DREXSDK_DIR=$ROOT/sdk" > /dev/null
   G="$ROOT/app/generated/default_mp"
   "$PY" "$ROOT/tools/direct_calls.py" --check --gen "$G"
@@ -166,6 +170,6 @@ fi
 
 if want package; then
   echo "== package"
-  bash "$ROOT/tools/mac/package.sh" "$OUT" "$RUN" "$BO2_BUILD/shaders" "$DATA"
+  bash "$ROOT/tools/mac/package.sh" "$OUT" "$RUN" "$SHADERS" "$DATA"
   echo "ready: open $RUN/bo2zm.command (or run it from a terminal)"
 fi

@@ -1,18 +1,18 @@
-# 4-player split screen (Town). Player 0 uses BO2ZM_TEST_BUTTONS, players 1-3 use _P2.._P4.
-# The local lobby opens 10-30 s after start (later under load) and waits BO2ZM_TEST_START_WAIT_S; players 2-4 join
-# with A ("Press A To Play"; Start does nothing there). Each presses A twice so a slow lobby still catches one; a
-# press after the match has started is ignored. The match starts about 80 s in. Measured on purple-fix, 2026-11-10:
-# all four "local player" lines in three runs out of three.
-duration_s = 300
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to splitscreen4.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
+# Players 2 to 4 join with A ("Press A To Play"; Start does nothing in the lobby), 2 s apart, and each presses A a
+# second time 6 s later: the lobby catches one of the two even when it is slow to take input under load, and a
+# player who already joined is not affected by the second press. The lobby waits BO2ZM_TEST_START_WAIT_S from when
+# it opens, so all presses (the last at 13 s) land well inside it.
+duration_s = 340
 players = 4
 BO2ZM_TEST_START = zm_transit town zstandard zsurvival
-BO2ZM_TEST_START_WAIT_S = 50
-BO2ZM_TEST_GOD = true
+BO2ZM_TEST_START_WAIT_S = 55
 BO2ZM_TEST_ALL_GOD = true
 BO2ZM_BENCHMARK = true
 BO2ZM_BENCHMARK_S = 180
-BO2ZM_TEST_BUTTONS =
-BO2ZM_TEST_BUTTONS_P2 = 33:a,45:a
-BO2ZM_TEST_BUTTONS_P3 = 35:a,47:a
-BO2ZM_TEST_BUTTONS_P4 = 37:a,49:a
+BO2ZM_TEST_BUTTONS = wait_log "the game's client is in a match" 90, 40-70:look_right, 70-100:up, 100-130:look_left, 130-160:up
+BO2ZM_TEST_BUTTONS_P2 = wait_log Local lobby open 60, 3:a, 9:a
+BO2ZM_TEST_BUTTONS_P3 = wait_log Local lobby open 60, 5:a, 11:a
+BO2ZM_TEST_BUTTONS_P4 = wait_log Local lobby open 60, 7:a, 13:a
 compare_quadrants = true

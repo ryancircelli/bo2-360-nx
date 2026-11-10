@@ -98,4 +98,10 @@ copied from it, so no notice is needed.
 Taken into this sdk/ (by cherry-pick from the mac-perf branch): the shared memory unlink, the arm64 FPSCR rounding
 table, the 16-in-32 copy swap word count, the append-mode rewind, non-Space fullscreen and the MoltenVK precise math
 default. Not taken because this copy already had its own fix from the Horizon port: the POSIX timed wait spin and the
-timer queue sleep. The Xenos (SDK renderer) changes are not taken: bo2-360-nx draws with its own native renderer.
+timer queue sleep.
+
+Since the Mac build defaults to the SDK's Xenos path (Metal plugin, with Vulkan on MoltenVK as the fallback), three
+Xenos changes were taken as well: uploads out of open render passes, primitive restart on strips, and creating stored
+pipelines in the background. All three are in the Vulkan backend, so they help only the Vulkan fallback; the Metal
+plugin has its own presenter, shared memory and pipeline code. The presenter final-effect fix was already here. Not
+taken: FMA contraction in pixel shaders, because it trades the guest's precision for speed.

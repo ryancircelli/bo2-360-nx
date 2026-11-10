@@ -72,7 +72,9 @@ REXCVAR_DEFINE_STRING(hid_virtual_pad_script, "", "Input",
                       "hid_virtual_pads is 0");
 REXCVAR_DEFINE_STRING(hid_virtual_pad1, "", "Input",
                       "Virtual pad 1 script: \"25:a,60-90:stick_up+look_right,100-105:disconnect\" "
-                      "(seconds from startup). Overrides the script file");
+                      "(seconds from startup). \"wait_event <name> [timeout_s]\" or "
+                      "\"wait_log <text> [timeout_s]\" waits for the game, and later times count "
+                      "from there. Overrides the script file");
 REXCVAR_DEFINE_STRING(hid_virtual_pad2, "", "Input", "Virtual pad 2 script (see hid_virtual_pad1)");
 REXCVAR_DEFINE_STRING(hid_virtual_pad3, "", "Input", "Virtual pad 3 script (see hid_virtual_pad1)");
 REXCVAR_DEFINE_STRING(hid_virtual_pad4, "", "Input", "Virtual pad 4 script (see hid_virtual_pad1)");

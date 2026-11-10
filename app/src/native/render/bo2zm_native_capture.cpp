@@ -16,6 +16,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
@@ -147,11 +148,18 @@ std::vector<uint8_t> EncodePng(const rex::ui::RawImage& image) {
   return png;
 }
 
+// Captures go to $BO2_LOG_DIR/captures when the launcher gives one (the packed Mac app: a bundle must not be written to),
+// otherwise to captures/ beside the executable.
+std::filesystem::path CaptureFolder() {
+  if (const char* d = std::getenv("BO2_LOG_DIR"); d && *d) return std::filesystem::path(d) / "captures";
+  return rex::filesystem::GetExecutableFolder() / "captures";
+}
+
 // The capture thread. It takes one capture every every_s seconds (starting after bo2zm_capture_from_s, at most max
 // of them; every_s 0 means none), plus the captures RequestCapture asks for, each when it falls due and under its own
 // name.
 void Loop(std::function<rex::ui::Presenter*()> get_presenter, int every_s, int max) {
-  const std::filesystem::path folder = rex::filesystem::GetExecutableFolder() / "captures";
+  const std::filesystem::path folder = CaptureFolder();
   const auto start = std::chrono::steady_clock::now();
   auto next = start + std::chrono::seconds(REXCVAR_GET(bo2zm_capture_from_s)) + std::chrono::seconds(every_s);
   int n = 0;
@@ -271,7 +279,7 @@ void CaptureNowForTests(rex::ui::Presenter* presenter, const std::string& label)
     REXLOG_WARN("[capture] {}: there is no image to capture", label);
     return;
   }
-  const std::filesystem::path folder = rex::filesystem::GetExecutableFolder() / "captures";
+  const std::filesystem::path folder = CaptureFolder();
   std::error_code ec;
   std::filesystem::create_directories(folder, ec);
   const std::filesystem::path path = folder / (label + ".png");

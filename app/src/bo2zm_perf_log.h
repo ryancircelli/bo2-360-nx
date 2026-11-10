@@ -27,6 +27,10 @@ struct Counters {
 bool Enabled();
 // A presented frame. Ring thread.
 void OnPresent(const Counters& counters);
+// For the emulated GPU plugins (xenos on Vulkan, Metal), which have no counters of their own: every frame the guest
+// presents is logged through rex::graphics::SetSwapHook with its frame time only (cpu, gpu and present wait read "-"
+// or 0). renderer is the header's renderer name, e.g. "xenos-vulkan" or "metal". Call once after setup.
+void InstallSwapHook(std::string_view renderer);
 // A GPU submission finished: its number (the one jobs_submitted counts) and the span of its timestamps, if it had any.
 void NoteGpuJob(uint64_t order, uint64_t ns, bool measured);
 // A pipeline compiled synchronously on the ring thread, taking ns. Ring thread.

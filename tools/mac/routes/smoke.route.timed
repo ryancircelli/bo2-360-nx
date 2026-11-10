@@ -1,0 +1,6 @@
+# Boot to the home menu and sit there. Checks the app starts, renders, and exits cleanly.
+# key = value, one per line; the value is a REX_ cvar suffix (REX_<NAME> env).
+duration_s = 45
+players = 1
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_BUTTONS =

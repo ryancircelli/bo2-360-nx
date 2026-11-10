@@ -14,6 +14,7 @@
 //                    not wait for them).
 //   draws            draws read from the ring.
 #include "bo2zm_perf_log.h"
+#include <rex/graphics/swap_hook.h>
 
 #include "bo2zm_cheats.h"
 
@@ -51,6 +52,13 @@ REXCVAR_DEFINE_STRING(bo2zm_perf_log, "", "BO2",
 
 namespace bo2zm::perf_log {
 namespace {
+// The renderer line of the header; InstallSwapHook changes it for the emulated GPU plugins.
+const char* g_renderer =
+#if defined(__APPLE__)
+    "native-moltenvk";
+#else
+    "native-vulkan";
+#endif
 
 using Clock = std::chrono::steady_clock;
 
@@ -235,11 +243,7 @@ class Log {
       }
     };
     meta("build", BO2ZM_BUILD_ID);
-#if defined(__APPLE__)
-    meta("renderer", "native-moltenvk");
-#else
-    meta("renderer", "native-vulkan");
-#endif
+    meta("renderer", g_renderer);
     for (const auto& [k, v] : meta_) {
       meta(k, v);
     }
@@ -374,6 +378,28 @@ void OnPresent(const Counters& counters) {
   if (Enabled()) {
     TheLog().OnPresent(counters);
   }
+}
+
+void InstallSwapHook(std::string_view renderer) {
+  if (!Enabled()) {
+    return;
+  }
+  static std::string name;
+  name = std::string(renderer);
+  g_renderer = name.c_str();
+  rex::graphics::SetGpuJobHook([](uint64_t order, uint64_t ns, bool measured) { NoteGpuJob(order, ns, measured); });
+  rex::graphics::SetSwapHook([](uint32_t width, uint32_t height) {
+    // Cumulative counters of the GPU plugin (Metal fills them; the Xenos path leaves them at zero).
+    auto& st = rex::graphics::GetPerfStats();
+    Counters c;
+    c.ns_working = st.ns_working.load(std::memory_order_relaxed);
+    c.ns_present_wait = st.ns_present_wait.load(std::memory_order_relaxed);
+    c.draws = st.draws.load(std::memory_order_relaxed);
+    c.jobs_submitted = st.jobs_submitted.load(std::memory_order_relaxed);
+    c.width = width;
+    c.height = height;
+    OnPresent(c);
+  });
 }
 
 void NoteGpuJob(uint64_t order, uint64_t ns, bool measured) {

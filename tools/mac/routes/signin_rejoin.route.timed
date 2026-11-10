@@ -1,0 +1,9 @@
+# Sign-in join test (research/splitscreen-signin.md). Fails if the log has a STUB line for XamUserGetAgeGroup or XamUserGetMembershipTier.
+# Player 2 joins at 44 s, leaves (B) at 54 s, joins again at 62 s; lobby open 40 s.
+players = 2
+duration_s = 190
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_START_WAIT_S = 70
+BO2ZM_TEST_BUTTONS_P2 = 44:a,54:b,62:a

@@ -238,13 +238,23 @@ class VulkanPipelineCache {
     // destroyed by it while the pipeline cache is active.
     std::atomic<const PipelineLayoutProvider*> pipeline_layout{nullptr};
     std::atomic<bool> is_placeholder{false};
+    // Loaded from the persistent storage and created in the background (pipeline stays null and
+    // is_placeholder true until then, so draws using it are skipped). A storage pipeline the game
+    // needs before its turn is queued again in creation_urgent_queue_; whoever claims it first
+    // creates it.
+    bool from_storage = false;
+    std::atomic<bool> creation_claimed{false};
+    bool urgent_requested = false;  // Command processor thread only.
     Pipeline() = default;
     Pipeline(const PipelineLayoutProvider* pipeline_layout_provider)
         : pipeline_layout(pipeline_layout_provider) {}
     Pipeline(const Pipeline& other)
         : pipeline(other.pipeline.load(std::memory_order_acquire)),
           pipeline_layout(other.pipeline_layout.load(std::memory_order_acquire)),
-          is_placeholder(other.is_placeholder.load(std::memory_order_acquire)) {}
+          is_placeholder(other.is_placeholder.load(std::memory_order_acquire)),
+          from_storage(other.from_storage),
+          creation_claimed(other.creation_claimed.load(std::memory_order_acquire)),
+          urgent_requested(other.urgent_requested) {}
     Pipeline& operator=(const Pipeline& other) {
       if (this == &other) {
         return *this;
@@ -254,6 +264,10 @@ class VulkanPipelineCache {
                             std::memory_order_release);
       is_placeholder.store(other.is_placeholder.load(std::memory_order_acquire),
                            std::memory_order_release);
+      from_storage = other.from_storage;
+      creation_claimed.store(other.creation_claimed.load(std::memory_order_acquire),
+                             std::memory_order_release);
+      urgent_requested = other.urgent_requested;
       return *this;
     }
   };
@@ -462,6 +476,21 @@ class VulkanPipelineCache {
   std::priority_queue<PipelineCreationArguments, std::vector<PipelineCreationArguments>,
                       PipelineCreationArgumentsPriorityComparator>
       creation_queue_;
+  // Storage pipelines that a draw needs before the background creation reached them.
+  std::deque<PipelineCreationArguments> creation_urgent_queue_;
+  std::atomic<uint32_t> background_creation_total_{0};
+  std::atomic<uint32_t> background_creation_done_{0};
+  uint64_t background_creation_start_ticks_ = 0;
+  // Next creation request (urgent first), skipping storage pipelines already claimed. Requires
+  // creation_request_lock_. False when both queues are empty.
+  bool PopCreationLocked(PipelineCreationArguments& out);
+  bool CreationQueuesEmptyLocked() const {
+    return creation_queue_.empty() && creation_urgent_queue_.empty();
+  }
+  void CreateDequeued(const PipelineCreationArguments& creation_arguments);
+  // Added to the priority of pipelines requested by draws so they go before the background
+  // creation of storage pipelines.
+  static constexpr uint8_t kRuntimePriorityBoost = 4;
   size_t creation_threads_busy_ = 0;
   bool startup_loading_ = false;
   std::unique_ptr<rex::thread::Event> creation_completion_event_;

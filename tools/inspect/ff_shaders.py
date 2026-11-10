@@ -12,7 +12,8 @@ function stores the 32 key bytes as immediates and memcpy's them into the loader
 folder outside the repo (default: %TEMP%/bo2_ff); the tool refuses to write inside the repo.
 
 usage: python -I tools/inspect/ff_shaders.py <file.ff> [...] [--out DIR] [--xex-image IMG | --key-file FILE]
-                                             [--list N] [--dump]
+                                             [--list N] [--dump] [--image-shaders]
+--image-shaders adds the shaders linked into the XEX image itself (find_image_shaders), written to <out>/<image>_shaders/.
 """
 import argparse
 import hashlib
@@ -686,7 +687,10 @@ def find_shaders(zone):
         physical part (microcode, physicalSize bytes)
         cached part (RUNTIME_HDR zeros + container, cachedSize bytes)
     so the container's own microcode is not next to it; the blob XenosRecomp wants is container || physical part.
-    One other form exists ("shaders/gpu_transfer/gpu_transfer.xpu"): u32 size, name\\0, container || physical."""
+    One other form exists ("shaders/gpu_transfer/gpu_transfer.xpu"): u32 size, name\\0, container || physical.
+    Left out on purpose: the two vertex shaders of that form, gpu_transfer.xvu and gpu_transfer_128in256.xvu (flags
+    0x102A1111). They write memory (memexport) for texture streaming and draw nothing; the native renderer runs
+    their draws on the CPU, and only for draws whose vertex shader is not in the library."""
     shaders = []
     for m in re.finditer(rb"\x10\x2A\x11[\x00\x01]", zone):
         c = m.start()
@@ -738,6 +742,34 @@ def find_shaders(zone):
     return shaders
 
 
+def find_image_shaders(path):
+    """Find the shader containers in a decrypted XEX image (PE, as written by xexdump): shaders that the game's code
+    creates itself, with D3D's CreateVertexShader/CreatePixelShader, from microcode linked into the executable. No
+    fastfile holds them. In TU18's default_mp image these are six of BO2's own (compiler 2.0.21119; sub_824E3108
+    creates them at renderer start-up: five pixel shaders reading texIn/texIn0/texIn1 and one vertex shader) and the
+    XDK libraries' (compiler 2.0.9407), which this game never creates. In the image a container is followed by its
+    physical part (the microcode), so the blob XenosRecomp wants, container || physical, is contiguous.
+    Returns records shaped as find_shaders' (record = the container's virtual address)."""
+    d = open(path, "rb").read()
+    if d[:2] != b"MZ":
+        raise ValueError(f"{path}: not a PE image")
+    pe = struct.unpack_from("<I", d, 0x3C)[0]
+    base = struct.unpack_from("<I", d, pe + 24 + 28)[0]
+    shaders = []
+    for m in re.finditer(rb"\x10\x2A\x11[\x00\x01]", d):
+        c = m.start()
+        if c + 0x24 > len(d):
+            continue
+        flags, virt, phys, _, _, _, soff, f1c, f20 = struct.unpack_from(">9I", d, c)
+        if f1c or f20 or virt < 0x24 or soff >= virt or not phys or phys > 0x10000 or c + virt + phys > len(d):
+            continue
+        blob = d[c:c + virt + phys]
+        shaders.append({"container": c, "flags": flags, "kind": "vs" if flags & 1 else "ps", "virtual": virt,
+                        "physical": phys, "name": None, "record": base + c, "form": "executable image", "ok": True,
+                        "blob": blob, "sha1": hashlib.sha1(blob).hexdigest()})
+    return shaders
+
+
 def is_inside(path, root):
     path, root = os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(root))
     return path == root or path.startswith(root + os.sep)
@@ -745,12 +777,15 @@ def is_inside(path, root):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("ff", nargs="+")
+    ap.add_argument("ff", nargs="*")
     ap.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "bo2_ff"),
                     help="scratch folder for decompressed zones (outside the repo)")
     ap.add_argument("--key-file", help="32-byte key file (raw or hex text)")
     ap.add_argument("--xex-image", help="decrypted XEX image to rebuild the key from "
                                         "(default: work/dump_tu18/default_mp.image.bin if present)")
+    ap.add_argument("--image-shaders", action="store_true",
+                    help="also list (and with --dump write) the shaders linked into the XEX image itself "
+                         "(--xex-image, else the default), which no fastfile holds")
     ap.add_argument("--list", type=int, default=12, help="how many shader blobs to print per zone")
     ap.add_argument("--dump", action="store_true", help="also write each shader blob to <out>/<zone>_shaders/")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -760,6 +795,12 @@ def main():
     if is_inside(args.out, REPO):
         sys.exit(f"refusing to write game-derived data inside the repo: {args.out}")
     os.makedirs(args.out, exist_ok=True)
+    if args.image_shaders:
+        image = args.xex_image or DEFAULT_IMAGE
+        print(f"== {image}")
+        report_shaders(None, os.path.splitext(os.path.basename(image))[0], args, find_image_shaders(image))
+    if not args.ff:
+        return
     key, where = load_key(args.key_file, args.xex_image)
     print(f"key: {where}; sha1 {hashlib.sha1(key).hexdigest()[:12]}")
 
@@ -793,8 +834,9 @@ def main():
             report_shaders(zone, zone_name, args)
 
 
-def report_shaders(zone, zone_name, args):
-    shaders = find_shaders(zone)
+def report_shaders(zone, zone_name, args, shaders=None):
+    if shaders is None:
+        shaders = find_shaders(zone)
     good = [s for s in shaders if s["ok"]]
     print(f"  shader containers (0x102A110x): {len(shaders)}, matched to a zone record: {len(good)}")
     for kind in ("vs", "ps"):

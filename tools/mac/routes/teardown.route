@@ -1,0 +1,9 @@
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to teardown.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
+duration_s = 300
+players = 1
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = false
+# pause, END GAME (4 downs), confirm defaults to No (up first), then back in the lobby start again
+BO2ZM_TEST_BUTTONS = wait_log "the game's client is in a match" 90, 20:start, 3:down, 1:down, 1:down, 1:down, 2:a, 4:up, 2:a, 40:a

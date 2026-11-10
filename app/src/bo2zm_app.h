@@ -31,6 +31,7 @@
 #include "native/bo2zm_native_system.h"
 #include "native/render/bo2zm_graphics_settings.h"
 #include "native/render/bo2zm_native_capture.h"
+#include "native/render/bo2zm_native_video.h"
 #include "native/render/bo2zm_native_precompile.h"
 
 class Bo2zmApp : public rex::ReXApp {
@@ -75,6 +76,9 @@ class Bo2zmApp : public rex::ReXApp {
 
   // Mode switches (MP <-> Zombies) relaunch the title; see bo2zm_relaunch.cpp.
   void OnPostSetup() override {
+    if (!bo2zm::native::Active()) {
+      bo2zm::perf_log::InstallSwapHook(rex::cvar::GetFlagByName("gpu_plugin") == "metal" ? "metal" : "xenos");
+    }
     bo2zm::name::ApplySaved();  // before the game signs in
     bo2zm::pc_profiler::Start();  // bo2zm_pc_profile (PC test helper; off by default)
     bo2zm::test_waits::RunIfRequested();  // bo2zm_test_waits, off by default
@@ -83,11 +87,14 @@ class Bo2zmApp : public rex::ReXApp {
     bo2zm::gsc::Configure();
     // PNG captures of the game image (bo2zm_capture_every_s, off by default), to
     // compare the native renderer with Xenos emulation without watching the screen.
-    bo2zm::capture::Boot([this]() -> rex::ui::Presenter* {
+    auto get_presenter = [this]() -> rex::ui::Presenter* {
       const auto* rt = runtime();
       const auto* graphics = rt ? rt->graphics_system() : nullptr;
       return graphics ? graphics->presenter() : nullptr;
-    });
+    };
+    bo2zm::capture::Boot(get_presenter);
+    // Raw test video (bo2zm_video_rgba, off by default) for tools/mac/boot_test.sh --video.
+    bo2zm::video::Boot(get_presenter);
   }
 
   // The game waits while the native renderer compiles the pipelines that earlier runs used and that this build,
@@ -98,6 +105,7 @@ class Bo2zmApp : public rex::ReXApp {
 
   void OnShutdown() override {
     bo2zm::perf_log::Close();  // the "# end" line; a run stopped by a signal ends without it, which the readers allow
+    bo2zm::video::Stop();
     bo2zm::capture::Stop();
     bo2zm::lifecycle::Stop();
     bo2zm::updates::Stop();

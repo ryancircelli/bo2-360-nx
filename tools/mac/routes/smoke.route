@@ -1,5 +1,5 @@
-# Boot to the home menu and sit there. Checks the app starts, renders, and exits cleanly.
-# key = value, one per line; the value is a REX_ cvar suffix (REX_<NAME> env).
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to smoke.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
 duration_s = 45
 players = 1
 BO2ZM_BENCHMARK = false

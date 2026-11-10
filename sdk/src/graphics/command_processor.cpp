@@ -80,6 +80,13 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
                     "pipelines are being prepared.")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(shader_precompile_background, true, "GPU",
+                    "Create the pipelines saved by earlier runs in the background at launch instead "
+                    "of before the game starts (needs async_shader_compilation, Vulkan only). Draws "
+                    "using one that is not ready yet are skipped, and it is moved to the front of "
+                    "the queue.")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace rex::graphics {
 
 using namespace rex::graphics::xenos;
