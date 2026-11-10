@@ -12,6 +12,9 @@
  */
 
 #include "frame_replay.h"
+#if defined(FABLE2_NO_CONVERTER)
+#include <rex/graphics/trace_writer.h>
+#endif
 
 #include <algorithm>
 #include <bit>
@@ -1132,7 +1135,14 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
   if (texcheck_) {
     if (modecontrol.edram_mode == xenos::EdramMode::kCopy) {
       draw_util::ResolveInfo info;
+#if defined(FABLE2_NO_CONVERTER)
+      // Built into rexgpu-metal: the plugin's private SDK copy keeps Xenia's
+      // TraceWriter argument (a no-op in release builds).
+      static ::rex::graphics::TraceWriter unused_trace_writer(nullptr);
+      if (draw_util::GetResolveInfo(regs, *memory_, unused_trace_writer, 1, 1, false, false, info) &&
+#else
       if (draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info) &&
+#endif
           info.copy_dest_extent_length) {
         texcheck_->AddGpuWrittenRange(info.copy_dest_extent_start, info.copy_dest_extent_length);
       }
