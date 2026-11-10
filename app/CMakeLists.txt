@@ -131,6 +131,10 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(bo2zm PRIVATE src/bo2zm_linux.cpp)
 endif()
+# macOS (tools/build_mac.sh): the relaunch.
+if(APPLE)
+    target_sources(bo2zm PRIVATE src/bo2zm_mac.cpp)
+endif()
 
 if(BO2ZM_DEVLINK AND REXGLUE_PLATFORM_SWITCH)
     target_sources(bo2zm PRIVATE src/bo2zm_devlink_net.cpp src/bo2zm_devlink_screen.cpp)
