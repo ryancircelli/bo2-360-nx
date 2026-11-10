@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <rex/graphics/trace/texture_probe.h>
 
@@ -124,6 +125,11 @@ class TextureCheck : public TextureLoadProbe {
   std::unordered_map<Key, Entry, KeyHash> entries_;
   std::unordered_map<uint64_t, Origin> origins_;
   std::map<uint32_t, uint32_t> gpu_written_;  // start -> end
+  // Writes injected during the current packet (race mode): a draw may have
+  // validated a texture before another texture's load window wrote over it.
+  uint32_t injected_packet_ = UINT32_MAX;
+  std::vector<std::pair<uint32_t, uint32_t>> injected_;  // start, end
+  bool InjectedThisPacket(uint32_t address, uint32_t size) const;
   std::FILE* report_ = nullptr;
   uint64_t loads_ = 0;
   uint64_t checked_ = 0;
