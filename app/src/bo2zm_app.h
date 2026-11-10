@@ -21,6 +21,7 @@
 #include "bo2zm_script_manager.h"
 #include "bo2zm_name.h"
 #include "bo2zm_pc_profiler.h"
+#include "bo2zm_perf_log.h"
 #include "bo2zm_relaunch.h"
 #include "bo2zm_switch.h"
 #include "bo2zm_test_pad.h"
@@ -96,6 +97,7 @@ class Bo2zmApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    bo2zm::perf_log::Close();  // the "# end" line; a run stopped by a signal ends without it, which the readers allow
     bo2zm::capture::Stop();
     bo2zm::lifecycle::Stop();
     bo2zm::updates::Stop();

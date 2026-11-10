@@ -46,6 +46,7 @@ set(BO2ZM_SOURCES
     src/bo2zm_settings.cpp
     src/bo2zm_preset.cpp
     src/bo2zm_benchmark.cpp
+    src/bo2zm_perf_log.cpp
     src/bo2zm_heap_track.cpp
     src/bo2zm_memcpy_callers.cpp
     src/bo2zm_debug_options.cpp
@@ -377,8 +378,8 @@ if(WIN32 AND BO2ZM_EXE_ICON AND EXISTS "${BO2ZM_EXE_ICON}")
     target_sources(bo2zm PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/bo2zm_icon.rc")
 endif()
 
-# Build ID logged at startup (src/bo2zm_switch.cpp), so every log names the
-# build that wrote it. build_switch.sh / build_windows.sh pass the time.
+# Build ID logged at startup (src/bo2zm_switch.cpp) and in the perf log's header
+# (src/bo2zm_perf_log.cpp), so every log names the build that wrote it. build_switch.sh / build_windows.sh pass the time.
 set(BO2ZM_BUILD_ID "dev" CACHE STRING "Build identifier shown in the log")
-set_source_files_properties(src/bo2zm_switch.cpp PROPERTIES
+set_source_files_properties(src/bo2zm_switch.cpp src/bo2zm_perf_log.cpp PROPERTIES
     COMPILE_DEFINITIONS "BO2ZM_BUILD_ID=\"${BO2ZM_BUILD_ID}\"")
