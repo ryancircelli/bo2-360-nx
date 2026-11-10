@@ -49,11 +49,18 @@ class VulkanSharedMemory : public SharedMemory {
 
   VkBuffer buffer() const { return buffer_; }
 
+  // Upload hoisting (vulkan_hoist_shared_memory_uploads). Ranges requested since the last draw
+  // become reads of the current render pass when that draw is recorded (CommitDrawReads). An
+  // upload that overlaps none of them is moved before the render pass instead of ending it.
+  void CommitDrawReads();
+  void RenderPassBegun() { pass_reads_.clear(); }
+
  protected:
   bool AllocateSparseHostGpuMemoryRange(uint32_t offset_allocations,
                                         uint32_t length_allocations) override;
 
   bool UploadRanges(const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) override;
+  void OnRangesRequested(const std::vector<std::pair<uint32_t, uint32_t>>& ranges) override;
 
  private:
   void GetUsageMasks(Usage usage, VkPipelineStageFlags& stage_mask,
@@ -72,6 +79,12 @@ class VulkanSharedMemory : public SharedMemory {
 
   std::unique_ptr<ui::vulkan::VulkanUploadBufferPool> upload_buffer_pool_;
   std::vector<VkBufferCopy> upload_regions_;
+
+  bool OverlapsPassReads(
+      const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) const;
+  // (start, length) in bytes.
+  std::vector<std::pair<uint32_t, uint32_t>> draw_reads_;
+  std::vector<std::pair<uint32_t, uint32_t>> pass_reads_;
 };
 
 }  // namespace rex::graphics::vulkan

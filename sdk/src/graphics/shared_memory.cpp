@@ -461,11 +461,11 @@ bool SharedMemory::RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, si
   COUNT_profile_set("gpu/shared_memory/request_ranges_upload_count",
                     uint32_t(upload_ranges_.size()));
 
-  if (upload_ranges_.empty()) {
-    return true;
+  if (!upload_ranges_.empty() && !UploadRanges(upload_ranges_)) {
+    return false;
   }
-
-  return UploadRanges(upload_ranges_);
+  OnRangesRequested(merged_ranges);
+  return true;
 }
 
 bool SharedMemory::RequestRange(uint32_t start, uint32_t length) {

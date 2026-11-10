@@ -3159,6 +3159,8 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
 
   current_render_pass_ = use_dynamic_rendering ? VK_NULL_HANDLE : render_pass;
   current_framebuffer_ = framebuffer;
+  render_pass_hoist_position_ = deferred_command_buffer_.stream_position();
+  shared_memory_->RenderPassBegun();
 
   if (use_dynamic_rendering) {
     VkRenderingAttachmentInfo color_attachments[xenos::kMaxColorRenderTargets];
@@ -3233,6 +3235,8 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
 
   current_render_pass_ = use_dynamic_rendering ? VK_NULL_HANDLE : render_pass;
   current_framebuffer_ = framebuffer;
+  render_pass_hoist_position_ = deferred_command_buffer_.stream_position();
+  shared_memory_->RenderPassBegun();
 
   if (use_dynamic_rendering) {
     VkRenderingAttachmentInfo color_attachment = {};
@@ -4220,6 +4224,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     deferred_command_buffer_.CmdVkDrawIndexed(primitive_processing_result.host_draw_vertex_count, 1,
                                               0, 0, 0);
   }
+  shared_memory_->CommitDrawReads();
 
   // Invalidate textures in memexported memory and watch for changes.
   if (!memexport_ranges_.empty()) {

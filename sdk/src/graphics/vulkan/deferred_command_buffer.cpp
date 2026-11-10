@@ -30,6 +30,8 @@ DeferredCommandBuffer::DeferredCommandBuffer(const VulkanCommandProcessor& comma
 
 void DeferredCommandBuffer::Reset() {
   command_stream_.clear();
+  splice_stream_.clear();
+  splices_.clear();
 }
 
 void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
@@ -37,10 +39,22 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
+  // Splices are recorded with non-decreasing positions (render passes only begin later in the
+  // stream), and ones at the same position run in recording order.
+  size_t position = 0;
+  for (const Splice& splice : splices_) {
+    ExecuteRange(command_buffer, command_stream_.data() + position, splice.position - position);
+    ExecuteRange(command_buffer, splice_stream_.data() + splice.start, splice.length);
+    position = splice.position;
+  }
+  ExecuteRange(command_buffer, command_stream_.data() + position,
+               command_stream_.size() - position);
+}
+
+void DeferredCommandBuffer::ExecuteRange(VkCommandBuffer command_buffer, const uintmax_t* stream,
+                                         size_t stream_remaining) {
   const ui::vulkan::VulkanDevice::Functions& dfn =
       command_processor_.GetVulkanDevice()->functions();
-  const uintmax_t* stream = command_stream_.data();
-  size_t stream_remaining = command_stream_.size();
   while (stream_remaining) {
     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
     stream += kCommandHeaderSizeElements;

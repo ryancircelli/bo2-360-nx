@@ -31,6 +31,25 @@ class DeferredCommandBuffer {
   void Reset();
   void Execute(VkCommandBuffer command_buffer);
 
+  // Position (in stream elements) where the next command will be written.
+  size_t stream_position() const { return command_stream_.size(); }
+  // Moves the commands written since tail_start so they execute at insert_position instead,
+  // before the commands already recorded there and after earlier moves to the same position.
+  // The tail goes to a side stream that Execute interleaves, so this is O(tail length): rotating
+  // the main stream instead would be quadratic per frame.
+  void MoveTailTo(size_t insert_position, size_t tail_start) {
+    assert_true(insert_position <= tail_start && tail_start <= command_stream_.size());
+    size_t length = command_stream_.size() - tail_start;
+    if (!length) {
+      return;
+    }
+    assert_true(splices_.empty() || splices_.back().position <= insert_position);
+    splices_.push_back({insert_position, splice_stream_.size(), length});
+    splice_stream_.insert(splice_stream_.end(), command_stream_.begin() + tail_start,
+                          command_stream_.end());
+    command_stream_.resize(tail_start);
+  }
+
   // render_pass_begin->pNext of all barriers must be null.
   void CmdVkBeginRenderPass(const VkRenderPassBeginInfo* render_pass_begin,
                             VkSubpassContents contents) {
@@ -581,8 +600,20 @@ class DeferredCommandBuffer {
 
   const VulkanCommandProcessor& command_processor_;
 
+  void ExecuteRange(VkCommandBuffer command_buffer, const uintmax_t* stream,
+                    size_t stream_remaining);
+
   // uintmax_t to ensure uint64_t and pointer alignment of all structures.
   std::vector<uintmax_t> command_stream_;
+  // MoveTailTo: command ranges of splice_stream_ executed just before
+  // command_stream_[position], in non-decreasing position order.
+  struct Splice {
+    size_t position;
+    size_t start;
+    size_t length;
+  };
+  std::vector<uintmax_t> splice_stream_;
+  std::vector<Splice> splices_;
 };
 
 }  // namespace rex::graphics::vulkan
