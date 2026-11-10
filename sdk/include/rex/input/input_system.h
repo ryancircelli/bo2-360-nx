@@ -48,6 +48,10 @@ class InputSystem : public system::IInputSystem {
   /// Replaces any previous assignment after in-flight queries finish.
   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);
 
+  /// True once after a controller connected or disconnected (or moved to another player), so the
+  /// caller can tell the guest (XN_SYS_INPUTDEVICESCHANGED) outside the input lock.
+  bool TakeDevicesChanged() { return devices_changed_.exchange(false, std::memory_order_acq_rel); }
+
   X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
   X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
@@ -91,6 +95,7 @@ class InputSystem : public system::IInputSystem {
   std::mutex lifecycle_mutex_;
   mutable std::mutex mutex_;
   bool accepting_queries_ = true;
+  std::atomic<bool> devices_changed_{false};
 
   // Caller holds mutex_ for these helpers.
   /// Re-enumerates every driver and notifies the assignment when the set
