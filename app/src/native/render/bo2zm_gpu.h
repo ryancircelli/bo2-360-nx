@@ -219,6 +219,27 @@ struct PoolCounts {
   bool update_after_bind = false;
 };
 
+// What an image is used for, in Vulkan's bits (VkImageUsageFlagBits). Metal maps them to MTLTextureUsage.
+using ImageUsage = uint32_t;
+inline constexpr ImageUsage kImageCopySource = 0x1;
+inline constexpr ImageUsage kImageCopyTarget = 0x2;
+inline constexpr ImageUsage kImageSampled = 0x4;
+inline constexpr ImageUsage kImageColorTarget = 0x10;
+inline constexpr ImageUsage kImageDepthTarget = 0x20;
+
+// An image: 2D (with `layers`, 6 for a cube) or 3D (`depth` slices), one sample, optimal tiling.
+struct ImageDesc {
+  bool volume = false;
+  bool cube = false;
+  Format format = 0;
+  uint32_t width = 1;
+  uint32_t height = 1;
+  uint32_t depth = 1;
+  uint32_t levels = 1;
+  uint32_t layers = 1;
+  ImageUsage usage = kImageSampled | kImageCopyTarget;
+};
+
 // A view of an image: its type, format, aspect, mips and layers, and the channel swizzle (Vulkan numbering:
 // 0 identity, 1 zero, 2 one, 3 to 6 red to alpha). Metal makes a texture view with the same swizzle.
 enum ViewType : uint32_t { kView2D = 1, kView3D = 2, kViewCube = 3 };
