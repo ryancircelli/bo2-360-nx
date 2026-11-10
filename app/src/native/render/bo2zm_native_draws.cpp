@@ -1574,10 +1574,30 @@ constexpr size_t kMaxRegistersList = 4096;
 // 360..487), which avoid querying the texture size on every sample.
 // + 16 words for the fetch scale of each slot (bytes 488-551; see WriteScale), 2 of padding, and
 // 32 for the texture coordinate scale of each slot (bytes 560-687; see WriteScaleCoords).
-constexpr uint32_t kWordsShared = 172;
+// + 8 words with the iteration count of the 32 loop constants (0x4908-0x4927; one byte each, loop i in word
+// 172 + i / 4): BO2's two looping pixel shaders take theirs from the draw, not from a literal (bytes 688-719).
+// + the vertex shaders' texture slots (fetch constants 16-19, CTAB samplers 0-3; slot k): texture indices
+// 180 + dimension * 4 + k, sampler 192 + k, 1/size 196 + k * 2, fetch scale 204 + k, coordinate scale 208 + k * 2
+// (bytes 720-863). Keep in step with tools/xenosrecomp/translator/shader_recompiler.cpp.
+constexpr uint32_t kWordsShared = 216;
 constexpr uint32_t kWordScale = 122;
 constexpr uint32_t kWordScaleCoords = 140;
 constexpr uint32_t kWordInvSize = 90;
+constexpr uint32_t kWordLoops = 172;
+constexpr uint32_t kWordsVsSlots = 180;
+constexpr uint32_t kSlotsPs = 16;  // slots 16-19 are the vertex shader's
+constexpr uint32_t kSlotsVs = 4;
+constexpr uint32_t WordTexture(uint32_t heap, uint32_t slot) {
+  return slot < kSlotsPs ? heap * 16 + slot : kWordsVsSlots + heap * 4 + (slot - kSlotsPs);
+}
+constexpr uint32_t WordSampler(uint32_t slot) { return slot < kSlotsPs ? 48 + slot : 192 + (slot - kSlotsPs); }
+constexpr uint32_t WordInvSize(uint32_t slot) {
+  return slot < kSlotsPs ? kWordInvSize + slot * 2 : 196 + (slot - kSlotsPs) * 2;
+}
+constexpr uint32_t WordScale(uint32_t slot) { return slot < kSlotsPs ? kWordScale + slot : 204 + (slot - kSlotsPs); }
+constexpr uint32_t WordScaleCoords(uint32_t slot) {
+  return slot < kSlotsPs ? kWordScaleCoords + slot * 2 : 208 + (slot - kSlotsPs) * 2;
+}
 // Constants through a dynamic UBO (bo2zm_native_constants_ubo). The bit is SPEC_CONSTANT_CONSTANTS_UBO
 // from shader_common.h, and the sizes are the blocks the shaders declare: 256 and 224 float4, and 23 shared
 // float4.
@@ -1687,7 +1707,7 @@ constexpr uint32_t kSkyFramesWithOne = 90;
 constexpr VkDeviceSize kUboBytesVs = 256 * 16;
 // 256, as the library's Bo2zmBlockPs declares (BO2 reads pixel constants up to c250).
 constexpr VkDeviceSize kUboBytesPs = 256 * 16;
-constexpr VkDeviceSize kUboBytesShared = 43 * 16;  // 43 (fetch and coordinate scales); the library declares 43
+constexpr VkDeviceSize kUboBytesShared = 54 * 16;  // kWordsShared / 4; the library declares 54
 constexpr uint32_t kRemapIdentity = 0xFFF;
 constexpr uint32_t kMaxVerticesPerDraw = uint32_t(1) << 20;
 constexpr uint32_t kMemoryPhysical = 0x20000000;
@@ -3597,7 +3617,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
      */
     const uint64_t generation_textures_before = generation_textures_;
     const uint64_t slots_retired_before = slots_retired_;
-    bool reuse_textures = reuse_textures_on_ && reuse_valid_ && ps == reuse_ps_ &&
+    // Vertex-shader samplers are not part of the reuse key: their draws always run the loop.
+    bool reuse_textures = reuse_textures_on_ && reuse_valid_ && ps == reuse_ps_ && p.vs->samplers.empty() &&
                           mip_min == reuse_mip_min_ && !composite_no_blur &&
                           generation_textures_ == reuse_generation_textures_ && frame_ == reuse_frame_ &&
                           slots_retired_ == reuse_slots_retired_;
@@ -3618,23 +3639,34 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (fewer_copies_) {
       std::memset(shared, 0, kSharedBytes);
     }
-    {  // every slot's fetch scale starts at 1 (vertex-shader samplers are not set below)
+    {  // every slot's fetch scale starts at 1
       const float one = 1.0f;
-      for (uint32_t k = 0; k < 16; ++k) {
-        std::memcpy(shared + kWordScale + k, &one, sizeof(one));
-        std::memcpy(shared + kWordScaleCoords + k * 2, &one, sizeof(one));
-        std::memcpy(shared + kWordScaleCoords + k * 2 + 1, &one, sizeof(one));
+      for (uint32_t k = 0; k < kSlotsPs + kSlotsVs; ++k) {
+        std::memcpy(shared + WordScale(k), &one, sizeof(one));
+        std::memcpy(shared + WordScaleCoords(k), &one, sizeof(one));
+        std::memcpy(shared + WordScaleCoords(k) + 1, &one, sizeof(one));
+      }
+    }
+    // The samplers to prepare: the pixel shader's (slot = fetch constant 0-15) and the vertex shader's (CTAB
+    // register k reads fetch constant 16 + k, slot 16 + k).
+    std::array<uint32_t, kSlotsPs + kSlotsVs> slots_draw;
+    size_t slots_count = 0;
+    if (ps) {
+      for (const SamplerShader& x : ps->samplers) {
+        if (x.reg_index < kSlotsPs && slots_count < slots_draw.size()) slots_draw[slots_count++] = x.reg_index;
+      }
+    }
+    for (const SamplerShader& x : p.vs->samplers) {
+      if (x.reg_index < kSlotsVs && slots_count < slots_draw.size()) {
+        slots_draw[slots_count++] = kSlotsPs + x.reg_index;
       }
     }
     if (composite_no_blur) {
       context_->DeadDepthReads(true);
     }
-    for (const SamplerShader& sampler :
-         ps ? std::span<const SamplerShader>(ps->samplers) : std::span<const SamplerShader>()) {
-      if (sampler.reg_index >= 16) {
-        continue;
-      }
-      const uint32_t* fetch = r + kRegFetch + uint32_t(sampler.reg_index) * 6;
+    for (size_t i_slot = 0; i_slot < slots_count; ++i_slot) {
+      const uint32_t slot = slots_draw[i_slot];
+      const uint32_t* fetch = r + kRegFetch + slot * 6;
       // reflection visibility. Here and not in TextureResolved, which, because of the caches, only sees
       // the first draw of each frame that samples it. Without checking the dimension: over-counting only
       // means the reflection gets drawn.
@@ -3648,16 +3680,16 @@ class VulkanDrawsImpl final : public VulkanDraws {
       uint32_t path = 20;  // the table hit, unless a branch below says otherwise
       bool no_cache = false;  // depth requested but not sampled, kept out of the caches
       // Per-register cache: same fetch constant and mip floor, with no intervening C2 copy.
-      CacheSampler& cache = cache_samplers_[sampler.reg_index];
+      CacheSampler& cache = cache_samplers_[slot];
       // Valid until cache.valid_until (with the cross-frame cache disabled, only its own frame)
       if ((cache_between_frames_ ? frame_ <= cache.valid_until : cache.frame == frame_) &&
           cache.generation == generation_textures_ && cache.mip_min == mip_min && SlotCurrent(cache) &&
           std::memcmp(cache.fetch.data(), fetch, sizeof(cache.fetch)) == 0) {
-        shared[cache.heap * 16 + sampler.reg_index] = cache.slot;
-        shared[48 + sampler.reg_index] = cache.sampler;
-        WriteInvSize(shared, sampler.reg_index, cache.width, cache.height);
-        WriteScale(shared, sampler.reg_index, fetch);
-        WriteScaleCoords(shared, sampler.reg_index, fetch, cache.width, cache.height);
+        shared[WordTexture(cache.heap, slot)] = cache.slot;
+        shared[WordSampler(slot)] = cache.sampler;
+        WriteInvSize(shared, slot, cache.width, cache.height);
+        WriteScale(shared, slot, fetch);
+        WriteScaleCoords(shared, slot, fetch, cache.width, cache.height);
         ++samplers_cache_;
         SamplerPath(19, t_one);
         continue;
@@ -3731,11 +3763,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
           no_cache = true;
         }
       }
-      shared[heap * 16 + sampler.reg_index] = slot_texture;
-      shared[48 + sampler.reg_index] = slot_sampler;
-      WriteInvSize(shared, sampler.reg_index, width_host, height_host);
-      WriteScale(shared, sampler.reg_index, fetch);
-      WriteScaleCoords(shared, sampler.reg_index, fetch, width_host, height_host);
+      shared[WordTexture(heap, slot)] = slot_texture;
+      shared[WordSampler(slot)] = slot_sampler;
+      WriteInvSize(shared, slot, width_host, height_host);
+      WriteScale(shared, slot, fetch);
+      WriteScaleCoords(shared, slot, fetch, width_host, height_host);
       cache.frame = frame_;
       cache.generation = generation_textures_;
       cache.mip_min = mip_min;
@@ -4189,6 +4221,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
       specialization |= (function_alpha & 0x7u) << kSpecFunctionAlphaOffset;
     }
     shared[64] = (r[kRegBooleans] & 0xFFFF) | ((r[kRegBooleans + 4] & 0xFFFF) << 16);
+    for (uint32_t w = 0; w < 8; ++w) {  // loop counts, see kWordLoops (SQ_LOOP_CONST: count in bits 0-7)
+      const uint32_t* loop = r + kRegBooleans + 8 + w * 4;
+      shared[kWordLoops + w] = (loop[0] & 0xFF) | (loop[1] & 0xFF) << 8 | (loop[2] & 0xFF) << 16 | (loop[3] & 0xFF) << 24;
+    }
     shared[65] = 0;  // g_SwappedTexcoords
     if (!(r[gr::XE_GPU_REG_PA_SU_VTX_CNTL] & 0x1)) {  // PixelCenter::kD3DZero
       const float mid[2] = {1.0f / viewport.width, -1.0f / std::abs(viewport.height)};
@@ -13590,7 +13626,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (fetch[3] & 0x1) {
       scale *= MaxWhole(fetch[1] & 0x3F);
     }
-    std::memcpy(shared + kWordScale + reg_index, &scale, sizeof(scale));
+    std::memcpy(shared + WordScale(reg_index), &scale, sizeof(scale));
   }
 
   // Normalized 2D coordinates address the texture the fetch constant describes, but a resolved texture's
@@ -13611,12 +13647,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
         scale[1] = float(height_guest) / float(height);
       }
     }
-    std::memcpy(shared + kWordScaleCoords + reg_index * 2, scale, sizeof(scale));
+    std::memcpy(shared + WordScaleCoords(reg_index), scale, sizeof(scale));
   }
 
   static void WriteInvSize(uint32_t* shared, uint32_t reg_index, uint32_t width, uint32_t height) {
     const float inv[2] = {width ? 1.0f / float(width) : 0.0f, height ? 1.0f / float(height) : 0.0f};
-    std::memcpy(shared + kWordInvSize + reg_index * 2, inv, sizeof(inv));
+    std::memcpy(shared + WordInvSize(reg_index), inv, sizeof(inv));
   }
 
   bool BeginPass(const uint32_t* r, const uint64_t keys[5], uint32_t pitch,
@@ -17595,7 +17631,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint64_t mips_reviewed_ = 0;
   uint64_t mips_rare_ = 0;
   uint64_t levels_mip_uploaded_ = 0;    // report: mip levels (without the base) in created textures
-  std::array<CacheSampler, 16> cache_samplers_{};
+  std::array<CacheSampler, kSlotsPs + kSlotsVs> cache_samplers_{};  // by slot
   // Second cache, by the whole fetch constant: a direct-mapped table (the hash picks the slot). It went
   // from 256 to 1024 slots because in gameplay there are ~340 distinct textures per frame and 256 slots
   // collided (64 KB: fits in L2).
