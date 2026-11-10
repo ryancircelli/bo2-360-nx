@@ -2920,21 +2920,21 @@ class VulkanDrawsImpl final : public VulkanDraws {
       dfn_.vkDestroyRenderPass(device_, pass, nullptr);
     }
     for (auto& [input, shader_module] : modules_) {
-      dfn_.vkDestroyShaderModule(device_, shader_module, nullptr);
+      gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
     }
     for (auto& [input, shader_module] : modules_only_alpha_) {
       if (shader_module != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, shader_module, nullptr);
+        gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
       }
     }
     for (auto& [input, shader_module] : modules_z_early_) {
       if (shader_module != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, shader_module, nullptr);
+        gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
       }
     }
     for (VkShaderModule shader_module : modules_variants_) {
       if (shader_module != VK_NULL_HANDLE) {
-        dfn_.vkDestroyShaderModule(device_, shader_module, nullptr);
+        gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
       }
     }
     for (auto& [key, view] : views_) {
@@ -10001,12 +10001,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!bo2zm::gpu_skin::RendererOn()) {
       return;
     }
-    VkShaderModuleCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = sizeof(kSpirvBo2zmGpuSkin);
-    info.pCode = kSpirvBo2zmGpuSkin;
     VkShaderModule module = VK_NULL_HANDLE;
-    if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &module) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateShader(dfn_, device_, kSpirvBo2zmGpuSkin, sizeof(kSpirvBo2zmGpuSkin), module)) {
       REXLOG_ERROR("[gpu_skin] the compute shader could not be created: skinning stays on the CPU");
       return;
     }
@@ -10028,7 +10024,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         skin_pipeline_ = VK_NULL_HANDLE;
       }
     }
-    dfn_.vkDestroyShaderModule(device_, module, nullptr);
+    gpu::vulkan::DestroyShader(dfn_, device_, module);
     const bool buffers =
         skin_pipeline_ != VK_NULL_HANDLE &&
         CreateSkinBuffer(kSkinTableBytes * kSlotsOfJob, skin_table_buffer_, skin_table_memory_, skin_table_data_,
@@ -14007,11 +14003,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   VkShaderModule ModuleVariant(size_t index, const uint32_t* spirv, size_t bytes) {
     if (!modules_variants_created_[index]) {
       modules_variants_created_[index] = true;
-      VkShaderModuleCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      info.codeSize = bytes;
-      info.pCode = spirv;
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &modules_variants_[index]) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateShader(dfn_, device_, spirv, bytes, modules_variants_[index])) {
         modules_variants_[index] = VK_NULL_HANDLE;
       }
     }
@@ -14190,12 +14182,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       return it->second;
     }
     const auto& spirv = bo2zm::shaderlib::Spirv(*input.shader);
-    VkShaderModuleCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = spirv.size() * sizeof(uint32_t);
-    info.pCode = spirv.data();
     VkShaderModule shader_module = VK_NULL_HANDLE;
-    if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &shader_module) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateShader(dfn_, device_, spirv.data(), spirv.size() * sizeof(uint32_t), shader_module)) {
       shader_module = VK_NULL_HANDLE;
     }
     modules_.emplace(&input, shader_module);
@@ -14212,11 +14200,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const std::vector<uint32_t> pruned = PruneColorWrites(bo2zm::shaderlib::Spirv(*input.shader), removed);
     VkShaderModule shader_module = VK_NULL_HANDLE;
     if (!pruned.empty()) {
-      VkShaderModuleCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      info.codeSize = pruned.size() * sizeof(uint32_t);
-      info.pCode = pruned.data();
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &shader_module) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateShader(dfn_, device_, pruned.data(), pruned.size() * sizeof(uint32_t), shader_module)) {
         shader_module = VK_NULL_HANDLE;
       }
     }
@@ -14240,11 +14224,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const std::vector<uint32_t> patched = WithTestsEarly(bo2zm::shaderlib::Spirv(*input.shader), reason);
     VkShaderModule shader_module = VK_NULL_HANDLE;
     if (!patched.empty()) {
-      VkShaderModuleCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      info.codeSize = patched.size() * sizeof(uint32_t);
-      info.pCode = patched.data();
-      if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &shader_module) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateShader(dfn_, device_, patched.data(), patched.size() * sizeof(uint32_t), shader_module)) {
         shader_module = VK_NULL_HANDLE;
       }
     }
@@ -15700,7 +15680,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     ~Warmer() {
       for (const auto& [key, shader_module] : modules_) {
         if (shader_module != VK_NULL_HANDLE) {
-          d_.dfn_.vkDestroyShaderModule(d_.device_, shader_module, nullptr);
+          gpu::vulkan::DestroyShader(d_.dfn_, d_.device_, shader_module);
         }
       }
       for (const auto& [key, pass] : passes_) {
@@ -15777,12 +15757,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
    private:
     VkShaderModule Create(const uint32_t* spirv, size_t bytes) {
-      VkShaderModuleCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      info.codeSize = bytes;
-      info.pCode = spirv;
       VkShaderModule shader_module = VK_NULL_HANDLE;
-      if (d_.dfn_.vkCreateShaderModule(d_.device_, &info, nullptr, &shader_module) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateShader(d_.dfn_, d_.device_, spirv, bytes, shader_module)) {
         shader_module = VK_NULL_HANDLE;
       }
       return shader_module;
