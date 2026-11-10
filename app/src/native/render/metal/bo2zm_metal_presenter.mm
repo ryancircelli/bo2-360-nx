@@ -4,9 +4,11 @@
 #include <rex/ui/surface_mac.h>
 
 #import <Metal/Metal.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bo2zm::native::gpu::metal {
@@ -22,12 +24,18 @@ struct Presenter::State {
   uint32_t width = 0;
   uint32_t height = 0;
   std::array<id<MTLTexture>, kGuestOutputMailboxSize> outputs{};
+  // Scales the guest output into the drawable (Apple's prebuilt kernel: no shader is compiled for it). Used
+  // from the paint thread only.
+  MPSImageBilinearScale* scale = nil;
 };
 
 Presenter::Presenter(Device& device, HostGpuLossCallback host_gpu_loss_callback)
     : rex::ui::Presenter(host_gpu_loss_callback), device_(device), state_(std::make_unique<State>()) {
   state_->device = (__bridge id<MTLDevice>)device.native();
   state_->queue = (__bridge id<MTLCommandQueue>)device.queue();
+  if (MPSSupportsMTLDevice(state_->device)) {
+    state_->scale = [[MPSImageBilinearScale alloc] initWithDevice:state_->device];
+  }
 }
 
 Presenter::~Presenter() {
@@ -176,7 +184,24 @@ Presenter::PaintResult Presenter::PaintAndPresentImpl(bool execute_ui_drawers) {
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
     [[commands renderCommandEncoderWithDescriptor:pass] endEncoding];
-    if (output) {
+    if (output && s.scale) {
+      // Aspect fit and centred, bilinear. Clipped to the image's rectangle, so the bars keep the clear.
+      const double scale_x = double(target.width) / double(output.width);
+      const double scale_y = double(target.height) / double(output.height);
+      const double scale = std::min(scale_x, scale_y);
+      const double width = double(output.width) * scale;
+      const double height = double(output.height) * scale;
+      const double left = std::floor((double(target.width) - width) / 2.0);
+      const double top = std::floor((double(target.height) - height) / 2.0);
+      MPSScaleTransform transform{scale, scale, left, top};
+      s.scale.scaleTransform = &transform;
+      MTLRegion clip = MTLRegionMake2D(NSUInteger(left), NSUInteger(top),
+                                       std::min(NSUInteger(std::ceil(width)), target.width - NSUInteger(left)),
+                                       std::min(NSUInteger(std::ceil(height)), target.height - NSUInteger(top)));
+      s.scale.clipRect = clip;
+      [s.scale encodeToCommandBuffer:commands sourceTexture:output destinationTexture:target];
+      s.scale.scaleTransform = nullptr;
+    } else if (output) {
       // 1:1 and centred, cropped to the drawable.
       const NSUInteger width = std::min(output.width, target.width);
       const NSUInteger height = std::min(output.height, target.height);
