@@ -12,7 +12,20 @@
 
 #include <cstdint>
 
+// Handles of the drawing backend. Vulkan draws in every build for now (Metal is brought up next to it), so these are
+// Vulkan's own handle types (VkImage is VkImage_T*), declared without the Vulkan headers; bo2zm_gpu_vulkan.h checks
+// that they are the same types. The Metal backend gives them its own.
+struct VkCommandBuffer_T;
+struct VkImage_T;
+struct VkImageView_T;
+struct VkDeviceMemory_T;
+
 namespace bo2zm::native::gpu {
+
+using CommandList = VkCommandBuffer_T*;  // the commands being recorded
+using Image = VkImage_T*;
+using ImageView = VkImageView_T*;
+using Memory = VkDeviceMemory_T*;  // a dedicated allocation
 
 enum class Backend : uint8_t { kVulkan, kMetal };
 
