@@ -75,6 +75,9 @@ class Bo2zmApp : public rex::ReXApp {
 
   // Mode switches (MP <-> Zombies) relaunch the title; see bo2zm_relaunch.cpp.
   void OnPostSetup() override {
+    if (!bo2zm::native::Active()) {
+      bo2zm::perf_log::InstallSwapHook(rex::cvar::GetFlagByName("gpu_plugin") == "metal" ? "metal" : "xenos");
+    }
     bo2zm::name::ApplySaved();  // before the game signs in
     bo2zm::pc_profiler::Start();  // bo2zm_pc_profile (PC test helper; off by default)
     bo2zm::test_waits::RunIfRequested();  // bo2zm_test_waits, off by default

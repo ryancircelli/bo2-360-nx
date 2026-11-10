@@ -1,3 +1,4 @@
+#include <rex/graphics/swap_hook.h>
 #include "rex/graphics/metal/metal_frame_log.h"
 #include "rex/graphics/metal/metal_readiness.h"
 #include "rex/graphics/metal/metal_trace.h"
@@ -2747,6 +2748,7 @@ void MetalCommandProcessor::MaybeLogMemReport() {
 void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
+  rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
   ZpdMaybeLogStats();
   if (hle_census::Enabled()) {
     hle_census::EndFrame(frame_log::CurrentFrame());
