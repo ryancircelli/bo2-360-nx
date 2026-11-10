@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "../bo2zm_gpu.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -13,6 +15,13 @@
 #include <string_view>
 
 namespace bo2zm::native::gpu::metal {
+
+// The MTLPixelFormat of an image format (gpu::Format, Vulkan's numbering), as its integer value; 0
+// (MTLPixelFormatInvalid) if Metal has none. Apple GPUs have no 24-bit depth: D24S8 and X8_D24 become 32-bit float
+// depth, which is what the renderer's D32S8 fallback already draws with on other drivers.
+uint32_t PixelFormat(Format format);
+// The MTLVertexFormat of a vertex attribute format, as its integer value; 0 (MTLVertexFormatInvalid) if none.
+uint32_t VertexFormat(Format format);
 
 class Device {
  public:
