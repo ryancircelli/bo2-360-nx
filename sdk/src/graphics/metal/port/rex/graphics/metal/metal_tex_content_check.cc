@@ -11,6 +11,12 @@
 // or a load that read stale data. Each mismatch logs the address, format,
 // size and mips; a summary line with the counters is logged every 600
 // submissions.
+//
+// REX_METAL_TEX_CONTENT_REPAIR=<N> (0 = off) runs the same check every N
+// submissions (when REX_METAL_TEX_CONTENT_CHECK is not set) and, on a
+// mismatch the buffer does not explain, invalidates the range as a CPU write
+// would have: the texture watches fire and the next draw reloads the texture
+// from guest memory. A safety net for writes the page watches miss.
 
 #include "rex/graphics/metal/metal_texture_cache.h"
 
@@ -25,13 +31,24 @@ namespace rex {
 namespace graphics {
 namespace metal {
 
+uint32_t MetalTextureCache::TexContentRepairInterval() {
+  static const uint32_t n = [] {
+    const char* v = MetalDebugEnv("TEX_CONTENT_REPAIR");
+    return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 0u;
+  }();
+  return n;
+}
+
 uint32_t MetalTextureCache::TexContentCheckInterval() {
   static const uint32_t n = [] {
     const char* v = MetalDebugEnv("TEX_CONTENT_CHECK");
     uint32_t r = v ? uint32_t(std::strtoul(v, nullptr, 10)) : 0u;
+    if (!r) r = TexContentRepairInterval();
     if (r) {
       REXLOG_INFO("[tex-content-check] on, every {} submissions "
-                  "(REX_METAL_TEX_CONTENT_CHECK)", r);
+                  "(REX_METAL_TEX_CONTENT_CHECK), repair {} "
+                  "(REX_METAL_TEX_CONTENT_REPAIR)",
+                  r, TexContentRepairInterval() ? "on" : "off");
     }
     return r;
   }();
@@ -165,6 +182,17 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
         const uint64_t n = ++cc_mismatch_[cat];
         // Log each texture range once until it is reloaded.
         t->cc_have_[i] = false;
+        // [tex-content-repair] A range the buffer does not hold as GPU data
+        // (category 1 may be a resolve or memexport result that guest memory
+        // never receives) is invalidated as a CPU write would have done: the
+        // watches fire, the texture becomes outdated and the next draw that
+        // uses it loads guest memory again.
+        bool repaired = false;
+        if (cat != 1 && TexContentRepairInterval()) {
+          shared_memory().MemoryInvalidationCallback(r.start, r.length, true);
+          ++cc_repaired_;
+          repaired = true;
+        }
         const uint64_t total = cc_mismatch_[0] + cc_mismatch_[1] +
                                cc_mismatch_[2];
         if (total <= 64 || (total & (total - 1)) == 0) {
@@ -173,7 +201,7 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
               "[tex-content-check] mismatch #{} ({} #{}): {} {:08X}+{} of "
               "base {:08X} mips {:08X} fmt {} {}x{}x{} dim {} pitch {} "
               "tiled {} packed {} levels {} route {} loaded {} submissions "
-              "ago, shmem valid {}, guest==buffer {}, rtt {} nx {}",
+              "ago, shmem valid {}, guest==buffer {}, rtt {} nx {}{}",
               total, cat == 0 ? "neither" : cat == 1 ? "buffer-only" : "stale-load",
               n, i ? "mips" : "base", r.start, r.length,
               uint32_t(key.base_page) << 12, uint32_t(key.mip_page) << 12,
@@ -184,7 +212,8 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
               t->cc_route_[i] == 1 ? "resident" : "cpu",
               submission - t->cc_load_submission_[i],
               shared_memory().IsRangeValid(r.start, r.length), g == b,
-              t->rtt_tracked_, t->nx_tracked_);
+              t->rtt_tracked_, t->nx_tracked_,
+              repaired ? ", invalidated for a reload" : "");
         }
       }
     }
@@ -194,9 +223,9 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
     REXLOG_INFO(
         "[tex-content-check] summary at submission {}: checked {}, mismatches "
         "neither {} buffer-only {} stale-load {}, loads that read stale data "
-        "{}",
+        "{}, invalidated for a reload {}",
         submission, cc_checked_, cc_mismatch_[0], cc_mismatch_[1],
-        cc_mismatch_[2], cc_stale_loads_);
+        cc_mismatch_[2], cc_stale_loads_, cc_repaired_);
   }
 }
 

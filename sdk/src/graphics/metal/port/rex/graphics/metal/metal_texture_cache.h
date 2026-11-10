@@ -916,6 +916,11 @@ class MetalTextureCache : public TextureCache {
 
  public:
   static uint32_t TexContentCheckInterval();
+  // [tex-content-repair] REX_METAL_TEX_CONTENT_REPAIR=<N>: run the check every
+  // N submissions (unless TEX_CONTENT_CHECK sets its own interval) and, on a
+  // mismatch that is not GPU-written data, invalidate the range like a CPU
+  // write so the texture loads again from guest memory. 0 is off.
+  static uint32_t TexContentRepairInterval();
   // Called by the command processor after each draw's texture request.
   void TexContentCheck(uint32_t used_texture_mask);
 
@@ -924,6 +929,7 @@ class MetalTextureCache : public TextureCache {
   uint64_t cc_mismatch_[3] = {};
   uint64_t cc_stale_loads_ = 0;
   uint64_t cc_last_summary_ = 0;
+  uint64_t cc_repaired_ = 0;
   static void CpuSourceWatchThunk(const global_unique_lock_type& global_lock,
                                   void* context, void* data, uint64_t argument,
                                   bool invalidated_by_gpu);
