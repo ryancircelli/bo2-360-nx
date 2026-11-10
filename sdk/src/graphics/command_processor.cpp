@@ -87,6 +87,11 @@ REXCVAR_DEFINE_BOOL(shader_precompile_background, true, "GPU",
                     "the queue.")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+// GPU frame capture (tools/gputest), compiled in with REXGLUE_BUILD_GPUTEST.
+#if REX_GPU_TRACE
+#include "trace/frame_capture.h"
+#endif
+
 namespace rex::graphics {
 
 using namespace rex::graphics::xenos;
@@ -141,6 +146,13 @@ bool CommandProcessor::Initialize() {
       gamma_ramp_pwl_rgb_[i][j] = gamma_ramp_entry;
     }
   }
+
+#if REX_GPU_TRACE
+  if (!trace_hooks_) {
+    owned_trace_hooks_ = trace::FrameCapture::CreateFromEnvironment(memory_);
+    trace_hooks_ = owned_trace_hooks_.get();
+  }
+#endif
 
   worker_running_ = true;
   worker_thread_ = system::object_ref<system::XHostThread>(
@@ -675,6 +687,9 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
                                               : 0x100u;
   uint32_t published = read_index;
 
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnPrimaryBufferStart(primary_buffer_ptr_ + read_index * sizeof(uint32_t), 0);
+  }
   do {
     if (!ExecutePacket(&reader)) {
       // This probably should be fatal - but we're going to continue anyways.
@@ -694,6 +709,9 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
       }
     }
   } while (reader.read_count());
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnPrimaryBufferEnd();
+  }
 
   OnPrimaryBufferEnd();
 
@@ -706,6 +724,9 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
   // Execute commands!
   memory::RingBuffer reader(memory_->TranslatePhysical(ptr), count * sizeof(uint32_t));
   reader.set_write_offset(count * sizeof(uint32_t));
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnIndirectBufferStart(ptr, count);
+  }
   do {
     if (!ExecutePacket(&reader)) {
       // Return up a level if we encounter a bad packet.
@@ -714,6 +735,9 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
       break;
     }
   } while (reader.read_count());
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnIndirectBufferEnd();
+  }
 }
 
 void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
@@ -730,6 +754,34 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+  if (trace_hooks_ && trace_hooks_->is_recording()) [[unlikely]] {
+    // Report the whole packet (header + payload) before it executes.
+    uint32_t header = memory::load_and_swap<uint32_t>(reinterpret_cast<const void*>(reader->read_ptr()));
+    uint32_t dword_count = 1;
+    switch (header >> 30) {
+      case 0x00:
+      case 0x03:
+        dword_count += ((header >> 16) & 0x3FFF) + 1;
+        break;
+      case 0x01:
+        dword_count += 2;
+        break;
+      default:
+        break;
+    }
+    // read_count() is 0 for a completely full buffer (ExecutePacket(ptr, count)).
+    size_t available = reader->read_count() ? reader->read_count() : reader->capacity();
+    dword_count = std::min<uint32_t>(dword_count, uint32_t(available / sizeof(uint32_t)));
+    trace_hooks_->OnPacketStart(reader->buffer(), uint32_t(reader->capacity()),
+                                uint32_t(reader->read_offset()), dword_count);
+    bool result = ExecutePacketUntraced(reader);
+    trace_hooks_->OnPacketEnd();
+    return result;
+  }
+  return ExecutePacketUntraced(reader);
+}
+
+bool CommandProcessor::ExecutePacketUntraced(memory::RingBuffer* reader) {
   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
   const uint32_t packet_type = packet >> 30;
   if (packet == 0) {
@@ -1029,6 +1081,9 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
 
   ++counter_;
   swap_count_.fetch_add(1, std::memory_order_relaxed);
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnSwap(*this, frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  }
   return true;
 }
 
@@ -1056,6 +1111,13 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
   uint32_t wait = reader->ReadAndSwap<uint32_t>();
 
   bool is_memory = (wait_info & 0x10) != 0;
+
+  if (trace_hooks_) [[unlikely]] {
+    if (trace_hooks_->is_replaying()) {
+      // The recorded stream already satisfied this wait.
+      return true;
+    }
+  }
 
   bool matched = false;
   do {
@@ -1119,6 +1181,10 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
       }
     }
   } while (!matched);
+
+  if (trace_hooks_ && is_memory) [[unlikely]] {
+    trace_hooks_->OnMemoryRead(poll_reg_addr & 0x1FFFFFFC, sizeof(uint32_t));
+  }
 
   return true;
 }
@@ -1448,6 +1514,19 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
           xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
       draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
                                  is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
+      if (trace_hooks_) [[unlikely]] {
+        trace::DrawEvent draw_event;
+        draw_event.prim_type = vgt_draw_initiator.prim_type;
+        draw_event.source_select = vgt_draw_initiator.source_select;
+        draw_event.index_count = vgt_draw_initiator.num_indices;
+        draw_event.is_indexed = is_indexed;
+        draw_event.index_format = index_buffer_info.format;
+        draw_event.index_endianness = index_buffer_info.endianness;
+        draw_event.index_guest_base = index_buffer_info.guest_base;
+        draw_event.index_length_bytes = uint32_t(index_buffer_info.length);
+        draw_event.succeeded = draw_succeeded;
+        trace_hooks_->OnDrawEnd(*this, draw_event);
+      }
       if (!draw_succeeded) {
         auto vgt_output_path_cntl = register_file_->Get<reg::VGT_OUTPUT_PATH_CNTL>();
         auto vgt_hos_cntl = register_file_->Get<reg::VGT_HOS_CNTL>();
@@ -1548,6 +1627,9 @@ bool CommandProcessor::ExecutePacketType3_LOAD_ALU_CONSTANT(memory::RingBuffer* 
   size_dwords &= 0xFFF;
   uint32_t type = (offset_type >> 16) & 0xFF;
   uint32_t* xlat_address = memory_->TranslatePhysical<uint32_t*>(address);
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnMemoryRead(address & 0x1FFFFFFF, size_dwords * sizeof(uint32_t));
+  }
   switch (type) {
     case 0:  // ALU
       WriteALURangeFromMem(index, xlat_address, size_dwords);
@@ -1592,6 +1674,9 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD(memory::RingBuffer* reader, ui
   uint32_t size_dwords = start_size & 0xFFFF;  // dwords
   assert_true(start == 0);
 
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnMemoryRead(addr & 0x1FFFFFFF, size_dwords * sizeof(uint32_t));
+  }
   auto shader =
       LoadShader(shader_type, addr, memory_->TranslatePhysical<uint32_t*>(addr), size_dwords);
   switch (shader_type) {

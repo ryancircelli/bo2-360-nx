@@ -1,0 +1,383 @@
+/**
+ * GPU frame capture. See frame_capture.h.
+ *
+ * Hook placement and the trace layout follow Xenia's TraceWriter usage in
+ * src/xenia/gpu/command_processor.cc (BSD-3, Copyright Ben Vanik). Unlike
+ * Xenia, which records memory from each backend's shared memory upload path,
+ * guest memory is recorded here from the backend agnostic command processor
+ * at draw time (index buffer, vertex fetch ranges and texture fetch ranges of
+ * the active shaders), so the same capture works for every GPU backend that
+ * runs the shared CommandProcessor.
+ */
+
+#include "frame_capture.h"
+
+#include <algorithm>
+#include <bit>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+
+#include <rex/graphics/command_processor.h>
+#include <rex/graphics/pipeline/shader/shader.h>
+#include <rex/graphics/pipeline/texture/info.h>
+#include <rex/graphics/pipeline/texture/util.h>
+#include <rex/graphics/register_file.h>
+#include <rex/graphics/registers.h>
+#include <rex/graphics/util/draw.h>
+#include <rex/hash.h>
+#include <rex/logging.h>
+#include <rex/string/buffer.h>
+#include <rex/system/xmemory.h>
+
+#include "trace_access.h"
+
+namespace rex::graphics::trace {
+
+namespace {
+
+bool ParseUint(const char* text, uint64_t& out) {
+  if (!text || !*text) {
+    return false;
+  }
+  char* end = nullptr;
+  unsigned long long value = std::strtoull(text, &end, 0);
+  if (end == text) {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+}  // namespace
+
+std::unique_ptr<TraceHooks> FrameCapture::CreateFromEnvironment(memory::Memory* memory) {
+  const char* frame_env = std::getenv("REX_GPU_TRACE_FRAME");
+  const char* trigger_env = std::getenv("REX_GPU_TRACE_TRIGGER");
+  if ((!frame_env || !*frame_env) && (!trigger_env || !*trigger_env)) {
+    return nullptr;
+  }
+  FrameCaptureConfig config;
+  uint64_t value = 0;
+  if (ParseUint(frame_env, value)) {
+    config.start_frame = int64_t(value);
+  }
+  if (ParseUint(std::getenv("REX_GPU_TRACE_FRAMES"), value) && value) {
+    config.frame_count = uint32_t(value);
+  }
+  if (const char* dir = std::getenv("REX_GPU_TRACE_DIR"); dir && *dir) {
+    config.directory = dir;
+  }
+  if (trigger_env && *trigger_env) {
+    config.trigger_file = trigger_env;
+  }
+  REXGPU_INFO("GPU trace capture armed: frame={} frames={} dir={} trigger={}", config.start_frame,
+              config.frame_count, config.directory.string(), config.trigger_file.string());
+  return std::make_unique<FrameCapture>(memory, std::move(config));
+}
+
+FrameCapture::FrameCapture(memory::Memory* memory, FrameCaptureConfig config)
+    : memory_(memory), config_(std::move(config)) {}
+
+FrameCapture::~FrameCapture() { EndTrace(); }
+
+void FrameCapture::RequestCapture(uint32_t frame_count) {
+  pending_frames_ = std::max<uint32_t>(frame_count, 1);
+}
+
+void FrameCapture::OnPrimaryBufferStart(uint32_t base_ptr, uint32_t count) {
+  if (writer_.is_open()) {
+    writer_.WritePrimaryBufferStart(base_ptr, count);
+  }
+}
+
+void FrameCapture::OnPrimaryBufferEnd() {
+  if (writer_.is_open()) {
+    writer_.WritePrimaryBufferEnd();
+  }
+}
+
+void FrameCapture::OnIndirectBufferStart(uint32_t base_ptr, uint32_t count) {
+  if (writer_.is_open()) {
+    writer_.WriteIndirectBufferStart(base_ptr, count);
+  }
+}
+
+void FrameCapture::OnIndirectBufferEnd() {
+  if (writer_.is_open()) {
+    writer_.WriteIndirectBufferEnd();
+  }
+}
+
+void FrameCapture::OnPacketStart(const uint8_t* ring_base, uint32_t ring_capacity,
+                                 uint32_t read_offset, uint32_t dword_count) {
+  if (!writer_.is_open()) {
+    return;
+  }
+  // Copy out with ring wrap so the trace holds the packet contiguously, as
+  // the replayer copies it to base_ptr and executes it from there.
+  packet_scratch_.resize(dword_count);
+  uint8_t* dst = reinterpret_cast<uint8_t*>(packet_scratch_.data());
+  uint32_t bytes = dword_count * uint32_t(sizeof(uint32_t));
+  uint32_t first = std::min(bytes, ring_capacity - read_offset);
+  std::memcpy(dst, ring_base + read_offset, first);
+  if (first < bytes) {
+    std::memcpy(dst + first, ring_base, bytes - first);
+  }
+  uint32_t base_ptr = uint32_t(ring_base + read_offset - memory_->physical_membase());
+  writer_.WritePacketStart(base_ptr, packet_scratch_.data(), dword_count);
+}
+
+void FrameCapture::OnPacketEnd() {
+  if (writer_.is_open()) {
+    writer_.WritePacketEnd();
+  }
+}
+
+void FrameCapture::OnMemoryRead(uint32_t physical_address, uint32_t length) {
+  if (writer_.is_open()) {
+    CaptureRange(physical_address & 0x1FFFFFFF, length);
+  }
+}
+
+void FrameCapture::OnDrawEnd(CommandProcessor& cp, const DrawEvent& draw) {
+  if (!writer_.is_open()) {
+    return;
+  }
+  ++traced_draws_;
+  const RegisterFile& regs = TraceAccess::registers(cp);
+  auto mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+
+  if (mode == xenos::EdramMode::kCopy) {
+    // Resolve: the rectangle comes from vertex fetch constant 0, the output is
+    // regenerated by the replaying GPU so later reads of it are not recorded.
+    xenos::xe_gpu_vertex_fetch_t fetch = regs.GetVertexFetch(0);
+    if (fetch.type == xenos::FetchConstantType::kVertex) {
+      CaptureRange(fetch.address << 2, fetch.size << 2);
+    }
+    draw_util::ResolveInfo info;
+    if (draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info) &&
+        info.copy_dest_extent_length) {
+      AddResolvedRange(info.copy_dest_extent_start, info.copy_dest_extent_length);
+    }
+    return;
+  }
+
+  if (draw.is_indexed && draw.index_length_bytes) {
+    CaptureRange(draw.index_guest_base & 0x1FFFFFFF, draw.index_length_bytes);
+  }
+
+  Shader* shaders[2] = {cp.active_vertex_shader(), cp.active_pixel_shader()};
+  string::StringBuffer ucode_disasm;
+  for (Shader* shader : shaders) {
+    if (!shader) {
+      continue;
+    }
+    if (!shader->is_ucode_analyzed()) {
+      shader->AnalyzeUcode(ucode_disasm);
+    }
+    for (const auto& binding : shader->vertex_bindings()) {
+      xenos::xe_gpu_vertex_fetch_t fetch = regs.GetVertexFetch(binding.fetch_constant);
+      if (fetch.type != xenos::FetchConstantType::kVertex || !fetch.size) {
+        continue;
+      }
+      CaptureRange(fetch.address << 2, fetch.size << 2);
+    }
+    for (const auto& binding : shader->texture_bindings()) {
+      xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(binding.fetch_constant);
+      if (fetch.type != xenos::FetchConstantType::kTexture) {
+        continue;
+      }
+      uint32_t width_minus_1, height_minus_1, depth_minus_1;
+      uint32_t base_page, mip_page, mip_max_level;
+      texture_util::GetSubresourcesFromFetchConstant(fetch, &width_minus_1, &height_minus_1,
+                                                     &depth_minus_1, &base_page, &mip_page,
+                                                     nullptr, &mip_max_level);
+      if (!base_page && !mip_page) {
+        continue;
+      }
+      texture_util::TextureGuestLayout layout = texture_util::GetGuestTextureLayout(
+          fetch.dimension, fetch.pitch, width_minus_1 + 1, height_minus_1 + 1, depth_minus_1 + 1,
+          fetch.tiled, GetBaseFormat(fetch.format), fetch.packed_mips, base_page != 0,
+          mip_max_level);
+      if (base_page && layout.base.level_data_extent_bytes) {
+        CaptureRange(base_page << 12, layout.base.level_data_extent_bytes);
+      }
+      if (mip_page && layout.mips_total_extent_bytes) {
+        CaptureRange(mip_page << 12, layout.mips_total_extent_bytes);
+      }
+    }
+  }
+}
+
+void FrameCapture::OnSwap(CommandProcessor& cp, uint32_t frontbuffer_ptr, uint32_t width,
+                          uint32_t height) {
+  ++swaps_seen_;
+  if (writer_.is_open()) {
+    // The front buffer itself is produced by a resolve inside the trace.
+    (void)frontbuffer_ptr;
+    (void)width;
+    (void)height;
+    writer_.WriteEvent(EventCommand::Type::kSwap);
+    writer_.Flush();
+    if (frames_left_) {
+      --frames_left_;
+    }
+    if (!frames_left_) {
+      EndTrace();
+    }
+    return;
+  }
+
+  if (!config_.trigger_file.empty()) {
+    std::error_code ec;
+    if (std::filesystem::exists(config_.trigger_file, ec)) {
+      uint32_t frames = config_.frame_count;
+      {
+        std::ifstream in(config_.trigger_file);
+        uint64_t requested = 0;
+        if (in >> requested && requested) {
+          frames = uint32_t(requested);
+        }
+      }
+      std::filesystem::path done = config_.trigger_file;
+      done += ".done";
+      std::filesystem::remove(done, ec);
+      std::filesystem::rename(config_.trigger_file, done, ec);
+      if (ec) {
+        std::filesystem::remove(config_.trigger_file, ec);
+      }
+      RequestCapture(frames);
+    }
+  }
+  if (config_.start_frame >= 0 && int64_t(swaps_seen_) >= config_.start_frame) {
+    config_.start_frame = -1;
+    RequestCapture(config_.frame_count);
+  }
+  if (pending_frames_) {
+    frames_left_ = pending_frames_;
+    pending_frames_ = 0;
+    BeginTrace(cp);
+  }
+}
+
+void FrameCapture::BeginTrace(CommandProcessor& cp) {
+  uint32_t title_id = TraceAccess::title_id(cp);
+  char name[64];
+  std::snprintf(name, sizeof(name), "%08X_%u.xtr", title_id, swaps_seen_);
+  std::filesystem::path path = config_.directory / name;
+  if (!writer_.Open(path, title_id)) {
+    REXGPU_ERROR("GPU trace: failed to open {}", path.string());
+    frames_left_ = 0;
+    return;
+  }
+  written_ranges_.clear();
+  resolved_ranges_.clear();
+  traced_draws_ = 0;
+
+  // Initial state, as Xenia's CommandProcessor::InitializeTrace.
+  const RegisterFile& regs = TraceAccess::registers(cp);
+  writer_.WriteRegisters(0, regs.values, RegisterFile::kRegisterCount, false);
+  uint8_t gamma[TraceAccess::kGammaRampBytes];
+  uint8_t rw_component = 0;
+  TraceAccess::ReadGammaRamp(cp, gamma, rw_component);
+  writer_.WriteGammaRamp(gamma, uint32_t(sizeof(gamma)), rw_component);
+
+  // Shaders loaded before the trace started are still bound. Re-create them
+  // with synthetic IM_LOAD_IMMEDIATE packets at a scratch address; every
+  // guest range read later in the trace is written after these, so the
+  // scratch contents cannot leak into the replayed frame.
+  for (Shader* shader : {cp.active_vertex_shader(), cp.active_pixel_shader()}) {
+    if (!shader || !shader->ucode_dword_count()) {
+      continue;
+    }
+    uint32_t size_dwords = uint32_t(shader->ucode_dword_count());
+    uint32_t count = 2 + size_dwords;
+    std::vector<uint32_t> packet;
+    packet.reserve(1 + count);
+    packet.push_back(std::byteswap((3u << 30) | (((count - 1) & 0x3FFF) << 16) |
+                                   (uint32_t(xenos::PM4_IM_LOAD_IMMEDIATE) << 8)));
+    packet.push_back(std::byteswap(uint32_t(shader->type())));
+    packet.push_back(std::byteswap(size_dwords & 0xFFFF));
+    for (uint32_t i = 0; i < size_dwords; ++i) {
+      packet.push_back(std::byteswap(shader->ucode_dwords()[i]));
+    }
+    writer_.WritePacketStart(kSyntheticPacketAddress, packet.data(), uint32_t(packet.size()));
+    writer_.WritePacketEnd();
+  }
+  REXGPU_INFO("GPU trace: recording {} frame(s) to {}", frames_left_, path.string());
+}
+
+void FrameCapture::EndTrace() {
+  if (!writer_.is_open()) {
+    return;
+  }
+  REXGPU_INFO("GPU trace: wrote {} ({} draws, {} bytes)", writer_.path().string(), traced_draws_,
+              writer_.bytes_written());
+  writer_.Close();
+  written_ranges_.clear();
+  resolved_ranges_.clear();
+}
+
+void FrameCapture::AddResolvedRange(uint32_t address, uint32_t length) {
+  address &= 0x1FFFFFFF;
+  uint32_t start = address;
+  uint32_t end = address + length;
+  // Merge with overlapping or adjacent ranges.
+  auto it = resolved_ranges_.upper_bound(start);
+  if (it != resolved_ranges_.begin()) {
+    auto prev = std::prev(it);
+    if (prev->second >= start) {
+      start = prev->first;
+      end = std::max(end, prev->second);
+      it = resolved_ranges_.erase(prev);
+    }
+  }
+  while (it != resolved_ranges_.end() && it->first <= end) {
+    end = std::max(end, it->second);
+    it = resolved_ranges_.erase(it);
+  }
+  resolved_ranges_.emplace(start, end);
+}
+
+void FrameCapture::CaptureRange(uint32_t address, uint32_t length) {
+  if (!length) {
+    return;
+  }
+  address &= 0x1FFFFFFF;
+  uint32_t end = std::min<uint64_t>(uint64_t(address) + length, 0x20000000);
+  // Subtract the resolved ranges and record the remaining pieces.
+  uint32_t cursor = address;
+  auto it = resolved_ranges_.upper_bound(cursor);
+  if (it != resolved_ranges_.begin()) {
+    --it;
+  }
+  for (; it != resolved_ranges_.end() && it->first < end; ++it) {
+    if (it->second <= cursor) {
+      continue;
+    }
+    if (it->first > cursor) {
+      CaptureRangeUnfiltered(cursor, it->first - cursor);
+    }
+    cursor = std::max(cursor, it->second);
+    if (cursor >= end) {
+      return;
+    }
+  }
+  if (cursor < end) {
+    CaptureRangeUnfiltered(cursor, end - cursor);
+  }
+}
+
+void FrameCapture::CaptureRangeUnfiltered(uint32_t address, uint32_t length) {
+  const uint8_t* data = memory_->TranslatePhysical(address);
+  uint64_t hash = XXH3_64bits(data, length);
+  auto it = written_ranges_.find(address);
+  if (it != written_ranges_.end() && it->second.length == length && it->second.hash == hash) {
+    return;
+  }
+  written_ranges_[address] = {length, hash};
+  writer_.WriteMemoryRead(address, data, length);
+}
+
+}  // namespace rex::graphics::trace
