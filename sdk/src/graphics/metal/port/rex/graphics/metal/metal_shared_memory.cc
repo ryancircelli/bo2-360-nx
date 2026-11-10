@@ -450,6 +450,8 @@ bool MetalSharedMemory::Initialize() {
   upload_buffer_pool_ = std::make_unique<MetalUploadBufferPool>(
       device, rex::align(ui::GraphicsUploadBufferPool::kDefaultPageSize,
                         size_t(1) << page_size_log2()));
+  marked_gpu_access_cache_.fill(MarkedGpuAccessRange());
+  dedupe_gpu_access_ = REXCVAR_GET(metal_dedupe_gpu_access);
   page_last_main_gpu_access_submission_.assign(kBufferSize >> page_size_log2(),
                                                0);
   page_standalone_gpu_access_counts_.assign(kBufferSize >> page_size_log2(), 0);
@@ -485,6 +487,16 @@ void MetalSharedMemory::MarkGpuAccess(uint32_t start, uint32_t length,
   if (end <= start) {
     return;
   }
+  MarkedGpuAccessRange& marked =
+      marked_gpu_access_cache_[((start >> 8) ^ (length * 0x9E3779B1u)) &
+                               (kMarkedGpuAccessCacheSize - 1)];
+  if (dedupe_gpu_access_ && marked.start == start && marked.length == length &&
+      marked.submission >= submission_index) {
+    return;
+  }
+  marked.start = start;
+  marked.length = length;
+  marked.submission = submission_index;
   uint32_t page_first = start >> page_size_log2();
   uint32_t page_last = static_cast<uint32_t>((end - 1) >> page_size_log2());
   page_last = std::min<uint32_t>(

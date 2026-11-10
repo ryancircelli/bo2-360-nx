@@ -14,6 +14,7 @@ DECLARE_bool(metal_allow_tearing);
 DECLARE_bool(metal_backend_telemetry);
 DECLARE_int32(metal_backend_telemetry_interval);
 DECLARE_bool(metal_constant_payload_cache);
+DECLARE_bool(metal_dedupe_gpu_access);
 DECLARE_bool(metal_encode_thread);
 DECLARE_bool(metal_direct_host_resolve);
 DECLARE_bool(metal_float_constants_dirty_on_change);
