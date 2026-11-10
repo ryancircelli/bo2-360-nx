@@ -506,6 +506,38 @@ inline void DestroyFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& d
   dfn.vkDestroyFramebuffer(device, framebuffer, nullptr);
 }
 
+// A descriptor pool for `counts`: true and the pool in `out` if created. The sizes are listed in a fixed
+// order (sampled images, samplers, uniform buffers, dynamic uniform buffers), kinds with no descriptors left out.
+inline bool CreatePool(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, const PoolCounts& counts,
+                       VkDescriptorPool& out) {
+  VkDescriptorPoolSize sizes[4];
+  uint32_t n = 0;
+  if (counts.sampled_images) sizes[n++] = {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, counts.sampled_images};
+  if (counts.samplers) sizes[n++] = {VK_DESCRIPTOR_TYPE_SAMPLER, counts.samplers};
+  if (counts.uniform_buffers) sizes[n++] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, counts.uniform_buffers};
+  if (counts.uniform_buffers_dynamic) {
+    sizes[n++] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, counts.uniform_buffers_dynamic};
+  }
+  VkDescriptorPoolCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  info.flags = counts.update_after_bind ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT : 0;
+  info.maxSets = counts.max_sets;
+  info.poolSizeCount = n;
+  info.pPoolSizes = sizes;
+  return dfn.vkCreateDescriptorPool(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+// `count` sets from `pool`, one per layout in `layouts`, into `out`: true if allocated.
+inline bool AllocateSets(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorPool pool,
+                         uint32_t count, const VkDescriptorSetLayout* layouts, VkDescriptorSet* out) {
+  VkDescriptorSetAllocateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  info.descriptorPool = pool;
+  info.descriptorSetCount = count;
+  info.pSetLayouts = layouts;
+  return dfn.vkAllocateDescriptorSets(device, &info, out) == VK_SUCCESS;
+}
+
 // Descriptor writes, one vkUpdateDescriptorSets each. Metal writes the same slots into the heaps' argument buffers.
 // A sampled image at `element` of `binding` (the bindless heaps use binding 0 and the slot as the element).
 inline void WriteSampledImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorSet set,

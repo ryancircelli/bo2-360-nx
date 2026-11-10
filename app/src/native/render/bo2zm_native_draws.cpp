@@ -10743,25 +10743,15 @@ class VulkanDrawsImpl final : public VulkanDraws {
         generation_slot_[i].assign(kCapacityHeap[i], 0);
       }
     }
-    const VkDescriptorPoolSize sizes[2] = {
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-         kCapacityHeap[0] + kCapacityHeap[1] + kCapacityHeap[2]},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, kCapacityHeap[3]}};
-    VkDescriptorPoolCreateInfo info_pool{};
-    info_pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    info_pool.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    info_pool.maxSets = 4;
-    info_pool.poolSizeCount = 2;
-    info_pool.pPoolSizes = sizes;
-    if (dfn_.vkCreateDescriptorPool(device_, &info_pool, nullptr, &pool_) != VK_SUCCESS) {
+    gpu::PoolCounts counts_heaps{};
+    counts_heaps.max_sets = 4;
+    counts_heaps.sampled_images = kCapacityHeap[0] + kCapacityHeap[1] + kCapacityHeap[2];
+    counts_heaps.samplers = kCapacityHeap[3];
+    counts_heaps.update_after_bind = true;
+    if (!gpu::vulkan::CreatePool(dfn_, device_, counts_heaps, pool_)) {
       return false;
     }
-    VkDescriptorSetAllocateInfo reserve{};
-    reserve.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    reserve.descriptorPool = pool_;
-    reserve.descriptorSetCount = 4;
-    reserve.pSetLayouts = layouts_.data();
-    if (dfn_.vkAllocateDescriptorSets(device_, &reserve, sets_.data()) != VK_SUCCESS) {
+    if (!gpu::vulkan::AllocateSets(dfn_, device_, pool_, 4, layouts_.data(), sets_.data())) {
       return false;
     }
     // --- Set 4, the constants through dynamic UBOs ------------------------------------------------------
@@ -10806,23 +10796,16 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (dfn_.vkCreateDescriptorSetLayout(device_, &info_ubo, nullptr, &layout_ubo_) != VK_SUCCESS) {
       return false;
     }
-    const VkDescriptorPoolSize size_ubo{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 3 * uint32_t(sets_ubo_.size())};
-    VkDescriptorPoolCreateInfo info_pool_ubo{};
-    info_pool_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    info_pool_ubo.maxSets = uint32_t(sets_ubo_.size());
-    info_pool_ubo.poolSizeCount = 1;
-    info_pool_ubo.pPoolSizes = &size_ubo;
-    if (dfn_.vkCreateDescriptorPool(device_, &info_pool_ubo, nullptr, &pool_ubo_) != VK_SUCCESS) {
+    gpu::PoolCounts counts_ubo{};
+    counts_ubo.max_sets = uint32_t(sets_ubo_.size());
+    counts_ubo.uniform_buffers_dynamic = 3 * uint32_t(sets_ubo_.size());
+    if (!gpu::vulkan::CreatePool(dfn_, device_, counts_ubo, pool_ubo_)) {
       return false;
     }
     std::array<VkDescriptorSetLayout, kSlotsOfJob> layouts_ubo;
     layouts_ubo.fill(layout_ubo_);
-    VkDescriptorSetAllocateInfo reserve_ubo{};
-    reserve_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    reserve_ubo.descriptorPool = pool_ubo_;
-    reserve_ubo.descriptorSetCount = uint32_t(sets_ubo_.size());
-    reserve_ubo.pSetLayouts = layouts_ubo.data();
-    if (dfn_.vkAllocateDescriptorSets(device_, &reserve_ubo, sets_ubo_.data()) != VK_SUCCESS) {
+    if (!gpu::vulkan::AllocateSets(dfn_, device_, pool_ubo_, uint32_t(sets_ubo_.size()), layouts_ubo.data(),
+                                   sets_ubo_.data())) {
       return false;
     }
     for (size_t slot = 0; slot < sets_ubo_.size(); ++slot) {

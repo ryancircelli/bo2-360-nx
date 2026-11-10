@@ -143,6 +143,17 @@ enum BorderColor : uint32_t { kBorderTransparentBlack = 0, kBorderOpaqueWhite = 
 // No upper limit on the level of detail (VK_LOD_CLAMP_NONE).
 inline constexpr float kLodUnclamped = 1000.0f;
 
+// What a descriptor pool holds: `max_sets` sets and the descriptors of each kind across them.
+// `update_after_bind` for the bindless heaps (written while bound). Metal sizes argument buffers from it.
+struct PoolCounts {
+  uint32_t max_sets = 0;
+  uint32_t sampled_images = 0;
+  uint32_t samplers = 0;
+  uint32_t uniform_buffers = 0;
+  uint32_t uniform_buffers_dynamic = 0;
+  bool update_after_bind = false;
+};
+
 struct SamplerDesc {
   Filter mag = kFilterNearest;
   Filter min = kFilterNearest;
