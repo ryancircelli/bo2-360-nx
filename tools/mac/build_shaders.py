@@ -81,6 +81,17 @@ def main():
                     if n.endswith(".bin") and not os.path.exists(os.path.join(unique, n)):
                         os.replace(os.path.join(path, n), os.path.join(unique, n))
         shutil.rmtree(zones_dir, ignore_errors=True)
+    # The shaders linked into the executable itself (not in any zone): BO2 creates six of them at renderer start
+    # (sub_824E3108). Also run on an existing --work, which then gains only these.
+    image_dir = os.path.join(work, "image")
+    shutil.rmtree(image_dir, ignore_errors=True)
+    subprocess.run([sys.executable, "-I", os.path.join(ROOT, "tools", "inspect", "ff_shaders.py"), "--image-shaders",
+                    "--dump", "--out", image_dir, "--xex-image", a.image], check=True, stdout=subprocess.DEVNULL)
+    for dp, _, fn in os.walk(image_dir):
+        for n in fn:
+            if n.endswith(".bin") and not os.path.exists(os.path.join(unique, n)):
+                os.replace(os.path.join(dp, n), os.path.join(unique, n))
+    shutil.rmtree(image_dir, ignore_errors=True)
     count = len(os.listdir(unique))
     if count > MAX_SHADERS:
         sys.exit(f"{count} shaders, more than one library holds ({MAX_SHADERS})")

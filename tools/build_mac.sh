@@ -17,6 +17,8 @@
 #
 # Inputs (override with the variables):
 #   BO2_ISO   the disc image (default: ~/Games/Xbox360/roms/Call of Duty - Black Ops II (World).iso)
+#   BO2_OUT   the app build folder (default: $BO2_BUILD/out/mac-arm64); BO2_RUN the play folder (default:
+#             $BO2_BUILD/run), so parallel worktrees keep their own
 #   BO2_TU    the Title Update 18 package (default: the only file in $BO2_BUILD/TU/), as dumped from a console
 #             (an STFS/LIVE package holding default_mp.xexp). Its default_mp.xexp must be TU18's.
 #   VULKAN_SDK the LunarG Vulkan SDK's macOS folder, for dxc (default: the newest ~/VulkanSDK/*/macOS)
@@ -28,7 +30,7 @@ BO2_ISO="${BO2_ISO:-$HOME/Games/Xbox360/roms/Call of Duty - Black Ops II (World)
 DATA="$BO2_BUILD/data"
 OUT="${BO2_OUT:-$BO2_BUILD/out/mac-arm64}"
 HOST="$ROOT/out/host-mac"
-RUN="$BO2_BUILD/run"
+RUN="${BO2_RUN:-$BO2_BUILD/run}"
 PY="${PYTHON:-python3}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"
 
