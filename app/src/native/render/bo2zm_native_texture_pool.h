@@ -105,7 +105,13 @@ inline constexpr uint32_t kBlockPoolInvalid = UINT32_MAX;
 // (NOUVEAU_HORIZON_BIND_ALIGN_B, horizon/nouveau_horizon_private.h:21) and NVK already
 // rounds image sizes to that value, so no memory is lost: it is the same rounding the
 // dedicated allocation already pays.
+// On macOS (MoltenVK) nothing rounds to 64 KiB: 4 KiB units, and Allocate still honours the
+// alignment the driver asks for.
+#if defined(__APPLE__)
+inline constexpr uint64_t kUnitPoolBytes = 4ull * 1024ull;
+#else
 inline constexpr uint64_t kUnitPoolBytes = 64ull * 1024ull;
+#endif
 
 // For the AnnotateGpuMemory report.
 struct TexturePoolState {

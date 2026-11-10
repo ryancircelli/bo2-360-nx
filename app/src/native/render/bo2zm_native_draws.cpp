@@ -540,6 +540,9 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_mipmaps, true, "BO2",
  */
 #if REX_PLATFORM_SWITCH
 constexpr int32_t kDefaultTexturesMbMax = 512;
+#elif defined(__APPLE__)
+// Apple silicon shares tens of GB with the GPU: room for four split-screen views' textures without churn.
+constexpr int32_t kDefaultTexturesMbMax = 768;
 #else
 constexpr int32_t kDefaultTexturesMbMax = 384;
 #endif
