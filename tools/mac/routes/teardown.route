@@ -1,14 +1,9 @@
-# Plays Town Survival, ends the game from the pause menu, and starts a second match from the Local lobby, so the
-# first match is torn down and a new one built. The run fails on any "unregistered function" line (boot_test.sh
-# CHECK_PATTERNS). Pause menu, as recorded on the 23:37 build: RESUME GAME, RESTART LEVEL, OPTIONS, EXTRAS,
-# END GAME; it opens on RESUME GAME, so END GAME is 4 downs. The confirm prompt defaults to No: press up, then a.
-# The game then returns to the Local lobby with the players still in it, START MATCH selected.
-# Times are on the script clock (starts with the process); the match starts about 20 s after the lobby opens
-# (45 to 60 s under load). Check the captures: pause menu, confirm prompt, lobby, second match.
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to teardown.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
 duration_s = 300
 players = 1
 BO2ZM_TEST_START = zm_transit town zstandard zsurvival
-BO2ZM_TEST_START_WAIT_S = 30
 BO2ZM_TEST_ALL_GOD = true
 BO2ZM_BENCHMARK = false
-BO2ZM_TEST_BUTTONS = 100:start,103:down,104:down,105:down,106:down,108:a,112:up,114:a,150:a
+# pause, END GAME (4 downs), confirm defaults to No (up first), then back in the lobby start again
+BO2ZM_TEST_BUTTONS = wait_log "the game's client is in a match" 90, 20:start, 3:down, 1:down, 1:down, 1:down, 2:a, 4:up, 2:a, 40:a

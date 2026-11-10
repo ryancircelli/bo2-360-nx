@@ -1,0 +1,9 @@
+# Zombies Town, player 0 invulnerable, walk loop. Reproducible 3 minutes for frame-time comparisons.
+duration_s = 340
+players = 1
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = true
+BO2ZM_BENCHMARK_S = 180
+# Menu navigation then movement (seconds from start). Tune against a real run; the build agent owns the timings.
+BO2ZM_TEST_BUTTONS = 25:down,26:down,27:a,60-90:look_right,90-120:up,120-150:look_left,150-180:up

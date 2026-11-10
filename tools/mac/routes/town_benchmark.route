@@ -1,9 +1,9 @@
-# Zombies Town, player 0 invulnerable, walk loop. Reproducible 3 minutes for frame-time comparisons.
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to town_benchmark.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
 duration_s = 340
 players = 1
 BO2ZM_TEST_START = zm_transit town zstandard zsurvival
 BO2ZM_TEST_ALL_GOD = true
 BO2ZM_BENCHMARK = true
 BO2ZM_BENCHMARK_S = 180
-# Menu navigation then movement (seconds from start). Tune against a real run; the build agent owns the timings.
-BO2ZM_TEST_BUTTONS = 25:down,26:down,27:a,60-90:look_right,90-120:up,120-150:look_left,150-180:up
+BO2ZM_TEST_BUTTONS = wait_log "the game's client is in a match" 90, 5:down, 6:down, 7:a, 40-70:look_right, 70-100:up, 100-130:look_left, 130-160:up

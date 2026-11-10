@@ -23,9 +23,23 @@ while [ $# -gt 0 ]; do case "$1" in
   --video) video=1; shift;; --open) useopen=1; shift;; --keep-running) keep=1; shift;; --pads) pads="$2"; shift 2;; --strict) strict=1; shift;; --port-offset) portoff="$2"; shift 2;;
   *) echo "unknown option $1" >&2; exit 2;; esac; done
 [ -f "$route" ] || { [ -f "$here/routes/$route.route" ] && route="$here/routes/$route.route"; }
+[ -f "$route" ] || { [ -f "$here/routes/$route.route.timed" ] && route="$here/routes/$route.route.timed"; }
 [ -f "$route" ] || { echo "no route file: $route" >&2; exit 2; }
 [ -n "$app$exe" ] || { echo "--app or --exe is required" >&2; exit 2; }
-rname="$(basename "$route" .route)"
+# Event routes (wait_log steps) need an SDK with the wait_log step. Look for the string in the binary and its dylibs;
+# without it (or with --pads game) the route's .timed twin is used, when it has one.
+_xd="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"
+_bin="$([ -n "$exe" ] && echo "$exe" || ls "$app"/Contents/MacOS/bo2zm 2>/dev/null)"
+if grep -q '^BO2ZM_TEST_BUTTONS.*wait_log' "$route" 2>/dev/null; then
+  if [ "$pads" = sdk ] && grep -l 'wait_log' "$_bin" "$_xd"/*.dylib 2>/dev/null | grep -q .; then
+    echo "wait_log: supported by this build, using the event route $(basename "$route")"
+  elif [ -f "$route.timed" ]; then
+    echo "wait_log: NOT supported by this build (or --pads game), using $(basename "$route").timed"; route="$route.timed"
+  else
+    echo "wait_log: NOT supported by this build and $(basename "$route") has no .timed twin" >&2; exit 2
+  fi
+fi
+rname="$(basename "$route" .timed)"; rname="$(basename "$rname" .route)"
 [ -n "$out" ] || out="/tmp/bo2-boot-test/$rname-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out/support" "$out/logs" "$out/captures"
 [ -z "$ref" ] && [ -n "$video" ] || true

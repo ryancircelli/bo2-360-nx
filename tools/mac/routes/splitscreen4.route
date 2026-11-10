@@ -1,7 +1,5 @@
-# 4-player split screen, Town Survival. Pads are scripted by the SDK (REX_HID_VIRTUAL_PAD_SCRIPT, set by boot_test.sh;
-# the SDK reads the BO2ZM_TEST_BUTTONS* keys below), so the harness does not export them to the game.
-# The Local lobby opens about 15 s after start and stays open 25 s; players 2 to 4 press A at 44, 46 and 48 s of the script clock (it starts with the process; under load the lobby opens at about 40 s, unloaded at about 15 s, so lower these when the machine is quiet) to join (Start does not join). Player 1 starts the match by itself
-# (BO2ZM_TEST_START). Walk timings for player 1 are copied from town_benchmark and still want a real run to tune.
+# Event-based version (needs a build with the SDK wait_log step; boot_test.sh falls back to splitscreen4.route.timed otherwise).
+# Pad clocks count from the end of each wait_log. Markers: Local lobby open, the game's client is in a match.
 duration_s = 340
 players = 4
 BO2ZM_TEST_START = zm_transit town zstandard zsurvival
@@ -9,8 +7,8 @@ BO2ZM_TEST_START_WAIT_S = 55
 BO2ZM_TEST_ALL_GOD = true
 BO2ZM_BENCHMARK = true
 BO2ZM_BENCHMARK_S = 180
-BO2ZM_TEST_BUTTONS = 60-90:look_right,90-120:up,120-150:look_left,150-180:up
-BO2ZM_TEST_BUTTONS_P2 = 44:a
-BO2ZM_TEST_BUTTONS_P3 = 46:a
-BO2ZM_TEST_BUTTONS_P4 = 48:a
+BO2ZM_TEST_BUTTONS = wait_log "the game's client is in a match" 90, 40-70:look_right, 70-100:up, 100-130:look_left, 130-160:up
+BO2ZM_TEST_BUTTONS_P2 = wait_log Local lobby open 60, 3:a
+BO2ZM_TEST_BUTTONS_P3 = wait_log Local lobby open 60, 5:a
+BO2ZM_TEST_BUTTONS_P4 = wait_log Local lobby open 60, 7:a
 compare_quadrants = true
