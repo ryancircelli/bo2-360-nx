@@ -29,6 +29,7 @@ set(REXGPU_METAL_COMMON_SOURCES
 )
 
 set(REXGPU_METAL_SOURCES
+  port/rex/graphics/trace_writer.cc
   port/rex/graphics/metal/metal_deferred_render_encoder.cc
   port/rex/graphics/metal/metal_frame_dump.cc
   port/rex/graphics/metal/metal_frame_log.cc
