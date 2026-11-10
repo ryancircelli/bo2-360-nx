@@ -83,10 +83,14 @@ class Device {
   void* Function(std::string_view name);
   // The name of a shader's function: vs_/ps_ then the 16 hex digits of its hash, then _ez for the
   // early-fragment-tests variant of a pixel shader.
+  // The same function specialized with `constant` as function constant 0 (the pack shaders'
+  // g_SpecConstants), as an id<MTLFunction> kept by the device; nullptr if it cannot be made.
+  void* SpecializedFunction(std::string_view name, uint32_t constant);
   static std::string FunctionName(bool vertex, uint64_t hash, bool early_z = false);
 
  private:
   struct State;
+  void* Specialized(std::string_view name, bool specialized, uint32_t constant);
   explicit Device(std::unique_ptr<State> state);
   std::unique_ptr<State> state_;
   std::string name_;

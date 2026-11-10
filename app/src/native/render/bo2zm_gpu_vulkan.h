@@ -14,6 +14,21 @@
 #include <type_traits>
 #include <vector>
 
+#if BO2ZM_NATIVE_METAL
+#include "metal/bo2zm_gpu_metal_mirror.h"
+// Gives the call to the Metal mirror when it is on (see metal/bo2zm_gpu_metal_mirror.h).
+#define BO2ZM_MIRROR(call)                                                         \
+  do {                                                                             \
+    if (auto* bo2zm_mirror = ::bo2zm::native::gpu::metal::Mirror::Get()) {         \
+      bo2zm_mirror->call;                                                          \
+    }                                                                              \
+  } while (0)
+#else
+#define BO2ZM_MIRROR(call) \
+  do {                     \
+  } while (0)
+#endif
+
 static_assert(std::is_same_v<bo2zm::native::gpu::CommandList, VkCommandBuffer>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Image, VkImage>);
 static_assert(std::is_same_v<bo2zm::native::gpu::ImageView, VkImageView>);
@@ -175,17 +190,23 @@ class Recorder {
   Loaded& loaded() { return loaded_; }
   const Loaded& loaded() const { return loaded_; }
 
-  void SetViewport(VkCommandBuffer c, const Viewport& v) const { dfn_.vkCmdSetViewport(c, 0, 1, ToVk(&v)); }
+  void SetViewport(VkCommandBuffer c, const Viewport& v) const {
+    dfn_.vkCmdSetViewport(c, 0, 1, ToVk(&v));
+    BO2ZM_MIRROR(SetViewport(c, v));
+  }
   void SetScissor(VkCommandBuffer c, const Rect& r) const {
     const VkRect2D s = ToVk(r);
     dfn_.vkCmdSetScissor(c, 0, 1, &s);
+    BO2ZM_MIRROR(SetScissor(c, r));
   }
   void SetBlendConstants(VkCommandBuffer c, const float constants[4]) const {
     dfn_.vkCmdSetBlendConstants(c, constants);
+    BO2ZM_MIRROR(SetBlendConstants(c, constants));
   }
   // No clamp: the renderer never clamps the bias.
   void SetDepthBias(VkCommandBuffer c, float constant, float slope) const {
     dfn_.vkCmdSetDepthBias(c, constant, 0.0f, slope);
+    BO2ZM_MIRROR(SetDepthBias(c, constant, slope));
   }
   /*
    * Stencil reference, compare mask and write mask of both faces, each packed as reference | compare << 8 |
@@ -198,12 +219,14 @@ class Recorder {
     dfn_.vkCmdSetStencilCompareMask(c, VK_STENCIL_FACE_BACK_BIT, (back >> 8) & 0xFF);
     dfn_.vkCmdSetStencilWriteMask(c, VK_STENCIL_FACE_FRONT_BIT, (front >> 16) & 0xFF);
     dfn_.vkCmdSetStencilWriteMask(c, VK_STENCIL_FACE_BACK_BIT, (back >> 16) & 0xFF);
+    BO2ZM_MIRROR(SetStencilValues(c, front, back));
   }
 
   // Binding and drawing. The handles are still Vulkan's (VkPipeline, VkPipelineLayout, VkDescriptorSet, VkBuffer)
   // until the resources move behind the layer.
   void BindGraphicsPipeline(VkCommandBuffer c, VkPipeline p) const {
     dfn_.vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+    BO2ZM_MIRROR(BindPipeline(c, p));
   }
   void BindComputePipeline(VkCommandBuffer c, VkPipeline p) const {
     dfn_.vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_COMPUTE, p);
@@ -212,6 +235,7 @@ class Recorder {
   void BindSets(VkCommandBuffer c, VkPipelineLayout layout, uint32_t first, uint32_t count, const VkDescriptorSet* sets,
                 uint32_t n_offsets = 0, const uint32_t* offsets = nullptr) const {
     dfn_.vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, first, count, sets, n_offsets, offsets);
+    BO2ZM_MIRROR(BindSets(c, first, count, sets, n_offsets, offsets));
   }
   // stages: VkShaderStageFlags (vertex 0x1, fragment 0x10, compute 0x20).
   void PushConstants(VkCommandBuffer c, VkPipelineLayout layout, uint32_t stages, uint32_t offset, uint32_t size,
@@ -221,16 +245,20 @@ class Recorder {
   void BindVertexBuffers(VkCommandBuffer c, uint32_t count, const VkBuffer* buffers,
                          const VkDeviceSize* offsets) const {
     dfn_.vkCmdBindVertexBuffers(c, 0, count, buffers, offsets);
+    BO2ZM_MIRROR(BindVertexBuffers(c, count, buffers, offsets));
   }
   void BindIndexBuffer(VkCommandBuffer c, VkBuffer buffer, bool indices_16) const {
     dfn_.vkCmdBindIndexBuffer(c, buffer, 0, indices_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+    BO2ZM_MIRROR(BindIndexBuffer(c, buffer, indices_16));
   }
   // One instance, first instance 0: the renderer never instances.
   void Draw(VkCommandBuffer c, uint32_t count, uint32_t first_vertex) const {
     dfn_.vkCmdDraw(c, count, 1, first_vertex, 0);
+    BO2ZM_MIRROR(Draw(c, count, first_vertex));
   }
   void DrawIndexed(VkCommandBuffer c, uint32_t count, uint32_t first_index, int32_t vertex_offset) const {
     dfn_.vkCmdDrawIndexed(c, count, 1, first_index, vertex_offset, 0);
+    BO2ZM_MIRROR(DrawIndexed(c, count, first_index, vertex_offset));
   }
   void Dispatch(VkCommandBuffer c, uint32_t x, uint32_t y, uint32_t z) const { dfn_.vkCmdDispatch(c, x, y, z); }
 
@@ -271,8 +299,12 @@ class Recorder {
     begin.clearValueCount = n_clears;
     begin.pClearValues = reinterpret_cast<const VkClearValue*>(clears);
     dfn_.vkCmdBeginRenderPass(c, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    BO2ZM_MIRROR(BeginPass(c, pass, framebuffer, area, n_clears, clears));
   }
-  void EndPass(VkCommandBuffer c) const { dfn_.vkCmdEndRenderPass(c); }
+  void EndPass(VkCommandBuffer c) const {
+    dfn_.vkCmdEndRenderPass(c);
+    BO2ZM_MIRROR(EndPass(c));
+  }
   // Clears area (layer 0) of one attachment of the open pass: color attachment color_index, or depth and stencil.
   void ClearAttachment(VkCommandBuffer c, Aspects aspects, uint32_t color_index, const ClearValue& value,
                        const Rect& area) const {
@@ -285,25 +317,30 @@ class Recorder {
     rectangle.baseArrayLayer = 0;
     rectangle.layerCount = 1;
     dfn_.vkCmdClearAttachments(c, 1, &attachment, 1, &rectangle);
+    BO2ZM_MIRROR(ClearAttachment(c, aspects, color_index, value, area));
   }
   void ClearColorImage(VkCommandBuffer c, VkImage image, Layout layout, const ClearColor* color, uint32_t count,
                        const Range* ranges) const {
     dfn_.vkCmdClearColorImage(c, image, VkImageLayout(layout), reinterpret_cast<const VkClearColorValue*>(color),
                               count, reinterpret_cast<const VkImageSubresourceRange*>(ranges));
+    BO2ZM_MIRROR(ClearColorImage(c, image, *color, count, ranges));
   }
   void CopyBuffer(VkCommandBuffer c, VkBuffer source, VkBuffer target, uint32_t count,
                   const BufferCopy* regions) const {
     dfn_.vkCmdCopyBuffer(c, source, target, count, reinterpret_cast<const VkBufferCopy*>(regions));
+    BO2ZM_MIRROR(CopyBuffer(c, source, target, count, regions));
   }
   void CopyBufferToImage(VkCommandBuffer c, VkBuffer source, VkImage target, Layout layout, uint32_t count,
                          const BufferImageCopy* regions) const {
     dfn_.vkCmdCopyBufferToImage(c, source, target, VkImageLayout(layout), count,
                                 reinterpret_cast<const VkBufferImageCopy*>(regions));
+    BO2ZM_MIRROR(CopyBufferToImage(c, source, target, count, regions));
   }
   void CopyImageToBuffer(VkCommandBuffer c, VkImage source, Layout layout, VkBuffer target, uint32_t count,
                          const BufferImageCopy* regions) const {
     dfn_.vkCmdCopyImageToBuffer(c, source, VkImageLayout(layout), target, count,
                                 reinterpret_cast<const VkBufferImageCopy*>(regions));
+    BO2ZM_MIRROR(Skipped("image to buffer copies"));
   }
   // memory: one memory barrier, or none (nullptr). Neither dependency flags nor buffer barriers are used.
   void Barrier(VkCommandBuffer c, Stages source, Stages target, const MemoryBarrier* memory, uint32_t images = 0,
@@ -333,25 +370,30 @@ class Recorder {
   }
   void BeginQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index, VkQueryControlFlags flags) const {
     dfn_.vkCmdBeginQuery(c, pool, index, flags);
+    BO2ZM_MIRROR(Skipped("occlusion queries"));
   }
   void EndQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index) const { dfn_.vkCmdEndQuery(c, pool, index); }
   void CopyImage(VkCommandBuffer c, VkImage source, Layout source_layout, VkImage target,
                  Layout target_layout, uint32_t count, const ImageCopy* regions) const {
     loaded_.copy_image(c, source, VkImageLayout(source_layout), target, VkImageLayout(target_layout), count,
                        reinterpret_cast<const VkImageCopy*>(regions));
+    BO2ZM_MIRROR(CopyImage(c, source, target, count, regions));
   }
   void ClearDepthStencilImage(VkCommandBuffer c, VkImage image, Layout layout, const ClearDepthStencil* value,
                               uint32_t count, const Range* ranges) const {
     loaded_.clear_depth(c, image, VkImageLayout(layout), reinterpret_cast<const VkClearDepthStencilValue*>(value),
                         count, reinterpret_cast<const VkImageSubresourceRange*>(ranges));
+    BO2ZM_MIRROR(ClearDepthStencilImage(c, image, *value, count, ranges));
   }
   void Blit(VkCommandBuffer c, VkImage source, Layout source_layout, VkImage target,
             Layout target_layout, uint32_t count, const ImageBlit* regions, Filter filter) const {
     loaded_.blit(c, source, VkImageLayout(source_layout), target, VkImageLayout(target_layout), count,
                  reinterpret_cast<const VkImageBlit*>(regions), VkFilter(filter));
+    BO2ZM_MIRROR(Blit(c, source, target, count, regions));
   }
   void WriteTimestamp(VkCommandBuffer c, VkPipelineStageFlagBits stage, VkQueryPool pool, uint32_t index) const {
     loaded_.write_timestamp(c, stage, pool, index);
+    BO2ZM_MIRROR(Skipped("timestamps"));
   }
   void ResetQueries(VkCommandBuffer c, VkQueryPool pool, uint32_t first, uint32_t count) const {
     dfn_.vkCmdResetQueryPool(c, pool, first, count);
@@ -375,6 +417,7 @@ class Work {
     VkCommandBufferBeginInfo start{};
     start.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     start.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    BO2ZM_MIRROR(Begin(c));
     return dfn_.vkBeginCommandBuffer(c, &start) == VK_SUCCESS;
   }
   bool End(CommandList c) const { return dfn_.vkEndCommandBuffer(c) == VK_SUCCESS; }
@@ -384,6 +427,7 @@ class Work {
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = count;
     submit.pCommandBuffers = buffers;
+    BO2ZM_MIRROR(Submit(count, buffers));
     return dfn_.vkQueueSubmit(queue, 1, &submit, fence) == VK_SUCCESS;
   }
   // Without waiting.
@@ -524,6 +568,7 @@ HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Functions
       return HostBufferResult::kNoAddress;
     }
   }
+  BO2ZM_MIRROR(BufferCreated(out.buffer, out.data, size));
   return HostBufferResult::kDone;
 }
 
@@ -564,6 +609,7 @@ inline void Flush(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice 
 // Object destruction, one overload per handle type (each is its own type on the 64-bit targets the renderer builds
 // for). Metal releases the matching objects; memory is freed with Free.
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkPipeline object) {
+  BO2ZM_MIRROR(PipelineDestroyed(object));
   dfn.vkDestroyPipeline(device, object, nullptr);
 }
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkPipelineLayout object) {
@@ -580,12 +626,15 @@ inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevic
   dfn.vkDestroyRenderPass(device, object, nullptr);
 }
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImageView object) {
+  BO2ZM_MIRROR(ViewDestroyed(object));
   dfn.vkDestroyImageView(device, object, nullptr);
 }
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImage object) {
+  BO2ZM_MIRROR(ImageDestroyed(object));
   dfn.vkDestroyImage(device, object, nullptr);
 }
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkBuffer object) {
+  BO2ZM_MIRROR(BufferDestroyed(object));
   dfn.vkDestroyBuffer(device, object, nullptr);
 }
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkCommandPool object) {
@@ -640,7 +689,11 @@ inline bool CreatePass(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDe
   info.pAttachments = attachments;
   info.subpassCount = 1;
   info.pSubpasses = &subpass;
-  return dfn.vkCreateRenderPass(device, &info, nullptr, &out) == VK_SUCCESS;
+  const bool made = dfn.vkCreateRenderPass(device, &info, nullptr, &out) == VK_SUCCESS;
+  if (made) {
+    BO2ZM_MIRROR(PassCreated(out, desc));
+  }
+  return made;
 }
 
 // The attachments of a render pass, `width` x `height`, one layer: true and the framebuffer in `out` if created.
@@ -656,11 +709,16 @@ inline bool CreateFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& df
   info.width = width;
   info.height = height;
   info.layers = 1;
-  return dfn.vkCreateFramebuffer(device, &info, nullptr, &out) == VK_SUCCESS;
+  const bool made = dfn.vkCreateFramebuffer(device, &info, nullptr, &out) == VK_SUCCESS;
+  if (made) {
+    BO2ZM_MIRROR(FramebufferCreated(out, pass, count, views, width, height));
+  }
+  return made;
 }
 
 inline void DestroyFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
                                VkFramebuffer framebuffer) {
+  BO2ZM_MIRROR(FramebufferDestroyed(framebuffer));
   dfn.vkDestroyFramebuffer(device, framebuffer, nullptr);
 }
 
@@ -695,7 +753,11 @@ inline bool CreateSetLayout(const rex::ui::vulkan::VulkanDevice::Functions& dfn,
   }
   info.bindingCount = count;
   info.pBindings = vk;
-  return dfn.vkCreateDescriptorSetLayout(device, &info, nullptr, &out) == VK_SUCCESS;
+  const bool made = dfn.vkCreateDescriptorSetLayout(device, &info, nullptr, &out) == VK_SUCCESS;
+  if (made) {
+    BO2ZM_MIRROR(SetLayoutCreated(out, bindings, count));
+  }
+  return made;
 }
 
 // A pipeline layout: `set_count` set layouts and `range_count` push constant ranges. True and the layout in
@@ -741,7 +803,11 @@ inline bool AllocateSets(const rex::ui::vulkan::VulkanDevice::Functions& dfn, Vk
   info.descriptorPool = pool;
   info.descriptorSetCount = count;
   info.pSetLayouts = layouts;
-  return dfn.vkAllocateDescriptorSets(device, &info, out) == VK_SUCCESS;
+  const bool made = dfn.vkAllocateDescriptorSets(device, &info, out) == VK_SUCCESS;
+  if (made) {
+    BO2ZM_MIRROR(SetsAllocated(count, layouts, out));
+  }
+  return made;
 }
 
 // Descriptor writes, one vkUpdateDescriptorSets each. Metal writes the same slots into the heaps' argument buffers.
@@ -761,6 +827,7 @@ inline void WriteSampledImage(const rex::ui::vulkan::VulkanDevice::Functions& df
   write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
   write.pImageInfo = &image;
   dfn.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+  BO2ZM_MIRROR(WriteSampledImage(set, binding, element, view));
 }
 
 inline void WriteSampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorSet set,
@@ -776,6 +843,7 @@ inline void WriteSampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, Vk
   write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
   write.pImageInfo = &image;
   dfn.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+  BO2ZM_MIRROR(WriteSampler(set, binding, element, sampler));
 }
 
 // Uniform buffers at bindings 0 to count - 1 of `set`, in one update. `dynamic`: offsets given when the set is bound
@@ -792,6 +860,9 @@ inline void WriteUniforms(const rex::ui::vulkan::VulkanDevice::Functions& dfn, V
     writes[b].pBufferInfo = &buffers[b];
   }
   dfn.vkUpdateDescriptorSets(device, count, writes, 0, nullptr);
+  for (uint32_t b = 0; b < count; ++b) {
+    BO2ZM_MIRROR(WriteUniform(set, first_binding + b, buffers[b].buffer, buffers[b].offset));
+  }
 }
 
 // A sampler: true and the sampler in `out` if the driver created it. Every field the description does not have is
@@ -812,10 +883,15 @@ inline bool CreateSampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, V
   info.minLod = desc.lod_min;
   info.maxLod = desc.lod_max;
   info.borderColor = VkBorderColor(desc.border);
-  return dfn.vkCreateSampler(device, &info, nullptr, &out) == VK_SUCCESS;
+  const bool made = dfn.vkCreateSampler(device, &info, nullptr, &out) == VK_SUCCESS;
+  if (made) {
+    BO2ZM_MIRROR(SamplerCreated(out, desc));
+  }
+  return made;
 }
 
 inline void DestroySampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkSampler sampler) {
+  BO2ZM_MIRROR(SamplerDestroyed(sampler));
   dfn.vkDestroySampler(device, sampler, nullptr);
 }
 
@@ -832,6 +908,7 @@ inline bool CreateShader(const rex::ui::vulkan::VulkanDevice::Functions& dfn, Vk
 
 inline void DestroyShader(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
                           VkShaderModule shader) {
+  BO2ZM_MIRROR(ShaderDestroyed(shader));
   dfn.vkDestroyShaderModule(device, shader, nullptr);
 }
 
@@ -845,7 +922,11 @@ inline VkResult CreateView(const rex::ui::vulkan::VulkanDevice::Functions& dfn, 
   info.components = {VkComponentSwizzle(desc.swizzle[0]), VkComponentSwizzle(desc.swizzle[1]),
                      VkComponentSwizzle(desc.swizzle[2]), VkComponentSwizzle(desc.swizzle[3])};
   info.subresourceRange = {desc.aspects, 0, desc.levels, 0, desc.layers};
-  return dfn.vkCreateImageView(device, &info, nullptr, &out);
+  const VkResult result = dfn.vkCreateImageView(device, &info, nullptr, &out);
+  if (result == VK_SUCCESS) {
+    BO2ZM_MIRROR(ViewCreated(out, image, desc));
+  }
+  return result;
 }
 
 inline VkImageCreateInfo ImageInfo(const ImageDesc& desc) {
@@ -869,14 +950,22 @@ inline VkImageCreateInfo ImageInfo(const ImageDesc& desc) {
 inline bool CreateImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, const ImageDesc& desc,
                         VkImage& out) {
   const VkImageCreateInfo info = ImageInfo(desc);
-  return dfn.vkCreateImage(device, &info, nullptr, &out) == VK_SUCCESS;
+  const bool made = dfn.vkCreateImage(device, &info, nullptr, &out) == VK_SUCCESS;
+  if (made) {
+    BO2ZM_MIRROR(ImageCreated(out, desc));
+  }
+  return made;
 }
 
 // An image with its own device-local allocation.
 inline bool CreateDedicatedImage(const rex::ui::vulkan::VulkanDevice* device, const ImageDesc& desc, VkImage& out,
                                  VkDeviceMemory& memory) {
-  return rex::ui::vulkan::util::CreateDedicatedAllocationImage(
+  const bool made = rex::ui::vulkan::util::CreateDedicatedAllocationImage(
       device, ImageInfo(desc), rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, out, memory);
+  if (made) {
+    BO2ZM_MIRROR(ImageCreated(out, desc));
+  }
+  return made;
 }
 
 static_assert(sizeof(Requirements) == sizeof(VkMemoryRequirements) &&
@@ -1056,7 +1145,11 @@ inline VkResult CreateGraphicsPipeline(const rex::ui::vulkan::VulkanDevice::Func
   info.basePipelineIndex = -1;
   info.flags = flags;
   out = VK_NULL_HANDLE;
-  return dfn.vkCreateGraphicsPipelines(device, cache, 1, &info, nullptr, &out);
+  const VkResult result = dfn.vkCreateGraphicsPipelines(device, cache, 1, &info, nullptr, &out);
+  if (result == VK_SUCCESS) {
+    BO2ZM_MIRROR(PipelineCreated(out, desc));
+  }
+  return result;
 }
 
 // A compute pipeline from one shader (entry main) and its layout.
