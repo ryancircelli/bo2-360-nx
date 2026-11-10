@@ -159,6 +159,14 @@ class SlabMemory {
 // The Vulkan slabs (vkAllocateMemory without a dedicated image, see Start).
 std::unique_ptr<SlabMemory> VulkanSlabMemory(const rex::ui::vulkan::VulkanDevice* vulkan_device);
 
+#if BO2ZM_NATIVE_METAL
+namespace gpu::metal {
+class Device;
+}
+// The Metal slabs: placement heaps in private storage, one memory type.
+std::unique_ptr<SlabMemory> MetalSlabMemory(gpu::metal::Device& device);
+#endif
+
 class TexturePool {
  public:
   TexturePool() = default;
