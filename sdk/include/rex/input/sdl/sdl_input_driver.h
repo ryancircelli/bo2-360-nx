@@ -42,6 +42,13 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   X_RESULT GetDeviceKeystroke(DeviceId id, uint32_t flags,
                               X_INPUT_KEYSTROKE* out_keystroke) override;
   void OnWindowAvailable(rex::ui::Window* window) override;
+  void OnDeviceUserChanged(DeviceId id, int32_t user) override;
+
+  /// Starts SDL on the calling thread without a window, for tools such as
+  /// rex-padtest. That thread must call PumpHeadless() regularly. Controller
+  /// events are taken even while the app is in the background.
+  bool InitHeadless();
+  void PumpHeadless();
 
  private:
   enum class RepeatState {
@@ -65,6 +72,13 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     bool state_changed;
     bool is_active;
     DeviceId id;
+    // Identity and diagnostics, read once when the pad is opened.
+    std::string serial;
+    uint16_t vendor_id;
+    uint16_t product_id;
+    bool virtual_device;
+    std::string transport;
+    bool can_rumble;
     // Per pad rather than per guest user, so it survives reassignment.
     KeystrokeState keystroke;
   };
@@ -89,6 +103,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   bool TestSDLVersion() const;
   void UpdateXCapabilities(ControllerState& state);
   void QueueControllerUpdate();
+  /// Brings up the SDL events and gamepad subsystems on the calling thread.
+  void InitSubsystems();
+  bool headless_ = false;
 
   rex::ui::Window* attached_window_ = nullptr;
   bool sdl_events_initialized_;

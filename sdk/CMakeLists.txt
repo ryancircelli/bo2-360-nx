@@ -19,6 +19,7 @@ project(ReXGlue
 # Build Options
 #==========================================================
 option(REXGLUE_BUILD_TESTS       "Build PPC instruction and unit tests" OFF)
+option(REXGLUE_BUILD_PADTEST     "Build rex-padtest, the controller test tool" ${PROJECT_IS_TOP_LEVEL})
 # OFF leaves the host tools (codegen, rexglue) out, so a title build never runs the code generator. Used
 # by builds in git worktrees whose generated code is shared with the main checkout.
 option(REXGLUE_BUILD_HOST_TOOLS  "Build the host code generator tools" ON)
@@ -290,6 +291,11 @@ if(NOT REXGLUE_PLATFORM_SWITCH AND REXGLUE_BUILD_HOST_TOOLS)
     # output.
     add_subdirectory(src/codegen)
     add_subdirectory(src/rexglue)
+endif()
+
+# rex-padtest is a desktop tool (SDL controllers); the Switch build leaves it out.
+if(REXGLUE_BUILD_PADTEST AND NOT REXGLUE_PLATFORM_SWITCH)
+    add_subdirectory(tools/padtest)
 endif()
 
 # Add tests subdirectory if tests are enabled

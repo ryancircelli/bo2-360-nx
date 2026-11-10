@@ -45,6 +45,9 @@ class InputDriver {
                                       X_INPUT_KEYSTROKE* out_keystroke) = 0;
 
   virtual void OnWindowAvailable(rex::ui::Window* /*window*/) {}
+  /// The guest user (0-3) a device now feeds, or -1. Drivers with player
+  /// lights show it.
+  virtual void OnDeviceUserChanged(DeviceId /*id*/, int32_t /*user*/) {}
 
   void set_is_active_callback(std::function<bool()> is_active_callback) {
     is_active_callback_ = is_active_callback;

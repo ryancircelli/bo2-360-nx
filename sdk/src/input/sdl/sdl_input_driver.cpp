@@ -17,6 +17,7 @@
 #include <rex/cvar.h>
 #include <rex/input/flags.h>
 #include <rex/input/sdl/sdl_input_driver.h>
+#include <rex/input/steam_detect.h>
 #include <rex/logging.h>
 #include <rex/ui/virtual_key.h>
 
@@ -55,65 +56,95 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
   if (window && !attached_window_) {
     attached_window_ = window;
     window->AddListener(this);
-    window->app_context().CallInUIThreadSynchronous([this]() {
-      // Initialize SDL events subsystem
-      if (!SDL_InitSubSystem(SDL_INIT_EVENTS)) {
-        REXLOG_ERROR("SDL: Failed to init events subsystem: {}", SDL_GetError());
-        return;
-      }
-      sdl_events_initialized_ = true;
-      pending_events_.reserve(64);
+    window->app_context().CallInUIThreadSynchronous([this]() { InitSubsystems(); });
+  }
+}
 
-      // With an event watch we will always get notified, even if the event queue
-      // is full, which can happen if another subsystem does not clear its events.
-      SDL_AddEventWatch(
-          [](void* userdata, SDL_Event* event) -> bool {
-            if (!userdata || !event) {
-              assert_always();
-              return false;
-            }
+void SDLInputDriver::InitSubsystems() {
+  // Initialize SDL events subsystem
+  if (!SDL_InitSubSystem(SDL_INIT_EVENTS)) {
+    REXLOG_ERROR("SDL: Failed to init events subsystem: {}", SDL_GetError());
+    return;
+  }
+  sdl_events_initialized_ = true;
+  pending_events_.reserve(64);
 
-            const auto type = event->type;
-            if (type < SDL_EVENT_JOYSTICK_AXIS_MOTION || type >= SDL_EVENT_FINGER_DOWN) {
-              return false;
-            }
-
-            // If another part of rex uses another SDL subsystem that generates
-            // events, this may seem like a bad idea. They will however not
-            // subscribe to controller events so we get away with that.
-            const auto driver = static_cast<SDLInputDriver*>(userdata);
-            driver->HandleEvent(*event);
-
-            return false;
-          },
-          this);
-
-      // Initialize game controller subsystem
-      if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
-        REXLOG_ERROR("SDL: Failed to init gamecontroller subsystem: {}", SDL_GetError());
-        return;
-      }
-      SDL_Gamepad_initialized_ = true;
-
-      // Load custom controller mappings if available
-      if (!REXCVAR_GET(hid_mappings_file).empty()) {
-        std::filesystem::path mappings_path(REXCVAR_GET(hid_mappings_file));
-        if (!std::filesystem::exists(mappings_path)) {
-          REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
-                      REXCVAR_GET(hid_mappings_file));
-        } else {
-          auto mappings_result =
-              SDL_AddGamepadMappingsFromFile(REXCVAR_GET(hid_mappings_file).c_str());
-          if (mappings_result < 0) {
-            REXLOG_ERROR("SDL GameControllerDB: error loading file '{}': {}.",
-                         REXCVAR_GET(hid_mappings_file), mappings_result);
-          } else {
-            REXLOG_INFO("SDL GameControllerDB: loaded {} mappings.", mappings_result);
-          }
+  // With an event watch we will always get notified, even if the event queue
+  // is full, which can happen if another subsystem does not clear its events.
+  SDL_AddEventWatch(
+      [](void* userdata, SDL_Event* event) -> bool {
+        if (!userdata || !event) {
+          assert_always();
+          return false;
         }
+
+        const auto type = event->type;
+        if (type < SDL_EVENT_JOYSTICK_AXIS_MOTION || type >= SDL_EVENT_FINGER_DOWN) {
+          return false;
+        }
+
+        // If another part of rex uses another SDL subsystem that generates
+        // events, this may seem like a bad idea. They will however not
+        // subscribe to controller events so we get away with that.
+        const auto driver = static_cast<SDLInputDriver*>(userdata);
+        driver->HandleEvent(*event);
+
+        return false;
+      },
+      this);
+
+  // Initialize game controller subsystem
+  if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+    REXLOG_ERROR("SDL: Failed to init gamecontroller subsystem: {}", SDL_GetError());
+    return;
+  }
+  SDL_Gamepad_initialized_ = true;
+
+  // Load custom controller mappings if available
+  if (!REXCVAR_GET(hid_mappings_file).empty()) {
+    std::filesystem::path mappings_path(REXCVAR_GET(hid_mappings_file));
+    if (!std::filesystem::exists(mappings_path)) {
+      REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
+                  REXCVAR_GET(hid_mappings_file));
+    } else {
+      auto mappings_result =
+          SDL_AddGamepadMappingsFromFile(REXCVAR_GET(hid_mappings_file).c_str());
+      if (mappings_result < 0) {
+        REXLOG_ERROR("SDL GameControllerDB: error loading file '{}': {}.",
+                     REXCVAR_GET(hid_mappings_file), mappings_result);
+      } else {
+        REXLOG_INFO("SDL GameControllerDB: loaded {} mappings.", mappings_result);
       }
-      REXLOG_INFO("SDL input driver initialized successfully");
-    });
+    }
+  }
+  REXLOG_INFO("SDL input driver initialized successfully");
+}
+
+bool SDLInputDriver::InitHeadless() {
+  if (sdl_events_initialized_) {
+    return SDL_Gamepad_initialized_;
+  }
+  headless_ = true;
+  // A terminal tool is never the focused app.
+  SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+  InitSubsystems();
+  return sdl_events_initialized_ && SDL_Gamepad_initialized_;
+}
+
+void SDLInputDriver::PumpHeadless() {
+  if (headless_ && sdl_events_initialized_) {
+    SDL_PumpEvents();
+  }
+}
+
+void SDLInputDriver::OnDeviceUserChanged(DeviceId id, int32_t user) {
+  if (!SDL_Gamepad_initialized_) {
+    return;
+  }
+  auto guard = DrainAndLock();
+  if (auto* controller = FindController(id)) {
+    // The pad's player light shows the guest user it feeds; -1 turns it off.
+    SDL_SetGamepadPlayerIndex(controller->sdl, user);
   }
 }
 
@@ -162,6 +193,12 @@ void SDLInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
                      static_cast<int>(sizeof(guid_text)));
     info.guid = guid_text;
     info.synthetic = false;
+    info.serial = controller.serial;
+    info.vendor_id = controller.vendor_id;
+    info.product_id = controller.product_id;
+    info.virtual_device = controller.virtual_device;
+    info.transport = controller.transport;
+    info.can_rumble = controller.can_rumble;
     out.push_back(info);
   }
 }
@@ -463,15 +500,40 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   ControllerState state = {};
   state.sdl = controller;
   state.id = AllocateDeviceId();
+  const char* serial = SDL_GetGamepadSerial(controller);
+  state.serial = serial ? serial : "";
+  state.vendor_id = SDL_GetGamepadVendor(controller);
+  state.product_id = SDL_GetGamepadProduct(controller);
+  const char* pad_name = SDL_GetGamepadName(controller);
+  state.virtual_device = SDL_IsJoystickVirtual(event.gdevice.which) ||
+                         IsSteamVirtualPad(state.vendor_id, state.product_id,
+                                           pad_name ? pad_name : "");
+  switch (SDL_GetGamepadConnectionState(controller)) {
+    case SDL_JOYSTICK_CONNECTION_WIRED:
+      state.transport = "usb";
+      break;
+    case SDL_JOYSTICK_CONNECTION_WIRELESS:
+      state.transport = "bluetooth";
+      break;
+    default:
+      break;
+  }
+  state.can_rumble = SDL_GetBooleanProperty(SDL_GetGamepadProperties(controller),
+                                            SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
   state.state_changed = true;  // XInput starts with packet_number = 1
   UpdateXCapabilities(state);
   controllers_.push_back(state);
 
   const int ordinal = static_cast<int>(controllers_.size()) - 1;
-  SDL_SetGamepadPlayerIndex(controller, ordinal);
+  // No player light until InputSystem picks the guest user
+  // (OnDeviceUserChanged).
+  SDL_SetGamepadPlayerIndex(controller, -1);
 
-  REXLOG_INFO("SDL OnControllerDeviceAdded: connection order {}, device {}.", ordinal,
-              static_cast<uint64_t>(state.id));
+  REXLOG_INFO("SDL OnControllerDeviceAdded: connection order {}, device {}, serial \"{}\", {}{}{}.",
+              ordinal, static_cast<uint64_t>(state.id), state.serial,
+              state.transport.empty() ? "unknown link" : state.transport,
+              state.can_rumble ? ", rumble" : ", no rumble",
+              state.virtual_device ? ", virtual" : "");
 }
 
 void SDLInputDriver::OnControllerDeviceRemovedLocked(const SDL_Event& event) {
@@ -483,11 +545,8 @@ void SDLInputDriver::OnControllerDeviceRemovedLocked(const SDL_Event& event) {
   SDL_CloseGamepad(controllers_.at(*idx).sdl);
   controllers_.erase(controllers_.begin() + static_cast<ptrdiff_t>(*idx));
 
-  // LEDs only. Guest user assignment does not shift, because InputSystem holds
-  // each device's ordinal.
-  for (size_t i = 0; i < controllers_.size(); i++) {
-    SDL_SetGamepadPlayerIndex(controllers_[i].sdl, static_cast<int>(i));
-  }
+  // The other pads keep their guest users and lights: InputSystem holds each
+  // device's ordinal.
   REXLOG_INFO("SDL OnControllerDeviceRemoved: {} device(s) remain.", controllers_.size());
 }
 
@@ -669,6 +728,10 @@ void SDLInputDriver::UpdateXCapabilities(ControllerState& state) {
 }
 
 void SDLInputDriver::QueueControllerUpdate() {
+  if (headless_) {
+    // The tool's own loop pumps (PumpHeadless).
+    return;
+  }
   // Pump SDL events to ensure controller state is up to date.
   bool is_queued = false;
   sdl_pumpevents_queued_.compare_exchange_strong(is_queued, true);

@@ -28,7 +28,8 @@ class DeviceAssignment {
   virtual void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const = 0;
 };
 
-/// Device ordinal N feeds guest user N. Synthetic devices feed user 0.
+/// Device ordinal N feeds guest user N. Synthetic devices feed user 0, or
+/// their fixed_user when they have one.
 class SlotAssignment final : public DeviceAssignment {
  public:
   void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override;

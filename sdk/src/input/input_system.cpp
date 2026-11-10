@@ -9,8 +9,10 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <fstream>
+#include <sstream>
 #include <cmath>
 
 #include <rex/dbg.h>
@@ -20,12 +22,15 @@
 #include <rex/input/input_system.h>
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/nop/nop_input_driver.h>
+#include <rex/input/script/script_input_driver.h>
 #if REX_PLATFORM_SWITCH
 #include <rex/input/switch/switch_input_driver.h>
 #else
 #include <rex/input/sdl/sdl_input_driver.h>
 #endif
+#include <rex/input/state_log.h>
 #include <rex/input/state_merge.h>
+#include <rex/input/steam_detect.h>
 #include <rex/input/xinput/xinput_input_driver.h>
 #include <rex/logging.h>
 
@@ -41,6 +46,40 @@ REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-thro
 REXCVAR_DEFINE_BOOL(input_vibration, false, "Input",
                     "Controller vibration (off by default: the controllers only get "
                     "zero vibration). true = the game's vibration");
+
+REXCVAR_DEFINE_STRING(input_player_slots, "", "Input",
+                      "Pin controllers to players, e.g. \"1=<serial>;2=054c:0ce6;3=Xbox\": each "
+                      "player 1-4 takes the pad whose serial, GUID or vid:pid equals the text, or "
+                      "whose name contains it. rex-padtest prints these for each pad. Pads not "
+                      "pinned take players in connection order");
+REXCVAR_DEFINE_STRING(input_virtual_pads, "after", "Input",
+                      "Software-made pads (Steam Input's virtual pad): after = never player 1, "
+                      "normal = like any pad, ignore = hidden from the game")
+    .allowed({"after", "normal", "ignore"});
+REXCVAR_DEFINE_BOOL(input_remember_slots, true, "Input",
+                    "A controller that disconnects gets its player back when it reconnects");
+REXCVAR_DEFINE_BOOL(input_log_state, false, "Input",
+                    "Log every controller's player and state every 0.5 s (env REX_INPUT_LOG_STATE=1)");
+
+REXCVAR_DEFINE_INT32(hid_virtual_pads, 0, "Input",
+                     "Scripted virtual pads on players 1-N, for testing split screen without "
+                     "controllers. Each replays hid_virtual_pad1..4 or the matching line of "
+                     "hid_virtual_pad_script; a pad without a script stays connected and idle")
+    .range(0, 4);
+REXCVAR_DEFINE_STRING(hid_virtual_pad_script, "", "Input",
+                      "File of virtual pad scripts: \"pad1 = 25:down,27:a\" lines up to pad4 "
+                      "(a bo2 .route file works as is). Sets the pad count when "
+                      "hid_virtual_pads is 0");
+REXCVAR_DEFINE_STRING(hid_virtual_pad1, "", "Input",
+                      "Virtual pad 1 script: \"25:a,60-90:stick_up+look_right,100-105:disconnect\" "
+                      "(seconds from startup). Overrides the script file");
+REXCVAR_DEFINE_STRING(hid_virtual_pad2, "", "Input", "Virtual pad 2 script (see hid_virtual_pad1)");
+REXCVAR_DEFINE_STRING(hid_virtual_pad3, "", "Input", "Virtual pad 3 script (see hid_virtual_pad1)");
+REXCVAR_DEFINE_STRING(hid_virtual_pad4, "", "Input", "Virtual pad 4 script (see hid_virtual_pad1)");
+REXCVAR_DEFINE_INT32(hid_virtual_pad_look_speed, 35, "Input",
+                     "Right stick tilt of look_* in virtual pad scripts, in percent")
+    .range(1, 100);
+
 namespace rex::input {
 
 namespace {
@@ -49,6 +88,20 @@ namespace {
 // a real pad off guest user 0. SlotAssignment routes them by their synthetic
 // flag and never reads this value.
 constexpr uint32_t kSyntheticOrdinal = UINT32_MAX;
+
+constexpr auto kStateLogInterval = std::chrono::milliseconds(500);
+
+std::string DescribeDevice(const DeviceInfo& info) {
+  std::string text = fmt::format("\"{}\"", info.name.empty() ? "?" : info.name);
+  if (info.vendor_id || info.product_id) {
+    text += fmt::format(" {:04x}:{:04x}", info.vendor_id, info.product_id);
+  }
+  text += " " + DeviceIdentityKey(info);
+  if (info.virtual_device) {
+    text += " (virtual)";
+  }
+  return text;
+}
 
 }  // namespace
 
@@ -68,6 +121,18 @@ X_STATUS InputSystem::Setup() {
   std::lock_guard lock(mutex_);
   accepting_queries_ = true;
   return X_STATUS_SUCCESS;
+}
+
+X_RESULT InputSystem::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) {
+  std::lock_guard lock(mutex_);
+  if (!accepting_queries_) {
+    return X_ERROR_DEVICE_NOT_CONNECTED;
+  }
+  auto* driver = DriverForDevice(id);
+  if (!driver || !vibration) {
+    return X_ERROR_DEVICE_NOT_CONNECTED;
+  }
+  return driver->SetDeviceVibration(id, vibration);
 }
 
 void InputSystem::Shutdown() {
@@ -130,6 +195,25 @@ void InputSystem::SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignme
   }
 }
 
+void InputSystem::ApplySlotConfig() {
+  const std::string& pins_text = REXCVAR_GET(input_player_slots);
+  if (pins_text != applied_pins_text_) {
+    applied_pins_text_ = pins_text;
+    std::string error;
+    slot_table_.SetPins(ParseSlotPins(pins_text, &error));
+    if (!error.empty()) {
+      REXLOG_WARN("input_player_slots: {}", error);
+    }
+    for (const auto& pin : slot_table_.pins()) {
+      REXLOG_INFO("input_player_slots: player {} is the pad matching \"{}\"", pin.user + 1,
+                  pin.match);
+    }
+  }
+  slot_table_.SetVirtualPolicy(
+      ParseVirtualPadPolicy(REXCVAR_GET(input_virtual_pads)).value_or(VirtualPadPolicy::kAfterPhysical));
+  slot_table_.SetRememberDisconnected(REXCVAR_GET(input_remember_slots));
+}
+
 void InputSystem::RefreshDevices() {
   /*
    * At most one enumeration every 50 ms.
@@ -150,6 +234,8 @@ void InputSystem::RefreshDevices() {
     }
     last_refresh_ns_ = now;
   }
+  ApplySlotConfig();
+
   std::vector<DeviceInfo> seen;
   std::vector<InputDriver*> owners;
   std::vector<DeviceInfo> enumerated;
@@ -157,6 +243,14 @@ void InputSystem::RefreshDevices() {
     enumerated.clear();
     driver->EnumerateDevices(enumerated);
     for (auto& info : enumerated) {
+      if (info.virtual_device && !info.synthetic &&
+          slot_table_.virtual_policy() == VirtualPadPolicy::kIgnore) {
+        if (ignored_virtual_.insert(info.id).second) {
+          REXLOG_WARN("Input: ignoring virtual pad {} (input_virtual_pads = ignore).",
+                      DescribeDevice(info));
+        }
+        continue;
+      }
       seen.push_back(info);
       owners.push_back(driver.get());
     }
@@ -177,10 +271,32 @@ void InputSystem::RefreshDevices() {
     changed = true;
   }
 
+  // Departures first, so a pad that left and came back within one refresh
+  // finds its reservation.
+  for (const auto& old : devices_) {
+    if (std::none_of(seen.begin(), seen.end(),
+                     [&](const DeviceInfo& d) { return d.id == old.id; })) {
+      active_devices_.Forget(old.id);
+      changed = true;
+      if (!old.synthetic) {
+        slot_table_.OnDisconnected(old);
+        REXLOG_INFO("Input: player {} disconnected: {}{}", old.ordinal + 1, DescribeDevice(old),
+                    old.ordinal < kMaxGuestUsers && REXCVAR_GET(input_remember_slots)
+                        ? "; the player is kept for it until another pad needs it"
+                        : "");
+      }
+    }
+  }
+
   // Runs after the carry-forward pass so a new device cannot take an ordinal a
-  // live one is still holding. Lowest free rather than a growing counter,
-  // because a reconnected pad arrives as a new device and would otherwise walk
-  // off the end of the guest users.
+  // live one is still holding. New pads are placed one at a time in the
+  // drivers' connection order, each seeing the ones placed before it.
+  std::vector<DeviceInfo> live;
+  for (size_t i = 0; i < seen.size(); i++) {
+    if (!fresh[i] || seen[i].synthetic) {
+      live.push_back(seen[i]);
+    }
+  }
   for (size_t i = 0; i < seen.size(); i++) {
     if (!fresh[i]) {
       continue;
@@ -189,31 +305,27 @@ void InputSystem::RefreshDevices() {
     // guest user 0 however many synthetic devices enumerated ahead of it.
     if (seen[i].synthetic) {
       seen[i].ordinal = kSyntheticOrdinal;
-      fresh[i] = false;
       continue;
     }
-    auto taken = [&](uint32_t candidate) {
-      for (size_t j = 0; j < seen.size(); j++) {
-        if (!fresh[j] && !seen[j].synthetic && seen[j].ordinal == candidate) {
-          return true;
-        }
-      }
-      return false;
-    };
-    uint32_t ordinal = 0;
-    while (taken(ordinal)) {
-      ordinal++;
+    seen[i].ordinal = slot_table_.AssignOrdinal(seen[i], live);
+    live.push_back(seen[i]);
+    if (seen[i].ordinal < kMaxGuestUsers) {
+      REXLOG_INFO("Input: player {} connected: {}", seen[i].ordinal + 1, DescribeDevice(seen[i]));
+    } else {
+      REXLOG_WARN("Input: {} connected, but all {} players already have a controller; it is not "
+                  "used until one leaves and it is reconnected.",
+                  DescribeDevice(seen[i]), kMaxGuestUsers);
     }
-    seen[i].ordinal = ordinal;
-    fresh[i] = false;
-  }
-
-  for (const auto& old : devices_) {
-    if (std::none_of(seen.begin(), seen.end(),
-                     [&](const DeviceInfo& d) { return d.id == old.id; })) {
-      active_devices_.Forget(old.id);
-      changed = true;
+#if !REX_PLATFORM_SWITCH
+    if (IsSteamVirtualPad(seen[i].vendor_id, seen[i].product_id, seen[i].name) &&
+        !steam_virtual_warned_) {
+      steam_virtual_warned_ = true;
+      REXLOG_WARN(
+          "Input: {} is Steam Input's virtual pad, so Steam has taken a real controller. "
+          "Disable Steam Input for this game or quit Steam to use the controller directly.",
+          DescribeDevice(seen[i]));
     }
+#endif
   }
 
   std::vector<size_t> order(seen.size());
@@ -234,6 +346,76 @@ void InputSystem::RefreshDevices() {
 
   if (changed && assignment_) {
     assignment_->OnDevicesChanged(devices_);
+    // Player lights follow the guest user, not the driver's own order.
+    for (size_t i = 0; i < devices_.size(); i++) {
+      if (!devices_[i].synthetic) {
+        device_owners_[i]->OnDeviceUserChanged(devices_[i].id, UserForDeviceLocked(devices_[i].id));
+      }
+    }
+  }
+}
+
+int32_t InputSystem::UserForDevice(DeviceId id) const {
+  std::lock_guard lock(mutex_);
+  return UserForDeviceLocked(id);
+}
+
+int32_t InputSystem::UserForDeviceLocked(DeviceId id) const {
+  if (!assignment_) {
+    return -1;
+  }
+  std::vector<DeviceId> ids;
+  for (uint32_t user = 0; user < kMaxGuestUsers; user++) {
+    assignment_->DevicesForUser(user, ids);
+    if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
+      return static_cast<int32_t>(user);
+    }
+  }
+  return -1;
+}
+
+std::vector<InputSystem::DeviceSnapshot> InputSystem::SnapshotDevices() {
+  std::lock_guard lock(mutex_);
+  std::vector<DeviceSnapshot> out;
+  if (!accepting_queries_) {
+    return out;
+  }
+  RefreshDevices();
+  out.reserve(devices_.size());
+  for (size_t i = 0; i < devices_.size(); i++) {
+    DeviceSnapshot snap;
+    snap.info = devices_[i];
+    snap.user = UserForDeviceLocked(devices_[i].id);
+    snap.has_state = device_owners_[i]->GetDeviceState(devices_[i].id, &snap.state) ==
+                     X_ERROR_SUCCESS;
+    snap.has_caps = device_owners_[i]->GetDeviceCapabilities(devices_[i].id, 0, &snap.caps) ==
+                    X_ERROR_SUCCESS;
+    out.push_back(std::move(snap));
+  }
+  return out;
+}
+
+void InputSystem::LogStateIfDue() {
+  if (!REXCVAR_GET(input_log_state)) {
+    return;
+  }
+  const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  int64_t last = last_state_log_ms_.load();
+  if (now - last < kStateLogInterval.count() ||
+      !last_state_log_ms_.compare_exchange_strong(last, now)) {
+    return;
+  }
+  const auto snapshots = SnapshotDevices();
+  if (snapshots.empty()) {
+    REXLOG_INFO("Input state: no controllers");
+  }
+  for (const auto& snap : snapshots) {
+    const std::string player =
+        snap.user >= 0 ? fmt::format("P{}", snap.user + 1) : std::string("--");
+    REXLOG_INFO("Input state: {} {} {}", player, DescribeDevice(snap.info),
+                snap.has_state ? FormatGamepad(snap.state.gamepad) : std::string("no state"));
   }
 }
 
@@ -285,6 +467,8 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
 }
 
 X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+  // Before mutex_: the state log takes it itself.
+  LogStateIfDue();
   SCOPE_profile_cpu_f("hid");
   std::lock_guard lock(mutex_);
   if (!accepting_queries_ || !assignment_) {
@@ -402,10 +586,64 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
   return any_connected ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
 }
 
+std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
+#if REX_PLATFORM_SWITCH
+  // Switch layer: scripted pads and Steam detection are desktop tools; the Switch build leaves them out.
+  return nullptr;
+#else
+  script::ScriptFile file;
+  const std::string& path = REXCVAR_GET(hid_virtual_pad_script);
+  if (!path.empty()) {
+    std::ifstream stream(path);
+    if (!stream) {
+      REXLOG_ERROR("hid_virtual_pad_script: cannot read '{}'", path);
+    } else {
+      std::stringstream text;
+      text << stream.rdbuf();
+      file = script::ParseScriptFile(text.str());
+    }
+  }
+  const std::array<std::string, kMaxGuestUsers> inline_scripts = {
+      REXCVAR_GET(hid_virtual_pad1), REXCVAR_GET(hid_virtual_pad2),
+      REXCVAR_GET(hid_virtual_pad3), REXCVAR_GET(hid_virtual_pad4)};
+  int count = REXCVAR_GET(hid_virtual_pads);
+  if (count == 0) {
+    count = std::clamp(file.pad_count, 0, static_cast<int>(kMaxGuestUsers));
+  }
+  if (count == 0) {
+    return nullptr;
+  }
+  const int look = file.look_speed > 0 ? file.look_speed : REXCVAR_GET(hid_virtual_pad_look_speed);
+  std::vector<std::vector<script::Step>> scripts;
+  for (int i = 0; i < count; i++) {
+    const std::string& text = inline_scripts[i].empty() ? file.pads[i] : inline_scripts[i];
+    std::string error;
+    scripts.push_back(script::ParseScript(text, &error));
+    if (!error.empty()) {
+      REXLOG_WARN("Virtual pad {}: {}", i + 1, error);
+    }
+    REXLOG_INFO("Virtual pad {} on player {}: {} step(s){}", i + 1, i + 1, scripts.back().size(),
+                scripts.back().empty() ? ", idle" : "");
+  }
+  return std::make_unique<script::ScriptInputDriver>(std::move(scripts), look);
+#endif
+}
+
 std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
   auto input = std::make_unique<InputSystem>(nullptr);
 
   if (!tool_mode) {
+    // First, so the script pads are on their players before any controller.
+    if (auto script_driver = CreateScriptPadDriverFromConfig()) {
+      input->AddDriver(std::move(script_driver));
+    }
+
+#if !REX_PLATFORM_SWITCH
+    const std::string steam_warning = SteamInputWarning(DetectSteamInput());
+    if (!steam_warning.empty()) {
+      REXLOG_WARN("Input: {}", steam_warning);
+    }
+#endif
 #if REX_PLATFORM_WIN32
     if (REXCVAR_GET(input_backend) == "xinput") {
       auto xinput_driver = std::make_unique<xinput::XinputInputDriver>(nullptr, 0);

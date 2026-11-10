@@ -10,13 +10,18 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <rex/input/device_assignment.h>
 #include <rex/input/input.h>
 #include <rex/input/input_driver.h>
+#include <rex/input/slot_table.h>
 #include <rex/input/state_merge.h>
 #include <rex/system/interfaces/input.h>
 
@@ -48,6 +53,29 @@ class InputSystem : public system::IInputSystem {
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
 
+  /// One device as the guest sees it, for diagnostics (rex-padtest, the state
+  /// log).
+  struct DeviceSnapshot {
+    DeviceInfo info;
+    int32_t user = -1;  // guest user it feeds, -1 for none
+    X_INPUT_STATE state = {};
+    bool has_state = false;
+    X_INPUT_CAPABILITIES caps = {};
+    bool has_caps = false;
+  };
+  /// Re-enumerates and reads every device's raw state (no deadzones, no UI
+  /// blockers).
+  std::vector<DeviceSnapshot> SnapshotDevices();
+
+  /// With input_log_state on, logs every pad's state at most every 0.5 s.
+  /// GetState calls it; tools that only take snapshots call it themselves.
+  void LogStateIfDue();
+  /// Guest user a device feeds, or -1.
+  int32_t UserForDevice(DeviceId id) const;
+  /// Rumbles one device directly, bypassing the guest user mapping.
+  X_RESULT SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration);
+  const SlotTable& slot_table() const { return slot_table_; }
+
  private:
   // Queries hold mutex_ through driver calls: cache entries, assignment and
   // active state must belong to the same device generation. Polling driver
@@ -68,6 +96,10 @@ class InputSystem : public system::IInputSystem {
   /// Re-enumerates every driver and notifies the assignment when the set
   /// changed.
   void RefreshDevices();
+  /// Reads the slot cvars into slot_table_.
+  void ApplySlotConfig();
+  /// UserForDevice without taking mutex_.
+  int32_t UserForDeviceLocked(DeviceId id) const;
   InputDriver* DriverForDevice(DeviceId id);
   const DeviceInfo* DeviceInfoFor(DeviceId id) const;
 
@@ -87,7 +119,16 @@ class InputSystem : public system::IInputSystem {
   // to be called on every GetState, SetState and GetCapabilities from the game (several per frame),
   // allocating memory and querying every driver each time. See RefreshDevices.
   int64_t last_refresh_ns_ = 0;
+
+  SlotTable slot_table_;
+  std::string applied_pins_text_;
+  std::set<DeviceId> ignored_virtual_;
+  bool steam_virtual_warned_ = false;
+  std::atomic<int64_t> last_state_log_ms_{0};
 };
+
+/// The scripted virtual pads the hid_virtual_pad* cvars ask for, or null.
+std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig();
 
 /// Create a default InputSystem with SDL + NOP drivers.
 /// In tool mode, only the NOP driver is added.
