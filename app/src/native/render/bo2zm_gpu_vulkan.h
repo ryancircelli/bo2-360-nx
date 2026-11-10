@@ -64,7 +64,7 @@ class Recorder {
   using Functions = rex::ui::vulkan::VulkanDevice::Functions;
 
   // The dynamic state setters loaded by name (EDS1/EDS2 core in 1.3, EDS3 the extension); null if missing.
-  struct DynamicState {
+  struct Loaded {
     PFN_vkCmdSetCullMode cull_mode = nullptr;
     PFN_vkCmdSetFrontFace front_face = nullptr;
     PFN_vkCmdSetPrimitiveTopology topology = nullptr;
@@ -78,13 +78,18 @@ class Recorder {
     PFN_vkCmdSetColorBlendEnableEXT blend_enable = nullptr;
     PFN_vkCmdSetColorBlendEquationEXT blend_equation = nullptr;
     PFN_vkCmdSetColorWriteMaskEXT color_mask = nullptr;
+    // Not in the SDK's table either; queued through deferred::Wrap like the others.
+    PFN_vkCmdCopyImage copy_image = nullptr;
+    PFN_vkCmdClearDepthStencilImage clear_depth = nullptr;
+    PFN_vkCmdBlitImage blit = nullptr;
+    PFN_vkCmdWriteTimestamp write_timestamp = nullptr;
   };
 
   explicit Recorder(const Functions& dfn) : dfn_(dfn) {}
 
   const Functions& functions() const { return dfn_; }
-  DynamicState& dynamic() { return dynamic_; }
-  const DynamicState& dynamic() const { return dynamic_; }
+  Loaded& loaded() { return loaded_; }
+  const Loaded& loaded() const { return loaded_; }
 
   void SetViewport(VkCommandBuffer c, const Viewport& v) const { dfn_.vkCmdSetViewport(c, 0, 1, ToVk(&v)); }
   void SetScissor(VkCommandBuffer c, const Rect& r) const {
@@ -145,28 +150,28 @@ class Recorder {
   }
   void Dispatch(VkCommandBuffer c, uint32_t x, uint32_t y, uint32_t z) const { dfn_.vkCmdDispatch(c, x, y, z); }
 
-  void SetCullMode(VkCommandBuffer c, CullMode v) const { dynamic_.cull_mode(c, VkCullModeFlags(v)); }
-  void SetFrontFace(VkCommandBuffer c, FrontFace v) const { dynamic_.front_face(c, VkFrontFace(v)); }
-  void SetTopology(VkCommandBuffer c, Topology v) const { dynamic_.topology(c, VkPrimitiveTopology(v)); }
-  void SetPrimitiveRestart(VkCommandBuffer c, bool on) const { dynamic_.restart(c, VkBool32(on)); }
-  void SetDepthBiasEnable(VkCommandBuffer c, bool on) const { dynamic_.depth_bias(c, VkBool32(on)); }
-  void SetDepthTest(VkCommandBuffer c, bool on) const { dynamic_.depth_test(c, VkBool32(on)); }
-  void SetDepthWrite(VkCommandBuffer c, bool on) const { dynamic_.depth_write(c, VkBool32(on)); }
-  void SetDepthCompare(VkCommandBuffer c, CompareOp v) const { dynamic_.depth_compare(c, VkCompareOp(v)); }
-  void SetStencilTest(VkCommandBuffer c, bool on) const { dynamic_.stencil_test(c, VkBool32(on)); }
+  void SetCullMode(VkCommandBuffer c, CullMode v) const { loaded_.cull_mode(c, VkCullModeFlags(v)); }
+  void SetFrontFace(VkCommandBuffer c, FrontFace v) const { loaded_.front_face(c, VkFrontFace(v)); }
+  void SetTopology(VkCommandBuffer c, Topology v) const { loaded_.topology(c, VkPrimitiveTopology(v)); }
+  void SetPrimitiveRestart(VkCommandBuffer c, bool on) const { loaded_.restart(c, VkBool32(on)); }
+  void SetDepthBiasEnable(VkCommandBuffer c, bool on) const { loaded_.depth_bias(c, VkBool32(on)); }
+  void SetDepthTest(VkCommandBuffer c, bool on) const { loaded_.depth_test(c, VkBool32(on)); }
+  void SetDepthWrite(VkCommandBuffer c, bool on) const { loaded_.depth_write(c, VkBool32(on)); }
+  void SetDepthCompare(VkCommandBuffer c, CompareOp v) const { loaded_.depth_compare(c, VkCompareOp(v)); }
+  void SetStencilTest(VkCommandBuffer c, bool on) const { loaded_.stencil_test(c, VkBool32(on)); }
   // ops: fail, pass, depth fail, compare.
   void SetStencilOps(VkCommandBuffer c, StencilFace faces, const uint32_t ops[4]) const {
-    dynamic_.stencil_op(c, VkStencilFaceFlags(faces), VkStencilOp(ops[0]), VkStencilOp(ops[1]),
+    loaded_.stencil_op(c, VkStencilFaceFlags(faces), VkStencilOp(ops[0]), VkStencilOp(ops[1]),
                         VkStencilOp(ops[2]), VkCompareOp(ops[3]));
   }
   void SetBlendEnable(VkCommandBuffer c, uint32_t count, const uint32_t* enable) const {
-    dynamic_.blend_enable(c, 0, count, enable);
+    loaded_.blend_enable(c, 0, count, enable);
   }
   void SetBlendEquations(VkCommandBuffer c, uint32_t count, const BlendEquation* equations) const {
-    dynamic_.blend_equation(c, 0, count, reinterpret_cast<const VkColorBlendEquationEXT*>(equations));
+    loaded_.blend_equation(c, 0, count, reinterpret_cast<const VkColorBlendEquationEXT*>(equations));
   }
   void SetColorMasks(VkCommandBuffer c, uint32_t count, const ColorMask* masks) const {
-    dynamic_.color_mask(c, 0, count, masks);
+    loaded_.color_mask(c, 0, count, masks);
   }
 
   // Render passes, clears, copies, barriers and queries. These still take the Vulkan structures (the images,
@@ -204,13 +209,29 @@ class Recorder {
     dfn_.vkCmdBeginQuery(c, pool, index, flags);
   }
   void EndQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index) const { dfn_.vkCmdEndQuery(c, pool, index); }
+  void CopyImage(VkCommandBuffer c, VkImage source, VkImageLayout source_layout, VkImage target,
+                 VkImageLayout target_layout, uint32_t count, const VkImageCopy* regions) const {
+    loaded_.copy_image(c, source, source_layout, target, target_layout, count, regions);
+  }
+  void ClearDepthStencilImage(VkCommandBuffer c, VkImage image, VkImageLayout layout,
+                              const VkClearDepthStencilValue* value, uint32_t count,
+                              const VkImageSubresourceRange* ranges) const {
+    loaded_.clear_depth(c, image, layout, value, count, ranges);
+  }
+  void Blit(VkCommandBuffer c, VkImage source, VkImageLayout source_layout, VkImage target,
+            VkImageLayout target_layout, uint32_t count, const VkImageBlit* regions, VkFilter filter) const {
+    loaded_.blit(c, source, source_layout, target, target_layout, count, regions, filter);
+  }
+  void WriteTimestamp(VkCommandBuffer c, VkPipelineStageFlagBits stage, VkQueryPool pool, uint32_t index) const {
+    loaded_.write_timestamp(c, stage, pool, index);
+  }
   void ResetQueries(VkCommandBuffer c, VkQueryPool pool, uint32_t first, uint32_t count) const {
     dfn_.vkCmdResetQueryPool(c, pool, first, count);
   }
 
  private:
   const Functions& dfn_;
-  DynamicState dynamic_;
+  Loaded loaded_;
 };
 
 }  // namespace vulkan
