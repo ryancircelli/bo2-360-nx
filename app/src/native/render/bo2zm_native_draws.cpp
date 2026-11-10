@@ -2028,8 +2028,6 @@ struct UninitializedAllocator : std::allocator<T> {
 };
 
 using FnBufferAddress = VkDeviceAddress(VKAPI_PTR*)(VkDevice, const VkBufferDeviceAddressInfo*);
-using FnCopyImage = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage,
-                                        VkImageLayout, uint32_t, const VkImageCopy*);
 
 float Float(uint32_t value) {
   return std::bit_cast<float>(value);
@@ -3013,7 +3011,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     address_buffer_ = reinterpret_cast<FnBufferAddress>(
         vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
                                                                           "vkGetBufferDeviceAddress"));
-    copy_image_ = reinterpret_cast<FnCopyImage>(deferred::Wrap(
+    gpu_.loaded().copy_image = reinterpret_cast<PFN_vkCmdCopyImage>(deferred::Wrap(
         "vkCmdCopyImage",
         vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
     LoadCachePipelines();
@@ -11688,7 +11686,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       extension = (layers - 1) * stride_face + extent_layer;
     }
 
-    if (cube && copy_image_) {
+    if (cube && gpu_.loaded().copy_image) {
       // The game's dynamic cubemap: C2 resolves its faces one by one to those same addresses. They are
       // copied to the cubemap's layers in the upload command buffer, which runs before the work one, so they
       // lag one frame behind.
@@ -11731,7 +11729,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
             copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, c, 1};
             copy.extent = {width, height, 1};
-            copy_image_(upload, faces[c]->image, VK_IMAGE_LAYOUT_GENERAL, texture.image.image,
+            gpu_.CopyImage(upload, faces[c]->image, VK_IMAGE_LAYOUT_GENERAL, texture.image.image,
                            VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
           }
           // Reflection diagnostic: how many times the faces are copied to the cubemap per submission.
@@ -15078,33 +15076,34 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const auto request = [&](const char* label) {
       return deferred::Wrap(label, ifn.vkGetDeviceProcAddr(device_, label));
     };
-    gpu_.dynamic().cull_mode = reinterpret_cast<PFN_vkCmdSetCullMode>(request("vkCmdSetCullMode"));
-    gpu_.dynamic().front_face = reinterpret_cast<PFN_vkCmdSetFrontFace>(request("vkCmdSetFrontFace"));
-    gpu_.dynamic().topology = reinterpret_cast<PFN_vkCmdSetPrimitiveTopology>(request("vkCmdSetPrimitiveTopology"));
-    gpu_.dynamic().restart = reinterpret_cast<PFN_vkCmdSetPrimitiveRestartEnable>(request("vkCmdSetPrimitiveRestartEnable"));
-    gpu_.dynamic().depth_bias = reinterpret_cast<PFN_vkCmdSetDepthBiasEnable>(request("vkCmdSetDepthBiasEnable"));
-    gpu_.dynamic().depth_test = reinterpret_cast<PFN_vkCmdSetDepthTestEnable>(request("vkCmdSetDepthTestEnable"));
-    gpu_.dynamic().depth_write = reinterpret_cast<PFN_vkCmdSetDepthWriteEnable>(request("vkCmdSetDepthWriteEnable"));
-    gpu_.dynamic().depth_compare = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(request("vkCmdSetDepthCompareOp"));
-    gpu_.dynamic().stencil_test = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(request("vkCmdSetStencilTestEnable"));
-    gpu_.dynamic().stencil_op = reinterpret_cast<PFN_vkCmdSetStencilOp>(request("vkCmdSetStencilOp"));
+    gpu::vulkan::Recorder::Loaded& f = gpu_.loaded();
+    f.cull_mode = reinterpret_cast<PFN_vkCmdSetCullMode>(request("vkCmdSetCullMode"));
+    f.front_face = reinterpret_cast<PFN_vkCmdSetFrontFace>(request("vkCmdSetFrontFace"));
+    f.topology = reinterpret_cast<PFN_vkCmdSetPrimitiveTopology>(request("vkCmdSetPrimitiveTopology"));
+    f.restart = reinterpret_cast<PFN_vkCmdSetPrimitiveRestartEnable>(request("vkCmdSetPrimitiveRestartEnable"));
+    f.depth_bias = reinterpret_cast<PFN_vkCmdSetDepthBiasEnable>(request("vkCmdSetDepthBiasEnable"));
+    f.depth_test = reinterpret_cast<PFN_vkCmdSetDepthTestEnable>(request("vkCmdSetDepthTestEnable"));
+    f.depth_write = reinterpret_cast<PFN_vkCmdSetDepthWriteEnable>(request("vkCmdSetDepthWriteEnable"));
+    f.depth_compare = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(request("vkCmdSetDepthCompareOp"));
+    f.stencil_test = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(request("vkCmdSetStencilTestEnable"));
+    f.stencil_op = reinterpret_cast<PFN_vkCmdSetStencilOp>(request("vkCmdSetStencilOp"));
     const uint32_t api = vulkan_device_->properties().apiVersion;
-    eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && gpu_.dynamic().cull_mode && gpu_.dynamic().front_face && gpu_.dynamic().topology &&
-                        gpu_.dynamic().restart && gpu_.dynamic().depth_bias && gpu_.dynamic().depth_test && gpu_.dynamic().depth_write && gpu_.dynamic().depth_compare &&
-                        gpu_.dynamic().stencil_test && gpu_.dynamic().stencil_op;
+    eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && f.cull_mode && f.front_face && f.topology &&
+                        f.restart && f.depth_bias && f.depth_test && f.depth_write && f.depth_compare &&
+                        f.stencil_test && f.stencil_op;
     REXLOG_INFO("[native] C6 dynamic state: EDS1/EDS2 {} (device API {}.{}.{})",
                 eds12_available_ ? "available (core 1.3)" : "NOT available: phase 1 is not used",
                 VK_API_VERSION_MAJOR(api), VK_API_VERSION_MINOR(api), VK_API_VERSION_PATCH(api));
 #if defined(REX_UI_VULKAN_DYNAMIC_STATE3)
     // Phase 2. The driver only provides these three if the SDK enabled the extension; the SDK records the
     // three features in its device properties.
-    gpu_.dynamic().blend_enable = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(request("vkCmdSetColorBlendEnableEXT"));
-    gpu_.dynamic().blend_equation = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(request("vkCmdSetColorBlendEquationEXT"));
-    gpu_.dynamic().color_mask = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(request("vkCmdSetColorWriteMaskEXT"));
+    f.blend_enable = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(request("vkCmdSetColorBlendEnableEXT"));
+    f.blend_equation = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(request("vkCmdSetColorBlendEquationEXT"));
+    f.color_mask = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(request("vkCmdSetColorWriteMaskEXT"));
     const auto& p3 = vulkan_device_->properties();
     eds3_available_ = vulkan_device_->extensions().ext_EXT_extended_dynamic_state3 &&
                        p3.extendedDynamicState3ColorBlendEnable && p3.extendedDynamicState3ColorBlendEquation &&
-                       p3.extendedDynamicState3ColorWriteMask && gpu_.dynamic().blend_enable && gpu_.dynamic().blend_equation && gpu_.dynamic().color_mask;
+                       p3.extendedDynamicState3ColorWriteMask && f.blend_enable && f.blend_equation && f.color_mask;
     REXLOG_INFO("[native] C6 dynamic state: EDS3 (blend, equation and color mask) {}",
                 eds3_available_ ? "available"
                                  : "NOT available (the device does not provide it or it is not enabled): phase 2 is not "
@@ -16532,7 +16531,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   rex::memory::Memory* memory_;
   TargetContext* context_;
   FnBufferAddress address_buffer_ = nullptr;
-  FnCopyImage copy_image_ = nullptr;  // resolved faces of the dynamic cubemaps
 
   VkBuffer upload_ = VK_NULL_HANDLE;
   VkDeviceMemory upload_memory_ = VK_NULL_HANDLE;
