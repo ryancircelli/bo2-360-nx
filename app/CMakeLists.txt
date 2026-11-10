@@ -97,6 +97,7 @@ set(BO2ZM_SOURCES
     src/native/render/bo2zm_native_precompile.cpp
     src/native/render/bo2zm_native_capture.cpp
     src/native/render/bo2zm_native_video.cpp
+    src/native/render/bo2zm_native_pso.cpp
     src/native/render/bo2zm_graphics_settings.cpp
     src/native/bo2zm_render_stubs.cpp
     # The SDK's Xenos shader interpreter, for the vertex shaders that write memory (memexport): BO2 copies

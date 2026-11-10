@@ -44,6 +44,8 @@ bool Decide(const rex::ui::vulkan::VulkanDevice* device, const NativeShaders* li
 // This start's stamp (0 before Decide), and whether the pipelines file on disk was vouched for at start.
 uint64_t Stamp();
 bool KnownWarm();
+// bo2zm_native_precompile_keep: the pass keeps its pipelines for the ring, and runs even when the caches are warm.
+bool Keep();
 
 // The pass. Begin from the ring thread; Advance from its workers, once per record (compiled = the driver had to
 // compile it: the screen comes up); End from the ring thread: the screen closes and the game starts.

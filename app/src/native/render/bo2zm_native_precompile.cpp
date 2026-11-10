@@ -1,6 +1,7 @@
 // Pipeline precompile at start-up (see bo2zm_native_precompile.h).
 
 #include "bo2zm_native_precompile.h"
+#include "bo2zm_native_pso.h"
 
 #include "bo2zm_native_shaders.h"
 #include "../bo2zm_native_system.h"
@@ -44,6 +45,17 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_precompile, true, "BO2",
                     "compiled before the game starts, on every core, behind a progress screen that only comes up if "
                     "the driver really has to compile one. false = they are compiled in the background during the "
                     "menus, as before (bo2zm_native_prewarm_pipelines)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+#if defined(__APPLE__)
+#define BO2ZM_PRECOMPILE_KEEP_DEFAULT true
+#else
+#define BO2ZM_PRECOMPILE_KEEP_DEFAULT false
+#endif
+REXCVAR_DEFINE_BOOL(bo2zm_native_precompile_keep, BO2ZM_PRECOMPILE_KEEP_DEFAULT, "BO2",
+                    "Native renderer: the precompile keeps the pipelines it creates and the ring uses them, so a match "
+                    "creates none of the listed ones; the pass then also runs when the caches already hold every "
+                    "pipeline (it is short then). For MoltenVK, where even a cached pipeline costs a Metal pipeline "
+                    "state in the match (default on macOS, off elsewhere)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(bo2zm_native_test_cold_pipelines, false, "BO2",
                     "Test helper: the session starts with an empty pipeline cache but keeps the list, and ignores the "
@@ -98,7 +110,7 @@ fs::path FolderCache() {
 #ifndef BO2ZM_NATIVE_CACHE_FOLDER
 #define BO2ZM_NATIVE_CACHE_FOLDER "cache"  // as in bo2zm_native_draws.cpp
 #endif
-  return rex::filesystem::GetExecutableFolder() / BO2ZM_NATIVE_CACHE_FOLDER;
+  return pso::CacheFolder();  // cache/ beside the executable, or the user's cache folder for a macOS app bundle
 }
 
 // The extra prewarm lists (bo2zm_native_prewarm_lists): names and sizes, sorted, for the stamp. A new or changed list
@@ -120,6 +132,7 @@ std::string ExtraLists() {
     all += e;
     all += '\n';
   }
+  all += pso::ListStamp();  // the bo2pso text list (bo2zm_native_pso.h)
   return all;
 }
 
@@ -292,7 +305,7 @@ bool Decide(const rex::ui::vulkan::VulkanDevice* device, const NativeShaders* li
     why = "no shader library";
   } else if (!has_file && !lists) {
     why = "no pipelines file yet (a first start: its pipelines are compiled as they come)";
-  } else if (g.known_warm) {
+  } else if (g.known_warm && !Keep()) {
     why = "every listed pipeline is already compiled for this build, driver and shader pack";
   }
   bool wanted = why == nullptr;
@@ -316,6 +329,10 @@ bool Decide(const rex::ui::vulkan::VulkanDevice* device, const NativeShaders* li
 
 uint64_t Stamp() {
   return g.stamp;
+}
+
+bool Keep() {
+  return REXCVAR_GET(bo2zm_native_precompile_keep);
 }
 
 bool KnownWarm() {

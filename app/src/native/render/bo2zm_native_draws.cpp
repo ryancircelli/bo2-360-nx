@@ -41,6 +41,8 @@
 #include "bo2zm_native_vertex_dedupe.h"
 #include "bo2zm_native_deferred.h"  // the job buffer's calls made by a recorder thread
 #include "bo2zm_native_texture_pool.h"
+#include "bo2zm_native_pso.h"  // bo2pso text lists and the cache folder
+#include "../../bo2zm_switch.h"  // BuildId
 #include "bo2zm_native_texture_mips.h"
 #include "bo2zm_native_precompile.h"  // the precompile at start and its stamp file
 
@@ -103,6 +105,8 @@ static const uint32_t kSpirvGlowSmooth[1] = {0};
 #include <fstream>
 #include <set>
 #include <string>
+#include <string_view>
+#include <cstdlib>
 #include <system_error>  // the bind thread
 #include <unordered_map>
 #include <unordered_set>
@@ -2649,6 +2653,109 @@ struct PipelineRecord {
 static_assert(std::has_unique_object_representations_v<PipelineRecord>,
               "PipelineRecord is saved to disk byte by byte: no implicit padding");
 
+/*
+ * bo2pso text lists (docs/mac/pso-list-format.md, bo2zm_native_pso.h). A line describes the pipeline in the
+ * portable fields of the format and carries the renderer's own record in the state's x:rec extra (hex), which is
+ * what the loader feeds back into the prewarm list: the native renderer creates pipelines from PipelineRecord, and
+ * its shader hashes (hash_vs, hash_ps) are checked against the library before a record is compiled, so a list from
+ * another shader pack only costs the records whose shaders are gone.
+ */
+const char* PsoTopology(uint32_t topology) {
+  switch (VkPrimitiveTopology(topology)) {
+    case VK_PRIMITIVE_TOPOLOGY_POINT_LIST: return "point_list";
+    case VK_PRIMITIVE_TOPOLOGY_LINE_LIST: return "line_list";
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP: return "line_strip";
+    case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: return "triangle_list";
+    case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: return "triangle_strip";
+    case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN: return "triangle_fan";
+    default: return "other";
+  }
+}
+
+std::string PsoFormat(uint32_t format) {
+  switch (VkFormat(format)) {
+    case VK_FORMAT_UNDEFINED: return "-";
+    case VK_FORMAT_R8G8B8A8_UNORM: return "rgba8";
+    case VK_FORMAT_B8G8R8A8_UNORM: return "bgra8";
+    case VK_FORMAT_R8G8B8A8_SRGB: return "rgba8srgb";
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return "rgb10a2";
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return "rgba16f";
+    case VK_FORMAT_R16G16_SFLOAT: return "rg16f";
+    case VK_FORMAT_R16G16B16A16_UNORM: return "rgba16";
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return "rg11b10f";
+    case VK_FORMAT_R32_SFLOAT: return "r32f";
+    case VK_FORMAT_R32G32_SFLOAT: return "rg32f";
+    case VK_FORMAT_R32G32B32A32_SFLOAT: return "rgba32f";
+    case VK_FORMAT_D16_UNORM: return "d16";
+    case VK_FORMAT_D24_UNORM_S8_UINT: return "d24s8";
+    case VK_FORMAT_D32_SFLOAT: return "d32f";
+    case VK_FORMAT_D32_SFLOAT_S8_UINT: return "d32fs8";
+    default: return fmt::format("vk{}", format);
+  }
+}
+
+// The line without its uses field, and its key (XXH3 of that text).
+std::string PsoLine(const PipelineRecord& r, uint64_t& key_line) {
+  const PipelineKey& k = r.key;
+  std::string state = fmt::format("fmt={}.{}.{}.{},zfmt={},samples=1,blend=", PsoFormat(k.formats[0]),
+                                  PsoFormat(k.formats[1]), PsoFormat(k.formats[2]), PsoFormat(k.formats[3]),
+                                  PsoFormat(k.formats[4]));
+  for (uint32_t i = 0; i < 4; ++i) {
+    const uint32_t m = k.blend[i];
+    state += fmt::format("{}{:x}.{:x}.{:x}.{:x}.{:x}.{:x}.{:x}", i ? "/" : "", m & 0x1F, (m >> 8) & 0x1F,
+                         (m >> 5) & 0x7, (m >> 16) & 0x1F, (m >> 24) & 0x1F, (m >> 21) & 0x7,
+                         (k.masks >> (i * 4)) & 0xF);
+  }
+  const uint32_t d = k.formats[4] ? k.depth : 0;
+  state += fmt::format(",depth={}.{}.{}", (d >> 1) & 1, ((d >> 1) & 1) && ((d >> 2) & 1), (d >> 4) & 7);
+  if (d & 1) {
+    state += fmt::format(",stencil={:x}", d);  // the packed RB_DEPTHCONTROL stencil fields (front and back)
+  } else {
+    state += ",stencil=0";
+  }
+  const uint32_t ras = k.rasterization;
+  state += fmt::format(",cull={},front={},fill=solid,bias={},vtx={:016x},alpha2c=0,x:spec={:x},x:restart={}",
+                       (ras & 0x3) == 0x3 ? "both" : (ras & 0x1) ? "front" : (ras & 0x2) ? "back" : "none",
+                       (ras & 0x4) ? "cw" : "ccw", (ras & 0x10) ? 1 : 0, k.input, k.specialization,
+                       (ras & 0x8) ? 1 : 0);
+  state += ",x:rec=";
+  static constexpr char kHex[] = "0123456789abcdef";
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&r);
+  for (size_t i = 0; i < sizeof(r); ++i) {
+    state += kHex[bytes[i] >> 4];
+    state += kHex[bytes[i] & 0xF];
+  }
+  const std::string ps = k.ps ? fmt::format("{:016x}", r.hash_ps) : std::string("-");
+  const std::string body = fmt::format("{:016x}\t{}\t{}\t{}", r.hash_vs, ps, PsoTopology(k.topology), state);
+  key_line = XXH3_64bits(body.data(), body.size());
+  return fmt::format("G\t{:016x}\t{}", key_line, body);
+}
+
+// The record in a line's x:rec extra; false if the line has none or it does not fit this build's record.
+bool PsoRecordOf(std::string_view line, PipelineRecord& r) {
+  const size_t at = line.find("x:rec=");
+  if (at == std::string_view::npos) {
+    return false;
+  }
+  std::string_view hex = line.substr(at + 6);
+  hex = hex.substr(0, hex.find_first_of(",\t\r"));
+  if (hex.size() != sizeof(PipelineRecord) * 2) {
+    return false;
+  }
+  auto* bytes = reinterpret_cast<uint8_t*>(&r);
+  const auto nibble = [](char c) -> int {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+  };
+  for (size_t i = 0; i < sizeof(r); ++i) {
+    const int hi = nibble(hex[2 * i]), lo = nibble(hex[2 * i + 1]);
+    if (hi < 0 || lo < 0) {
+      return false;
+    }
+    bytes[i] = uint8_t(hi << 4 | lo);
+  }
+  return r.n_attributes <= PipelineRecord::kMaxAttributes && r.n_bindings <= PipelineRecord::kMaxBindings;
+}
+
 // A tiled 3D texture kept up to date by 4 KB pages (VulkanDrawsImpl::UpdateVolume). The game
 // rewrites a few hundred bytes of its model lighting volume (512x256x4, 2 MB) almost every frame; reading, untiling,
 // byte-swapping, hashing and uploading all of it each time would cost the console's ring thread ~8-11 ms per
@@ -2753,6 +2860,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     StopHashes();  // the hash thread writes to the upload buffer: join it before releasing that
     SaveCachePipelines();
     StopWriterCache();  // writes whatever is still pending
+    ClosePsoRecord();
     for (auto& [key, pair] : pipelines_) {
       dfn_.vkDestroyPipeline(device_, pair.second, nullptr);
     }
@@ -9181,7 +9289,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // The pipelines file (cache/bo2zm_native_pipelines.bin): the Vulkan cache and the prewarm list.
   static std::filesystem::path PathFilePipelines() {
-    return rex::filesystem::GetExecutableFolder() / kFolderCache / kFilePipelines;
+    return bo2zm::native::pso::CacheFolder() / kFilePipelines;
   }
 
   static void ReadFileWhole(const std::filesystem::path& path, std::vector<uint8_t>& data) {
@@ -15284,9 +15392,118 @@ class VulkanDrawsImpl final : public VulkanDraws {
       written_list_ = std::move(data);  // the writer thread rewrites it unchanged if only the cache changes
     }
     LoadExtraListsPipelines();
+    LoadPsoList();
     state_list_.assign(list_file_.size(), kListPending);
     REXLOG_INFO("[native] C6 prewarm: {} pipelines in the list of {}{}{}", list_file_.size(),
                 path.string(), reason ? ": " : "", reason ? reason : "");
+  }
+
+  // The bo2pso text list (bo2zm_pso.psolist beside the executable or in the app bundle, or bo2zm_pso_list): its
+  // records join the prewarm list in descending uses, so the precompile builds them behind the loading screen. Its keys
+  // are what bo2zm_pso_verify checks the session's pipelines against.
+  void LoadPsoList() {
+    pso_verify_ = bo2zm::native::pso::Verify();
+    const std::filesystem::path path = bo2zm::native::pso::ListToLoad();
+    if (path.empty()) {
+      if (pso_verify_) {
+        REXLOG_WARN("[pso] verify is on but there is no bo2zm_pso.psolist: every pipeline is unlisted");
+      }
+      return;
+    }
+    std::ifstream in(path);
+    std::string line;
+    if (!std::getline(in, line) || line != "# bo2pso 1") {
+      REXLOG_WARN("[pso] {} is not a bo2pso 1 list: ignored", path.string());
+      return;
+    }
+    struct Entry {
+      PipelineRecord r;
+      uint64_t uses;
+    };
+    std::vector<Entry> entries;
+    uint32_t lines = 0, unusable = 0;
+    bool end = false;
+    while (std::getline(in, line)) {
+      if (line.rfind("# end", 0) == 0) {
+        end = true;
+        continue;
+      }
+      if (line.empty() || line[0] != 'G') {
+        continue;  // headers, compute pipelines (the native renderer has none)
+      }
+      ++lines;
+      Entry e{};
+      if (!PsoRecordOf(line, e.r)) {
+        ++unusable;
+        continue;
+      }
+      const size_t tab = line.rfind('\t');
+      e.uses = tab == std::string::npos ? 1 : std::strtoull(line.c_str() + tab + 1, nullptr, 10);
+      entries.push_back(e);
+    }
+    std::stable_sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.uses > b.uses; });
+    uint32_t added = 0, known = 0;
+    for (const Entry& e : entries) {
+      const uint64_t hash = XXH3_64bits(&e.r.key, sizeof(e.r.key));
+      pso_listed_.insert(hash);
+      if (list_file_.size() >= kMaxRegistersList) {
+        continue;
+      }
+      if (index_list_.emplace(hash, list_file_.size()).second) {
+        list_file_.push_back(e.r);
+        ++added;
+      } else {
+        ++known;
+      }
+    }
+    REXLOG_INFO("[pso] {}: {} pipelines, {} new to the prewarm list ({} already listed, {} lines without a record "
+                "for this build){}",
+                path.string(), lines, added, known, unusable, end ? "" : "; no # end line, the list may be cut short");
+  }
+
+  // Ring (AnnotatePipelineCreated): the session's pipelines to the bo2zm_pso_record list, each once, and the
+  // bo2zm_pso_verify check.
+  void PsoPipelineCreated(const PipelineRecord& r, uint64_t hash, uint64_t ns) {
+    if (pso_verify_ && !pso_listed_.count(hash) && pso_unlisted_.insert(hash).second) {
+      REXLOG_ERROR("[pso] unlisted pipeline {:016x} ({} ms)", hash, ns / 1000000.0);
+      bo2zm::perf_log::Event("compile", fmt::format("key={:016x}\tms={:.2f}\tunlisted=1", hash, ns / 1000000.0));
+    }
+    if (!pso_record_checked_) {
+      pso_record_checked_ = true;
+      const std::filesystem::path path = bo2zm::native::pso::RecordPath();
+      if (!path.empty()) {
+        std::error_code error;
+        if (path.has_parent_path()) {
+          std::filesystem::create_directories(path.parent_path(), error);
+        }
+        pso_record_.open(path, std::ios::trunc);
+        if (pso_record_) {
+          const NativeShaders* library = LibraryActive();
+          pso_record_ << "# bo2pso 1\n# build\t" << bo2zm::BuildId() << "\n# renderer\tnative-vulkan\n"
+                      << fmt::format("# shaderpack\tbo2zm_shaders.spvpack\t{:016x}\n",
+                                     library ? library->Identity() : 0);
+          REXLOG_INFO("[pso] recording the session's pipelines to {}", path.string());
+        } else {
+          REXLOG_WARN("[pso] could not create {}", path.string());
+        }
+      }
+    }
+    if (pso_record_.is_open() && pso_recorded_.insert(hash).second) {
+      uint64_t key_line = 0;
+      pso_record_ << PsoLine(r, key_line) << "\t1\n";
+      pso_record_.flush();  // a run stopped by a signal keeps what it saw
+    }
+  }
+
+  void ClosePsoRecord() {
+    if (pso_record_.is_open()) {
+      pso_record_ << "# end\tpipelines=" << pso_recorded_.size() << "\n";
+      pso_record_.close();
+      REXLOG_INFO("[pso] recorded {} pipelines", pso_recorded_.size());
+    }
+    if (pso_verify_) {
+      REXLOG_INFO("[pso] verify: {} unlisted pipelines this session", pso_unlisted_.size());
+    }
   }
 
   // More prewarm lists, cache/prewarm/*.bin, each in the list's own format (tools/pipelines_list.py
@@ -15370,6 +15587,24 @@ class VulkanDrawsImpl final : public VulkanDraws {
   void AnnotatePipelineCreated(const PipelineKey& key, const VertexInput& input, const ShaderInput* vs,
                                const ShaderInput* ps, VkPipeline pipeline, uint64_t ns) {
     const uint64_t hash = XXH3_64bits(&key, sizeof(key));
+    if (pipeline != VK_NULL_HANDLE && vs && vs->shader && (!key.ps || (ps && ps->shader)) &&
+        input.attributes.size() <= PipelineRecord::kMaxAttributes &&
+        input.bindings.size() <= PipelineRecord::kMaxBindings) {
+      PipelineRecord r;
+      r.key = key;
+      r.hash_vs = vs->shader->hash;
+      r.hash_ps = key.ps ? ps->shader->hash : 0;
+      r.n_attributes = uint32_t(input.attributes.size());
+      for (uint32_t k = 0; k < r.n_attributes; ++k) {
+        const VertexAttribute& a = input.attributes[k];
+        r.attributes[k] = {a.location, a.binding, uint32_t(a.format), a.offset};
+      }
+      r.n_bindings = uint32_t(input.bindings.size());
+      for (uint32_t k = 0; k < r.n_bindings; ++k) {
+        r.strides[k] = input.bindings[k].stride;
+      }
+      PsoPipelineCreated(r, hash, ns);
+    }
     if (const auto it = index_list_.find(hash); it != index_list_.end()) {
       const size_t j = it->second;
       if (j < list_file_.size() && j < prewarm_until_.load(std::memory_order_acquire) &&
@@ -15476,7 +15711,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // Returns its state; ns, the time the driver took. probe (the precompile): first from the driver's cache alone,
     // as the ring asks for it (VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT); compiled then says whether
     // the driver had to compile it. Without probe, compiled stays false (the prewarm tells by the time, kNsCompiled).
-    uint8_t Warm(const PipelineRecord& r, uint64_t& ns, bool probe, bool& compiled) {
+    // keep (the precompile, bo2zm_native_precompile_keep): the pipeline is handed back instead of destroyed.
+    uint8_t Warm(const PipelineRecord& r, uint64_t& ns, bool probe, bool& compiled, VkPipeline* keep = nullptr) {
       ns = 0;
       compiled = false;
       const ShaderInput* vs = r.key.vs ? library_.PerNumber(r.key.vs - 1) : nullptr;
@@ -15526,7 +15762,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (result != VK_SUCCESS || pipeline == VK_NULL_HANDLE) {
         return kListFailed;
       }
-      d_.dfn_.vkDestroyPipeline(d_.device_, pipeline, nullptr);
+      if (keep) {
+        *keep = pipeline;
+      } else {
+        d_.dfn_.vkDestroyPipeline(d_.device_, pipeline, nullptr);
+      }
       return kListPrewarm;
     }
 
@@ -15730,6 +15970,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const uint32_t threads = std::clamp(std::thread::hardware_concurrency(), 4u, 10u) - 2;
 #endif
     bo2zm::native::precompile::Begin(uint32_t(n), threads);
+    // On MoltenVK even a pipeline the caches hold costs a Metal pipeline state (about 1 to 10 ms) when the ring
+    // creates it in a match. Kept, the precompile's pipelines are the ring's own and a match creates none of them.
+    // Not while recording a pipeline list: that has to see what the session really asks for.
+    const bool keep = bo2zm::native::precompile::Keep() && bo2zm::native::pso::RecordPath().empty();
+    std::vector<VkPipeline> kept(keep ? n : 0, VK_NULL_HANDLE);
     std::atomic<size_t> next{0};
     std::atomic<uint32_t> done{0}, compiled{0}, no_shader{0}, other_mode{0}, failed{0};
     std::atomic<uint64_t> ns_compiled{0}, ns_cached{0};
@@ -15746,7 +15991,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < n;) {
         uint64_t ns = 0;
         bool was_compiled = false;
-        const uint8_t state = warmer.Warm(list_file_[i], ns, true, was_compiled);
+        const uint8_t state = warmer.Warm(list_file_[i], ns, true, was_compiled, keep ? &kept[i] : nullptr);
         state_list_[i] = state;  // each record by one thread; read after the join
         if (state == kListNoShader) {
           no_shader.fetch_add(1, std::memory_order_relaxed);
@@ -15792,6 +16037,23 @@ class VulkanDrawsImpl final : public VulkanDraws {
     prewarm_until_.store(n, std::memory_order_release);
     prewarm_finished_.store(true, std::memory_order_release);
     precompiled_ = true;
+    // The kept pipelines join the ring's map (this is the ring thread, before its loop), as if it had created them.
+    uint32_t adopted = 0;
+    for (size_t i = 0; i < kept.size(); ++i) {
+      if (kept[i] == VK_NULL_HANDLE) {
+        continue;
+      }
+      const PipelineKey& key = list_file_[i].key;
+      if (pipelines_.emplace(XXH3_64bits(&key, sizeof(key)), std::make_pair(key, kept[i])).second) {
+        ++adopted;
+        ++pipelines_per_mode_[key.padding2 & 3];
+      } else {
+        dfn_.vkDestroyPipeline(device_, kept[i], nullptr);
+      }
+    }
+    if (keep) {
+      REXLOG_INFO("[native] C6 precompile: {} pipelines kept for the ring (bo2zm_native_precompile_keep)", adopted);
+    }
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - prewarm_start_).count();
     const uint32_t cached = done.load() - compiled.load();
@@ -17498,6 +17760,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::vector<uint8_t> state_list_;                   // kList* of each record of list_file_
   std::unordered_map<uint64_t, size_t> index_list_;   // XXH3 of the key -> index (SIZE_MAX: from this run)
   std::vector<PipelineRecord> list_session_;          // this run's new ones
+  // bo2pso text lists (LoadPsoList, PsoPipelineCreated): ring only.
+  std::unordered_set<uint64_t> pso_listed_;    // keys (XXH3 of PipelineKey) in the loaded list
+  std::unordered_set<uint64_t> pso_unlisted_;  // bo2zm_pso_verify: already reported
+  std::unordered_set<uint64_t> pso_recorded_;  // bo2zm_pso_record: already written
+  std::ofstream pso_record_;
+  bool pso_record_checked_ = false;
+  bool pso_verify_ = false;
   uint32_t list_no_save_ = 0;
   std::vector<uint8_t> writer_list_;                 // with writer_mutex_
   std::thread prewarm_thread_;
