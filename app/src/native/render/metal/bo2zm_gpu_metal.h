@@ -35,6 +35,8 @@ class Device {
   const std::string& name() const { return name_; }
   // The id<MTLDevice>, for the Objective-C++ parts of the backend.
   void* native() const;
+  // The id<MTLCommandQueue> every command buffer goes to (rendering and presentation).
+  void* queue() const;
 
   // The function of a shader, from its library (loaded the first time one of its functions is asked for).
   // nullptr if there is no such function; the returned id<MTLFunction> is owned by the device.

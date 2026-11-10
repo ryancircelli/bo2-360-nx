@@ -192,11 +192,13 @@ if(BO2ZM_NATIVE_METAL)
     message(FATAL_ERROR "BO2ZM_NATIVE_METAL needs an Apple platform")
   endif()
   target_sources(bo2zm PRIVATE src/native/render/metal/bo2zm_gpu_metal.mm
-    src/native/render/metal/bo2zm_gpu_metal_formats.mm)
+    src/native/render/metal/bo2zm_gpu_metal_formats.mm
+    src/native/render/metal/bo2zm_metal_presenter.mm)
   # Compiled as C++ with clang in Objective-C++ mode. Enabling the OBJCXX language from here instead makes CMake 4
   # give the SDK's Objective-C files (SDL's) -std=c++23, which clang refuses.
   set_source_files_properties(src/native/render/metal/bo2zm_gpu_metal.mm
-    src/native/render/metal/bo2zm_gpu_metal_formats.mm PROPERTIES
+    src/native/render/metal/bo2zm_gpu_metal_formats.mm
+    src/native/render/metal/bo2zm_metal_presenter.mm PROPERTIES
     LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
   target_compile_definitions(bo2zm PRIVATE BO2ZM_NATIVE_METAL=1)
   target_link_libraries(bo2zm PRIVATE "-framework Metal" "-framework QuartzCore" "-framework Foundation")
