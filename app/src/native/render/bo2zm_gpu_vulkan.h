@@ -421,6 +421,27 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
                           [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
 }
 
+// The attachments of a render pass, `width` x `height`, one layer: true and the framebuffer in `out` if created.
+// Metal has no framebuffer object: its render pass descriptor names the textures directly.
+inline bool CreateFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkRenderPass pass,
+                              uint32_t count, const VkImageView* views, uint32_t width, uint32_t height,
+                              VkFramebuffer& out) {
+  VkFramebufferCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  info.renderPass = pass;
+  info.attachmentCount = count;
+  info.pAttachments = views;
+  info.width = width;
+  info.height = height;
+  info.layers = 1;
+  return dfn.vkCreateFramebuffer(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+inline void DestroyFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                               VkFramebuffer framebuffer) {
+  dfn.vkDestroyFramebuffer(device, framebuffer, nullptr);
+}
+
 // Descriptor writes, one vkUpdateDescriptorSets each. Metal writes the same slots into the heaps' argument buffers.
 // A sampled image at `element` of `binding` (the bindless heaps use binding 0 and the slot as the element).
 inline void WriteSampledImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorSet set,

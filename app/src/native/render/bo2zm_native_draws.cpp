@@ -2911,10 +2911,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
       destroy_cache_(device_, cache_pipelines_, nullptr);
     }
     for (auto& [key, framebuffer] : framebuffers_) {
-      dfn_.vkDestroyFramebuffer(device_, framebuffer, nullptr);
+      gpu::vulkan::DestroyFramebuffer(dfn_, device_, framebuffer);
     }
     for (VkFramebuffer framebuffer : fb_retired_) {  // the ones ForgetView retired
-      dfn_.vkDestroyFramebuffer(device_, framebuffer, nullptr);
+      gpu::vulkan::DestroyFramebuffer(dfn_, device_, framebuffer);
     }
     for (auto& [key, pass] : passes_) {
       dfn_.vkDestroyRenderPass(device_, pass, nullptr);
@@ -7172,7 +7172,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
           if (fb_retire_) {
             fb_retired_.push_back(fb->second);
           } else {
-            dfn_.vkDestroyFramebuffer(device_, fb->second, nullptr);
+            gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb->second);
           }
           framebuffers_.erase(fb);
           ++outside;
@@ -13942,16 +13942,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
         attachments[n++] = view;
       }
     }
-    VkFramebufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    info.renderPass = pass;
-    info.attachmentCount = n;
-    info.pAttachments = attachments.data();
-    info.width = width;
-    info.height = height;
-    info.layers = 1;
     VkFramebuffer framebuffer;
-    if (dfn_.vkCreateFramebuffer(device_, &info, nullptr, &framebuffer) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateFramebuffer(dfn_, device_, pass, n, attachments.data(), width, height, framebuffer)) {
       return VK_NULL_HANDLE;
     }
     framebuffers_.emplace(hash, framebuffer);
