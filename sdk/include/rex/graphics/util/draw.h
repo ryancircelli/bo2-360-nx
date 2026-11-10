@@ -101,6 +101,27 @@ inline bool IsPrimitivePolygonal(const RegisterFile& regs) {
 // game, of course).
 bool IsRasterizationPotentiallyDone(const RegisterFile& regs, bool primitive_polygonal);
 
+// Reports whether the depth test fails every sample and nothing else can write.
+//
+// The depth test is enabled with the NEVER function, the stencil test is off, and the EDRAM mode
+// writes depth. Such a draw cannot change depth, stencil or color.
+//
+// @param regs Register file.
+// @return True when no sample can pass the depth test and no stencil operation can run.
+bool IsDepthTestNeverPassing(const RegisterFile& regs);
+
+// Reports whether the draw rasterizes into the EDRAM render targets.
+//
+// A draw whose depth test never passes does not touch EDRAM unless the pixel shader memexports,
+// because early depth testing is off for a memexporting pixel shader and the shader still runs.
+//
+// @param regs Register file.
+// @param primitive_polygonal True when the primitive type is polygonal.
+// @param pixel_shader_memexports True when the bound pixel shader writes memexport streams.
+// @return True when the draw needs the render targets.
+bool IsRasterizationDone(const RegisterFile& regs, bool primitive_polygonal,
+                         bool pixel_shader_memexports);
+
 // Direct3D 10.1+ standard sample positions, also used in Vulkan, for
 // calculations related to host MSAA, in 1/16th of a pixel.
 extern const int8_t kD3D10StandardSamplePositions2x[2][2];

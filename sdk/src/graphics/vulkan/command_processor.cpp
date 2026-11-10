@@ -3716,6 +3716,19 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     }
   }
   bool memexport_used_pixel = pixel_shader && (pixel_shader->memexport_eM_written() != 0);
+  // A draw whose depth test can never pass does not touch the render targets, so
+  // it must not take them over - unless the pixel shader memexports, as early
+  // depth testing is off for a memexporting pixel shader and the shader still
+  // runs.
+  if (is_rasterization_done &&
+      !draw_util::IsRasterizationDone(regs, primitive_polygonal, memexport_used_pixel)) {
+    is_rasterization_done = false;
+    pixel_shader = nullptr;
+    memexport_used_pixel = false;
+    if (!memexport_used_vertex) {
+      return true;
+    }
+  }
   if (memexport_used_pixel) {
     if (!device_properties.fragmentStoresAndAtomics) {
       REXGPU_ERROR(
