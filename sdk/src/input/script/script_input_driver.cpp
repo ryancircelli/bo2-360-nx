@@ -11,6 +11,7 @@
  */
 
 #include <rex/input/script/script_input_driver.h>
+#include <rex/input/script/script_events.h>
 
 #include <algorithm>
 #include <cctype>
@@ -125,54 +126,169 @@ int ParseInt(std::string_view text) {
 
 }  // namespace
 
+namespace {
+
+// "[<s>:]wait_event <name> [timeout]" or "[<s>:]wait_log <text> [timeout]".
+// Returns false if `entry` is not a wait; sets ok when it parsed.
+bool ParseWait(std::string_view entry, Step& step, bool& ok) {
+  ok = false;
+  std::string_view rest = Trim(entry);
+  double start = 0;
+  const size_t colon = rest.find(':');
+  const size_t wait_at = rest.find("wait_");
+  if (wait_at == std::string_view::npos) {
+    return false;
+  }
+  if (colon != std::string_view::npos && colon < wait_at) {
+    if (Trim(rest.substr(colon + 1, wait_at - colon - 1)).size() != 0 ||
+        !Seconds(Trim(rest.substr(0, colon)), start)) {
+      return false;
+    }
+    rest = rest.substr(wait_at);
+  } else if (wait_at != 0) {
+    return false;
+  }
+  Step::Wait kind;
+  if (rest.starts_with("wait_event")) {
+    kind = Step::Wait::kEvent;
+    rest.remove_prefix(10);
+  } else if (rest.starts_with("wait_log")) {
+    kind = Step::Wait::kLog;
+    rest.remove_prefix(8);
+  } else {
+    return false;
+  }
+  if (!rest.empty() && !std::isspace(static_cast<unsigned char>(rest.front()))) {
+    return false;  // e.g. "wait_events"
+  }
+  rest = Trim(rest);
+  std::string target;
+  double timeout = kDefaultWaitTimeout;
+  if (!rest.empty() && rest.front() == '"') {
+    const size_t close = rest.find('"', 1);
+    if (close == std::string_view::npos) {
+      return true;
+    }
+    target = std::string(rest.substr(1, close - 1));
+    const std::string_view tail = Trim(rest.substr(close + 1));
+    if (!tail.empty() && !Seconds(tail, timeout)) {
+      return true;
+    }
+  } else {
+    // A last word that is a number is the timeout.
+    const size_t space = rest.find_last_of(" \t");
+    double value = 0;
+    if (space != std::string_view::npos && Seconds(Trim(rest.substr(space + 1)), value)) {
+      timeout = value;
+      rest = Trim(rest.substr(0, space));
+    }
+    target = std::string(rest);
+  }
+  if (target.empty() || (kind == Step::Wait::kEvent &&
+                         target.find_first_of(" \t") != std::string::npos)) {
+    return true;
+  }
+  step = {};
+  step.wait = kind;
+  step.target = std::move(target);
+  step.timeout = timeout;
+  step.start = start;
+  step.end = start;
+  ok = true;
+  return true;
+}
+
+// Splits on ',', ';' and new lines, keeping double-quoted text whole.
+std::vector<std::string_view> SplitPieces(std::string_view text) {
+  std::vector<std::string_view> pieces;
+  bool quoted = false;
+  size_t start = 0;
+  for (size_t i = 0; i <= text.size(); i++) {
+    const char c = i < text.size() ? text[i] : ',';
+    if (c == '"') {
+      quoted = !quoted;
+    } else if (!quoted && (c == ',' || c == ';' || c == '\n' || c == '\r')) {
+      pieces.push_back(text.substr(start, i - start));
+      start = i + 1;
+    }
+  }
+  return pieces;
+}
+
+bool ParseTimed(std::string_view entry, Step& step) {
+  step = {};
+  const size_t colon = entry.find(':');
+  const std::string_view times = entry.substr(0, colon);
+  const size_t dash = times.find('-');
+  bool ok = colon != std::string_view::npos &&
+            ControlBits(entry.substr(colon + 1), step.controls, step.disconnect) &&
+            Seconds(times.substr(0, dash), step.start);
+  if (ok) {
+    if (dash == std::string_view::npos) {
+      // A tap. A disconnect needs an explicit end.
+      step.end = step.start + kTapSeconds;
+      ok = !step.disconnect;
+    } else {
+      ok = Seconds(times.substr(dash + 1), step.end) && step.end > step.start;
+    }
+  }
+  return ok;
+}
+
+}  // namespace
+
 std::vector<Step> ParseScript(std::string_view text, std::string* error) {
   std::vector<Step> steps;
   std::string problems;
-  auto separator = [](char c) {
-    return c == ',' || c == ';' || std::isspace(static_cast<unsigned char>(c));
+  uint32_t segment = 0;
+  auto bad = [&](std::string_view entry) {
+    problems += fmt::format("{}\"{}\"", problems.empty() ? "" : ", ", Trim(entry));
   };
-  size_t i = 0;
-  while (i < text.size()) {
-    while (i < text.size() && separator(text[i])) {
-      i++;
-    }
-    size_t j = i;
-    while (j < text.size() && !separator(text[j])) {
-      j++;
-    }
-    if (i == j) {
-      break;
-    }
-    const std::string_view entry = text.substr(i, j - i);
-    i = j;
-
-    Step step;
-    const size_t colon = entry.find(':');
-    const std::string_view times = entry.substr(0, colon);
-    const size_t dash = times.find('-');
-    bool ok = colon != std::string_view::npos &&
-              ControlBits(entry.substr(colon + 1), step.controls, step.disconnect) &&
-              Seconds(times.substr(0, dash), step.start);
-    if (ok) {
-      if (dash == std::string_view::npos) {
-        // A tap. A disconnect needs an explicit end.
-        step.end = step.start + kTapSeconds;
-        ok = !step.disconnect;
-      } else {
-        ok = Seconds(times.substr(dash + 1), step.end) && step.end > step.start;
-      }
-    }
-    if (!ok) {
-      problems += fmt::format("{}\"{}\"", problems.empty() ? "" : ", ", entry);
+  for (const std::string_view piece : SplitPieces(text)) {
+    if (Trim(piece).empty()) {
       continue;
     }
-    steps.push_back(step);
+    Step step;
+    bool ok = false;
+    if (ParseWait(piece, step, ok)) {
+      if (!ok) {
+        bad(piece);
+        continue;
+      }
+      step.segment = segment++;
+      steps.push_back(std::move(step));
+      continue;
+    }
+    // Timed steps, separated by spaces too.
+    size_t i = 0;
+    while (i < piece.size()) {
+      while (i < piece.size() && std::isspace(static_cast<unsigned char>(piece[i]))) {
+        i++;
+      }
+      size_t j = i;
+      while (j < piece.size() && !std::isspace(static_cast<unsigned char>(piece[j]))) {
+        j++;
+      }
+      if (i == j) {
+        break;
+      }
+      const std::string_view entry = piece.substr(i, j - i);
+      i = j;
+      if (!ParseTimed(entry, step)) {
+        bad(entry);
+        continue;
+      }
+      step.segment = segment;
+      steps.push_back(step);
+    }
   }
   if (error) {
-    *error = problems.empty() ? std::string()
-                              : "skipped " + problems +
-                                    " (want <s>:<control> or <s>-<s>:<control>[+<control>...], "
-                                    "or <s>-<s>:disconnect)";
+    *error = problems.empty()
+                 ? std::string()
+                 : "skipped " + problems +
+                       " (want <s>:<control> or <s>-<s>:<control>[+<control>...], "
+                       "<s>-<s>:disconnect, wait_event <name> [timeout_s], or "
+                       "wait_log <text> [timeout_s])";
   }
   return steps;
 }
@@ -218,10 +334,11 @@ ScriptFile ParseScriptFile(std::string_view text) {
   return file;
 }
 
-Frame Evaluate(const std::vector<Step>& steps, double seconds) {
+Frame Evaluate(const std::vector<Step>& steps, double seconds, uint32_t segment) {
   Frame frame;
   for (const auto& step : steps) {
-    if (seconds < step.start || seconds >= step.end) {
+    if (step.wait != Step::Wait::kNone || step.segment != segment || seconds < step.start ||
+        seconds >= step.end) {
       continue;
     }
     if (step.disconnect) {
@@ -264,18 +381,93 @@ ScriptInputDriver::ScriptInputDriver(std::vector<std::vector<Step>> scripts, int
   for (auto& steps : scripts) {
     Pad pad;
     pad.steps = std::move(steps);
+    for (size_t i = 0; i < pad.steps.size(); i++) {
+      const Step& step = pad.steps[i];
+      if (step.wait == Step::Wait::kNone) {
+        continue;
+      }
+      pad.waits.push_back(i);
+      if (step.wait == Step::Wait::kLog) {
+        WatchLogText(step.target);
+      }
+    }
     pads_.push_back(std::move(pad));
+  }
+}
+
+namespace {
+
+std::string EventKey(const Step& step) {
+  return step.wait == Step::Wait::kLog ? LogEventName(step.target) : step.target;
+}
+
+std::string Describe(const Step& step) {
+  return step.wait == Step::Wait::kLog ? fmt::format("a log line with \"{}\"", step.target)
+                                       : fmt::format("event \"{}\"", step.target);
+}
+
+}  // namespace
+
+double ScriptInputDriver::Advance(size_t index, double now) {
+  Pad& pad = pads_[index];
+  // The lines below name the log text; they must not count as seeing it.
+  IgnoreLogLinesHere quiet;
+  while (true) {
+    if (pad.waiting) {
+      const Step& wait = pad.steps[pad.waits[pad.segment]];
+      const std::string key = EventKey(wait);
+      uint64_t& used = pad.consumed[key];
+      const bool fired = ScriptEventCount(key) > used;
+      const bool timed_out = now - pad.wait_start >= wait.timeout;
+      if (!fired && !timed_out) {
+        return 0;
+      }
+      if (fired) {
+        used++;
+        REXLOG_INFO("Script pad {}: got {} after {:.1f} s; going on", index + 1, Describe(wait),
+                    now - pad.wait_start);
+      } else {
+        REXLOG_WARN("Script pad {}: no {} within {:.0f} s; going on anyway", index + 1,
+                    Describe(wait), wait.timeout);
+      }
+      pad.waiting = false;
+      pad.segment++;
+      pad.segment_start = now;
+      pad.last_seconds = -1;
+      continue;
+    }
+    if (pad.segment >= pad.waits.size()) {
+      return now - pad.segment_start;
+    }
+    // The segment ends at its wait's own time or its last step, whichever is
+    // later.
+    const Step& wait = pad.steps[pad.waits[pad.segment]];
+    double end = wait.start;
+    for (const auto& step : pad.steps) {
+      if (step.wait == Step::Wait::kNone && step.segment == pad.segment) {
+        end = std::max(end, step.end);
+      }
+    }
+    if (now - pad.segment_start < end) {
+      return now - pad.segment_start;
+    }
+    pad.waiting = true;
+    pad.wait_start = pad.segment_start + end;
+    REXLOG_INFO("Script pad {}: waiting for {} (up to {:.0f} s)", index + 1, Describe(wait),
+                wait.timeout);
   }
 }
 
 bool ScriptInputDriver::Update(size_t index) {
   Pad& pad = pads_[index];
-  const double now = clock_();
-  const Frame frame = Evaluate(pad.steps, now);
+  const double now = Advance(index, clock_());
+  const Frame frame = pad.waiting ? Frame{true, 0}
+                                  : Evaluate(pad.steps, now, pad.segment);
   // A disconnect shorter than the gap between polls still counts.
   bool blinked = false;
   for (const auto& step : pad.steps) {
-    if (step.disconnect && pad.last_seconds < step.start && now >= step.end) {
+    if (step.disconnect && step.segment == pad.segment && !pad.waiting &&
+        pad.last_seconds < step.start && now >= step.end) {
       blinked = true;
     }
   }

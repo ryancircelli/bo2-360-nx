@@ -282,7 +282,7 @@ def pack(a):
     shaders = Path(a.shaders).resolve() if a.shaders else None
     shader_files = []
     if shaders:
-        for f in ('bo2zm_shaders.spvpack', 'bo2zm_shaders.spvidx'):
+        for f in ('bo2zm_shaders.spvpack', 'bo2zm_shaders.spvidx', 'bo2zm_pso.psolist'):
             if (shaders / f).is_file():
                 shader_files.append(shaders / f)
             elif f.endswith('spvpack'):

@@ -33,6 +33,8 @@ put "$OUT/vulkan" "$RUN/vulkan"
 for f in bo2zm_shaders.spvpack bo2zm_shaders.spvidx; do
   put "$SHADERS/$f" "$RUN/$f"
 done
+# The recorded pipeline list (docs/mac/pso-list-format.md), when one sits beside the shaders.
+[ -f "$SHADERS/bo2zm_pso.psolist" ] && put "$SHADERS/bo2zm_pso.psolist" "$RUN/bo2zm_pso.psolist"
 [ -f "$RUN/bo2zm.toml" ] || cp "$ROOT/tools/mac/bo2zm.toml" "$RUN/bo2zm.toml"
 for d in game update content; do
   if [ -d "$DATA/$d" ]; then
