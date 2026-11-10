@@ -10839,16 +10839,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                                  {shared_separate_ ? shared_bufs_[slot].buffer
                                                                       : uploads_[slot].buffer,
                                                   0, kUboBytesShared}};
-      std::array<VkWriteDescriptorSet, 3> writes_ubo{};
-      for (uint32_t b = 0; b < 3; ++b) {
-        writes_ubo[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes_ubo[b].dstSet = sets_ubo_[slot];
-        writes_ubo[b].dstBinding = b;
-        writes_ubo[b].descriptorCount = 1;
-        writes_ubo[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        writes_ubo[b].pBufferInfo = &blocks[b];
-      }
-      dfn_.vkUpdateDescriptorSets(device_, 3, writes_ubo.data(), 0, nullptr);
+      gpu::vulkan::WriteUniforms(dfn_, device_, sets_ubo_[slot], 0, 3, blocks, true);
     }
     const VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                     24};
@@ -10952,33 +10943,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
                  &barrier);
   }
 
-  void WriteImage(uint32_t heap, uint32_t slot, VkImageView view) {
-    VkDescriptorImageInfo image{};
-    image.imageView = view;
-    image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = sets_[heap];
-    write.dstBinding = 0;
-    write.dstArrayElement = slot;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    write.pImageInfo = &image;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+  void WriteImage(uint32_t heap, uint32_t slot, gpu::ImageView view) {
+    gpu::vulkan::WriteSampledImage(dfn_, device_, sets_[heap], 0, slot, view);
   }
 
   void WriteSampler(uint32_t slot, VkSampler sampler) {
-    VkDescriptorImageInfo image{};
-    image.sampler = sampler;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = sets_[3];
-    write.dstBinding = 0;
-    write.dstArrayElement = slot;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-    write.pImageInfo = &image;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    gpu::vulkan::WriteSampler(dfn_, device_, sets_[3], 0, slot, sampler);
   }
 
   uint32_t ReserveSlot(uint32_t heap) {
