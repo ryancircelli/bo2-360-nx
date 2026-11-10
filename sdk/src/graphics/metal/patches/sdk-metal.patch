@@ -1298,7 +1298,7 @@ index a5eaa8f..91390b4 100644
 +
 +#endif  // XENIA_GPU_DXBC_H_
 diff --git a/include/rex/graphics/pipeline/render_target/cache.h b/include/rex/graphics/pipeline/render_target/cache.h
-index 3bbd52e..b8bcb00 100644
+index 7e4b61e..6d06c4f 100644
 --- a/include/rex/graphics/pipeline/render_target/cache.h
 +++ b/include/rex/graphics/pipeline/render_target/cache.h
 @@ -1,4 +1,5 @@
