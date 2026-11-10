@@ -29,6 +29,8 @@ fi
 SDK_BIN="${REXGLUE_BIN_DIR:-$ROOT/sdk/out/win-amd64}"
 export PATH="$SDK_BIN:$PATH"
 PY="${PYTHON:-python}"
+# Linux distributions often have only python3.
+if [ -z "${PYTHON:-}" ] && ! command -v python > /dev/null 2>&1; then PY=python3; fi
 # rexglue.exe on Windows, rexglue elsewhere (tools/build_mac.sh sets REXGLUE_BIN_DIR to its host build).
 REXGLUE=rexglue.exe
 command -v "$REXGLUE" > /dev/null 2>&1 || REXGLUE=rexglue
