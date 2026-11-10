@@ -6623,7 +6623,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // Only the cache entries that use a view of those images. The views stay valid (they go with their
   // image); what has to be redone is which slot each fetch constant gets. By their slots' generations,
   // without walking the caches.
-  void InvalidateImages(VkImage a, VkImage b) override {
+  void InvalidateImages(gpu::Image a, gpu::Image b) override {
     for (VkImage image : {a, b}) {
       if (image == VK_NULL_HANDLE || (image == b && a == b)) {
         continue;
@@ -7005,7 +7005,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // requires that usage (VUID-vkCmdClearDepthStencilImage-pRanges-02660). It costs no extra GPU time: it
   // is exactly how NVK implements that command internally (nvk_cmd_clear.c, clear_image opens a pass with
   // loadOp = CLEAR).
-  bool ClearDepthInPass(VkCommandBuffer commands, const NativeImage& image,
+  bool ClearDepthInPass(gpu::CommandList commands, const NativeImage& image,
                                float depth, uint32_t stencil) override {
     if (commands == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || !image.width ||
         !image.height) {
@@ -7043,7 +7043,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // bo2zm_native_clear_useful_area. Clears only the `area` rectangle of a color image with a
   // loadOp = CLEAR pass: what NVK does internally for vkCmdClearColorImage (nvk_cmd_clear.c), over that
   // rectangle. What lies outside is not touched (Vulkan only loads and stores the renderArea).
-  bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& image, const gpu::ClearColor& clear_color,
+  bool ClearColorInPass(gpu::CommandList commands, const NativeImage& image, const gpu::ClearColor& clear_color,
                         const gpu::Rect& clear_area) override {
     const VkClearColorValue color = gpu::ToVk(clear_color);
     const VkRect2D area = gpu::ToVk(clear_area);
@@ -7083,7 +7083,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // BO2's Direct3D Clear() is a draw (a rectangle with D3D's own shaders), so it can clear part of a
   // render target, or only its stencil. The pass loads the image (loadOp = LOAD) and vkCmdClearAttachments
   // writes only the rectangle and the aspects requested.
-  bool ClearAttachmentInPass(VkCommandBuffer commands, const NativeImage& image, gpu::Aspects clear_aspects,
+  bool ClearAttachmentInPass(gpu::CommandList commands, const NativeImage& image, gpu::Aspects clear_aspects,
                              const gpu::ClearValue& clear_value, const gpu::Rect& clear_area) override {
     const VkImageAspectFlags aspects = gpu::ToVk(clear_aspects);
     const VkClearValue value = gpu::ToVk(clear_value);
@@ -7137,7 +7137,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // in the log and, for the rest of the run, nothing is destroyed at runtime: the affected framebuffers
   // (or the whole cache, if they are out of step) are retired and destroyed at shutdown, which is never
   // worse than keeping everything until the destructor.
-  void ForgetView(VkImageView view) override {
+  void ForgetView(gpu::ImageView view) override {
     if (view == VK_NULL_HANDLE || !REXCVAR_GET(bo2zm_native_framebuffers_forget_views)) {
       return;
     }
@@ -7191,7 +7191,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
   }
 
-  void ForgetImage(VkImage image) override {
+  void ForgetImage(gpu::Image image) override {
     ++invalidations_retired_;
     const auto index = views_per_image_.find(image);  // without walking views_
     if (index == views_per_image_.end()) {

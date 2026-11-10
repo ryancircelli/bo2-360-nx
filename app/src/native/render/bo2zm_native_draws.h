@@ -35,14 +35,14 @@ struct ShaderInput;
 
 // Image of a render target or a texture, in a host format.
 struct NativeImage {
-  VkImage image = VK_NULL_HANDLE;
+  gpu::Image image = nullptr;
   // Only if the image has its own dedicated allocation. Images from the texture pool leave this NULL on
   // purpose: their memory is a chunk of a shared slab and cannot be freed on its own.
-  VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+  gpu::Memory guest_memory = nullptr;
   // Texture pool slab, or UINT32_MAX if the image does not come from the pool. The literal is used here
   // instead of kBlockPoolInvalid to keep that header out of this one.
   uint32_t pool_block = 0xFFFFFFFFu;
-  VkImageView view = VK_NULL_HANDLE;
+  gpu::ImageView view = nullptr;
   uint32_t width = 0;
   uint32_t height = 0;
   // bo2zm_native_shadow_scale: the shadow map is drawn smaller than the guest requests and upscaled when
@@ -95,9 +95,9 @@ class TargetContext {
  public:
   virtual ~TargetContext() = default;
   // Command buffer of the frame's work, recording. nullptr on failure.
-  virtual VkCommandBuffer CommandsJob() = 0;
+  virtual gpu::CommandList CommandsJob() = 0;
   // Upload command buffer, recording: submitted right before the work one.
-  virtual VkCommandBuffer CommandsUpload() = 0;
+  virtual gpu::CommandList CommandsUpload() = 0;
   // Changes every time the work buffer starts recording again.
   virtual uint64_t GenerationCommands() const = 0;
   // Render targets already in GENERAL. May record commands: call outside a pass.
@@ -306,11 +306,11 @@ class VulkanDraws {
   // ZCULL: clears a depth image by opening a pass with loadOp = CLEAR, instead of with
   // vkCmdClearDepthStencilImage. Needed for images created without TRANSFER_DST, the only ones the driver
   // can give a ZCULL plane. Returns false if it could not.
-  virtual bool ClearDepthInPass(VkCommandBuffer commands, const NativeImage& image,
+  virtual bool ClearDepthInPass(gpu::CommandList commands, const NativeImage& image,
                                        float depth, uint32_t stencil) = 0;
   // bo2zm_native_clear_useful_area. Clears only the `area` rectangle of a color image by opening a pass
   // with loadOp = CLEAR. Returns false if it could not.
-  virtual bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& image, const gpu::ClearColor& color,
+  virtual bool ClearColorInPass(gpu::CommandList commands, const NativeImage& image, const gpu::ClearColor& color,
                                 const gpu::Rect& area) {
     (void)commands;
     (void)image;
@@ -321,7 +321,7 @@ class VulkanDraws {
   // Clears the `area` rectangle of one render target, only the `aspects` given (color, or depth
   // and/or stencil), with vkCmdClearAttachments inside a pass that loads the image: everything else keeps its
   // content. For BO2's Direct3D Clear(), which is a draw. Returns false if it could not.
-  virtual bool ClearAttachmentInPass(VkCommandBuffer commands, const NativeImage& image, gpu::Aspects aspects,
+  virtual bool ClearAttachmentInPass(gpu::CommandList commands, const NativeImage& image, gpu::Aspects aspects,
                                      const gpu::ClearValue& value, const gpu::Rect& area) {
     (void)commands;
     (void)image;
@@ -336,11 +336,11 @@ class VulkanDraws {
   // submitted with it.
   virtual void UseSlot(uint32_t slot) = 0;
   // A C2 image is about to be destroyed: it is removed from the descriptors.
-  virtual void ForgetImage(VkImage image) = 0;
+  virtual void ForgetImage(gpu::Image image) = 0;
   // A C2 view is about to be destroyed (Destroy, in bo2zm_native_targets.cpp, with the GPU idle for that
   // image): the FramebufferOf cache framebuffers that use it are destroyed. Without this, if Vulkan gave
   // the same handle to another view, the cache returned a framebuffer created on the dead view.
-  virtual void ForgetView(VkImageView view) { (void)view; }
+  virtual void ForgetView(gpu::ImageView view) { (void)view; }
   // The GPU is out of memory. Stops the GPU, releases half the texture cache and reports whether anything
   // was freed. Called by both texture and render target allocations: whichever runs out of memory first
   // calls this before giving up.
@@ -355,7 +355,7 @@ class VulkanDraws {
   // Invalidates in the texture caches only what points to these two images. Used by the image swap of
   // bo2zm_native_resolve_without_copy: dropping the whole cache twice per frame costs more than the copy it
   // saves (measured on PC).
-  virtual void InvalidateImages(VkImage a, VkImage b) = 0;
+  virtual void InvalidateImages(gpu::Image a, gpu::Image b) = 0;
   virtual DrawStats Stats() const = 0;
   // Draws recorded since start-up; C2 counts those that fall between two copies.
   virtual uint64_t Drawn() const = 0;

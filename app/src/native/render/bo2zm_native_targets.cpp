@@ -3448,7 +3448,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   // --- TargetContext (what the draws use) ---------------------------------------
 
-  VkCommandBuffer CommandsJob() override {
+  gpu::CommandList CommandsJob() override {
     return Record() ? commands_job_ : VK_NULL_HANDLE;
   }
 
@@ -3470,7 +3470,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
   }
 
-  VkCommandBuffer CommandsUpload() override {
+  gpu::CommandList CommandsUpload() override {
     if (!Record()) {
       return VK_NULL_HANDLE;
     }
