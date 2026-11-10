@@ -119,7 +119,7 @@ void MetalGraphicsSystem::StartPhaseLockedVblankWorker() {
         REXLOG_INFO("[vsync-lock] vblank worker: guest {:.2f} Hz, {} ticks per vblank", refresh_rate_hz,
                     vsync_interval_ticks);
         int64_t last_frame_time = int64_t(chrono::Clock::QueryGuestTickCount());
-        const char* trace_env = std::getenv("FABLE2_VSYNC_LOCK_TRACE");  // getenv-ok: once per worker
+        const char* trace_env = MetalDebugEnv("VSYNC_LOCK_TRACE");  // getenv-ok: once per worker
         const bool trace = trace_env && *trace_env && std::strcmp(trace_env, "0") != 0;
         while (vsync_worker_running_) {
           const bool vsync = REXCVAR_GET(vsync);
@@ -204,25 +204,23 @@ void MetalGraphicsSystem::InitializeShaderStorage(
   }
 }
 
-// [shader-prep] FABLE2_SHADER_PREP=1|<status.json> (docs/offline-shader-seed.md): a headless shader preparation
+// [shader-prep] metal_shader_prep=1|<status.json> (docs/offline-shader-seed.md): a headless shader preparation
 // run. The game's normal storage init above has loaded the remembered shader and pipeline lists and queued the
 // startup warm-up (translation, pipeline creation into the binary archives, transfer / fused-resolve / tile
 // prewarms, and the native-shader pool: optimized and native-translated shaders). The guest is never resumed:
 // this waits on the UI thread until every one of those queues is empty, saves the archives and shader storage,
 // writes the status file and exits. Under the app's bundle id this also fills macOS's Metal cache for that app.
 bool MetalGraphicsSystem::ShaderPrepRequested() {
-  const char* v = std::getenv("FABLE2_SHADER_PREP");  // getenv-ok: once, at start
-  return v && *v && std::string(v) != "0";
+  const std::string& v = REXCVAR_GET(metal_shader_prep);
+  return !v.empty() && v != "0";
 }
 
 void MetalGraphicsSystem::RunShaderPrep() {
-  const char* v = std::getenv("FABLE2_SHADER_PREP");  // getenv-ok: once
-  const std::string target = v ? v : "";
+  const std::string target = REXCVAR_GET(metal_shader_prep);
   const std::filesystem::path status_path =
       target.size() > 5 && target.compare(target.size() - 5, 5, ".json") == 0 ? std::filesystem::path(target)
                                                                               : std::filesystem::path();
-  double timeout_s = 1800.0;  // guard only
-  if (const char* t = std::getenv("FABLE2_SHADER_PREP_TIMEOUT_S"); t && *t) timeout_s = std::atof(t);
+  const double timeout_s = REXCVAR_GET(metal_shader_prep_timeout_s);  // guard only
   auto* cp = static_cast<MetalCommandProcessor*>(command_processor_.get());
   MetalPipelineCache* cache = cp ? cp->pipeline_cache() : nullptr;
   const auto start = std::chrono::steady_clock::now();
@@ -269,13 +267,13 @@ void MetalGraphicsSystem::RunShaderPrep() {
   // compile the shaders of the player's own disc shader bank (docs/shader-precompile-20261015.md). The game
   // sets FABLE2_GAME_DATA_ROOT to the folder holding data/.
   if (cache && cp) {
-    const char* bank_env = std::getenv("FABLE2_SHADER_PREP_BANK");  // getenv-ok: once
+    const char* bank_env = MetalDebugEnv("SHADER_PREP_BANK");  // getenv-ok: once
     const std::string bank_value = bank_env ? bank_env : "";
     std::filesystem::path bank_path;
     if (bank_value.size() > 4 && bank_value.compare(bank_value.size() - 4, 4, ".sbk") == 0) {
       bank_path = bank_value;
-    } else if (bank_value != "0") {
-      if (const char* root = std::getenv("FABLE2_GAME_DATA_ROOT"); root && *root) {  // getenv-ok: once
+    } else if (bank_value != "0" && MetalFable2Quirks()) {  // Fable II disc layout
+      if (const char* root = MetalDebugEnv("GAME_DATA_ROOT"); root && *root) {  // getenv-ok: once
         bank_path = std::filesystem::path(root) / "data/Shaders/ShadersRelease.sbk";
       }
     }

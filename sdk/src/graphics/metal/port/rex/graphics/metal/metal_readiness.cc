@@ -28,7 +28,7 @@ constexpr int64_t kSampleQuietNs = 1000000000;  // ns-spec: no unconverged sampl
 
 uint32_t WorldDraws() {
   static const uint32_t n = [] {
-    const char* v = std::getenv("FABLE2_READY_WORLD_DRAWS");
+    const char* v = MetalDebugEnv("READY_WORLD_DRAWS");
     const long x = v && *v ? std::strtol(v, nullptr, 10) : 500;
     return uint32_t(x > 0 ? x : 500);
   }();
@@ -37,7 +37,7 @@ uint32_t WorldDraws() {
 
 double PsoUs() {
   static const double us = [] {
-    const char* v = std::getenv("FABLE2_READY_PSO_MS");
+    const char* v = MetalDebugEnv("READY_PSO_MS");
     const double ms = v && *v ? std::atof(v) : 1.0;
     return (ms > 0 ? ms : 1.0) * 1000.0;
   }();
@@ -94,11 +94,11 @@ double Median(double* v, int n) {
 
 bool Enabled() {
   static const bool on = [] {
-    const char* force = std::getenv("FABLE2_READINESS");
+    const char* force = MetalDebugEnv("READINESS");
     if (force && force[0] == '0') return false;
     if (force && force[0] == '1') return true;
-    const char* control = std::getenv("FABLE2_TEST_CONTROL_DIR");
-    const char* bench = std::getenv("FABLE2_BENCHMARK");
+    const char* control = MetalDebugEnv("TEST_CONTROL_DIR");
+    const char* bench = MetalDebugEnv("BENCHMARK");
     return (control && *control) || (bench && *bench);
   }();
   return on;

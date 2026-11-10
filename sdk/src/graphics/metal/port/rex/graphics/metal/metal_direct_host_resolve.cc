@@ -585,7 +585,7 @@ bool MetalRenderTargetCache::PrepareResolveDestinationBuffer(
     // first, as at 1x; pages already valid cost nothing.
     // FABLE2_SCALED_RESOLVE_PAGE_FILL=0 restores the old behaviour.
     static const bool page_fill = [] {
-      const char* v = std::getenv("FABLE2_SCALED_RESOLVE_PAGE_FILL");  // getenv-ok: once
+      const char* v = MetalDebugEnv("SCALED_RESOLVE_PAGE_FILL");  // getenv-ok: once
       return !(v && v[0] == '0');
     }();
     if (page_fill && resolve_info.copy_dest_extent_length &&
@@ -655,7 +655,7 @@ MetalRenderTargetCache::GetDirectHostDepthResolvePipeline(
 namespace {
 bool DhrRejectTraceOn() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DHR_REJECT_TRACE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("DHR_REJECT_TRACE");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   return on;
@@ -885,7 +885,7 @@ bool MetalRenderTargetCache::TryDirectHostResolveCopy(
       // a blending-precision variant (k_2_10_10_10_FLOAT_AS_16_16_16_16, ...)
       // reads the same host texels the EDRAM dump would pack; compare those.
       static const bool storage_eq = [] {
-        const char* v = std::getenv("FABLE2_DHR_STORAGE_FORMAT");  // getenv-ok: once
+        const char* v = MetalDebugEnv("DHR_STORAGE_FORMAT");  // getenv-ok: once
         return !(v && v[0] == '0');
       }();
       const xenos::ColorRenderTargetFormat resolve_storage_format =
@@ -1149,7 +1149,7 @@ bool MetalRenderTargetCache::TryDirectHostResolveCopy(
   // texture count, so per-resolve cost shows up in the pass CSV.
   std::string trace_key;
   static const uint64_t texres_diag_frame = [] {
-    const char* v = std::getenv("FABLE2_TEXRES_DIAG");
+    const char* v = MetalDebugEnv("TEXRES_DIAG");
     return v ? std::strtoull(v, nullptr, 10) : 0ull;
   }();
   if (rex::graphics::metal::pass_trace::Enabled() || texres_diag_frame) {
@@ -1287,7 +1287,7 @@ bool MetalRenderTargetCache::TryDirectHostResolveCopy(
       // the same bytes).
       static const std::pair<uint32_t, uint32_t> tg = [] {
         uint32_t w = 8, h = 8;
-        if (const char* v = std::getenv("FABLE2_RESOLVE_TG")) {
+        if (const char* v = MetalDebugEnv("RESOLVE_TG")) {
           unsigned a = 0, b = 0;
           if (std::sscanf(v, "%ux%u", &a, &b) == 2 && a && b &&
               a * b <= 1024) {

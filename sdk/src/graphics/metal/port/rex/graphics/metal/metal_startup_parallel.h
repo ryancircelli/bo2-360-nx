@@ -19,7 +19,7 @@ namespace rex::graphics::metal::startup {
 
 inline bool ParallelEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_STARTUP_PARALLEL");
+    const char* v = MetalDebugEnv("STARTUP_PARALLEL");
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[startup-par] {} (FABLE2_STARTUP_PARALLEL)", e ? "on" : "off");
     return e;

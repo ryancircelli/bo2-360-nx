@@ -15,7 +15,7 @@ namespace rex::graphics::metal {
 
 inline bool EncoderTrimEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_ENCODER_TRIM");
+    const char* v = MetalDebugEnv("ENCODER_TRIM");
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[encoder-trim] {} (FABLE2_ENCODER_TRIM)", e ? "on" : "off");
     return e;
@@ -25,7 +25,7 @@ inline bool EncoderTrimEnabled() {
 
 inline bool EncoderDebugLabelsEnabled() {
   static const bool on = [] {
-    const char* l = std::getenv("FABLE2_ENCODER_LABELS");
+    const char* l = MetalDebugEnv("ENCODER_LABELS");
     const char* c = std::getenv("MTL_CAPTURE_ENABLED");
     return !EncoderTrimEnabled() || (l && l[0] == '1') || (c && c[0] == '1');
   }();

@@ -23,7 +23,7 @@ namespace {
 // Trace-only (FABLE2_DRAW_SKIP_TRACE=1): texture first-use events in frame CSV.
 bool TexTraceEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_DRAW_SKIP_TRACE");
+    const char* v = MetalDebugEnv("DRAW_SKIP_TRACE");
     return v && v[0] == '1';
   }();
   return enabled;
@@ -179,7 +179,7 @@ namespace {
 // MetalCommandProcessor::DrawPrepLite2Enabled.
 bool DrawPrepLite2On() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DRAW_PREP_LITE2");  // getenv-ok: read once
+    const char* v = MetalDebugEnv("DRAW_PREP_LITE2");  // getenv-ok: read once
     return !(v && v[0] == '0');
   }();
   return on;
@@ -757,7 +757,7 @@ bool MetalTextureCache::EndDeferredUploadEncoderBatch() {
 
 bool MetalTextureCache::UploadMergeEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TEX_UPLOAD_MERGE");
+    const char* v = MetalDebugEnv("TEX_UPLOAD_MERGE");
     const bool e = !(v && v[0] == '0') && !PrecommitVerifyEnabled();
     REXLOG_INFO("[tex-upload-merge] {} (FABLE2_TEX_UPLOAD_MERGE)", e ? "on" : "off");
     return e;
@@ -1148,7 +1148,7 @@ uint32_t MetalTextureCache::TexBlitEncodeCount(size_t bytes, bool scaled) {
   static const int mode = [] {
     // -1 skip (DIAGNOSTIC ONLY, UNSAFE: stale scaled textures), N>0 encode
     // N extra identical copies (same image; bandwidth slope), 0 normal.
-    const char* v = std::getenv("FABLE2_TEX_BLIT_DIAG");
+    const char* v = MetalDebugEnv("TEX_BLIT_DIAG");
     int m = 0;
     if (v && !std::strcmp(v, "skip")) m = -1;
     if (v && !std::strncmp(v, "dup", 3)) m = std::max(1, std::atoi(v + 3));
@@ -1371,7 +1371,7 @@ bool MetalTextureCache::PrepareTextureMaterialization(
 
 bool MetalTextureCache::PrecommitVerifyEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_TEXTURE_PRECOMMIT_VERIFY");
+    const char* v = MetalDebugEnv("TEXTURE_PRECOMMIT_VERIFY");
     const bool on = v && v[0] == '1';
     if (on) {
       REXLOG_INFO(
@@ -1495,7 +1495,7 @@ void MetalTextureCache::SetPrecommitTarget(MTL::CommandBuffer* cmd) {
 
 bool MetalTextureCache::TexRenameTraceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TEX_RENAME_TRACE");
+    const char* v = MetalDebugEnv("TEX_RENAME_TRACE");
     return v && v[0] == '1';
   }();
   return on;
@@ -2191,7 +2191,7 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
   if (stored_levels.empty()) {
     return false;
   }
-  static const bool tex_scl_log = std::getenv("FABLE2_TEX_SCL_LOG") != nullptr;
+  static const bool tex_scl_log = MetalDebugEnv("TEX_SCL_LOG") != nullptr;
   if (texture_resolution_scaled && tex_scl_log) {
     static std::mutex m;
     static std::unordered_set<uint64_t> seen;
@@ -2997,7 +2997,7 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     static const std::pair<uint32_t, uint32_t> tg_log2 = [] {
       uint32_t wl = kLoadGuestXThreadsPerGroupLog2,
                hl = kLoadGuestYBlocksPerGroupLog2;
-      if (const char* v = std::getenv("FABLE2_TEX_LOAD_TG")) {
+      if (const char* v = MetalDebugEnv("TEX_LOAD_TG")) {
         unsigned a = 0, b = 0;
         if (std::sscanf(v, "%ux%u", &a, &b) == 2 && a && b &&
             !(a & (a - 1)) && !(b & (b - 1)) && a * b <= 1024) {
@@ -3200,7 +3200,7 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     // [tex-resolve] diagnostic: FABLE2_TEXRES_DIAG=<frame> logs every load
     // of that frame and the next (format, size, levels, dispatches).
     static const uint64_t diag_frame = [] {
-      const char* v = std::getenv("FABLE2_TEXRES_DIAG");
+      const char* v = MetalDebugEnv("TEXRES_DIAG");
       return v ? std::strtoull(v, nullptr, 10) : 0ull;
     }();
     if (diag_frame) {
@@ -4424,7 +4424,7 @@ void MetalTextureCache::RequestTexturesWithLoadHint(
     const LoadCheckState& state) {
   SCOPE_profile_cpu_f("gpu");
   static const bool verify = [] {
-    const char* v = std::getenv("FABLE2_DRAW_PREP_LITE2_VERIFY");  // getenv-ok: once
+    const char* v = MetalDebugEnv("DRAW_PREP_LITE2_VERIFY");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   bool rechecked = false;
@@ -4520,7 +4520,7 @@ void MetalTextureCache::LogLoadCheckSummary(const char* when) {
 
 bool MetalTextureCache::LoadCheckExactEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_LOAD_CHECK_EXACT");  // getenv-ok: once
+    const char* v = MetalDebugEnv("LOAD_CHECK_EXACT");  // getenv-ok: once
     return !(v && v[0] == '0');
   }();
   return on;
@@ -4530,7 +4530,7 @@ uint64_t MetalTextureCache::LoadCheckDeferEpoch(uint64_t check_epoch) {
   // FABLE2_LOAD_CHECK_EXACT=2 (diagnostic): run the filter but defer nothing
   // (every load is kept as a "gap"), to separate code cost from behaviour.
   static const bool code_only = [] {
-    const char* v = std::getenv("FABLE2_LOAD_CHECK_EXACT");  // getenv-ok: once
+    const char* v = MetalDebugEnv("LOAD_CHECK_EXACT");  // getenv-ok: once
     return v && v[0] == '2';
   }();
   return code_only ? UINT64_MAX : check_epoch;
@@ -4538,7 +4538,7 @@ uint64_t MetalTextureCache::LoadCheckDeferEpoch(uint64_t check_epoch) {
 
 bool MetalTextureCache::LoadCheckExactVerifyEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_LOAD_CHECK_EXACT_VERIFY");  // getenv-ok: once
+    const char* v = MetalDebugEnv("LOAD_CHECK_EXACT_VERIFY");  // getenv-ok: once
     // =2: negative control, planned loads are not credited (must report violations).
     return v && (v[0] == '1' || v[0] == '2');
   }();
@@ -4602,7 +4602,7 @@ void MetalTextureCache::LoadCheckExactVerifyAfterRequest(
         continue;
       }
       static const bool negative_control = [] {
-        const char* v = std::getenv("FABLE2_LOAD_CHECK_EXACT_VERIFY");  // getenv-ok: once
+        const char* v = MetalDebugEnv("LOAD_CHECK_EXACT_VERIFY");  // getenv-ok: once
         return v && v[0] == '2';
       }();
       if (!negative_control && plan && plan->PlansLoadOf(texture)) {
@@ -4628,7 +4628,7 @@ void MetalTextureCache::LoadCheckExactVerifyAfterRequest(
 
 bool MetalTextureCache::LoadCheckTraceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_LOAD_CHECK_TRACE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("LOAD_CHECK_TRACE");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   return on;
@@ -5374,7 +5374,7 @@ bool MetalTextureCache::GetScaledResolveRange(
 
 bool MetalTextureCache::ScaledTexturePrecommitEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_SCALED_TEXTURE_PRECOMMIT");
+    const char* v = MetalDebugEnv("SCALED_TEXTURE_PRECOMMIT");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO(
         "[res-scale] scaled-resolve texture pre-commit {} "
@@ -5556,7 +5556,7 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
     // current command buffer and retire the old buffers past the budget.
     // FABLE2_SCALED_GROW_ORDER_FIX=0 restores the old behaviour.
     static const bool order_fix = [] {
-      const char* v = std::getenv("FABLE2_SCALED_GROW_ORDER_FIX");
+      const char* v = MetalDebugEnv("SCALED_GROW_ORDER_FIX");
       return !(v && v[0] == '0');
     }();
     if (exceeds_retired_budget && !order_fix) {
@@ -5600,7 +5600,7 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
           MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
               kScaledResolveBlit);
     }
-    static const bool rtt_trace_base = std::getenv("FABLE2_RTT_TRACE_BASE") != nullptr;
+    static const bool rtt_trace_base = MetalDebugEnv("RTT_TRACE_BASE") != nullptr;
     if (rtt_trace_base) {
       REXLOG_INFO("[rtt-trace] scaled grow {:X}+{:X} overlaps {} retain {} "
                   "standalone {} rsv# {}",
@@ -5860,7 +5860,7 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   }
   {
     static const uint32_t nxb = [] {
-      const char* v = std::getenv("FABLE2_TEX_NX_TRACE");
+      const char* v = MetalDebugEnv("TEX_NX_TRACE");
       return v ? uint32_t(std::strtoul(v, nullptr, 16)) : 0u;
     }();
     if (nxb && (uint32_t(texture.key().base_page) << 12) == nxb) {
@@ -6072,7 +6072,7 @@ void MetalTextureCache::GetMemReportInfo(MemReportInfo& out) const {
 
 bool MetalTextureCache::TexLoadDirectVerify() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TEX_LOAD_DIRECT_VERIFY");
+    const char* v = MetalDebugEnv("TEX_LOAD_DIRECT_VERIFY");
     const bool e = v && v[0] == '1';
     if (e) REXLOG_WARN("[tex-load-direct] FABLE2_TEX_LOAD_DIRECT_VERIFY=1 (diagnostic)");
     return e;
@@ -6082,7 +6082,7 @@ bool MetalTextureCache::TexLoadDirectVerify() {
 
 bool MetalTextureCache::TexLoadDirectEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TEX_LOAD_DIRECT");
+    const char* v = MetalDebugEnv("TEX_LOAD_DIRECT");
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[tex-load-direct] {} (FABLE2_TEX_LOAD_DIRECT)", e ? "on" : "off");
     return e;

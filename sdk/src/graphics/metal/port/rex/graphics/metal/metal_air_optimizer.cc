@@ -143,7 +143,7 @@ std::string Capture(const std::vector<std::string>& args) {
 // without prompting. FABLE2_NS_ASSUME_NO_XCODE=1 simulates a Mac without
 // Xcode or the command-line tools (testing, docs/portable-build.md).
 bool HaveDeveloperTools() {
-  const char* assume = std::getenv("FABLE2_NS_ASSUME_NO_XCODE");  // getenv-ok: toolchain discovery (compile worker)
+  const char* assume = MetalDebugEnv("NS_ASSUME_NO_XCODE");  // getenv-ok: toolchain discovery (compile worker)
   if (assume && assume[0] == '1') {
     return false;
   }
@@ -184,7 +184,7 @@ const Tools& GetTools() {
     CleanStaleTemp();
     // FABLE2_NS_TOOL_DIR=<dir>: take metal-opt/metallib from <dir> instead of
     // xcrun (testing: a missing dir simulates a missing Metal Toolchain).
-    const char* tool_dir = std::getenv("FABLE2_NS_TOOL_DIR");  // getenv-ok: toolchain discovery (compile worker)
+    const char* tool_dir = MetalDebugEnv("NS_TOOL_DIR");  // getenv-ok: toolchain discovery (compile worker)
     const char* why = "Metal Toolchain";
     if (tool_dir && tool_dir[0]) {
       tools.metal_opt = (std::filesystem::path(tool_dir) / "metal-opt").string();
@@ -202,7 +202,7 @@ const Tools& GetTools() {
     if (tools.metal_opt.empty() || tools.metallib.empty() ||
         access(tools.metal_opt.c_str(), X_OK) != 0 ||
         access(tools.metallib.c_str(), X_OK) != 0) {
-      const char* seeded = std::getenv("FABLE2_NS_CACHE_TOOLCHAIN");  // getenv-ok: toolchain discovery (compile worker)
+      const char* seeded = REXCVAR_GET(metal_ns_cache_toolchain).c_str();
       char* end = nullptr;
       const uint64_t hash =
           seeded && seeded[0] ? std::strtoull(seeded, &end, 16) : 0;
@@ -330,7 +330,7 @@ bool NoConverterForcesNative() {
     if (ConverterBuiltIn()) {
       return false;
     }
-    const char* v = std::getenv("FABLE2_NOCONV_ALLOW_OFF");
+    const char* v = MetalDebugEnv("NOCONV_ALLOW_OFF");
     return !(v && v[0] == '1');
   }();
   return force;
@@ -344,7 +344,7 @@ namespace {
 // environment value, or nullptr (the default, i.e. on) when the value turns
 // the path off in a no-converter build. Logs one line per switch.
 const char* NativeSwitchValue(const char* name) {
-  const char* v = std::getenv(name);
+  const char* v = MetalDebugEnv(name);
   if (!v || v[0] != '0' || !NoConverterForcesNative()) {
     return v;
   }
@@ -354,15 +354,27 @@ const char* NativeSwitchValue(const char* name) {
   return nullptr;
 }
 
+// The same rule for the native-path cvars: a value that turns the path off
+// (0 / false) is replaced by `forced` in a no-converter build.
+int32_t NativeSwitchCvar(const char* name, int32_t value, int32_t forced) {
+  if (value != 0 || !NoConverterForcesNative()) {
+    return value;
+  }
+  REXLOG_WARN("[no-converter] {}=0 ignored: no converter fallback in this "
+              "build",
+              name);
+  return forced;
+}
+
 }  // namespace
 
 uint32_t NativeShadersMode() {
   static const uint32_t mode = [] {
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_SHADERS");
-    if (v && v[0]) {
-      return v[0] == '0' ? 0u : 1u;
-    }
-    return kNativeShadersDefault;
+    return NativeSwitchCvar("metal_native_shaders",
+                            REXCVAR_GET(metal_native_shaders) ? 1 : 0,
+                            int32_t(kNativeShadersDefault))
+               ? 1u
+               : 0u;
   }();
   return mode;
 }
@@ -372,7 +384,7 @@ bool NativeShadersEmuPipelines() {
     if (!NativeShadersMode()) {
       return false;
     }
-    const char* v = std::getenv("FABLE2_NS_EMU_PIPELINES");
+    const char* v = MetalDebugEnv("NS_EMU_PIPELINES");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -385,8 +397,8 @@ bool NativeXlateMode() {
     }
     // Default on since 2026-10-13 (docs/native-translator.md); =0 restores
     // the converter path.
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_XLATE");
-    return !(v && v[0] == '0');
+    return NativeSwitchCvar("metal_native_xlate",
+                            REXCVAR_GET(metal_native_xlate) ? 1 : 0, 1) != 0;
   }();
   return on;
 }
@@ -401,13 +413,14 @@ bool NativeFirstMode() {
       }
       return false;
     }
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_FIRST");
-    const bool mode = !(v && v[0] == '0');
-    REXLOG_INFO("[native-first] {} (FABLE2_NATIVE_FIRST={}; converter {})",
+    const bool mode = NativeSwitchCvar("metal_native_first",
+                                       REXCVAR_GET(metal_native_first) ? 1 : 0,
+                                       1) != 0;
+    REXLOG_INFO("[native-first] {} (metal_native_first={}; converter {})",
                 mode ? "on: guest shaders are compiled from the native "
                        "translation directly"
                      : "off: converter library first, native swap later",
-                v ? v : "unset", ConverterBuiltIn() ? "built in" : "not built");
+                mode, ConverterBuiltIn() ? "built in" : "not built");
     return mode;
   }();
   return on;
@@ -418,7 +431,7 @@ bool NativeXlateVertexMode() {
     if (!NativeXlateMode()) {
       return false;
     }
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_XLATE_VS");
+    const char* v = NativeSwitchValue("NATIVE_XLATE_VS");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -430,11 +443,9 @@ uint32_t NativeTessMode() {
       return 0u;
     }
     // Default 1 (exact only) since 2026-10-13; =0 restores the emulation.
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_TESS");
-    if (!v || !v[0]) {
-      return 1u;
-    }
-    return v[0] == '3' ? 3u : (v[0] == '2' ? 2u : (v[0] == '0' ? 0u : 1u));
+    const int32_t v =
+        NativeSwitchCvar("metal_native_tess", REXCVAR_GET(metal_native_tess), 1);
+    return v == 3 ? 3u : (v == 2 ? 2u : (v == 0 ? 0u : 1u));
   }();
   return mode;
 }
@@ -446,11 +457,9 @@ uint32_t NativePointsMode() {
     }
     // Default 2 (mesh function, VS once per point) since 2026-10-13: exact
     // and not slower. =1 per-corner expansion (slower), =0 emulation.
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_POINTS");
-    if (!v || !v[0]) {
-      return 2u;
-    }
-    return v[0] == '0' ? 0u : (v[0] == '1' ? 1u : 2u);
+    const int32_t v = NativeSwitchCvar("metal_native_points",
+                                       REXCVAR_GET(metal_native_points), 2);
+    return v == 0 ? 0u : (v == 1 ? 1u : 2u);
   }();
   return mode;
 }
@@ -460,7 +469,7 @@ bool NativePointsMemexportMode() {
     if (NativePointsMode() != 2 || !NativeFirstMode()) {
       return false;
     }
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_POINTS_MEMEXPORT");
+    const char* v = NativeSwitchValue("NATIVE_POINTS_MEMEXPORT");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -472,7 +481,7 @@ bool NativeRectsMode() {
       return false;
     }
     // Default on since 2026-10-13 (bit-identical, neutral); =0 emulates.
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_RECTS");
+    const char* v = NativeSwitchValue("NATIVE_RECTS");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -483,7 +492,7 @@ bool TerrainAdaptiveMode() {
     if (!NativeTessMode()) {
       return false;
     }
-    const char* v = std::getenv("FABLE2_TERRAIN_ADAPTIVE");
+    const char* v = MetalDebugEnv("TERRAIN_ADAPTIVE");
     return v && v[0] == '1';
   }();
   return on;
@@ -496,7 +505,7 @@ bool TerrainLayerMatchMode() {
     }
     // Default on (docs/adaptive-terrain-flashes-20261014.md); =0 leaves the
     // layers at the uniform maximum on Metal's tessellator, as before.
-    const char* v = std::getenv("FABLE2_TERRAIN_LAYER_MATCH");
+    const char* v = MetalDebugEnv("TERRAIN_LAYER_MATCH");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -507,7 +516,7 @@ bool NativeTessBlendedMode() {
     if (!NativeTessMode()) {
       return false;
     }
-    const char* v = NativeSwitchValue("FABLE2_NATIVE_TESS_BLENDED");
+    const char* v = NativeSwitchValue("NATIVE_TESS_BLENDED");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -515,7 +524,7 @@ bool NativeTessBlendedMode() {
 
 bool NativeTessSnapUvMode() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NATIVE_TESS_SNAP_UV");
+    const char* v = MetalDebugEnv("NATIVE_TESS_SNAP_UV");
     const bool enabled = v && v[0] == '1';
     // Confirms in the log that the switch reached the game (flash kit, docs/flash-kit.md); the translator
     // logs each domain shader compiled with the snap ([tess-trace] snap-uv ... compiled).
@@ -528,7 +537,7 @@ bool NativeTessSnapUvMode() {
 
 bool EffectsFootprintMode() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_EFFECTS_FOOTPRINT");
+    const char* v = MetalDebugEnv("EFFECTS_FOOTPRINT");
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO(
         "[effects-footprint] offset texture fetches cover their guest "
@@ -541,7 +550,7 @@ bool EffectsFootprintMode() {
 
 bool EffectsFootprintVariantMode() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_EFFECTS_FOOTPRINT_VARIANT");
+    const char* v = MetalDebugEnv("EFFECTS_FOOTPRINT_VARIANT");
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO(
         "[effects-footprint] footprint code only in pixel-shader variants of "
@@ -554,7 +563,7 @@ bool EffectsFootprintVariantMode() {
 
 const char* NativeXlateDumpDir() {
   static const char* dir = [] {
-    const char* v = std::getenv("FABLE2_NATIVE_XLATE_DUMP");
+    const char* v = MetalDebugEnv("NATIVE_XLATE_DUMP");
     return (v && v[0]) ? v : nullptr;
   }();
   return dir;
@@ -565,8 +574,10 @@ bool NativeShaderKeepPlain(uint64_t ucode_hash) {
     // Measured (docs/native-shaders.md): -O2 makes these slower than plain.
     // 0F99810F072BF0FC: full-screen pass at Bower Lake, 3x: +12% pass time
     // with -O2 (1.24 -> 1.39 ms), +34% shader cost in the replay profile.
-    std::vector<uint64_t> l = {UINT64_C(0x0F99810F072BF0FC)};
-    const char* v = std::getenv("FABLE2_NS_KEEP_PLAIN");
+    // Fable II shaders: built in only with the fable2 title quirk.
+    std::vector<uint64_t> l;
+    if (MetalFable2Quirks()) l = {UINT64_C(0x0F99810F072BF0FC)};
+    const char* v = MetalDebugEnv("NS_KEEP_PLAIN");
     if (v) {
       l.clear();
       while (*v) {

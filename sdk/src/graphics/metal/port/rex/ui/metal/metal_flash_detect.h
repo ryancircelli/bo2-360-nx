@@ -66,7 +66,7 @@ constexpr size_t kExamples = 6;
 
 inline const char* Folder() {
   static const char* dir = [] {
-    const char* v = std::getenv("FABLE2_FLASH_DETECT");
+    const char* v = MetalDebugEnv("FLASH_DETECT");
     return v && v[0] ? v : nullptr;
   }();
   return dir;
@@ -74,7 +74,7 @@ inline const char* Folder() {
 inline bool Enabled() { return Folder() != nullptr; }
 inline bool Induce() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_FLASH_INDUCE");
+    const char* v = MetalDebugEnv("FLASH_INDUCE");
     return v && v[0] == '1';
   }();
   return on;

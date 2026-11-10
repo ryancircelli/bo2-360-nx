@@ -29,9 +29,10 @@ MetalStartupWaitResult WaitForMetalStartup(const std::function<bool()>& complete
       overlay.wantsLayer = YES;
       overlay.layer.backgroundColor =
           [NSColor colorWithCalibratedRed:0.075 green:0.085 blue:0.095 alpha:1].CGColor;
-      [overlay setAccessibilityLabel:@"Loading Fable II"];
+      NSString* loading_text = MetalFable2Quirks() ? @"Loading Fable II" : @"Loading";
+      [overlay setAccessibilityLabel:loading_text];
 
-      NSTextField* title = [NSTextField labelWithString:@"Loading Fable II"];
+      NSTextField* title = [NSTextField labelWithString:loading_text];
       title.font = [NSFont systemFontOfSize:25 weight:NSFontWeightMedium];
       title.textColor = NSColor.whiteColor;
       title.alignment = NSTextAlignmentCenter;

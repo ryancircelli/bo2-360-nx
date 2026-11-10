@@ -43,3 +43,46 @@ DECLARE_bool(snorm16_render_target_full_range);
 DECLARE_bool(submit_on_primary_buffer_end);
 
 DECLARE_bool(ac6_ground_fix);
+
+// Settings formerly read from FABLE2_* environment variables (README.md,
+// "Settings"). User-facing ones are the cvars below (env REX_METAL_<NAME>, or
+// the legacy FABLE2_<NAME> through ApplyLegacyMetalEnv).
+DECLARE_bool(metal_native_first);
+DECLARE_int32(metal_native_points);
+DECLARE_bool(metal_native_shaders);
+DECLARE_int32(metal_native_tess);
+DECLARE_bool(metal_native_xlate);
+DECLARE_string(metal_ns_cache_toolchain);
+DECLARE_bool(metal_ns_specialize);
+DECLARE_string(metal_msc_min_target);
+DECLARE_bool(metal_occlusion_real);
+DECLARE_int32(metal_present_drawables);
+DECLARE_string(metal_res_scale);
+DECLARE_bool(metal_resolve_to_texture);
+DECLARE_bool(metal_retina);
+DECLARE_string(metal_shader_prep);
+DECLARE_double(metal_shader_prep_timeout_s);
+DECLARE_bool(metal_ssm_merge);
+DECLARE_bool(metal_tile_resolve);
+DECLARE_string(metal_title_quirks);
+DECLARE_bool(metal_vsync_phase_lock);
+DECLARE_int32(metal_warmup_threads);
+
+// Debug and diagnostic switch <name>: the environment variable
+// REX_METAL_<name>, else the legacy FABLE2_<name>; nullptr when neither is set.
+// Not cached: call it once (static or setup), never per draw.
+const char* MetalDebugEnv(const char* name);
+
+// True when metal_title_quirks lists `quirk` (comma or space separated, e.g.
+// "fable2"). Parsed once on first use.
+bool MetalTitleQuirk(const char* quirk);
+
+// Fable II-only workarounds (metal_title_quirks=fable2). Off for other titles.
+inline bool MetalFable2Quirks() {
+  static const bool on = MetalTitleQuirk("fable2");
+  return on;
+}
+
+// Maps legacy FABLE2_<NAME> variables onto the user-facing cvars above when the
+// cvar was not set by a config file, REX_METAL_<NAME> or the command line.
+void ApplyLegacyMetalEnv();

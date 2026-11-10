@@ -2320,10 +2320,10 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
     Fail("unsupported fetch opcode");
     return;
   }
-  if (instr.dimension == xenos::FetchOpDimension::k3DOrStacked) {
-    Fail("3D / stacked texture fetch");
-    return;
-  }
+  // tfetch3D serves both 3D textures and stacked 2D textures (2D arrays): the
+  // fetch constant's dimension picks one at run time, as in the DXBC
+  // translator (3D view and stacked 2D-array view are separate bindings).
+  const bool dim_3d = instr.dimension == xenos::FetchOpDimension::k3DOrStacked;
 
   uint32_t tf = instr.operands[1].storage_index;
   bool use_computed_lod =
@@ -2345,6 +2345,16 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       if (weights) {
         offsets[0] -= 0.5f;
         offsets[1] -= 0.5f;
+      }
+      break;
+    case xenos::FetchOpDimension::k3DOrStacked:
+      offsets[0] = instr.attributes.offset_x + rounding_offset;
+      offsets[1] = instr.attributes.offset_y + rounding_offset;
+      offsets[2] = instr.attributes.offset_z + rounding_offset;
+      if (weights) {
+        offsets[0] -= 0.5f;
+        offsets[1] -= 0.5f;
+        offsets[2] -= 0.5f;
       }
       break;
     case xenos::FetchOpDimension::kCube:
@@ -2376,6 +2386,9 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
         case xenos::FetchOpDimension::k1D:
           size_needed |= 0b0001;
           break;
+        case xenos::FetchOpDimension::k3DOrStacked:
+          size_needed |= nonzero & 0b0111;
+          break;
         default:
           size_needed |= nonzero & 0b0011;
           break;
@@ -2390,6 +2403,14 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       case xenos::FetchOpDimension::k2D:
         if (instr.attributes.unnormalized_coordinates) size_needed |= 0b0011;
         break;
+      case xenos::FetchOpDimension::k3DOrStacked:
+        // Stacked and 3D are sampled from different views: whether the
+        // texture is 3D is always needed. Unnormalized: normalize all (if
+        // 3D); normalized: denormalize Z (if stacked).
+        size_needed |= 0b1000;
+        size_needed |= instr.attributes.unnormalized_coordinates ? 0b0111
+                                                                 : 0b0100;
+        break;
       case xenos::FetchOpDimension::kCube:
         if (instr.attributes.unnormalized_coordinates) size_needed |= 0b0011;
         size_needed &= 0b0011;
@@ -2398,11 +2419,31 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
         break;
     }
   }
+  if (dim_3d && size_needed) {
+    // 3D and stacked textures pack the size differently.
+    size_needed |= 0b1000;
+  }
   std::string size = NewTemp("sz");
   std::string w1d = NewTemp("w1d");
+  // Whether the texture bound to a 3D / stacked fetch is 3D (size .w in the
+  // DXBC translator).
+  std::string is_3d;
   if (size_needed) {
     Line("float4 {} = float4(0.0f);", size);
-    if (instr.dimension == xenos::FetchOpDimension::k1D) {
+    if (dim_3d) {
+      is_3d = NewTemp("is3d");
+      Line("bool {} = extract_bits({}, 9, 2) == {}u;", is_3d, FetchWord(tf, 5),
+           uint32_t(xenos::DataDimension::k3D));
+      if (size_needed & 0b0111) {
+        std::string m = Mask(size_needed & 0b0111);
+        std::string w2 = FetchWord(tf, 2);
+        Line("{}.{} = float4(({} ? uint4(extract_bits({}, 0, 11), "
+             "extract_bits({}, 11, 11), extract_bits({}, 22, 10), 0u) : "
+             "uint4(extract_bits({}, 0, 13), extract_bits({}, 13, 13), "
+             "extract_bits({}, 26, 6), 0u)) + 1u).{};",
+             size, m, is_3d, w2, w2, w2, w2, w2, w2, m);
+      }
+    } else if (instr.dimension == xenos::FetchOpDimension::k1D) {
       Line("uint {} = extract_bits({}, 0, 24);", w1d, FetchWord(tf, 2));
       Line("{}.x = float({} + 1u);", size, w1d);
     } else {
@@ -2456,7 +2497,7 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
     Operand co = LoadOperand(instr.operands[0]);
     uint32_t normalized = instr.dimension == xenos::FetchOpDimension::k1D
                               ? 0b0001
-                              : 0b0011;
+                              : (dim_3d ? 0b0111 : 0b0011);
     uint32_t with_offsets = normalized & offsets_not_zero;
     uint32_t with_scaled = with_offsets & revert_scale_axes;
     uint32_t with_unscaled = with_offsets & ~with_scaled;
@@ -2488,9 +2529,19 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
         }
         std::string m = Mask(normalized & 0b011);
         Line("{}.{} = ({} / {}).{};", coord, m, coord, size, m);
+        if (dim_3d) {
+          // Normalize Z if 3D.
+          Open(fmt::format("if ({})", is_3d));
+          Line("{}.z = {}.z / {}.z;", coord, coord, size);
+          Close();
+        }
       } else {
         std::string m = Mask(normalized);
         Line("{}.{} = ({} / {}).{};", coord, m, co.Vec(), size, m);
+        if (dim_3d) {
+          // Keep Z unnormalized if stacked.
+          Line("{}.z = {} ? {}.z : {};", coord, is_3d, coord, co.Comp(2));
+        }
       }
     } else {
       if (with_offsets) {
@@ -2515,6 +2566,20 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       if (without_offsets & 0b011) {
         std::string m = Mask(without_offsets & 0b011);
         Line("{}.{} = {}.{};", coord, m, co.Vec(), m);
+      }
+      if (dim_3d) {
+        if (with_offsets & 0b100) {
+          // Denormalize and offset Z if stacked (re-applying the offset not
+          // to lose precision to the division).
+          Open(fmt::format("if (!{})", is_3d));
+          Line("{}.z = fma({}, {}.z, {});", coord, co.Comp(2), size,
+               F(offsets[2]));
+          Close();
+        } else {
+          // Denormalize Z if stacked, keep it normalized if 3D.
+          Line("{}.z = {} * {}.z;", coord, co.Comp(2), size);
+          Line("{}.z = {} ? {} : {}.z;", coord, is_3d, co.Comp(2), coord);
+        }
       }
     }
     switch (instr.dimension) {
@@ -2606,7 +2671,8 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       if (use_computed_lod) {
         have_grad = true;
         grad_count =
-            instr.dimension == xenos::FetchOpDimension::kCube ? 3 : 2;
+            (instr.dimension == xenos::FetchOpDimension::kCube || dim_3d) ? 3
+                                                                          : 2;
         std::string gm = Mask((1u << grad_count) - 1);
         Line("{} = fast::exp2({});", lod, lod);
         Line("float4 {} = float4(0.0f), {} = float4(0.0f);", gh, gv);
@@ -2616,8 +2682,18 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
           Line("{}.{} = (xe_grad_v * {}).{};", gv, gm, lod, gm);
           if (instr.attributes.unnormalized_coordinates &&
               instr.dimension != xenos::FetchOpDimension::kCube) {
-            Line("{}.{} = ({} / {}).{};", gh, gm, gh, size, gm);
-            Line("{}.{} = ({} / {}).{};", gv, gm, gv, size, gm);
+            if (dim_3d) {
+              Line("{}.xy = ({} / {}).xy;", gh, gh, size);
+              Line("{}.xy = ({} / {}).xy;", gv, gv, size);
+              // Normalize Z of the gradients for the 3D texture.
+              Open(fmt::format("if ({})", is_3d));
+              Line("{}.z = {}.z / {}.z;", gh, gh, size);
+              Line("{}.z = {}.z / {}.z;", gv, gv, size);
+              Close();
+            } else {
+              Line("{}.{} = ({} / {}).{};", gh, gm, gh, size, gm);
+              Line("{}.{} = ({} / {}).{};", gv, gm, gv, size, gm);
+            }
           }
         } else {
           Line("{}.{} = (dfdx({}) * {}).{};", gh, gm, coord, lod, gm);
@@ -2842,7 +2918,139 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       Line("{}.{} = select({}, {}, {}).{};", res, m, res, st, is_signed, m);
       Close();
     };
-    if (!fp_axes) {
+    if (dim_3d) {
+      // Lerp factor between two stacked layers (DxbcShaderTranslator: linear
+      // filtering between layers is done in the shader, the 2D-array view
+      // can't filter across layers), or none if point-sampled.
+      const auto& a = instr.attributes;
+      bool vol_mag_fc = a.vol_mag_filter == xenos::TextureFilter::kUseFetchConst;
+      bool vol_min_fc = a.vol_min_filter == xenos::TextureFilter::kUseFetchConst;
+      bool vol_mag_lin = a.vol_mag_filter == xenos::TextureFilter::kLinear;
+      bool vol_min_lin = a.vol_min_filter == xenos::TextureFilter::kLinear;
+      std::string layer_lerp;
+      auto begin_layer_lerp = [&]() {
+        layer_lerp = NewTemp("ll");
+        // Point sampling unless the linear branch below is taken.
+        Line("float {} = 0.0f;", layer_lerp);
+        Open(fmt::format("if (!{})", is_3d));
+      };
+      auto layer_lerp_linear = [&]() {
+        // Subtract 0.5 for linear filtering and keep the lerp factor; the
+        // layer is floored when sampling.
+        Line("{}.z = {}.z + {};", coord, coord, F(-0.5f));
+        Line("{} = xe_frc({}.z);", layer_lerp, coord);
+      };
+      if (have_grad && (vol_mag_fc || vol_min_fc || vol_mag_lin != vol_min_lin)) {
+        begin_layer_lerp();
+        // Minifying along layers if the Z derivative is > 1 (NaN is
+        // magnifying).
+        std::string mf = NewTemp("lmf");
+        Line("float {} = max({}.z, {}.z);", mf, gh, gv);
+        if (!a.unnormalized_coordinates) {
+          // Denormalize the gradient.
+          Line("{} = {} * {}.z;", mf, mf, size);
+        }
+        std::string minif = NewTemp("lmin");
+        Line("bool {} = {} < {};", minif, F(1.0f), mf);
+        if (vol_mag_fc || vol_min_fc) {
+          std::string lin = NewTemp("llin");
+          std::string mag = vol_mag_fc
+                                ? fmt::format("({} & 1u)", FetchWord(tf, 4))
+                                : U(uint32_t(vol_mag_lin));
+          std::string min = vol_min_fc
+                                ? fmt::format("extract_bits({}, 1, 1)",
+                                              FetchWord(tf, 4))
+                                : U(uint32_t(vol_min_lin));
+          Line("uint {} = {} ? {} : {};", lin, minif, min, mag);
+          Open(fmt::format("if ({} != 0u)", lin));
+        } else if (vol_mag_lin) {
+          // Magnification linear, minification point.
+          Open(fmt::format("if (!{})", minif));
+        } else {
+          // Minification linear, magnification point.
+          Open(fmt::format("if ({})", minif));
+        }
+        layer_lerp_linear();
+        Close();
+        Close();
+      } else if (vol_mag_fc || vol_mag_lin) {
+        // No gradients (LOD 0 is magnification), or the same filter for
+        // magnification and minification. The LOD is within the layers.
+        begin_layer_lerp();
+        if (vol_mag_fc) {
+          Open(fmt::format("if (({} & 1u) != 0u)", FetchWord(tf, 4)));
+        }
+        layer_lerp_linear();
+        if (vol_mag_fc) {
+          Close();
+        }
+        Close();
+      }
+
+      // Unsigned and signed samples of one view into `dst`, as emit_samples.
+      auto emit_view = [&](const std::string& dst, uint32_t desc_u,
+                           uint32_t desc_s,
+                           auto&& sample) {
+        Open(fmt::format("if (!({}))", all_signed));
+        Line("{}.{} = {}.{};", dst, m, sample(desc_u), m);
+        Close();
+        Open(fmt::format("if ({})", any_signed));
+        std::string st = NewTemp("st");
+        Line("float4 {} = {};", st, sample(desc_s));
+        Line("{}.{} = select({}, {}, {}).{};", dst, m, dst, st, is_signed, m);
+        Close();
+      };
+
+      // 3D texture.
+      Open(fmt::format("if ({})", is_3d));
+      emit_view(res, tex_u, tex_s, [&](uint32_t desc) {
+        std::string t = fmt::format("xe_tl.t3d[xe_desc[{}]].t", desc);
+        if (have_grad) {
+          return fmt::format("{}.sample({}, {}.xyz, gradient3d({}.xyz, {}.xyz))",
+                             t, smp_v, coord, gh, gv);
+        }
+        return fmt::format("{}.sample({}, {}.xyz, level({}))", t, smp_v, coord,
+                           lod_src);
+      });
+      Close();
+
+      // Stacked 2D texture: the 2D-array view.
+      Open("else");
+      uint32_t stk_u = FindTextureBinding(tf, xenos::FetchOpDimension::k2D, false);
+      uint32_t stk_s = FindTextureBinding(tf, xenos::FetchOpDimension::k2D, true);
+      // Floor the layer (Direct3D rounds to nearest even, the Xbox 360
+      // addresses layers like 3D texture slices); with linear filtering 0.5
+      // was subtracted above.
+      Line("{}.z = fast::floor({}.z);", coord, coord);
+      auto stacked_sample = [&](uint32_t desc) {
+        std::string t = fmt::format("xe_tl.t2d[xe_desc[{}]].t", desc);
+        // Out-of-range layers clamp to the array, as in Direct3D.
+        std::string layer = fmt::format(
+            "uint(clamp({}.z, 0.0f, float({}.get_array_size() - 1u)))", coord,
+            t);
+        if (have_grad) {
+          return fmt::format("{}.sample({}, {}.xy, {}, gradient2d({}.xy, {}.xy))",
+                             t, smp_v, coord, layer, gh, gv);
+        }
+        return fmt::format("{}.sample({}, {}.xy, {}, level({}))", t, smp_v,
+                           coord, layer, lod_src);
+      };
+      emit_view(res, stk_u, stk_s, stacked_sample);
+      if (!layer_lerp.empty()) {
+        // If the lerp factor is not zero (or NaN), interpolate towards the
+        // next layer.
+        Open(fmt::format("if ({} != 0.0f)", layer_lerp));
+        Line("{}.z = {}.z + {};", coord, coord, F(1.0f));
+        std::string lv = NewTemp("lv");
+        Line("float4 {} = float4(0.0f);", lv);
+        emit_view(lv, stk_u, stk_s, stacked_sample);
+        Line("{}.{} = ({} - {}).{};", lv, m, lv, res, m);
+        Line("{}.{} = fma({}, float4({}), {}).{};", res, m, lv, layer_lerp, res,
+             m);
+        Close();
+      }
+      Close();
+    } else if (!fp_axes) {
       emit_samples(nullptr, smp_v);
     } else if (fp_xy.size() == 1) {
       // 2x: the moved coordinate (or the original one) and its sampler.

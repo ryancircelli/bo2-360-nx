@@ -92,8 +92,8 @@ namespace {
 // docs/resolution-scale.md section 22.
 bool TestDrawableOverride(uint32_t& width, uint32_t& height) {
   static const std::pair<uint32_t, uint32_t> size = [] {
-    const char* control = std::getenv("FABLE2_TEST_CONTROL_DIR");
-    const char* env = std::getenv("FABLE2_TEST_DRAWABLE");
+    const char* control = MetalDebugEnv("TEST_CONTROL_DIR");
+    const char* env = MetalDebugEnv("TEST_DRAWABLE");
     unsigned w = 0, h = 0;
     if (!control || !*control || !env || std::sscanf(env, "%ux%u", &w, &h) != 2 || w < 64 ||
         h < 64 || w > 8192 || h > 8192) {
@@ -577,16 +577,15 @@ bool MetalPresenter::CaptureScreen(RawImage& image_out, uint32_t timeout_ms, uin
 // Present queue depth (docs/macos-metal.md "Present queue", 2026-10-22). With display sync on, the game renders
 // faster than the display takes frames, so CAMetalLayer's queue stays full: with the default 3 drawables every
 // frame waits behind two older ones (55-61 ms swap->photon at 60 FPS). 2 drawables keep at most one frame
-// waiting (41-45 ms) with the same pacing. FABLE2_PRESENT_DRAWABLES: unset/2 = 2 (fix, default on);
+// waiting (41-45 ms) with the same pacing. metal_present_drawables: 2 = 2 (fix, default on);
 // 3 or 0 = 3 (old behaviour; 0 is the launcher's "off"). Read once (static).
 namespace {
 NSUInteger PresentDrawableCount() {
   static const NSUInteger count = [] {
-    const char* v = std::getenv("FABLE2_PRESENT_DRAWABLES");  // getenv-ok: cached in a static
-    const bool old = v && (std::strcmp(v, "3") == 0 || std::strcmp(v, "0") == 0);
+    const int32_t v = REXCVAR_GET(metal_present_drawables);
+    const bool old = v == 3 || v == 0;
     const NSUInteger n = old ? 3 : 2;
-    REXLOG_INFO("[present] maximumDrawableCount = {} (FABLE2_PRESENT_DRAWABLES={})", uint32_t(n),
-                v ? v : "unset");
+    REXLOG_INFO("[present] maximumDrawableCount = {} (metal_present_drawables={})", uint32_t(n), v);
     return n;
   }();
   return count;
@@ -1192,14 +1191,12 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   // contentsScale follows the window's backing scale (Retina 2, else 1). On macOS the SDL surface
   // already reports pixels (SDL_GetWindowSizeInPixels), so the drawable is the full pixel size
   // either way; this only stops the presenter overwriting the scale SDL's Metal view sets.
-  // FABLE2_RETINA=0 restores the old contentsScale = 1. The SDK reconnects on every pixel-size
+  // metal_retina=false restores the old contentsScale = 1. The SDK reconnects on every pixel-size
   // change (resize, move to a display with another backing scale), so this is re-read then.
   CGFloat backing_scale = 1.0;
   bool retina = true;
 #if !XE_PLATFORM_IOS
-  if (const char* env = std::getenv("FABLE2_RETINA")) {  // getenv-ok: per surface connect (resize)
-    retina = !(env[0] == '0' && env[1] == '\0');
-  }
+  retina = REXCVAR_GET(metal_retina);
   {
     id delegate = metal_layer.delegate;
     NSWindow* ns_window = [delegate isKindOfClass:[NSView class]] ? [(NSView*)delegate window] : nil;
@@ -1257,13 +1254,13 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   metal_layer_ = metal_layer;
 
   REXLOG_INFO("Metal surface connected successfully: {}x{} px = {}x{} points (backing scale={}, "
-              "contentsScale={}, extra drawable scale={}, drawable={}x{}) [retina] {} (FABLE2_RETINA={})",
+              "contentsScale={}, extra drawable scale={}, drawable={}x{}) [retina] {} (metal_retina)",
               new_surface_width, new_surface_height,
               uint32_t(new_surface_width / backing_scale + 0.5),
               uint32_t(new_surface_height / backing_scale + 0.5), double(backing_scale),
               double(metal_layer.contentsScale), double(surface_scale),
               uint32_t(metal_layer.drawableSize.width), uint32_t(metal_layer.drawableSize.height),
-              retina ? "on" : "off", std::getenv("FABLE2_RETINA") ? std::getenv("FABLE2_RETINA") : "unset");  // getenv-ok: per surface connect (resize)
+              retina ? "on" : "off");
   return SurfacePaintConnectResult::kSuccess;
 }
 

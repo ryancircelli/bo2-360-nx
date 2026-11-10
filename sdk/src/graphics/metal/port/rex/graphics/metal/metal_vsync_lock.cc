@@ -19,7 +19,7 @@ namespace rex::graphics::metal::vsync_lock {
 namespace {
 
 double EnvMs(const char* name, double fallback) {
-  const char* v = std::getenv(name);  // getenv-ok: once, from a static initializer
+  const char* v = MetalDebugEnv(name);  // getenv-ok: once, from a static initializer
   if (!v || !*v) return fallback;
   char* end = nullptr;
   const double d = std::strtod(v, &end);
@@ -38,16 +38,15 @@ struct Config {
 const Config& Cfg() {
   static const Config cfg = [] {
     Config c;
-    const char* v = std::getenv("FABLE2_VSYNC_PHASE_LOCK");  // getenv-ok: once (static)
-    // Default on (2026-10-22); 0/off/false turns it off.
-    c.enabled = !v || !*v || (std::strcmp(v, "0") != 0 && std::strcmp(v, "off") != 0 && std::strcmp(v, "false") != 0);
-    c.c0 = EnvMs("FABLE2_VSYNC_LOCK_LATCH_MS", 3.0) / 1000.0;  // beyond one refresh
-    c.margin = EnvMs("FABLE2_VSYNC_LOCK_MARGIN_MS", 1.5) / 1000.0;
-    c.offset = EnvMs("FABLE2_VSYNC_LOCK_OFFSET_MS", 0.0) / 1000.0;  // experiments: extra phase lead
-    c.gain = std::clamp(EnvMs("FABLE2_VSYNC_LOCK_GAIN", 0.2), 0.01, 1.0);
-    c.log_frames = EnvMs("FABLE2_VSYNC_LOCK_TRACE", 0.0) != 0.0;
-    REXLOG_INFO("[vsync-lock] {} (FABLE2_VSYNC_PHASE_LOCK={}): latch {:.1f} ms, margin {:.1f} ms, gain {:.2f}",
-                c.enabled ? "on" : "off", v ? v : "unset", c.c0 * 1e3, c.margin * 1e3, c.gain);
+    // Default on (2026-10-22); metal_vsync_phase_lock=false turns it off.
+    c.enabled = REXCVAR_GET(metal_vsync_phase_lock);
+    c.c0 = EnvMs("VSYNC_LOCK_LATCH_MS", 3.0) / 1000.0;  // beyond one refresh
+    c.margin = EnvMs("VSYNC_LOCK_MARGIN_MS", 1.5) / 1000.0;
+    c.offset = EnvMs("VSYNC_LOCK_OFFSET_MS", 0.0) / 1000.0;  // experiments: extra phase lead
+    c.gain = std::clamp(EnvMs("VSYNC_LOCK_GAIN", 0.2), 0.01, 1.0);
+    c.log_frames = EnvMs("VSYNC_LOCK_TRACE", 0.0) != 0.0;
+    REXLOG_INFO("[vsync-lock] {} (metal_vsync_phase_lock): latch {:.1f} ms, margin {:.1f} ms, gain {:.2f}",
+                c.enabled ? "on" : "off", c.c0 * 1e3, c.margin * 1e3, c.gain);
     return c;
   }();
   return cfg;

@@ -60,7 +60,7 @@ inline const char* CatName(int c) {
 
 inline bool Enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_HITCH_TRACE");
+    const char* v = MetalDebugEnv("HITCH_TRACE");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -68,7 +68,7 @@ inline bool Enabled() {
 
 inline uint64_t ThresholdUs() {
   static const uint64_t us = [] {
-    const char* v = std::getenv("FABLE2_HITCH_MS");
+    const char* v = MetalDebugEnv("HITCH_MS");
     const double ms = v ? std::atof(v) : 40.0;
     return uint64_t((ms > 0 ? ms : 40.0) * 1000.0);
   }();
@@ -76,26 +76,26 @@ inline uint64_t ThresholdUs() {
 }
 
 inline double EnvMs(const char* name, double fallback) {
-  const char* v = std::getenv(name);
+  const char* v = MetalDebugEnv(name);
   const double ms = v ? std::atof(v) : fallback;
   return ms > 0 ? ms : fallback;
 }
 
 inline bool Relative() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_HITCH_RELATIVE");
+    const char* v = MetalDebugEnv("HITCH_RELATIVE");
     return !(v && v[0] == '0');
   }();
   return on;
 }
 
 inline double Ratio() {
-  static const double r = EnvMs("FABLE2_HITCH_RATIO", 1.5);
+  static const double r = EnvMs("HITCH_RATIO", 1.5);
   return r;
 }
 
 inline uint64_t CeilUs() {
-  static const uint64_t us = uint64_t(EnvMs("FABLE2_HITCH_CEIL_MS", 100.0) * 1000.0);
+  static const uint64_t us = uint64_t(EnvMs("HITCH_CEIL_MS", 100.0) * 1000.0);
   return us;
 }
 

@@ -17,7 +17,7 @@ namespace rex::graphics::metal {
 
 inline bool PassMergeEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_PASS_MERGE");
+    const char* v = MetalDebugEnv("PASS_MERGE");
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[pass-merge] {} (FABLE2_PASS_MERGE)", e ? "on" : "off");
     return e;
@@ -26,19 +26,19 @@ inline bool PassMergeEnabled() {
 }
 
 inline bool PassMergeItem(const char* name) {
-  const char* v = std::getenv(name);  // getenv-ok: called from static initializers only
+  const char* v = MetalDebugEnv(name);  // getenv-ok: called from static initializers only
   const bool e = PassMergeEnabled() && !(v && v[0] == '0');
   REXLOG_INFO("[pass-merge] {} {}", name, e ? "on" : "off");
   return e;
 }
 
 inline bool PassMergeTexDirectEnabled() {
-  static const bool on = PassMergeItem("FABLE2_PASS_MERGE_TEX_DIRECT");  // getenv-ok: static init
+  static const bool on = PassMergeItem("PASS_MERGE_TEX_DIRECT");  // getenv-ok: static init
   return on;
 }
 
 inline bool PassMergeClearDstEnabled() {
-  static const bool on = PassMergeItem("FABLE2_PASS_MERGE_CLEAR_DST");  // getenv-ok: static init
+  static const bool on = PassMergeItem("PASS_MERGE_CLEAR_DST");  // getenv-ok: static init
   return on;
 }
 

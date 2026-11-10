@@ -52,7 +52,7 @@ uint64_t NowNs() {
 
 bool StatsEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_ZPD_STATS");
+    const char* v = MetalDebugEnv("ZPD_STATS");
     return v && v[0] == '1';
   }();
   return enabled;
@@ -108,10 +108,9 @@ fable2_zpd_wait_result(uint64_t seen, uint32_t guard_us) {
 }
 
 void MetalCommandProcessor::ZpdInitialize() {
-  // Default on (2026-10-14); FABLE2_OCCLUSION_REAL=0 restores the SDK's fake
+  // Default on (2026-10-14); metal_occlusion_real=false restores the SDK's fake
   // "1000 samples passed" answer.
-  const char* v = std::getenv("FABLE2_OCCLUSION_REAL");
-  zpd_real_ = !(v && v[0] == '0');
+  zpd_real_ = REXCVAR_GET(metal_occlusion_real);
   if (!zpd_real_) {
     return;
   }

@@ -132,7 +132,7 @@ uint32_t EstimateRenderTargetBytesPerPixel(bool is_64bpp) {
 // or on a new Mac / OS update, sees). Unset: empty.
 const std::string& MslSalt() {
   static const std::string salt = [] {
-    const char* v = std::getenv("FABLE2_MSL_SALT");
+    const char* v = MetalDebugEnv("MSL_SALT");
     return (v && v[0]) ? std::string("// salt ") + v + "\n" : std::string();
   }();
   return salt;
@@ -356,7 +356,7 @@ AttachmentLoadStoreActions GetTransientAttachmentLoadStoreActions() {
 // what DontCare stores could save; bit 0 stencil, bit 1 depth.
 uint32_t RtStoreDiag() {
   static const uint32_t mode = [] {
-    const char* v = std::getenv("FABLE2_RT_STORE_DIAG");
+    const char* v = MetalDebugEnv("RT_STORE_DIAG");
     uint32_t m = 0;
     if (v && !std::strcmp(v, "stencil")) m = 1;
     if (v && !std::strcmp(v, "depth")) m = 2;
@@ -800,7 +800,7 @@ bool MetalRenderTargetCache::Initialize() {
   // are separate allocations (FABLE2_RT_SHRINK_HEAPS=1 keeps the heap pool).
   const bool rt_heaps =
       RtShrinkMode() != 1 || [] {
-        const char* v = std::getenv("FABLE2_RT_SHRINK_HEAPS");  // getenv-ok: once, at cache setup
+        const char* v = MetalDebugEnv("RT_SHRINK_HEAPS");  // getenv-ok: once, at cache setup
         return v && v[0] == '1';
       }();
   if (REXCVAR_GET(metal_use_heaps) && rt_heaps) {
@@ -3217,7 +3217,7 @@ void MetalRenderTargetCache::SetUpRenderTargetViews(
 // ---------------------------------------------------------------------------
 uint32_t MetalRenderTargetCache::RtShrinkMode() {
   static const uint32_t mode = [] {
-    const char* v = std::getenv("FABLE2_RT_SHRINK");
+    const char* v = MetalDebugEnv("RT_SHRINK");
     uint32_t m = 1;
     if (v && v[0] == '0') m = 0;
     if (v && std::strcmp(v, "census") == 0) m = 2;
@@ -3230,7 +3230,7 @@ uint32_t MetalRenderTargetCache::RtShrinkMode() {
 
 bool MetalRenderTargetCache::RtShrinkVerify() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_RT_SHRINK_VERIFY");
+    const char* v = MetalDebugEnv("RT_SHRINK_VERIFY");
     bool e = v && v[0] == '1';
     if (e) REXLOG_WARN("[rt-shrink] FABLE2_RT_SHRINK_VERIFY=1 (diagnostic)");
     return e;
@@ -3242,13 +3242,13 @@ bool MetalRenderTargetCache::RtShrinkVerify() {
 // ownership claim (~5% of the GPU Commands thread at 1x, docs/archive/perf-gpucmd-20261012.md).
 // FABLE2_GETENV_PER_CALL=1 (A/B diagnostic only) reads it on every call again.
 bool MetalRenderTargetCache::RtShrinkTrace() {
-  static const bool on = std::getenv("FABLE2_RT_SHRINK_TRACE") != nullptr;
+  static const bool on = MetalDebugEnv("RT_SHRINK_TRACE") != nullptr;
   static const bool per_call = [] {
-    const char* v = std::getenv("FABLE2_GETENV_PER_CALL");
+    const char* v = MetalDebugEnv("GETENV_PER_CALL");
     return v && v[0] == '1';
   }();
   if (per_call) {
-    return std::getenv("FABLE2_RT_SHRINK_TRACE") != nullptr;  // getenv-ok: A/B diagnostic only
+    return MetalDebugEnv("RT_SHRINK_TRACE") != nullptr;  // getenv-ok: A/B diagnostic only
   }
   return on;
 }
@@ -3273,7 +3273,7 @@ void MetalRenderTargetCache::OnOwnershipClaimed(
   // Negative control for the verify mode (UNSAFE, image wrong): ignore
   // claims, so only draws size the textures.
   static const bool diag_noclaim = [] {
-    const char* v = std::getenv("FABLE2_RT_SHRINK_DIAG");
+    const char* v = MetalDebugEnv("RT_SHRINK_DIAG");
     bool on = v && std::strcmp(v, "noclaim") == 0;
     if (on) REXLOG_WARN("[rt-shrink] DIAG noclaim: ownership claims ignored");
     return on;
@@ -5208,7 +5208,7 @@ bool MetalRenderTargetCache::EffectsNativeEnabled() {
     // Experimental, opt-in: the effect size itself comes from
     // draw_resolution_scaled_texture_offsets (FABLE2_EFFECTS_NATIVE in the
     // executable); these targets only save GPU time (section 12).
-    const char* v = std::getenv("FABLE2_EFFECTS_NATIVE_TARGETS");
+    const char* v = MetalDebugEnv("EFFECTS_NATIVE_TARGETS");
     const bool on = v && v[0] == '1';
     REXLOG_INFO(
         "[native-scale] effect render targets at native 1x resolution "
@@ -5224,8 +5224,10 @@ bool MetalRenderTargetCache::ShadowsNativeEnabled() {
   static const bool enabled = [] {
     // Shadow maps at the console's own resolution when the draw resolution
     // is scaled (section 16). =0 keeps them scaled (today's 2x/3x image).
-    const char* v = std::getenv("FABLE2_SHADOWS_NATIVE");
-    const bool on = !(v && v[0] == '0');
+    // The detection heuristic was tuned on Fable II, so unset it follows the
+    // fable2 title quirk; =1 opts any title in.
+    const char* v = MetalDebugEnv("SHADOWS_NATIVE");
+    const bool on = v && v[0] ? v[0] != '0' : MetalFable2Quirks();
     REXLOG_INFO(
         "[native-scale] shadow maps at native 1x resolution when the draw "
         "resolution is scaled: {} (FABLE2_SHADOWS_NATIVE={})",
@@ -5243,8 +5245,10 @@ bool MetalRenderTargetCache::TexSpaceNativeEnabled() {
     // dilation (fixed texel-offset fetches) no longer fills the gutters
     // between UV islands, so the fur samples the clear colour there: a dark
     // seam down the dog's chest. =0 keeps them scaled (old 2x/3x image).
-    const char* v = std::getenv("FABLE2_TEXSPACE_NATIVE");
-    const bool on = !(v && v[0] == '0');
+    // Fable II only: the passes are matched by Fable shader hashes, so unset
+    // it follows the fable2 title quirk.
+    const char* v = MetalDebugEnv("TEXSPACE_NATIVE");
+    const bool on = v && v[0] ? v[0] != '0' : MetalFable2Quirks();
     REXLOG_INFO(
         "[native-scale] texture-space passes (morph, dog lighting) at native "
         "1x resolution when the draw resolution is scaled: {} "
@@ -5402,7 +5406,7 @@ void MetalRenderTargetCache::DropMixedScaleHostDepth(
 
 bool MetalRenderTargetCache::ShadowTraceActive() {
   static const uint64_t first = [] {
-    const char* v = std::getenv("FABLE2_SHADOW_TRACE");
+    const char* v = MetalDebugEnv("SHADOW_TRACE");
     return v ? std::strtoull(v, nullptr, 10) : 0ull;
   }();
   if (!first) {
@@ -5410,7 +5414,7 @@ bool MetalRenderTargetCache::ShadowTraceActive() {
   }
   // FABLE2_SHADOW_TRACE_FRAMES=<n>: trace window length (default 2 frames).
   static const uint64_t count = [] {
-    const char* v = std::getenv("FABLE2_SHADOW_TRACE_FRAMES");
+    const char* v = MetalDebugEnv("SHADOW_TRACE_FRAMES");
     const uint64_t n = v ? std::strtoull(v, nullptr, 10) : 0ull;
     return n ? n : 2ull;
   }();
@@ -5434,7 +5438,7 @@ std::string MetalRenderTargetCache::DescribeCurrentTargetsForTrace() const {
 
 bool MetalRenderTargetCache::EffectsNativeTraceEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_EFFECTS_NATIVE_TRACE");
+    const char* v = MetalDebugEnv("EFFECTS_NATIVE_TRACE");
     return v && v[0] == '1';
   }();
   return enabled;
@@ -5474,11 +5478,11 @@ void MetalRenderTargetCache::NoteEffectsNativeDraw(
 bool MetalRenderTargetCache::TileEdramSelfDepthEnabled() {
   static const bool on = [] {
     auto off = [](const char* name) {
-      const char* v = std::getenv(name);
+      const char* v = MetalDebugEnv(name);
       return v && v[0] == '0';
     };
-    bool enabled = !off("FABLE2_TILE_EDRAM") &&
-                   !off("FABLE2_TILE_EDRAM_SELFDEPTH");
+    bool enabled = !off("TILE_EDRAM") &&
+                   !off("TILE_EDRAM_SELFDEPTH");
     REXLOG_INFO("[tile-edram] self-source depth transfers in the draw pass: {}",
                 enabled ? "on" : "off");
     return enabled;
@@ -5488,7 +5492,7 @@ bool MetalRenderTargetCache::TileEdramSelfDepthEnabled() {
 
 bool MetalRenderTargetCache::DeferredClearsEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DEFERRED_CLEARS");
+    const char* v = MetalDebugEnv("DEFERRED_CLEARS");
     bool enabled = !(v && v[0] == '0');
     REXLOG_INFO(
         "[deferred-clears] resolve clears drawn in the next draw pass: {}",
@@ -5500,7 +5504,7 @@ bool MetalRenderTargetCache::DeferredClearsEnabled() {
 
 bool MetalRenderTargetCache::TransferQuadStateResetEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TRANSFER_QUAD_STATE_RESET");
+    const char* v = MetalDebugEnv("TRANSFER_QUAD_STATE_RESET");
     bool enabled = !(v && v[0] == '0');
     REXLOG_INFO(
         "[raster-state] draw-pass transfer quads reset the rasterizer state: {}",
@@ -5522,7 +5526,7 @@ void MetalRenderTargetCache::ResetDrawPassRasterizerState(
 
 bool MetalRenderTargetCache::AliasClearNativeEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_ALIAS_CLEAR_NATIVE");
+    const char* v = MetalDebugEnv("ALIAS_CLEAR_NATIVE");
     bool enabled = !(v && v[0] == '0');
     REXLOG_INFO(
         "[alias-clear] XDK alias-MSAA clear quads done as EDRAM clears of the "
@@ -5536,7 +5540,7 @@ bool MetalRenderTargetCache::AliasClearNativeEnabled() {
 
 bool MetalRenderTargetCache::AliasClearTraceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_ALIAS_CLEAR_TRACE");
+    const char* v = MetalDebugEnv("ALIAS_CLEAR_TRACE");
     return v && v[0] == '1';
   }();
   return on;
@@ -5544,7 +5548,7 @@ bool MetalRenderTargetCache::AliasClearTraceEnabled() {
 
 bool MetalRenderTargetCache::MainDepthNativeEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_MAIN_DEPTH_NATIVE");
+    const char* v = MetalDebugEnv("MAIN_DEPTH_NATIVE");
     bool enabled = !(v && v[0] == '0') && AliasClearNativeEnabled();
     REXLOG_INFO(
         "[main-depth] depth-word alias clears into a unorm colour variant and "
@@ -5800,12 +5804,11 @@ bool MetalRenderTargetCache::SsmMergeEnabled() {
   static const bool on = [] {
     // Default off (docs/ssm-merge-20261015.md): exact, but on the M5 Max the
     // removed pass overlapped texture uploads for free, so 2x GPU time rose
-    // about 0.1 ms; opt in with =1 (meant for bandwidth-bound Macs).
-    const char* v = std::getenv("FABLE2_SSM_MERGE");  // getenv-ok: once
-    const bool enabled = v && v[0] == '1';
+    // about 0.1 ms; opt in with metal_ssm_merge (meant for bandwidth-bound Macs).
+    const bool enabled = REXCVAR_GET(metal_ssm_merge);
     REXLOG_INFO("[ssm-merge] stencil-only alias clear transfers inside the "
-                "next draw pass {} (FABLE2_SSM_MERGE={})",
-                enabled ? "on" : "off", v ? v : "unset");
+                "next draw pass {} (metal_ssm_merge)",
+                enabled ? "on" : "off");
     return enabled;
   }();
   return on;
@@ -5813,7 +5816,7 @@ bool MetalRenderTargetCache::SsmMergeEnabled() {
 
 bool MetalRenderTargetCache::SsmStencilFoldEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_SSM_STENCIL_FOLD");  // getenv-ok: once
+    const char* v = MetalDebugEnv("SSM_STENCIL_FOLD");  // getenv-ok: once
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO("[ssm-merge] dead stencil-only clears folded into the "
                 "transfers that move their tiles away {} "
@@ -5905,7 +5908,7 @@ void MetalRenderTargetCache::FoldDeadStencilClears(
 
 bool MetalRenderTargetCache::ClearConstSourceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_CLEAR_CONST_SOURCE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("CLEAR_CONST_SOURCE");  // getenv-ok: once
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO("[clear-const] transfers read a pending whole-target clear "
                 "from a constant texture {} (FABLE2_CLEAR_CONST_SOURCE={})",
@@ -6124,8 +6127,8 @@ bool MetalRenderTargetCache::StencilAliasCoversTarget(
 
 uint64_t MetalRenderTargetCache::MainDepthDumpFrame() {
   static const uint64_t frame = [] {
-    const char* v = std::getenv("FABLE2_MAIN_DEPTH_DUMP");
-    const char* d = std::getenv("FABLE2_MAIN_DEPTH_DUMP_DIR");
+    const char* v = MetalDebugEnv("MAIN_DEPTH_DUMP");
+    const char* d = MetalDebugEnv("MAIN_DEPTH_DUMP_DIR");
     return (v && d && d[0]) ? std::strtoull(v, nullptr, 10) : 0ull;
   }();
   return frame;
@@ -6133,7 +6136,7 @@ uint64_t MetalRenderTargetCache::MainDepthDumpFrame() {
 
 void MetalRenderTargetCache::MainDepthDumpEdram(const char* tag) {
   (void)FlushQueuedStencilAlias();
-  const char* dir = std::getenv("FABLE2_MAIN_DEPTH_DUMP_DIR");
+  const char* dir = MetalDebugEnv("MAIN_DEPTH_DUMP_DIR");
   if (!dir || !dir[0] || !edram_buffer_ ||
       GetPath() != Path::kHostRenderTargets) {
     return;
@@ -6553,7 +6556,7 @@ bool MetalRenderTargetCache::TryAliasClear(const AliasClearRequest& req) {
 
 bool MetalRenderTargetCache::DeferredClearsSwapFlush() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DEFERRED_CLEARS_SWAP_FLUSH");
+    const char* v = MetalDebugEnv("DEFERRED_CLEARS_SWAP_FLUSH");
     bool enabled = v && v[0] == '1';
     if (enabled) {
       REXLOG_INFO("[deferred-clears] flush every deferred clear at frame start");
@@ -6694,7 +6697,7 @@ bool MetalRenderTargetCache::FlushDeferredClears(
 
 bool MetalRenderTargetCache::ClearLoadActionEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_CLEAR_LOAD_ACTION");  // getenv-ok: once
+    const char* v = MetalDebugEnv("CLEAR_LOAD_ACTION");  // getenv-ok: once
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO("[ssmask] whole-target in-pass clears as load actions {} "
                 "(FABLE2_CLEAR_LOAD_ACTION={})",
@@ -6873,7 +6876,7 @@ bool MetalRenderTargetCache::CanDrawDeferredClearInPass(
 
 bool MetalRenderTargetCache::XferTraceEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_XFER_TRACE");
+    const char* v = MetalDebugEnv("XFER_TRACE");
     return v && v[0] == '1';
   }();
   return enabled;
@@ -7276,7 +7279,7 @@ bool MetalRenderTargetCache::Resolve(rex::memory::Memory& memory, uint32_t& writ
         // clear pass N extra times (same image, clears are idempotent) to
         // measure what these passes cost on this GPU (ms per GB slope).
         static const char* diag_env =
-            std::getenv("FABLE2_DEFERRED_CLEARS_DIAG");
+            MetalDebugEnv("DEFERRED_CLEARS_DIAG");
         static const bool diag_skip = [] {
           bool on = diag_env && std::strcmp(diag_env, "skip") == 0;
           if (on) {
@@ -11236,7 +11239,7 @@ fragment TransferDepthOut transfer_ps(
 namespace {
 bool XferPrewarmEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_XFER_PREWARM");
+    const char* v = MetalDebugEnv("XFER_PREWARM");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -11336,8 +11339,11 @@ void MetalRenderTargetCache::StartTransferPrewarm(
       parse(in, false);
     }
   }
-  const char* use_defaults = std::getenv("FABLE2_XFER_PREWARM_DEFAULTS");  // getenv-ok: once, transfer-pipeline prewarm at startup
-  if (!(use_defaults && use_defaults[0] == '0')) {
+  // The built-in keys were captured from Fable II sessions: used by default
+  // only with the fable2 title quirk (=1 / =0 overrides).
+  const char* use_defaults = MetalDebugEnv("XFER_PREWARM_DEFAULTS");
+  if (use_defaults && use_defaults[0] ? use_defaults[0] != '0'
+                                      : MetalFable2Quirks()) {
     std::istringstream in(kXferKeysDefault);
     parse(in, true);
   }

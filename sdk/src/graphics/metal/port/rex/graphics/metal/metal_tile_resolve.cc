@@ -146,33 +146,33 @@ const TileLibrary* FindTileLibrary(const std::string& name) {
 }
 
 bool EnvOn(const char* name) {
-  const char* v = std::getenv(name);  // getenv-ok: read once by callers
+  const char* v = MetalDebugEnv(name);  // getenv-ok: read once by callers
   return v && v[0] == '1';
 }
 
 bool VerifyOn() {
-  static const bool on = EnvOn("FABLE2_TILE_RESOLVE_VERIFY");
+  static const bool on = EnvOn("TILE_RESOLVE_VERIFY");
   return on;
 }
 bool VerifyBreakOn() {
-  static const bool on = EnvOn("FABLE2_TILE_RESOLVE_VERIFY_BREAK");
+  static const bool on = EnvOn("TILE_RESOLVE_VERIFY_BREAK");
   return on;
 }
 bool TraceOn() {
-  static const bool on = EnvOn("FABLE2_TILE_RESOLVE_TRACE");
+  static const bool on = EnvOn("TILE_RESOLVE_TRACE");
   return on;
 }
 // FABLE2_TILE_RESOLVE_MSAA=0: 2x/4x MSAA sources stay on the compute path.
 bool MsaaOn() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_MSAA");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_MSAA");  // getenv-ok: once
     return !(v && v[0] == '0');
   }();
   return on;
 }
 double AreaRatio() {
   static const double ratio = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_AREA_RATIO");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_AREA_RATIO");  // getenv-ok: once
     double r = v ? std::atof(v) : 1.5;
     return r > 0.0 ? r : 1.5;
   }();
@@ -183,7 +183,7 @@ double AreaRatio() {
 // the resolve rectangle). Default: render area against the area drawn.
 bool DrawnGate() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_DRAWN_GATE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_DRAWN_GATE");  // getenv-ok: once
     return !(v && v[0] == '0');
   }();
   return on;
@@ -436,13 +436,12 @@ struct MetalRenderTargetCache::TileResolvePipelines {
 
 bool MetalRenderTargetCache::TileResolveEnabled() {
   // Default on since 2026-10-13 (docs/tile-resolve-20261013.md, follow-up);
-  // FABLE2_TILE_RESOLVE=0 is the kill switch.
+  // metal_tile_resolve=false is the kill switch.
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE");  // getenv-ok: once
-    const bool enabled = !(v && v[0] == '0');
+    const bool enabled = REXCVAR_GET(metal_tile_resolve);
     if (enabled) {
       REXLOG_INFO(
-          "[tile-resolve] on (FABLE2_TILE_RESOLVE=0 turns it off): colour "
+          "[tile-resolve] on (metal_tile_resolve=false turns it off): colour "
           "copies run as tile functions in the draw pass{}{}, area ratio "
           "{:.2f} ({} gate)",
           VerifyOn() ? ", VERIFY against the compute resolve" : "",
@@ -468,7 +467,7 @@ void MetalRenderTargetCache::StartTileResolvePrewarm(
     const std::filesystem::path& title_root, uint32_t title_id) {
   if (!TileResolveEnabled()) return;
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_PREWARM");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_PREWARM");  // getenv-ok: once
     return !(v && v[0] == '0');
   }();
   if (!tile_resolve_pipelines_) {
@@ -610,7 +609,7 @@ bool MetalRenderTargetCache::TileResolveDrawClearInPass(
 
 bool MetalRenderTargetCache::TileResolveKeepOpenEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_KEEP_OPEN");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_KEEP_OPEN");  // getenv-ok: once
     return TileResolveEnabled() && v && v[0] == '1';
   }();
   return on;
@@ -618,7 +617,7 @@ bool MetalRenderTargetCache::TileResolveKeepOpenEnabled() {
 
 bool MetalRenderTargetCache::TileResolveClearInPassEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_CLEAR");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_CLEAR");  // getenv-ok: once
     return TileResolveEnabled() && !(v && v[0] == '0');
   }();
   return on;
@@ -626,7 +625,7 @@ bool MetalRenderTargetCache::TileResolveClearInPassEnabled() {
 
 bool MetalRenderTargetCache::TileResolveExtentEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_EXTENT");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_EXTENT");  // getenv-ok: once
     return TileResolveEnabled() && !(v && v[0] == '0');
   }();
   return on;

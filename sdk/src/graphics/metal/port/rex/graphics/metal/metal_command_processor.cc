@@ -25,7 +25,22 @@
 
 // Fable II diagnostic: opt-in, native-resolution morph texture readback.
 DEFINE_bool(metal_fable_morph_readback, false,
-            "Copy Fable II morph resolves back to guest RAM (native resolution)", "Metal");
+            "Copy Fable II morph resolves back to guest RAM (native resolution). "
+            "Needs metal_title_quirks=fable2.",
+            "Metal");
+
+namespace {
+// Fable II (metal_title_quirks=fable2): the morph texture's resolve
+// destination (RB_COPY_DEST_BASE) and the pixel shader that draws it.
+constexpr uint32_t kFable2MorphCopyDest = 0x12704000;
+constexpr uint64_t kFable2MorphPixelShader = UINT64_C(0xE2120FEAFA4CF565);
+// Fable II terrain vertex shader (uniform tessellation workaround).
+constexpr uint64_t kFable2TerrainVertexShader = UINT64_C(0x5003700B7C9B1C16);
+
+bool Fable2MorphReadback() {
+  return MetalFable2Quirks() && REXCVAR_GET(metal_fable_morph_readback);
+}
+}  // namespace
 
 DEFINE_int32(metal_probe_capture_interval, 0,
              "Diagnostic only: capture up to six guest frames, every N swaps (0 disables)", "Metal");
@@ -102,7 +117,8 @@ REXCVAR_DEFINE_UINT32(metal_draw_trace_texture_base, 0, "Metal",
 
 DEFINE_bool(metal_fable_terrain_uniform_tessellation, true,
             "Use the guest maximum tessellation factor for Fable II terrain "
-            "to reduce cracks at detail transitions.",
+            "to reduce cracks at detail transitions. Needs "
+            "metal_title_quirks=fable2.",
             "Metal");
 
 DEFINE_bool(
@@ -125,16 +141,16 @@ DEFINE_bool(
 // MTL_CAPTURE_ENABLED=1 in the environment. Unset: one getenv at the first swap.
 namespace {
 void GpuCaptureTick(MTL::CommandQueue* queue) {
-  static const char* path = std::getenv("FABLE2_GPU_CAPTURE_PATH");
+  static const char* path = MetalDebugEnv("GPU_CAPTURE_PATH");
   if (!path || !path[0] || !queue) {
     return;
   }
   static const double at_s = [] {
-    const char* v = std::getenv("FABLE2_GPU_CAPTURE_AT_S");
+    const char* v = MetalDebugEnv("GPU_CAPTURE_AT_S");
     return v ? std::atof(v) : 30.0;
   }();
   static const int frames = [] {
-    const char* v = std::getenv("FABLE2_GPU_CAPTURE_FRAMES");
+    const char* v = MetalDebugEnv("GPU_CAPTURE_FRAMES");
     int n = v ? std::atoi(v) : 1;
     return n > 0 ? n : 1;
   }();
@@ -210,7 +226,7 @@ void NotifyRingProgress() {
 // wakes and no longer yield-spins up to 200 us for the store after every event.
 bool RingNotifyAfterStore() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_RING_WAIT_NOSPIN");
+    const char* v = MetalDebugEnv("RING_WAIT_NOSPIN");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -252,7 +268,7 @@ namespace metal {
 namespace gpu_time_trace {
 bool Enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_GPU_TIME_TRACE");
+    const char* v = MetalDebugEnv("GPU_TIME_TRACE");
     return v && v[0] == '1';
   }();
   return on && frame_log::Enabled();
@@ -1486,7 +1502,7 @@ int UploadBreakCauseOf(MetalSharedMemory::PageAccess access, bool guard) {
 // that wait costs. Never on by default.
 static bool PrecommitDiagSkipWar() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_UPLOAD_PRECOMMIT_DIAG");
+    const char* v = MetalDebugEnv("UPLOAD_PRECOMMIT_DIAG");
     const bool skip = v && std::strcmp(v, "nowar") == 0;
     if (skip) REXLOG_WARN("[upload-precommit] DIAG nowar: WAR wait skipped (unsafe)");
     return skip;
@@ -1904,7 +1920,7 @@ bool MetalCommandProcessor::SetupContext() {
   // runs on the GPU Commands worker. It is the CPU critical path (translation + Metal
   // encoding, ~5 ms per frame), so ask for user-interactive QoS to keep it on a P-core.
   {
-    const char* v = std::getenv("FABLE2_GPU_CMD_QOS");  // getenv-ok: once, at SetupContext
+    const char* v = MetalDebugEnv("GPU_CMD_QOS");  // getenv-ok: once, at SetupContext
     if (!(v && v[0] == '0')) {
       qos_class_t before = QOS_CLASS_UNSPECIFIED;
       int rel = 0;
@@ -2039,11 +2055,11 @@ bool MetalCommandProcessor::SetupContext() {
   sampler_bindless_heap_exhausted_logged_ = false;
 
   // Experimental draw resolution scale (investigation, docs/resolution-scale.md).
-  // Native (1x1) unless FABLE2_RES_SCALE=N (N = 1..3, both axes) is set, or
-  // FABLE2_RES_SCALE=cvar, which honours the SDK cvars draw_resolution_scale_x/y
+  // Native (1x1) unless metal_res_scale=N (N = 1..3, both axes) is set, or
+  // metal_res_scale=cvar, which honours the SDK cvars draw_resolution_scale_x/y
   // / resolution_scale. Clamped to 3 per axis.
   uint32_t res_scale_x = 1, res_scale_y = 1;
-  if (const char* v = std::getenv("FABLE2_RES_SCALE"); v && *v) {  // getenv-ok: once, at SetupContext
+  if (const char* v = REXCVAR_GET(metal_res_scale).c_str(); *v) {
     if (std::strcmp(v, "cvar") == 0) {
       TextureCache::GetConfigDrawResolutionScale(res_scale_x, res_scale_y);
     } else {
@@ -2052,7 +2068,7 @@ bool MetalCommandProcessor::SetupContext() {
     }
     res_scale_x = std::min<uint32_t>(res_scale_x, 3);
     res_scale_y = std::min<uint32_t>(res_scale_y, 3);
-    REXLOG_INFO("[res-scale] FABLE2_RES_SCALE={} -> draw resolution scale {}x{}",
+    REXLOG_INFO("[res-scale] metal_res_scale={} -> draw resolution scale {}x{}",
                 v, res_scale_x, res_scale_y);
   }
 
@@ -2654,7 +2670,7 @@ void MetalCommandProcessor::InitializeShaderStorage(
     // install, and the transfer pipelines build beside them instead of after.
     // FABLE2_XFER_PREWARM_EARLY=0: after storage init, as before.
     static const bool early = [] {
-      const char* v = std::getenv("FABLE2_XFER_PREWARM_EARLY");
+      const char* v = MetalDebugEnv("XFER_PREWARM_EARLY");
       return !(v && v[0] == '0');
     }();
     if (early && render_target_cache_) {
@@ -2681,7 +2697,7 @@ void MetalCommandProcessor::InitializeShaderStorage(
 // process footprint and the main Metal allocations. Log only, no GPU work.
 void MetalCommandProcessor::MaybeLogMemReport() {
   static const double interval = [] {
-    const char* v = std::getenv("FABLE2_MEM_REPORT");
+    const char* v = MetalDebugEnv("MEM_REPORT");
     return v && *v ? std::atof(v) : 0.0;
   }();
   if (interval <= 0.0) return;
@@ -2972,7 +2988,7 @@ bool MetalCommandProcessor::CanEndSubmissionImmediately() {
 bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
     memory::RingBuffer* reader, uint32_t packet, uint32_t count) {
   static const bool stats = [] {
-    const char* v = std::getenv("FABLE2_ZPD_STATS");
+    const char* v = MetalDebugEnv("ZPD_STATS");
     return v && v[0] == '1';
   }();
   if (stats) {
@@ -2998,7 +3014,7 @@ bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
   // FABLE2_ZPD_DIAG=zero (diagnostic only): finished queries report 0 passed
   // samples, so the audit can see what the game gates on its queries.
   static const bool zero = [] {
-    const char* v = std::getenv("FABLE2_ZPD_DIAG");
+    const char* v = MetalDebugEnv("ZPD_DIAG");
     return v && std::strcmp(v, "zero") == 0;
   }();
   if (zpd_real_) {
@@ -3480,7 +3496,7 @@ bool MetalCommandProcessor::EncodeSharedMemoryRenderReadDependencies(
   // this, a pending range that overlaps everything (the 16-entry list collapses
   // to the whole buffer) puts a barrier/fence wait before every draw.
   static const bool dedup = [] {
-    const char* v = std::getenv("FABLE2_RENDER_BARRIER_DEDUP");
+    const char* v = MetalDebugEnv("RENDER_BARRIER_DEDUP");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO("[barrier-dedup] {} (FABLE2_RENDER_BARRIER_DEDUP={})",
                 on ? "on: redundant render-encoder barriers/fence waits skipped"
@@ -3561,7 +3577,7 @@ namespace {
 struct DrawSkipTrace {
   static bool Enabled() {
     static const bool enabled = [] {
-      const char* v = std::getenv("FABLE2_DRAW_SKIP_TRACE");
+      const char* v = MetalDebugEnv("DRAW_SKIP_TRACE");
       return v && v[0] == '1';
     }();
     return enabled;
@@ -4140,7 +4156,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   // log each distinct memexport stream constant (format, signedness) once.
   if (memexport_used_vertex) {
     static const bool log_streams = [] {
-      const char* v = std::getenv("FABLE2_LOG_MEMEXPORT_FORMATS");
+      const char* v = MetalDebugEnv("LOG_MEMEXPORT_FORMATS");
       return v && v[0] == '1';
     }();
     if (log_streams) {
@@ -4278,7 +4294,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     // FABLE2_MAIN_DEPTH_DUMP_SKIP=<bits>: checkpoints left out (2 = b: the b
     // dump flushes work [ssm-merge] would draw in the shadow-mask pass).
     static const uint32_t skip = [] {
-      const char* v = std::getenv("FABLE2_MAIN_DEPTH_DUMP_SKIP");  // getenv-ok: once
+      const char* v = MetalDebugEnv("MAIN_DEPTH_DUMP_SKIP");  // getenv-ok: once
       return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 0u;
     }();
     if (tag && !(dumped & bit) && !(skip & bit)) {
@@ -4363,7 +4379,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     // FABLE2_SHADOW_TRACE window): full state of clear-like draws.
     {
       static const bool ac_trace = [] {
-        const char* v = std::getenv("FABLE2_ALIAS_CLEAR_TRACE");
+        const char* v = MetalDebugEnv("ALIAS_CLEAR_TRACE");
         return v && v[0] == '1';
       }();
       if (ac_trace && MetalRenderTargetCache::ShadowTraceActive()) {
@@ -4539,7 +4555,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   // (plain-point fallback if a pipeline still fails). 2 = plain points
   // (rasterized, no geometry emulation). 0 = old skip.
   static const int memexport_geometry_mode = [] {
-    const char* v = std::getenv("FABLE2_MEMEXPORT_GEOM_FALLBACK");
+    const char* v = MetalDebugEnv("MEMEXPORT_GEOM_FALLBACK");
     const int mode =
         !v ? 1
            : (v[0] == '0' ? 0 : (v[0] == '2' ? 2 : (v[0] == '3' ? 3 : 1)));
@@ -4569,8 +4585,11 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
            xenos::PrimitiveType::kQuadList);
   // Mode 1 covers every VS 695413A9 draw, with or without clip planes (about
   // half of them have none and used to go through geometry emulation too).
+  // VS 695413A9 is Fable II's tessellation-factor producer: fable2 quirk only
+  // (without it, mode 1 treats that hash like any other, as mode 3 does).
   const bool memexport_export_only =
       memexport_geometry_mode == 1 && memexport_no_ps_point_like &&
+      MetalFable2Quirks() &&
       vertex_shader->ucode_data_hash() == UINT64_C(0x695413A9831D88DA);
   if (memexport_export_only ||
       (memexport_geometry_fallback && memexport_no_ps_point_like &&
@@ -4740,7 +4759,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   {
     static const std::vector<uint64_t> skip_vs = [] {
       std::vector<uint64_t> list;
-      const char* v = std::getenv("FABLE2_SKIP_VS");
+      const char* v = MetalDebugEnv("SKIP_VS");
       while (v && *v) {
         char* end = nullptr;
         const uint64_t h = std::strtoull(v, &end, 16);
@@ -4755,11 +4774,11 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     // FABLE2_SKIP_VS_PS=<ps hash hex> narrows the skip to that pixel shader,
     // FABLE2_SKIP_VS_N=<n> to draws with that guest index count.
     static const uint64_t skip_vs_ps = [] {
-      const char* v = std::getenv("FABLE2_SKIP_VS_PS");  // getenv-ok: once
+      const char* v = MetalDebugEnv("SKIP_VS_PS");  // getenv-ok: once
       return v ? std::strtoull(v, nullptr, 16) : 0ull;
     }();
     static const uint32_t skip_vs_n = [] {
-      const char* v = std::getenv("FABLE2_SKIP_VS_N");  // getenv-ok: once
+      const char* v = MetalDebugEnv("SKIP_VS_N");  // getenv-ok: once
       return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 0u;
     }();
     if (!skip_vs.empty() &&
@@ -4774,7 +4793,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     // Diagnostic: FABLE2_SKIP_SRM=<RB_STENCILREFMASK hex> skips draws with
     // exactly that stencil ref/mask/writemask word.
     static const uint64_t skip_srm = [] {
-      const char* v = std::getenv("FABLE2_SKIP_SRM");  // getenv-ok: once
+      const char* v = MetalDebugEnv("SKIP_SRM");  // getenv-ok: once
       return v ? std::strtoull(v, nullptr, 16) : ~0ull;
     }();
     if (skip_srm != ~0ull &&
@@ -4811,7 +4830,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       // Diagnostic: FABLE2_NATIVE_POINTS_ONLY=<VS hash hex> limits the native
       // point/rectangle expansion to that vertex shader.
       static const uint64_t native_points_only = [] {
-        const char* v = std::getenv("FABLE2_NATIVE_POINTS_ONLY");
+        const char* v = MetalDebugEnv("NATIVE_POINTS_ONLY");
         if (v && v[0] && NoConverterForcesNative()) {
           REXLOG_WARN("[no-converter] FABLE2_NATIVE_POINTS_ONLY={} ignored: "
                       "no converter fallback in this build",
@@ -5100,7 +5119,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           // Metal edge) for the parity harness.
           static const std::array<uint32_t, 4> edge_map = [] {
             std::array<uint32_t, 4> m = {3, 0, 1, 2};
-            const char* v = std::getenv("FABLE2_NATIVE_TESS_EDGE_MAP");
+            const char* v = MetalDebugEnv("NATIVE_TESS_EDGE_MAP");
             if (v && std::strlen(v) == 4) {
               for (uint32_t i = 0; i < 4; ++i) {
                 m[i] = uint32_t(v[i] - '0') & 3;
@@ -5184,13 +5203,13 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       // of the opaque pass with the blended layers over the same ground.
       // FABLE2_TESS_FRAME_DUMP_FRAMES=<first>:<every>:<count> (600:60:20).
       static FILE* tess_dump_file = [] () -> FILE* {
-        const char* v = std::getenv("FABLE2_TESS_FRAME_DUMP");
+        const char* v = MetalDebugEnv("TESS_FRAME_DUMP");
         return (v && *v) ? std::fopen(v, "w") : nullptr;
       }();
       if (tess_dump_file) {
         static const std::array<uint64_t, 3> sel = [] {
           std::array<uint64_t, 3> s = {600, 60, 20};
-          if (const char* v = std::getenv("FABLE2_TESS_FRAME_DUMP_FRAMES")) {
+          if (const char* v = MetalDebugEnv("TESS_FRAME_DUMP_FRAMES")) {
             unsigned long long a = 0, b = 0, c = 0;
             if (std::sscanf(v, "%llu:%llu:%llu", &a, &b, &c) == 3 && b) {
               s = {a, b, c};
@@ -5375,7 +5394,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     // shader, for specialization experiments.
     {
       static const uint64_t log_ps = [] {
-        const char* v = std::getenv("FABLE2_NS_LOG_FETCH");
+        const char* v = MetalDebugEnv("NS_LOG_FETCH");
         return v ? std::strtoull(v, nullptr, 16) : 0ull;
       }();
       static uint32_t logged = 0;
@@ -5408,8 +5427,8 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       // Do not impose this wait on ordinary scene shaders: that causes stutters
       // whenever gameplay encounters an uncached pipeline.
       const bool preserve_morph_draw =
-          REXCVAR_GET(metal_fable_morph_readback) && pixel_shader &&
-          pixel_shader->ucode_data_hash() == UINT64_C(0xE2120FEAFA4CF565);
+          Fable2MorphReadback() && pixel_shader &&
+          pixel_shader->ucode_data_hash() == kFable2MorphPixelShader;
       if (!pipeline && (preserve_morph_draw || pipeline_handle->startup_warmup)) {
         // Cached startup draws must not disappear while the logos play or
         // when the player skips directly into gameplay.
@@ -5724,7 +5743,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   // invalidation / not-yet-executed staged upload / GPU-written memexport).
   {
     static const bool shmem_check = [] {
-      const char* v = std::getenv("FABLE2_SHMEM_CHECK");
+      const char* v = MetalDebugEnv("SHMEM_CHECK");
       return v && v[0] == '1';
     }();
     if (shmem_check && shared_memory_ && shared_memory_->GetBuffer()) {
@@ -5782,13 +5801,13 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       uint64_t first = 0, last = 0;
     };
     static DrawDumpConfig* dump_config = [] {
-      const char* path = std::getenv("FABLE2_DRAW_DUMP");
+      const char* path = MetalDebugEnv("DRAW_DUMP");
       if (!path || !path[0]) return static_cast<DrawDumpConfig*>(nullptr);
       auto* c = new DrawDumpConfig;
       c->file = std::fopen(path, "wb");
       if (c->file) std::setvbuf(c->file, nullptr, _IOFBF, 16 << 20);
       unsigned long long a = 0, b = 0;
-      const char* fr = std::getenv("FABLE2_DRAW_DUMP_FRAMES");
+      const char* fr = MetalDebugEnv("DRAW_DUMP_FRAMES");
       if (fr && std::sscanf(fr, "%llu-%llu", &a, &b) == 2) {
         c->first = a; c->last = b;
       } else {
@@ -6053,7 +6072,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   // FABLE2_SHADOW_TRACE_STENCIL=1 narrows the draw lines to stencil-writing
   // draws and stencil-tested colour draws (long windows stay small).
   static const bool trace_stencil_only = [] {
-    const char* v = std::getenv("FABLE2_SHADOW_TRACE_STENCIL");  // getenv-ok: once
+    const char* v = MetalDebugEnv("SHADOW_TRACE_STENCIL");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   if (render_target_cache_ && MetalRenderTargetCache::ShadowTraceActive() &&
@@ -6102,7 +6121,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   if (render_target_cache_ && MetalRenderTargetCache::ShadowTraceActive()) {
     static const std::pair<uint64_t, std::vector<uint32_t>> trace_vsc = [] {
       std::pair<uint64_t, std::vector<uint32_t>> r{0, {}};
-      const char* v = std::getenv("FABLE2_TRACE_VSC");  // getenv-ok: once
+      const char* v = MetalDebugEnv("TRACE_VSC");  // getenv-ok: once
       if (!v) return r;
       char* end = nullptr;
       r.first = std::strtoull(v, &end, 16);
@@ -6124,7 +6143,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       }
       // FABLE2_TRACE_TEXDUMP=<dir>: raw guest bytes of each fetched texture
       // (base level region, 1 MB max) as <dir>/<base hex>.bin, once each.
-      static const char* texdump_dir = std::getenv("FABLE2_TRACE_TEXDUMP");  // getenv-ok: once
+      static const char* texdump_dir = MetalDebugEnv("TRACE_TEXDUMP");  // getenv-ok: once
       if (texdump_dir) {
         static std::vector<uint32_t> dumped;
         uint32_t m = used_texture_mask, ti;
@@ -6379,7 +6398,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           // FABLE2_NS_SPECIALIZE_LOG_MISSES=N (default 1): the first N
           // misses of each variant name the dwords that differ.
           static const uint32_t log_misses = [] {
-            const char* v = std::getenv("FABLE2_NS_SPECIALIZE_LOG_MISSES");
+            const char* v = MetalDebugEnv("NS_SPECIALIZE_LOG_MISSES");
             return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 1u;
           }();
           if (m < log_misses) {
@@ -6590,7 +6609,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   // Default off (docs/lake-water-20261014.md).
   {
     static const uint64_t diag_tex_vs = [] {
-      const char* v = std::getenv("FABLE2_DIAG_TEX_VS");  // getenv-ok: once
+      const char* v = MetalDebugEnv("DIAG_TEX_VS");  // getenv-ok: once
       return v ? std::strtoull(v, nullptr, 16) : 0ull;
     }();
     if (diag_tex_vs && vertex_shader->ucode_data_hash() == diag_tex_vs &&
@@ -6600,7 +6619,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
       const uint64_t f = frame_log::CurrentFrame();
       if (f != diag_frame) { diag_frame = f; diag_count = 0; }
       static const uint64_t diag_tex_frame = [] {
-        const char* v = std::getenv("FABLE2_DIAG_TEX_FRAME");  // getenv-ok: once
+        const char* v = MetalDebugEnv("DIAG_TEX_FRAME");  // getenv-ok: once
         return v ? std::strtoull(v, nullptr, 10) : 0ull;
       }();
       if ((diag_tex_frame ? f == diag_tex_frame : (f % 120) == 0) &&
@@ -6677,7 +6696,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     // Up to 8 comma-separated hashes; the draw counter is shared.
     static const std::vector<uint64_t> log_list = [] {
       std::vector<uint64_t> list;
-      const char* v = std::getenv("FABLE2_NS_LOG_CONSTS");
+      const char* v = MetalDebugEnv("NS_LOG_CONSTS");
       while (v && *v && list.size() < 8) {
         char* end = nullptr;
         list.push_back(std::strtoull(v, &end, 16));
@@ -6689,7 +6708,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     if (!log_list.empty() && pixel_shader &&
         std::find(log_list.begin(), log_list.end(), log_ps) != log_list.end()) {
       static const uint32_t log_n = [] {
-        const char* v = std::getenv("FABLE2_NS_LOG_CONSTS_N");
+        const char* v = MetalDebugEnv("NS_LOG_CONSTS_N");
         return v ? uint32_t(std::strtoul(v, nullptr, 10)) : 256u;
       }();
       static std::atomic<uint32_t> logged{0};
@@ -8279,7 +8298,7 @@ bool MetalCommandProcessor::CanQueuePreparedDraw(
   // A/B only (default off): FABLE2_NO_DRAW_QUEUE=1 materializes every draw
   // immediately instead of deferring guest-memory uploads to a queue flush.
   static const bool no_draw_queue = [] {
-    const char* v = std::getenv("FABLE2_NO_DRAW_QUEUE");
+    const char* v = MetalDebugEnv("NO_DRAW_QUEUE");
     return v && v[0] == '1';
   }();
   if (no_draw_queue) {
@@ -8507,7 +8526,7 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
 
 bool MetalCommandProcessor::TexturePrecommitEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_TEXTURE_PRECOMMIT");
+    const char* v = MetalDebugEnv("TEXTURE_PRECOMMIT");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO(
         "[texture-precommit] {} (FABLE2_TEXTURE_PRECOMMIT={})",
@@ -8818,7 +8837,7 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
 
 bool MetalCommandProcessor::PreparedDrawPoolEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_PREPARED_DRAW_POOL");
+    const char* v = MetalDebugEnv("PREPARED_DRAW_POOL");
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[prepared-draw-pool] {} (FABLE2_PREPARED_DRAW_POOL)", e ? "on" : "off");
     return e;
@@ -8856,7 +8875,7 @@ void MetalCommandProcessor::ResetPreparedDrawKeepCapacity(PreparedDraw& draw) {
 bool FlatPtrSetLite2Enabled() {
   // Same switch as DrawPrepLite2Enabled (FABLE2_DRAW_PREP_LITE2), read once.
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DRAW_PREP_LITE2");  // getenv-ok: read once
+    const char* v = MetalDebugEnv("DRAW_PREP_LITE2");  // getenv-ok: read once
     return !(v && v[0] == '0');
   }();
   return on;
@@ -8865,7 +8884,7 @@ bool FlatPtrSetLite2Enabled() {
 bool FlatPtrSetEnabled() {
   // Same switch as DrawPrepLiteEnabled (FABLE2_DRAW_PREP_LITE), read once.
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DRAW_PREP_LITE");  // getenv-ok: read once
+    const char* v = MetalDebugEnv("DRAW_PREP_LITE");  // getenv-ok: read once
     return !(v && v[0] == '0');
   }();
   return on;
@@ -8873,7 +8892,7 @@ bool FlatPtrSetEnabled() {
 
 bool MetalCommandProcessor::DrawPrepLiteEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DRAW_PREP_LITE");  // getenv-ok: read once
+    const char* v = MetalDebugEnv("DRAW_PREP_LITE");  // getenv-ok: read once
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[draw-prep-lite] {} (FABLE2_DRAW_PREP_LITE)", e ? "on" : "off");
     return e;
@@ -8883,7 +8902,7 @@ bool MetalCommandProcessor::DrawPrepLiteEnabled() {
 
 bool MetalCommandProcessor::DrawPrepLite2Enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_DRAW_PREP_LITE2");  // getenv-ok: read once
+    const char* v = MetalDebugEnv("DRAW_PREP_LITE2");  // getenv-ok: read once
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[draw-prep-lite2] {} (FABLE2_DRAW_PREP_LITE2)", e ? "on" : "off");
     return e;
@@ -8893,7 +8912,7 @@ bool MetalCommandProcessor::DrawPrepLite2Enabled() {
 
 bool MetalCommandProcessor::PreparedDrawSlimEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_PREPARED_DRAW_SLIM");
+    const char* v = MetalDebugEnv("PREPARED_DRAW_SLIM");
     const bool e = !(v && v[0] == '0');
     REXLOG_INFO("[prepared-draw-slim] {} (FABLE2_PREPARED_DRAW_SLIM)", e ? "on" : "off");
     return e;
@@ -9154,10 +9173,11 @@ void MetalCommandProcessor::GetTessellationFactorRange(const RegisterFile& regs,
                                                        float& max_out) {
   min_out = regs.Get<float>(XE_GPU_REG_VGT_HOS_MIN_TESS_LEVEL) + 1.0f;
   max_out = regs.Get<float>(XE_GPU_REG_VGT_HOS_MAX_TESS_LEVEL) + 1.0f;
-  if (REXCVAR_GET(metal_fable_terrain_uniform_tessellation) &&
+  if (MetalFable2Quirks() &&
+      REXCVAR_GET(metal_fable_terrain_uniform_tessellation) &&
       !TerrainAdaptiveMode() && active_vertex_shader() &&
       active_vertex_shader()->ucode_data_hash() ==
-          UINT64_C(0x5003700B7C9B1C16)) {
+          kFable2TerrainVertexShader) {
     // Work around terrain depth gaps seen with adaptive edge factors on Metal.
     // Clamp this terrain shader to the guest maximum so neighboring patches
     // use uniform subdivision; leave other tessellated geometry unchanged.
@@ -9167,7 +9187,7 @@ void MetalCommandProcessor::GetTessellationFactorRange(const RegisterFile& regs,
 
 bool MetalCommandProcessor::NativeTessTraceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NATIVE_TESS_TRACE");
+    const char* v = MetalDebugEnv("NATIVE_TESS_TRACE");
     return v && v[0] == '1';
   }();
   return on;
@@ -9938,7 +9958,7 @@ bool MetalCommandProcessor::FootprintVariantNeeded(const Shader& shader) {
       // Diagnostic: FABLE2_EFFECTS_FOOTPRINT_TRACE=1 logs each distinct
       // (shader, fetch constant, format) that selects the footprint variant.
       static const bool trace = [] {
-        const char* v = std::getenv("FABLE2_EFFECTS_FOOTPRINT_TRACE");
+        const char* v = MetalDebugEnv("EFFECTS_FOOTPRINT_TRACE");
         return v && v[0] == '1';
       }();
       if (trace) {
@@ -9991,7 +10011,9 @@ bool MetalCommandProcessor::IssueCopy() {
     // Resolve then ends it at the same point (TileResolveEnd).
     const bool keep_open =
         current_render_encoder_ &&
-        (*register_file_)[XE_GPU_REG_RB_COPY_DEST_BASE] != 0x12704000 &&
+        !(MetalFable2Quirks() &&
+          (*register_file_)[XE_GPU_REG_RB_COPY_DEST_BASE] ==
+              kFable2MorphCopyDest) &&
         render_target_cache_->TileResolveOffer(resolve_plan);
     if (!keep_open) {
       EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
@@ -10026,8 +10048,8 @@ bool MetalCommandProcessor::IssueCopy() {
   // storage is CPU-visible, but is a separate allocation from guest RAM.
   const auto copy_control = register_file_->Get<reg::RB_COPY_CONTROL>();
   const auto copy_info = register_file_->Get<reg::RB_COPY_DEST_INFO>();
-  if (REXCVAR_GET(metal_fable_morph_readback) && written_length &&
-      (*register_file_)[XE_GPU_REG_RB_COPY_DEST_BASE] == 0x12704000 &&
+  if (Fable2MorphReadback() && written_length &&
+      (*register_file_)[XE_GPU_REG_RB_COPY_DEST_BASE] == kFable2MorphCopyDest &&
       copy_control.copy_src_select < xenos::kMaxColorRenderTargets &&
       copy_info.copy_dest_format == xenos::ColorFormat::k_8_8_8_8 &&
       texture_cache_->IsDrawResolutionScaled() && !resolve_plan.native) {
@@ -10036,8 +10058,8 @@ bool MetalCommandProcessor::IssueCopy() {
     if (!MorphReadbackScaled(written_address, written_length, 32)) {
       return false;
     }
-  } else if (REXCVAR_GET(metal_fable_morph_readback) && written_length &&
-      (*register_file_)[XE_GPU_REG_RB_COPY_DEST_BASE] == 0x12704000 &&
+  } else if (Fable2MorphReadback() && written_length &&
+      (*register_file_)[XE_GPU_REG_RB_COPY_DEST_BASE] == kFable2MorphCopyDest &&
       copy_control.copy_src_select < xenos::kMaxColorRenderTargets &&
       copy_info.copy_dest_format == xenos::ColorFormat::k_8_8_8_8 &&
       (!texture_cache_->IsDrawResolutionScaled() || resolve_plan.native)) {
@@ -10100,7 +10122,7 @@ void MetalCommandProcessor::NoteMorphReadback(const uint8_t* data,
   const uint32_t index = ++morph_readbacks;
   // Validation only: FABLE2_MORPH_READBACK_DUMP=<dir> writes the bytes copied
   // to guest RAM (morph-<n>-<bytes>.bin) for a per-pixel diff across scales.
-  static const char* dump_dir = std::getenv("FABLE2_MORPH_READBACK_DUMP");
+  static const char* dump_dir = MetalDebugEnv("MORPH_READBACK_DUMP");
   if (dump_dir && *dump_dir && index <= 64) {
     std::error_code ec;
     std::filesystem::create_directories(dump_dir, ec);
@@ -10261,10 +10283,10 @@ bool MetalCommandProcessor::MorphReadbackScaled(uint32_t written_address,
 
 void MetalCommandProcessor::DiagResolveDump(uint32_t written_address,
                                             uint32_t written_length) {
-  static const char* dir = std::getenv("FABLE2_DIAG_RESOLVE_DUMP");  // getenv-ok: once
+  static const char* dir = MetalDebugEnv("DIAG_RESOLVE_DUMP");  // getenv-ok: once
   static uint32_t lo = 0, hi = 0;
   static const bool have_range = [] {
-    const char* r = std::getenv("FABLE2_DIAG_RESOLVE_RANGE");  // getenv-ok: once
+    const char* r = MetalDebugEnv("DIAG_RESOLVE_RANGE");  // getenv-ok: once
     return r && std::sscanf(r, "%x-%x", &lo, &hi) == 2;
   }();
   if (!dir || !*dir || !have_range || !written_length ||
@@ -12807,7 +12829,7 @@ namespace {
 // FABLE2_TILE_RESOLVE_TRACE=1: why passes keep their full render area.
 void PassExtentTrace(const std::string& what) {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TILE_RESOLVE_TRACE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILE_RESOLVE_TRACE");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   if (!on) return;

@@ -165,7 +165,7 @@ bool RttFindBaseOrigin(uint32_t delta, uint32_t pitch_aligned,
 }
 uint32_t RttTraceBase() {
   static const uint32_t b = [] {
-    const char* v = std::getenv("FABLE2_RTT_TRACE_BASE");
+    const char* v = MetalDebugEnv("RTT_TRACE_BASE");
     return v ? uint32_t(std::strtoul(v, nullptr, 0)) : 0u;
   }();
   return b;
@@ -194,7 +194,7 @@ void RttTraceGlobalWatch(const global_unique_lock_type&, void*,
 
 uint32_t MetalTextureCache::RttDiagMode() {
   static const uint32_t mode = [] {
-    const char* v = std::getenv("FABLE2_RTT_DIAG");
+    const char* v = MetalDebugEnv("RTT_DIAG");
     uint32_t m = 0;
     if (v && (v[0] == '1' || std::string(v) == "census")) m = 1;
     if (v && (v[0] == '2' || std::string(v) == "skip")) m = 2;
@@ -212,7 +212,7 @@ uint32_t MetalTextureCache::RttDiagMode() {
 
 namespace {
 bool RttEnvFlag(const char* name, bool default_value) {
-  const char* v = std::getenv(name);
+  const char* v = MetalDebugEnv(name);
   if (!v || !v[0]) return default_value;
   return v[0] != '0';
 }
@@ -220,8 +220,8 @@ bool RttEnvFlag(const char* name, bool default_value) {
 
 bool MetalTextureCache::RttEnabled() {
   static const bool on = [] {
-    bool e = RttEnvFlag("FABLE2_RESOLVE_TO_TEXTURE", true);
-    REXLOG_INFO("[rtt] resolve-to-texture {} (FABLE2_RESOLVE_TO_TEXTURE)",
+    bool e = REXCVAR_GET(metal_resolve_to_texture);
+    REXLOG_INFO("[rtt] resolve-to-texture {} (metal_resolve_to_texture)",
                 e ? "on" : "off");
     return e;
   }();
@@ -230,13 +230,13 @@ bool MetalTextureCache::RttEnabled() {
 
 bool MetalTextureCache::RttKeepEnabled() {
   static const bool on =
-      RttEnabled() && RttEnvFlag("FABLE2_RTT_KEEP", true) && RttDiagMode() != 2;
+      RttEnabled() && RttEnvFlag("RTT_KEEP", true) && RttDiagMode() != 2;
   return on;
 }
 
 bool MetalTextureCache::RttFusedEnabled() {
   static const bool on =
-      RttEnabled() && RttEnvFlag("FABLE2_RTT_FUSED", true) && RttDiagMode() != 2;
+      RttEnabled() && RttEnvFlag("RTT_FUSED", true) && RttDiagMode() != 2;
   return on;
 }
 
@@ -245,7 +245,7 @@ bool MetalTextureCache::RttMipsEnabled() {
   // valid across them (FABLE2_RTT_MIPS=0: base level only, as before).
   static const bool on = [] {
     const bool e = RttFusedEnabled() && RttKeepEnabled() &&
-                   RttEnvFlag("FABLE2_RTT_MIPS", true);
+                   RttEnvFlag("RTT_MIPS", true);
     REXLOG_INFO("[rtt] mip-level targets {} (FABLE2_RTT_MIPS)",
                 e ? "on" : "off");
     return e;
@@ -257,7 +257,7 @@ bool MetalTextureCache::Rtt16Enabled() {
   // [tex-resolve] fused writes into 16 bpb textures (plain, 1_5_5_5 and
   // 5_6_5 loads; FABLE2_RTT_16BPP=0: not fused, as before).
   static const bool on = [] {
-    const bool e = RttFusedEnabled() && RttEnvFlag("FABLE2_RTT_16BPP", true);
+    const bool e = RttFusedEnabled() && RttEnvFlag("RTT_16BPP", true);
     REXLOG_INFO("[rtt] 16 bpb targets {} (FABLE2_RTT_16BPP)", e ? "on" : "off");
     return e;
   }();
@@ -267,7 +267,7 @@ bool MetalTextureCache::Rtt16Enabled() {
 bool MetalTextureCache::Rtt1xEnabled() {
   // [rtt-1x] keep / fused writes for unscaled textures at 1x.
   static const bool on = [] {
-    const bool e = RttEnabled() && RttEnvFlag("FABLE2_RTT_1X", true);
+    const bool e = RttEnabled() && RttEnvFlag("RTT_1X", true);
     REXLOG_INFO("[rtt] 1x resolve-to-texture {} (FABLE2_RTT_1X)",
                 e ? "on" : "off");
     return e;
@@ -279,7 +279,7 @@ bool MetalTextureCache::Rtt1xFusedEnabled() {
   // [rtt-1x] unscaled host resolves also write the matching cached textures.
   static const bool on = [] {
     const bool e = Rtt1xEnabled() && RttDiagMode() != 2 &&
-                   RttEnvFlag("FABLE2_RTT_1X_FUSED", true);
+                   RttEnvFlag("RTT_1X_FUSED", true);
     REXLOG_INFO("[rtt] 1x fused resolve writes {} (FABLE2_RTT_1X_FUSED)",
                 e ? "on" : "off");
     return e;
@@ -291,7 +291,7 @@ bool MetalTextureCache::Rtt1xNarrowEnabled() {
   // [rtt-1x] a resolve invalidates only the textures over its exact extent,
   // not every texture on its 16 KB pages.
   static const bool on = [] {
-    const bool e = Rtt1xEnabled() && RttEnvFlag("FABLE2_RTT_1X_KEEP", true);
+    const bool e = Rtt1xEnabled() && RttEnvFlag("RTT_1X_KEEP", true);
     REXLOG_INFO("[rtt] 1x keep across unrelated invalidations {} "
                 "(FABLE2_RTT_1X_KEEP)",
                 e ? "on" : "off");
@@ -312,13 +312,13 @@ bool MetalTextureCache::RttKeepActive() const {
 
 bool MetalTextureCache::RttMipsKeepActive() const {
   if (IsDrawResolutionScaled()) return RttMipsEnabled();
-  static const bool on = RttEnvFlag("FABLE2_RTT_MIPS", true);
+  static const bool on = RttEnvFlag("RTT_MIPS", true);
   return on && RttKeepActive();
 }
 
 bool MetalTextureCache::RttVerify() {
   static const bool on = [] {
-    bool e = RttEnvFlag("FABLE2_RTT_VERIFY", false);
+    bool e = RttEnvFlag("RTT_VERIFY", false);
     if (e) {
       REXLOG_WARN("[rtt] FABLE2_RTT_VERIFY=1: every kept or fused texture is "
                   "compared with a reference load (diagnostic)");
@@ -346,7 +346,7 @@ void MetalTextureCache::RttNoteFusedUnused(MetalTexture& t) {
 
 static uint32_t NxTraceBase() {
   static const uint32_t b = [] {
-    const char* v = std::getenv("FABLE2_TEX_NX_TRACE");
+    const char* v = MetalDebugEnv("TEX_NX_TRACE");
     return v ? uint32_t(std::strtoul(v, nullptr, 16)) : 0u;
   }();
   return b;
@@ -375,11 +375,11 @@ void MetalTextureCache::RttOnInvalidate(uint32_t address_first,
   // resolve is being marked (rtt_in_resolve_ is set outside the lock), and
   // narrowing it to the resolve's extent would drop it
   // (FABLE2_RTT_NARROW_CPU_FIX=0 restores the old condition).
-  static const bool cpu_fix = RttEnvFlag("FABLE2_RTT_NARROW_CPU_FIX", true);
+  static const bool cpu_fix = RttEnvFlag("RTT_NARROW_CPU_FIX", true);
   if (rtt_in_resolve_ && (invalidated_by_gpu || !cpu_fix) &&
       (IsDrawResolutionScaled() || Rtt1xNarrowEnabled())) {
     static const uint32_t margin = [] {
-      const char* v = std::getenv("FABLE2_RTT_RESOLVE_MARGIN");
+      const char* v = MetalDebugEnv("RTT_RESOLVE_MARGIN");
       return v ? uint32_t(std::strtoul(v, nullptr, 0)) : 0u;
     }();
     const uint32_t lo = (rtt_resolve_first_ & ~255u);
@@ -587,7 +587,7 @@ struct MetalTextureCache::RttPrewarm {
 
 void MetalTextureCache::StartRttPrewarm() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_RTT_PREWARM");
+    const char* v = MetalDebugEnv("RTT_PREWARM");
     return !(v && v[0] == '0');
   }();
   if (!enabled || rtt_prewarm_) return;
@@ -735,7 +735,7 @@ bool MetalTextureCache::NxKeepEnabled() {
   // contents when no write touched their exact guest ranges since their last
   // load; the reload after a page-wide invalidation is skipped.
   static const bool on = [] {
-    const bool e = RttEnvFlag("FABLE2_TEX_UNCHANGED", false);
+    const bool e = RttEnvFlag("TEX_UNCHANGED", false);
     REXLOG_INFO("[tex-unchanged] {} (FABLE2_TEX_UNCHANGED)", e ? "on" : "off");
     return e;
   }();
@@ -745,7 +745,7 @@ bool MetalTextureCache::NxKeepEnabled() {
 bool MetalTextureCache::NxDiagAllEnabled() {
   // FABLE2_TEX_NX_DIAG=1: track every candidate texture (counts only).
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_TEX_NX_DIAG");
+    const char* v = MetalDebugEnv("TEX_NX_DIAG");
     const bool diag = v && v[0] == '1';
     if (diag) REXLOG_WARN("[tex-rename] FABLE2_TEX_NX_DIAG=1 (diagnostic)");
     return diag;
@@ -928,7 +928,7 @@ bool MetalTextureCache::RttTryKeep(MetalTexture& texture, bool load_base,
 
 bool MetalTextureCache::LazyCensusEnabled() {
   static const bool on = [] {
-    const bool e = RttEnvFlag("FABLE2_LAZY_CENSUS", false);
+    const bool e = RttEnvFlag("LAZY_CENSUS", false);
     if (e) REXLOG_WARN("[tex-resolve] FABLE2_LAZY_CENSUS=1 (trace only)");
     return e;
   }();
@@ -1226,7 +1226,7 @@ bool MetalTextureCache::RttPrepareFused(
     RttTargetParams& tp = plan.params.t[plan.params.count];
     tp.origin_x = int32_t(c.bx * sx);
     // Negative control for the verify mode only (shifts the fused write).
-    static const bool rtt_break = RttEnvFlag("FABLE2_RTT_VERIFY_BREAK", false);
+    static const bool rtt_break = RttEnvFlag("RTT_VERIFY_BREAK", false);
     if (rtt_break) tp.origin_x += 1;
     tp.origin_y = int32_t(c.by * sy);
     tp.width = std::max(k.GetWidth() >> c.level, 1u) * sx;
@@ -1247,7 +1247,7 @@ bool MetalTextureCache::RttPrepareFused(
   }
   if (!plan.params.count) return false;
   plan.params.dest_bpb_log2 = rex::log2_floor(g.dest_bpb);
-  static const bool lazy_skip_diag = RttEnvFlag("FABLE2_LAZY_SKIP_DIAG", false);
+  static const bool lazy_skip_diag = RttEnvFlag("LAZY_SKIP_DIAG", false);
   if (LazyCensusEnabled() || lazy_skip_diag) {
     // Target 0 covers every resolved pixel, and its load is invertible.
     const RttTargetParams& t0 = plan.params.t[0];
@@ -1457,7 +1457,7 @@ int MetalTextureCache::MipLodPassSafeForLevel(const void* texture,
 
 bool MetalTextureCache::MipLodTraceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_MIPLOD_TRACE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("MIPLOD_TRACE");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   return on;

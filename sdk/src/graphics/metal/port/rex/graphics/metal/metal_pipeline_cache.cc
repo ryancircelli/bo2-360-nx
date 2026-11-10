@@ -137,7 +137,7 @@ void AtomicMax(std::atomic<uint64_t>& target, uint64_t value) {
 //   0: old behaviour.
 int ArchiveSafeSaveMode() {
   static const int mode = [] {
-    const char* v = std::getenv("FABLE2_ARCHIVE_SAFE_SAVE");
+    const char* v = MetalDebugEnv("ARCHIVE_SAFE_SAVE");
     const int m = !v ? 1 : (v[0] == '0' ? 0 : (v[0] == '2' ? 2 : 1));
     REXLOG_INFO("[archive-safe-save] mode {} (FABLE2_ARCHIVE_SAFE_SAVE={}): {}", m, v ? v : "unset",
                 m == 0 ? "off"
@@ -154,7 +154,7 @@ bool ArchiveSafeSaveEnabled() { return ArchiveSafeSaveMode() != 0; }
 // that is saved fails (simulates a poisoned archive).
 bool ArchiveTestFailSave() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_ARCHIVE_TEST_FAIL_SAVE");
+    const char* v = MetalDebugEnv("ARCHIVE_TEST_FAIL_SAVE");
     return v && v[0] == '1';
   }();
   return on;
@@ -171,7 +171,7 @@ std::atomic<uint64_t> g_archive_skip_no_fragment{0};
 // =0: the old behaviour (draw-path build every launch, OS cache only).
 bool NativeGeomPersistEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NATIVE_GEOM_PERSIST");
+    const char* v = MetalDebugEnv("NATIVE_GEOM_PERSIST");
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO("[native-geom-persist] {} (FABLE2_NATIVE_GEOM_PERSIST={})",
                 enabled ? "on: native point/rectangle/tessellation pipelines "
@@ -190,7 +190,7 @@ bool NativeGeomPersistEnabled() {
 // without the renderer shutdown). =0: only the periodic save, as before.
 bool Ns2ArchiveEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NS2_ARCHIVE");
+    const char* v = MetalDebugEnv("NS2_ARCHIVE");
     const bool enabled = !(v && v[0] == '0');
     REXLOG_INFO("[ns2-archive] {} (FABLE2_NS2_ARCHIVE={})",
                 enabled ? "on: settle save of specialized pipelines, flush "
@@ -203,7 +203,7 @@ bool Ns2ArchiveEnabled() {
 }
 int64_t Ns2SettleNs() {
   static const int64_t ns = [] {
-    const char* v = std::getenv("FABLE2_NS2_ARCHIVE_SETTLE_MS");
+    const char* v = MetalDebugEnv("NS2_ARCHIVE_SETTLE_MS");
     long ms = v && v[0] ? std::strtol(v, nullptr, 10) : 10000;
     if (ms < 0) ms = 0;
     return int64_t(ms) * 1000000;
@@ -285,7 +285,7 @@ void LogMetalErrorDetails(const char* label, NS::Error* error) {
 // keep the folder under ignored out/.
 const char* NativeTessDumpDir() {
   static const char* dir = [] {
-    const char* v = std::getenv("FABLE2_NATIVE_TESS_DUMP");
+    const char* v = MetalDebugEnv("NATIVE_TESS_DUMP");
     return (v && v[0]) ? v : nullptr;
   }();
   return dir;
@@ -1496,7 +1496,7 @@ bool MetalPipelineCache::InitializeShaderTranslation(
     // each library for the real GPU. The app exports [graphics]
     // shader_cache_target to this variable (src/core/fable2_graphics_config.h).
     static constexpr const char* kDefaultPin = "apple7:15.0";
-    const char* pin_env = std::getenv("FABLE2_MSC_MIN_TARGET");  // getenv-ok: per pipeline-compiler setup, not per draw
+    const char* pin_env = REXCVAR_GET(metal_msc_min_target).c_str();
     // "portable" (the Dev Launcher's and the config's name) = the default.
     const bool pin_from_env = pin_env && pin_env[0] &&
                               std::strcmp(pin_env, "portable") != 0;
@@ -1504,7 +1504,7 @@ bool MetalPipelineCache::InitializeShaderTranslation(
     if (std::strcmp(pin, "native") == 0) {
       REXLOG_INFO(
           "Metal shader converter: minimum target native, family {} macOS {} "
-          "(FABLE2_MSC_MIN_TARGET=native; the shader cache is tied to this "
+          "(metal_msc_min_target=native; the shader cache is tied to this "
           "Mac and macOS version)",
           static_cast<int>(native_family), version_stream.str());
     } else {
@@ -1530,7 +1530,7 @@ bool MetalPipelineCache::InitializeShaderTranslation(
       std::string value(pin);
       if (!parse(value)) {
         REXLOG_WARN(
-            "Metal shader converter: ignoring FABLE2_MSC_MIN_TARGET='{}' "
+            "Metal shader converter: ignoring metal_msc_min_target='{}' "
             "(expected e.g. apple7:15.0 or native); using the default {}",
             value, kDefaultPin);
         value = kDefaultPin;
@@ -1540,7 +1540,7 @@ bool MetalPipelineCache::InitializeShaderTranslation(
           "Metal shader converter: minimum target pinned to {} macOS {} "
           "({}; native would be family {} macOS {})",
           value.substr(0, value.find(':')), min_version,
-          pin_from_env && value == pin ? "FABLE2_MSC_MIN_TARGET" : "default",
+          pin_from_env && value == pin ? "metal_msc_min_target" : "default",
           static_cast<int>(native_family), version_stream.str());
     }
     metal_shader_converter_->SetMinimumTarget(min_family, IROperatingSystem_macOS,
@@ -2275,7 +2275,7 @@ void MetalPipelineCache::FlushPipelineBinaryArchiveForQuit() {
   // leaves only a ".tmp-<pid>" file (removed at the next launch), never a
   // partial segment, because segments are written to a temporary and renamed.
   static const int64_t limit_ms = [] {
-    const char* v = std::getenv("FABLE2_NS2_ARCHIVE_QUIT_MS");
+    const char* v = MetalDebugEnv("NS2_ARCHIVE_QUIT_MS");
     long ms = v && v[0] ? std::strtol(v, nullptr, 10) : 500;
     return int64_t(ms < 0 ? 0 : ms);
   }();
@@ -2531,8 +2531,8 @@ void MetalPipelineCache::PrewarmStoredPipelines(
       perf_cores = int(std::max(2u, std::thread::hardware_concurrency() / 2));
     }
     uint32_t total = uint32_t(std::clamp(perf_cores, 2, 6));
-    if (const char* v = std::getenv("FABLE2_WARMUP_THREADS"); v && *v) {
-      total = uint32_t(std::max(0, std::atoi(v)));
+    if (const int32_t v = REXCVAR_GET(metal_warmup_threads); v >= 0) {
+      total = uint32_t(v);
     }
     const size_t extra = total > creation_threads_.size()
                              ? total - creation_threads_.size()
@@ -2617,7 +2617,7 @@ void MetalPipelineCache::PrewarmNativeGeometry(
 
 namespace {
 uint32_t BankPrepThreadCount() {
-  if (const char* v = std::getenv("FABLE2_SHADER_PREP_BANK_THREADS"); v && *v) {  // getenv-ok: once (prep)
+  if (const char* v = MetalDebugEnv("SHADER_PREP_BANK_THREADS"); v && *v) {  // getenv-ok: once (prep)
     return uint32_t(std::clamp(std::atoi(v), 1, 64));
   }
   // All cores but one, at most 11 (the MSL compiles run in Metal's compiler service processes; this leaves a
@@ -2638,7 +2638,7 @@ size_t MetalPipelineCache::StartBankPrecompile(const std::filesystem::path& bank
   // FABLE2_SHADER_PREP_BANK_VS: which vertex shaders. Default: those without vertex fetches (D3D patches the
   // vertex-fetch instructions of the others at bind time, so their runtime microcode is not the bank's); "all";
   // 0 = none.
-  const char* vs_env = std::getenv("FABLE2_SHADER_PREP_BANK_VS");  // getenv-ok: once (prep)
+  const char* vs_env = MetalDebugEnv("SHADER_PREP_BANK_VS");  // getenv-ok: once (prep)
   const int vs_mode = (vs_env && vs_env[0] == '0') ? 0 : (vs_env && std::strcmp(vs_env, "all") == 0) ? 2 : 1;
   using Mod = DxbcShaderTranslator::Modification;
   using DepthStencilMode = Mod::DepthStencilMode;
@@ -2801,7 +2801,7 @@ size_t MetalPipelineCache::StartBankPrecompile(const std::filesystem::path& bank
   // FABLE2_SHADER_PREP_BANK_BUDGET_S (default 120, 0 = none): no new work starts after this many seconds, so
   // a slower Mac's install stays bounded; what is left is compiled on the draw path as before.
   double budget_s = 120.0;
-  if (const char* v = std::getenv("FABLE2_SHADER_PREP_BANK_BUDGET_S"); v && *v) {  // getenv-ok: once (prep)
+  if (const char* v = MetalDebugEnv("SHADER_PREP_BANK_BUDGET_S"); v && *v) {  // getenv-ok: once (prep)
     budget_s = std::max(0.0, std::atof(v));
   }
   bank_prep_shaders_.store(uint32_t(pixel.size() + vertex.size()), std::memory_order_relaxed);
@@ -3559,7 +3559,7 @@ bool MetalPipelineCache::CompileNativeXlate(
   // Diagnostic FABLE2_MSL_SALT=<text> (as in metal_render_target_cache.cc): a
   // comment in front of the source, so Metal's system shader cache misses.
   static const std::string msl_salt = [] {
-    const char* v = std::getenv("FABLE2_MSL_SALT");
+    const char* v = MetalDebugEnv("MSL_SALT");
     return (v && v[0]) ? std::string("// salt ") + v + "\n" : std::string();
   }();
   if (!msl_salt.empty()) {
@@ -4223,7 +4223,7 @@ void MetalPipelineCache::NsSpecialize(
     return;
   }
   static const bool shader_labels = [] {
-    const char* v = std::getenv("FABLE2_SHADER_LABELS");
+    const char* v = MetalDebugEnv("SHADER_LABELS");
     return v && v[0] == '1';
   }();
   if (shader_labels) {
@@ -4591,7 +4591,7 @@ bool MetalPipelineCache::EnsureMetalTranslationReady(
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     ~XlateTrace() {
       static const bool on = [] {
-        const char* v = std::getenv("FABLE2_XLATE_TRACE");
+        const char* v = MetalDebugEnv("XLATE_TRACE");
         return !(v && v[0] == '0');
       }();
       const double ms = startup::MsSince(start);
@@ -4891,7 +4891,7 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
   // Trace-only (FABLE2_SHADER_LABELS=1): name the pipeline after its guest
   // shaders so GPU captures (gpucapture/gpudebug) can attribute cost to them.
   static const bool shader_labels = [] {
-    const char* v = std::getenv("FABLE2_SHADER_LABELS");
+    const char* v = MetalDebugEnv("SHADER_LABELS");
     return v && v[0] == '1';
   }();
   if (shader_labels) {
@@ -5909,7 +5909,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
   // (tools/shaderlab/tess_diff.mm with culling: cw culls the opposite side).
   // Experiment knob: FABLE2_NATIVE_TESS_WINDING=cw.
   static const bool winding_ccw = [] {
-    const char* v = std::getenv("FABLE2_NATIVE_TESS_WINDING");
+    const char* v = MetalDebugEnv("NATIVE_TESS_WINDING");
     return !(v && std::strcmp(v, "cw") == 0);
   }();
   struct Key {

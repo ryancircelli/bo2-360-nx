@@ -62,7 +62,7 @@ SDL_Scancode Key(const std::string& name) {
 constexpr Uint32 kTestKeyEventType = 0xF2B5;
 constexpr Sint32 kTestKeyDownBit = 0x10000;
 bool BackgroundMode() {
-  static const bool on = [] { const char* v = std::getenv("FABLE2_TEST_BACKGROUND"); return v && v[0] == '1'; }();
+  static const bool on = [] { const char* v = MetalDebugEnv("TEST_BACKGROUND"); return v && v[0] == '1'; }();
   return on;
 }
 bool SendKey(SDL_Scancode key, bool down) {
@@ -169,7 +169,7 @@ std::string WriteCapture(const std::filesystem::path& folder, const std::string&
   }
   if (!output) return "error capture write failed";
   output.close();
-  const char* origin_value = std::getenv("FABLE2_SESSION_ORIGIN_US");  // getenv-ok: per test capture
+  const char* origin_value = MetalDebugEnv("SESSION_ORIGIN_US");  // getenv-ok: per test capture
   int64_t origin = origin_value ? std::strtoll(origin_value, nullptr, 10) : 0;
   std::ostringstream metadata;
   metadata << "{\"schema\":1,\"clock\":\"CLOCK_MONOTONIC\","
@@ -196,7 +196,7 @@ std::string WriteCapture(const std::filesystem::path& folder, const std::string&
 }
 }  // namespace
 void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
-  const char* value = std::getenv("FABLE2_TEST_CONTROL_DIR");  // getenv-ok: once, at start
+  const char* value = MetalDebugEnv("TEST_CONTROL_DIR");  // getenv-ok: once, at start
   if (!value || !*value || !context || !presenter) return;
   std::filesystem::path folder(value);
   if (!folder.is_absolute()) { REXLOG_WARN("Metal test control requires an absolute directory"); return; }
@@ -212,7 +212,7 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
       context->CallInUIThreadDeferred([] {
         // Keep frames advancing while hidden/occluded unless the test asks to
         // measure App Nap (FABLE2_TEST_APP_NAP=1). The token lives for the process.
-        const char* nap = std::getenv("FABLE2_TEST_APP_NAP");  // getenv-ok: once, at start
+        const char* nap = MetalDebugEnv("TEST_APP_NAP");  // getenv-ok: once, at start
         static id activity = nil;
         if (!(nap && nap[0] == '1') && !activity) {
           activity = [[NSProcessInfo processInfo]

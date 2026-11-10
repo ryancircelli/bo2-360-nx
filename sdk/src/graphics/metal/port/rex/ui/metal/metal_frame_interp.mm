@@ -126,7 +126,7 @@ void NoteDrawableWait(double seconds) {
 // Present log (dev: FABLE2_FRAME_INTERP_PRESENT_LOG=<file>): one CSV row per present with its presentedTime.
 FILE* PresentLog() {
   static FILE* f = [] {
-    const char* e = std::getenv("FABLE2_FRAME_INTERP_PRESENT_LOG");  // getenv-ok: once
+    const char* e = MetalDebugEnv("FRAME_INTERP_PRESENT_LOG");  // getenv-ok: once
     FILE* file = e && *e ? std::fopen(e, "w") : nullptr;
     if (file) std::fprintf(file, "kind,frame,taken,target,presented,ready,arrived\n");
     return file;
@@ -214,7 +214,7 @@ double SchedLead(double period) {
   if (lead > 0) return lead;
   // Dev tuning: FABLE2_FRAME_INTERP_LEAD_MS = initial lead.
   static const double ms = [] {
-    const char* e = std::getenv("FABLE2_FRAME_INTERP_LEAD_MS");  // getenv-ok: once
+    const char* e = MetalDebugEnv("FRAME_INTERP_LEAD_MS");  // getenv-ok: once
     return e ? std::strtod(e, nullptr) : 0.0;
   }();
   // Measured at 60 Hz: a 32 ms lead was a refresh late, 33.3+ on time.

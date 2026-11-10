@@ -56,14 +56,14 @@ namespace metal {
 namespace {
 
 bool EnvFlag(const char* name, bool default_value) {
-  const char* v = std::getenv(name);
+  const char* v = MetalDebugEnv(name);
   if (!v || !v[0]) return default_value;
   return v[0] != '0';
 }
 
 uint64_t RenameCapBytes() {
   static const uint64_t cap = [] {
-    const char* v = std::getenv("FABLE2_TEX_RENAME_MB");
+    const char* v = MetalDebugEnv("TEX_RENAME_MB");
     uint64_t mb = v ? std::strtoull(v, nullptr, 10) : 128;
     return mb << 20;
   }();
@@ -173,7 +173,7 @@ VerifyStats& Stats() {
 
 bool MetalTextureCache::TexRenameEnabled() {
   static const bool on = [] {
-    const bool e = EnvFlag("FABLE2_TEX_RENAME", true);
+    const bool e = EnvFlag("TEX_RENAME", true);
     REXLOG_INFO(
         "[tex-rename] {} (FABLE2_TEX_RENAME): full reloads of a texture the "
         "open command buffer sampled go into a fresh backing instead of "
@@ -186,7 +186,7 @@ bool MetalTextureCache::TexRenameEnabled() {
 
 bool MetalTextureCache::TexRenameVerify() {
   static const bool on = [] {
-    const bool e = TexRenameEnabled() && EnvFlag("FABLE2_TEX_RENAME_VERIFY", false);
+    const bool e = TexRenameEnabled() && EnvFlag("TEX_RENAME_VERIFY", false);
     if (e) {
       REXLOG_WARN(
           "[tex-rename] FABLE2_TEX_RENAME_VERIFY=1 (diagnostic: re-runs each "
@@ -199,7 +199,7 @@ bool MetalTextureCache::TexRenameVerify() {
 
 bool MetalTextureCache::TexRenameNoopEnabled() {
   static const bool on = [] {
-    const bool e = TexRenameEnabled() && EnvFlag("FABLE2_TEX_RENAME_NOOP", true);
+    const bool e = TexRenameEnabled() && EnvFlag("TEX_RENAME_NOOP", true);
     if (TexRenameEnabled()) {
       REXLOG_INFO(
           "[tex-rename] no-op loads {} (FABLE2_TEX_RENAME_NOOP): planned loads "
@@ -250,7 +250,7 @@ bool MetalTextureCache::PlannedLoadIsNoop(MetalTexture& texture,
 
 bool MetalTextureCache::NxVerify() {
   static const bool on = [] {
-    const bool e = NxKeepEnabled() && EnvFlag("FABLE2_TEX_UNCHANGED_VERIFY", false);
+    const bool e = NxKeepEnabled() && EnvFlag("TEX_UNCHANGED_VERIFY", false);
     if (e) {
       REXLOG_WARN("[tex-unchanged] FABLE2_TEX_UNCHANGED_VERIFY=1: kept loads "
                   "are re-run as reference loads and compared ([rtt] verify)");
@@ -261,7 +261,7 @@ bool MetalTextureCache::NxVerify() {
 }
 
 static bool TexRenameVerifyBreak() {
-  static const bool on = EnvFlag("FABLE2_TEX_RENAME_VERIFY_BREAK", false);
+  static const bool on = EnvFlag("TEX_RENAME_VERIFY_BREAK", false);
   return on;
 }
 

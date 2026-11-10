@@ -55,16 +55,13 @@ const char* kKindName[kKindCount] = {"sys", "bl", "fc"};
 }  // namespace
 
 bool Enabled() {
-  static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE");
-    return !(v && v[0] == '0');
-  }();
+  static const bool on = REXCVAR_GET(metal_ns_specialize);
   return on;
 }
 
 bool LearnMode() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_LEARN");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_LEARN");
     return v && v[0] == '1';
   }();
   return on;
@@ -72,7 +69,7 @@ bool LearnMode() {
 
 bool VerifyMode() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_VERIFY");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_VERIFY");
     return v && v[0] == '1';
   }();
   return on;
@@ -80,7 +77,7 @@ bool VerifyMode() {
 
 bool BakeFloats() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_FLOATS");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_FLOATS");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -88,7 +85,7 @@ bool BakeFloats() {
 
 uint32_t MinDraws() {
   static const uint32_t n = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_MIN_DRAWS");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_MIN_DRAWS");
     return v && v[0] ? uint32_t(std::strtoul(v, nullptr, 10)) : 16u;
   }();
   return n;
@@ -103,8 +100,9 @@ bool Candidate(uint64_t ucode_hash) {
   static const Lists lists = [] {
     Lists l;
     // Built-in: the hottest guest pixel shaders at Bower Lake 3x and Old Tomb
-    // (docs/engine-options-20261011.md §9.1, docs/native-shaders.md).
-    l.list = {
+    // (docs/engine-options-20261011.md §9.1, docs/native-shaders.md). These
+    // are Fable II shaders: built in only with the fable2 title quirk.
+    if (MetalFable2Quirks()) l.list = {
         UINT64_C(0xAF1E16EE57E4BB06), UINT64_C(0x0F99810F072BF0FC),
         UINT64_C(0xF1EB2497108F159D), UINT64_C(0x577CB5267A8C92C3),
         UINT64_C(0x7CD57B81550F19E3), UINT64_C(0x1B4B5AE12EF270CA),
@@ -115,7 +113,7 @@ bool Candidate(uint64_t ucode_hash) {
         UINT64_C(0x356E4E7B9E2B36E6), UINT64_C(0xCD2CE6D440B77BCE),
         UINT64_C(0x28E202861D3E2411), UINT64_C(0xF2F103F16764043B),
     };
-    if (const char* v = std::getenv("FABLE2_NS_SPECIALIZE_LIST")) {
+    if (const char* v = MetalDebugEnv("NS_SPECIALIZE_LIST")) {
       if (std::strcmp(v, "all") == 0) {
         l.all = true;
       } else {
@@ -126,8 +124,8 @@ bool Candidate(uint64_t ucode_hash) {
     // faster than their normal pipeline (per-shader A/B).
     // 4BE4344C27016E04: its own pass (2 draws/frame, Bower Lake) +5-6% at
     // 1x/2x/3x with the variant.
-    l.skip = {UINT64_C(0x4BE4344C27016E04)};
-    if (const char* v = std::getenv("FABLE2_NS_SPECIALIZE_SKIP")) {
+    if (MetalFable2Quirks()) l.skip = {UINT64_C(0x4BE4344C27016E04)};
+    if (const char* v = MetalDebugEnv("NS_SPECIALIZE_SKIP")) {
       l.skip = ParseHashList(v);
     }
     return l;
@@ -445,7 +443,7 @@ void WriteRecord(std::string& out, const LearnRecord& r) {
 // generation.
 bool LearnAppendMode() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_NS_LEARN_APPEND");
+    const char* v = MetalDebugEnv("NS_LEARN_APPEND");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -456,7 +454,7 @@ constexpr char kLearnHeader[] = "NS2LEARN 2\n";
 // (instead of max(1 MB, 4x the compacted size)).
 uint64_t LearnCompactTestBytes() {
   static const uint64_t n = [] {
-    const char* v = std::getenv("FABLE2_NS_LEARN_COMPACT_KB");
+    const char* v = MetalDebugEnv("NS_LEARN_COMPACT_KB");
     return v && v[0] ? uint64_t(std::strtoull(v, nullptr, 10)) * 1024 : uint64_t(0);
   }();
   return n;
@@ -624,7 +622,7 @@ void RequestSaveLocked() {
 bool AutoLearnEnabled() {
   static const bool on = [] {
     if (LearnMode() || !Enabled()) return false;
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_AUTOLEARN");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_AUTOLEARN");
     return !(v && v[0] == '0');
   }();
   return on;
@@ -632,7 +630,7 @@ bool AutoLearnEnabled() {
 
 uint32_t DemotePercent() {
   static const uint32_t n = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_DEMOTE_PCT");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_DEMOTE_PCT");
     return v && v[0] ? uint32_t(std::strtoul(v, nullptr, 10)) : 5u;
   }();
   return n;
@@ -640,7 +638,7 @@ uint32_t DemotePercent() {
 
 uint32_t AutoLearnSampleEvery() {
   static const uint32_t n = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_AUTOLEARN_SAMPLE");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_AUTOLEARN_SAMPLE");
     uint32_t x = v && v[0] ? uint32_t(std::strtoul(v, nullptr, 10)) : 4u;
     return std::max(x, 1u);
   }();
@@ -650,7 +648,7 @@ uint32_t AutoLearnSampleEvery() {
 namespace {
 uint32_t AutoLearnMinSamples() {
   static const uint32_t n = [] {
-    const char* v = std::getenv("FABLE2_NS_SPECIALIZE_AUTOLEARN_MIN_SAMPLES");
+    const char* v = MetalDebugEnv("NS_SPECIALIZE_AUTOLEARN_MIN_SAMPLES");
     uint32_t x = v && v[0] ? uint32_t(std::strtoul(v, nullptr, 10)) : 64u;
     return std::max(x, MinDraws());
   }();

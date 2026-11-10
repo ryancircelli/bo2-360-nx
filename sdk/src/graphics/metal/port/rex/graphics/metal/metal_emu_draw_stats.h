@@ -44,7 +44,7 @@ inline const char* KindName(uint32_t k) {
 
 inline bool Enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_EMU_DRAW_STATS");
+    const char* v = MetalDebugEnv("EMU_DRAW_STATS");
     return v && v[0] == '1';
   }();
   return on;
@@ -52,7 +52,7 @@ inline bool Enabled() {
 
 inline uint32_t WindowFrames() {
   static const uint32_t n = [] {
-    const char* v = std::getenv("FABLE2_EMU_DRAW_STATS_FRAMES");
+    const char* v = MetalDebugEnv("EMU_DRAW_STATS_FRAMES");
     long x = v ? std::strtol(v, nullptr, 10) : 0;
     return uint32_t(x > 0 ? x : 300);
   }();
