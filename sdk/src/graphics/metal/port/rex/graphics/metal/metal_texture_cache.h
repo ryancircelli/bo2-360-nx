@@ -32,6 +32,7 @@
 #include "rex/memory.h"
 
 #include "third_party/metal-cpp/Metal/Metal.hpp"
+#include "rex/graphics/metal/metal_test_hooks.h"
 
 namespace rex {
 namespace graphics {
@@ -42,6 +43,8 @@ class MetalSharedMemory;
 class MetalHeapPool;
 
 class MetalTextureCache : public TextureCache {
+  REX_METAL_TEST_FRIEND
+
  public:
   MetalTextureCache(MetalCommandProcessor* command_processor,
                     const RegisterFile& register_file,

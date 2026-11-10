@@ -1,0 +1,52 @@
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -12,11 +12,13 @@
+ #include "rex/graphics/shared_memory.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ 
+ #include "rex/assert.h"
+ #include "rex/bit_range.h"
+ #include "rex/logging.h"
+ #include "rex/profiling.h"
++#include "rex/graphics/metal/metal_test_hooks.h"
+ 
+ namespace rex {
+ namespace graphics {
+@@ -174,7 +176,25 @@
+     return;
+   }
+ 
+-  // Lock-free implementation using double buffering.
++  // [page-swap-lock] The copy below and the buffer exchange must not
++  // interleave with a CPU write invalidation (MemoryInvalidationCallback, on a
++  // guest thread under the global lock): one that lands between the copy of
++  // its block and the exchange clears the page in the buffer being retired,
++  // while the copy already brought the page back as valid with GPU-written
++  // data, and the dirty flag it set is cleared below. The page then stays
++  // valid with stale shared memory bytes, a texture reloads them, and the next
++  // swap that drops the bit fires no watch. Readers stay lock-free; only the
++  // writers serialize. REX_METAL_PAGE_SWAP_LOCK=0 restores the unlocked swap.
++  static const bool swap_lock = [] {
++    const char* v = std::getenv("REX_METAL_PAGE_SWAP_LOCK");
++    return !(v && v[0] == '0' && !v[1]);
++  }();
++  std::unique_lock<std::recursive_mutex> swap_global_lock;
++  if (swap_lock) {
++    swap_global_lock = global_critical_region_.Acquire();
++  }
++
++  // Double buffering: readers see either buffer, never a partial copy.
+   // Get the staging buffer (not currently being read)
+   uint64_t* staging = staging_valid_flags_.load(std::memory_order_acquire);
+ 
+@@ -210,6 +230,8 @@
+     }
+   }
+ 
++  REX_METAL_TEST_HOOK_AT(kPageSwapBeforeExchange, 0);
++
+   // Atomically swap buffers - readers will instantly see the new data
+   // Use acq_rel ordering: acquire the old value, release the new one
+   uint64_t* old_active =

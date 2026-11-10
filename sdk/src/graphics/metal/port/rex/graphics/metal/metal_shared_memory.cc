@@ -240,6 +240,21 @@ void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
                                 frame_log::CurrentFrame()});
 }
 
+namespace {
+// [host-write-watch] The readback writes guest RAM through the host view, so
+// no CPU watch fires. A texture loaded straight from guest RAM while the
+// export was in flight (the CPU source path: its pages were invalid, so the
+// export bytes it copied were the pre-export ones) stays stale unless the
+// range watches fire here. REX_METAL_MEMEXPORT_READBACK_WATCH=0 disables.
+bool MemexportReadbackWatchEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_READBACK_WATCH");
+    return !(v && v[0] == '0');
+  }();
+  return enabled;
+}
+}  // namespace
+
 void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
     uint64_t completed_submission) {
   if (pending_readbacks_.empty() ||
@@ -266,6 +281,7 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
   uint64_t cpu_skip_bytes = 0;
   std::vector<size_t> rebase_pending;
   std::vector<size_t> rebase_preserved;
+  std::vector<std::pair<uint32_t, uint32_t>> fire_ranges;
   for (size_t i = 0; i < done; ++i) {
     const PendingReadback& e = pending_readbacks_[i];
     const uint32_t len = e.end - e.start;
@@ -309,7 +325,11 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
                              : XXH3_64bits(guest + p.start, p.end - p.start);
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
+    const bool guest_changed = std::memcmp(guest + e.start, gpu + e.start, len) != 0;
     std::memcpy(guest + e.start, gpu + e.start, len);
+    if (guest_changed && MemexportReadbackWatchEnabled()) {
+      fire_ranges.emplace_back(e.start, len);
+    }
     rex::system::RecordGuestWrite('m', e.start, len, false,
                                   "memexport sub " + std::to_string(e.submission));
     if (!page_last_readback_us_.empty()) {
@@ -349,6 +369,9 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
   }
   pending_readbacks_.erase(pending_readbacks_.begin(),
                            pending_readbacks_.begin() + done);
+  for (const auto& r : fire_ranges) {
+    FireWatchesForHostWrite(r.first, r.second);
+  }
   if (PreserveTraceEnabled()) {
     const uint64_t frame = frame_log::CurrentFrame();
     if (bytes) {

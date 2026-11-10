@@ -276,6 +276,12 @@ if(REXGLUE_BUILD_TESTS)
     list(APPEND CMAKE_MODULE_PATH "${REXGLUE_ROOT}/thirdparty/catch2/extras")
 endif()
 
+# Tests registered from source directories (e.g. the Metal texture cache
+# stress test) need testing enabled before those directories are processed.
+if(REXGLUE_BUILD_TESTS OR REXGLUE_BUILD_GPUTEST)
+    enable_testing()
+endif()
+
 # Third-party dependencies (vendored sources only)
 add_subdirectory(thirdparty)
 

@@ -80,6 +80,8 @@ set(_metal_patches
     sdk-metal-gpucmd.patch
     sdk-metal-ssmask.patch
     sdk-metal-loadwindow.patch
+    sdk-metal-pageswap.patch
+    sdk-metal-hostwrite-watch.patch
 )
 set(_sdk_private ${_metal_work}/sdk-private)
 
@@ -234,3 +236,33 @@ target_compile_definitions(rexgpu-metal-msl-xlate PRIVATE REX_PLATFORM_MAC=1)
 target_compile_options(rexgpu-metal-msl-xlate PRIVATE
     -include ${_metal_dir}/compat.h -fno-strict-aliasing -ffp-model=strict -fno-char8_t)
 target_link_libraries(rexgpu-metal-msl-xlate PRIVATE rexruntime xxHash::xxhash)
+
+# Texture cache staleness stress test: the real cache, shared memory and
+# MTLDevice under a headless runtime, with REX_METAL_TEST_HOOKS injection
+# points (src/graphics/metal/port/rex/graphics/metal/metal_test_hooks.h).
+# The plugin itself is built without the hooks. Configure with
+# -DREXGLUE_BUILD_TESTS=ON or -DREXGLUE_BUILD_GPUTEST=ON to get it.
+if(REXGLUE_BUILD_TESTS OR REXGLUE_BUILD_GPUTEST)
+    add_executable(rexgpu-metal-texcache-stress
+        ${REXGPU_METAL_COMMON_SOURCES}
+        ${REXGPU_METAL_SOURCES}
+        metal_flags.cpp
+        tests/texcache_stress.cc
+    )
+    add_dependencies(rexgpu-metal-texcache-stress rexgpu-metal-helpers)
+    get_target_property(_rexgpu_metal_incs rexgpu-metal INCLUDE_DIRECTORIES)
+    get_target_property(_rexgpu_metal_defs rexgpu-metal COMPILE_DEFINITIONS)
+    get_target_property(_rexgpu_metal_opts rexgpu-metal COMPILE_OPTIONS)
+    get_target_property(_rexgpu_metal_libs rexgpu-metal LINK_LIBRARIES)
+    target_include_directories(rexgpu-metal-texcache-stress BEFORE PRIVATE ${_rexgpu_metal_incs})
+    target_compile_definitions(rexgpu-metal-texcache-stress PRIVATE
+        ${_rexgpu_metal_defs} REX_METAL_TEST_HOOKS=1)
+    target_compile_options(rexgpu-metal-texcache-stress PRIVATE ${_rexgpu_metal_opts})
+    target_link_libraries(rexgpu-metal-texcache-stress PRIVATE ${_rexgpu_metal_libs})
+    set_target_properties(rexgpu-metal-texcache-stress PROPERTIES
+        BUILD_RPATH "$<TARGET_FILE_DIR:rexruntime>")
+    add_test(NAME rexgpu-metal-texcache-stress
+        COMMAND rexgpu-metal-texcache-stress)
+    set_tests_properties(rexgpu-metal-texcache-stress PROPERTIES
+        TIMEOUT 120 LABELS "gpu;metal")
+endif()
