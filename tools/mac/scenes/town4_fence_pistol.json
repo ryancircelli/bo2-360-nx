@@ -1,55 +1,55 @@
 {
-  "scene": 1,
-  "name": "town4_fence_pistol",
-  "label": "Town 4p: Pack-a-Punch fence, pistol in hand",
-  "about": "All four players spawn around the Pack-a-Punch machine with the chain-link fence behind it and the M1911 in hand (research/signin-run/4way-split-town.png). Three frames 2 s apart a few seconds into the match; nobody moves. Catches green/red speckle on the held pistol and the fence drawn as a solid dark sheet.",
-  "players": 4,
-  "renderers": [
-    "metal",
-    "native"
-  ],
-  "duration_s": 150,
-  "pass_log": [
-    "test start: zm_transit town zstandard zsurvival started"
-  ],
-  "fail_log": [
-    "PLATFORM_MISSINGMAP",
-    "] [error] "
-  ],
-  "captures": [
-    "6:a",
-    "8:b",
-    "10:c"
-  ],
-  "end_on_log": {
-    "text": "town4_fence_pistol_c.png",
-    "count": 1,
-    "grace_s": 2
+ "scene": 1,
+ "name": "town4_fence_pistol",
+ "label": "Town 4p: Pack-a-Punch fence, pistol in hand",
+ "about": "All four players spawn around the Pack-a-Punch machine with the chain-link fence behind it and the M1911 in hand (research/signin-run/4way-split-town.png). Three frames at 22/26/30 s of the match (the screen is black until ~19 s while the game fades in); nobody moves. Catches green/red speckle on the held pistol and the fence drawn as a solid dark sheet.",
+ "players": 4,
+ "renderers": [
+  "metal",
+  "native"
+ ],
+ "duration_s": 150,
+ "pass_log": [
+  "test start: zm_transit town zstandard zsurvival started"
+ ],
+ "fail_log": [
+  "PLATFORM_MISSINGMAP",
+  "] [error] "
+ ],
+ "captures": [
+  "22:a",
+  "26:b",
+  "30:c"
+ ],
+ "end_on_log": {
+  "text": "town4_fence_pistol_c.png",
+  "count": 1,
+  "grace_s": 2
+ },
+ "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
+ "route": {
+  "BO2ZM_TEST_START": "zm_transit town zstandard zsurvival",
+  "BO2ZM_TEST_START_WAIT_S": "10",
+  "BO2ZM_TEST_ALL_GOD": "true",
+  "BO2ZM_BENCHMARK": "false",
+  "BO2ZM_LOADING_VIDEO": "false",
+  "BO2ZM_TEST_CONSOLE": "22:png town4_fence_pistol_a|26:png town4_fence_pistol_b|30:png town4_fence_pistol_c",
+  "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
+  "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
+  "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a"
+ },
+ "renderer_route": {
+  "metal": {
+   "REX_GPU_PLUGIN": "metal",
+   "REX_BO2ZM_RENDERER": "xenos"
   },
-  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
-  "route": {
-    "BO2ZM_TEST_START": "zm_transit town zstandard zsurvival",
-    "BO2ZM_TEST_START_WAIT_S": "10",
-    "BO2ZM_TEST_ALL_GOD": "true",
-    "BO2ZM_BENCHMARK": "false",
-    "BO2ZM_LOADING_VIDEO": "false",
-    "BO2ZM_TEST_CONSOLE": "6:png town4_fence_pistol_a|8:png town4_fence_pistol_b|10:png town4_fence_pistol_c",
-    "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
-    "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
-    "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a"
-  },
-  "renderer_route": {
-    "metal": {
-      "REX_GPU_PLUGIN": "metal",
-      "REX_BO2ZM_RENDERER": "xenos"
-    },
-    "native": {
-      "REX_GPU_PLUGIN": "xenos",
-      "REX_BO2ZM_RENDERER": "native"
-    }
-  },
-  "golden": {
-    "views": 4,
-    "metric": "fence_pistol"
+  "native": {
+   "REX_GPU_PLUGIN": "xenos",
+   "REX_BO2ZM_RENDERER": "native"
   }
+ },
+ "golden": {
+  "views": 4,
+  "metric": "fence_pistol"
+ }
 }

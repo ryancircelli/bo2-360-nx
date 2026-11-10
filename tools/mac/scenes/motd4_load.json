@@ -1,50 +1,50 @@
 {
-  "scene": 1,
-  "name": "motd4_load",
-  "label": "Mob of the Dead 4p load",
-  "about": "Load Mob of the Dead with 4 players and the loading video off; two frames in the Afterlife intro.",
-  "players": 4,
-  "renderers": [
-    "metal",
-    "native"
-  ],
-  "duration_s": 170,
-  "pass_log": [
-    "test start: zm_prison prison zclassic zclassic started"
-  ],
-  "fail_log": [
-    "PLATFORM_MISSINGMAP",
-    "] [error] "
-  ],
-  "captures": [
-    "5:a",
-    "10:b"
-  ],
-  "end_on_log": {
-    "text": "motd4_load_b.png",
-    "count": 1,
-    "grace_s": 2
+ "scene": 1,
+ "name": "motd4_load",
+ "label": "Mob of the Dead 4p load",
+ "about": "Load Mob of the Dead with 4 players and the loading video off; two frames in the Afterlife intro.",
+ "players": 4,
+ "renderers": [
+  "metal",
+  "native"
+ ],
+ "duration_s": 170,
+ "pass_log": [
+  "test start: zm_prison prison zclassic zclassic started"
+ ],
+ "fail_log": [
+  "PLATFORM_MISSINGMAP",
+  "] [error] "
+ ],
+ "captures": [
+  "25:a",
+  "40:b"
+ ],
+ "end_on_log": {
+  "text": "motd4_load_b.png",
+  "count": 1,
+  "grace_s": 2
+ },
+ "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
+ "route": {
+  "BO2ZM_TEST_START": "zm_prison prison zclassic zclassic",
+  "BO2ZM_TEST_START_WAIT_S": "10",
+  "BO2ZM_TEST_ALL_GOD": "true",
+  "BO2ZM_BENCHMARK": "false",
+  "BO2ZM_LOADING_VIDEO": "false",
+  "BO2ZM_TEST_CONSOLE": "25:png motd4_load_a|40:png motd4_load_b",
+  "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
+  "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
+  "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a"
+ },
+ "renderer_route": {
+  "metal": {
+   "REX_GPU_PLUGIN": "metal",
+   "REX_BO2ZM_RENDERER": "xenos"
   },
-  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{scene}-{renderer}",
-  "route": {
-    "BO2ZM_TEST_START": "zm_prison prison zclassic zclassic",
-    "BO2ZM_TEST_START_WAIT_S": "10",
-    "BO2ZM_TEST_ALL_GOD": "true",
-    "BO2ZM_BENCHMARK": "false",
-    "BO2ZM_LOADING_VIDEO": "false",
-    "BO2ZM_TEST_CONSOLE": "5:png motd4_load_a|10:png motd4_load_b",
-    "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
-    "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
-    "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a"
-  },
-  "renderer_route": {
-    "metal": {
-      "REX_GPU_PLUGIN": "metal",
-      "REX_BO2ZM_RENDERER": "xenos"
-    },
-    "native": {
-      "REX_GPU_PLUGIN": "xenos",
-      "REX_BO2ZM_RENDERER": "native"
-    }
+  "native": {
+   "REX_GPU_PLUGIN": "xenos",
+   "REX_BO2ZM_RENDERER": "native"
   }
+ }
 }
