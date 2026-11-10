@@ -879,11 +879,17 @@ inline bool CreateDedicatedImage(const rex::ui::vulkan::VulkanDevice* device, co
       device, ImageInfo(desc), rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, out, memory);
 }
 
-inline VkMemoryRequirements Requirements(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
-                                         VkImage image) {
+static_assert(sizeof(Requirements) == sizeof(VkMemoryRequirements) &&
+                  offsetof(Requirements, size) == offsetof(VkMemoryRequirements, size) &&
+                  offsetof(Requirements, alignment) == offsetof(VkMemoryRequirements, alignment) &&
+                  offsetof(Requirements, types) == offsetof(VkMemoryRequirements, memoryTypeBits),
+              "gpu::Requirements has VkMemoryRequirements' layout");
+
+inline gpu::Requirements Requirements(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                      VkImage image) {
   VkMemoryRequirements req{};
   dfn.vkGetImageMemoryRequirements(device, image, &req);
-  return req;
+  return gpu::Requirements{req.size, req.alignment, req.memoryTypeBits};
 }
 
 inline VkResult BindImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImage image,
