@@ -89,9 +89,12 @@
 
 #pragma once
 
+#include "bo2zm_gpu.h"
+
 #include <rex/ui/vulkan/device.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -141,6 +144,21 @@ struct TexturePoolState {
  *   Free(block)                                   in DestroyImage
  *   Finish()                                      in the destructor, after the images are destroyed
  */
+// Where the pool's slabs come from: device memory on Vulkan, placement heaps on Metal. Allocate and Release run on
+// the thread that calls Start, PerFrame and Finish.
+class SlabMemory {
+ public:
+  virtual ~SlabMemory() = default;
+  // The memory type the textures go in and the alignment the device asks of a typical one; false if none fits.
+  virtual bool Choose(uint32_t& type_out, gpu::Size& alignment_out) = 0;
+  // nullptr if the device refuses.
+  virtual gpu::Memory Allocate(gpu::Size bytes, uint32_t type) = 0;
+  virtual void Release(gpu::Memory memory) = 0;
+};
+
+// The Vulkan slabs (vkAllocateMemory without a dedicated image, see Start).
+std::unique_ptr<SlabMemory> VulkanSlabMemory(const rex::ui::vulkan::VulkanDevice* vulkan_device);
+
 class TexturePool {
  public:
   TexturePool() = default;
@@ -161,6 +179,8 @@ class TexturePool {
    * the usual dedicated path, exactly the behavior without the pool.
    */
   bool Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max);
+  // The same with any backend's slabs.
+  bool Start(std::unique_ptr<SlabMemory> memory, int32_t mb_cache_max);
 
   // Frees every slab. The images must already be destroyed.
   void Finish();
@@ -178,8 +198,8 @@ class TexturePool {
    * offset_out) and store block_out in NativeImage::pool_block.
    * If it returns false, nothing has been touched: the caller uses the dedicated path.
    */
-  bool Reserve(const VkMemoryRequirements& requirements, VkDeviceMemory& memory_out,
-                VkDeviceSize& offset_out, uint32_t& block_out);
+  bool Reserve(const gpu::Requirements& requirements, gpu::Memory& memory_out, gpu::Size& offset_out,
+               uint32_t& block_out);
 
   // Returns the block to the pool. Accepts kBlockPoolInvalid and does nothing with it.
   void Free(uint32_t block);
@@ -204,7 +224,7 @@ class TexturePool {
 
  private:
   struct Slab {
-    VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+    gpu::Memory guest_memory = nullptr;
     uint32_t units = 0;
     uint32_t units_in_use = 0;
     std::vector<uint64_t> occupied;  // bitmap, one unit per bit
@@ -219,10 +239,8 @@ class TexturePool {
   static constexpr uint32_t kMaxSlabs = 255;
 
   bool CreateSlab(bool in_hot);
-  bool ChooseMemoryType(uint32_t& type_out, uint64_t& alignment_view_out) const;
 
-  const rex::ui::vulkan::VulkanDevice* vulkan_device_ = nullptr;
-  VkDevice device_ = VK_NULL_HANDLE;
+  std::unique_ptr<SlabMemory> memory_;
   bool active_ = false;
   uint32_t type_memory_ = UINT32_MAX;
   uint64_t slab_bytes_ = 0;
