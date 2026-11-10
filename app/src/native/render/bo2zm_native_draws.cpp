@@ -6037,8 +6037,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
-                              &barrier, 0, nullptr, 0, nullptr);
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0,
+                 nullptr, 0, nullptr);
   }
 
   void FinishPass() override {
@@ -6059,7 +6059,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         query_occlusion_ = UINT32_MAX;
       }
       const auto before_end = std::chrono::steady_clock::now();
-      dfn_.vkCmdEndRenderPass(pass_commands_);
+      gpu_.EndPass(pass_commands_);
       PassBarrier(pass_commands_);
       if (stats_pass_ != UINT32_MAX) {
         context_->FinishStats(stats_pass_);
@@ -7035,8 +7035,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     start.clearValueCount = 1;
     start.pClearValues = &clear;
     PassBarrier(commands);
-    dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
-    dfn_.vkCmdEndRenderPass(commands);
+    gpu_.BeginPass(commands, start);
+    gpu_.EndPass(commands);
     PassBarrier(commands);
     ++clears_depth_in_pass_;
     return true;
@@ -7076,8 +7076,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     start.clearValueCount = 1;
     start.pClearValues = &clear;
     PassBarrier(commands);
-    dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
-    dfn_.vkCmdEndRenderPass(commands);
+    gpu_.BeginPass(commands, start);
+    gpu_.EndPass(commands);
     PassBarrier(commands);
     return true;
   }
@@ -7116,7 +7116,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     start.framebuffer = framebuffer;
     start.renderArea = area;
     PassBarrier(commands);
-    dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
+    gpu_.BeginPass(commands, start);
     VkClearAttachment attachment{};
     attachment.aspectMask = aspects;
     attachment.colorAttachment = 0;
@@ -7125,8 +7125,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     rectangle.rect = area;
     rectangle.baseArrayLayer = 0;
     rectangle.layerCount = 1;
-    dfn_.vkCmdClearAttachments(commands, 1, &attachment, 1, &rectangle);
-    dfn_.vkCmdEndRenderPass(commands);
+    gpu_.ClearAttachments(commands, 1, &attachment, 1, &rectangle);
+    gpu_.EndPass(commands);
     PassBarrier(commands);
     return true;
   }
@@ -10323,8 +10323,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-    dfn_.vkCmdPipelineBarrier(upload, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1,
-                              &barrier, 0, nullptr, 0, nullptr);
+    gpu_.Barrier(upload, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1,
+                 &barrier, 0, nullptr, 0, nullptr);
   }
 
   // bo2zm_gpu_skin_check: the checks recorded in upload buffer `index`, now that the GPU is done with it.
@@ -10997,8 +10997,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
         cero.float32[3] = 1.0f;
       }
       const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
-      dfn_.vkCmdClearColorImage(upload, empty_[i].image, VK_IMAGE_LAYOUT_GENERAL, &cero, 1,
-                                &range);
+      gpu_.ClearColorImage(upload, empty_[i].image, VK_IMAGE_LAYOUT_GENERAL, &cero, 1,
+                           &range);
       empty_[i].prepared = true;
     }
     empty_prepared_ = true;
@@ -11015,9 +11015,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
     barrier.image = image;
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, layers};  // and mips
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    dfn_.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                              &barrier);
+    gpu_.Barrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                 &barrier);
   }
 
   void WriteImage(uint32_t heap, uint32_t slot, VkImageView view) {
@@ -13269,8 +13269,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       for (VkBufferImageCopy& region : texture.regions_partial) {
         region.bufferOffset += offset;
       }
-      dfn_.vkCmdCopyBufferToImage(upload, upload_, texture.image.image, VK_IMAGE_LAYOUT_GENERAL,
-                                  uint32_t(texture.regions_partial.size()), texture.regions_partial.data());
+      gpu_.CopyBufferToImage(upload, upload_, texture.image.image, VK_IMAGE_LAYOUT_GENERAL,
+                             uint32_t(texture.regions_partial.size()), texture.regions_partial.data());
       texture.regions_partial.clear();
       texture.data.clear();
       texture.needs_upload = false;
@@ -13335,8 +13335,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       copy.imageExtent = {std::max(texture.image.width >> n, 1u), std::max(texture.image.height >> n, 1u),
                            texture.depth3d ? texture.depth3d : 1};
     }
-    dfn_.vkCmdCopyBufferToImage(upload, upload_, texture.image.image, VK_IMAGE_LAYOUT_GENERAL,
-                                texture.levels, copies.data());
+    gpu_.CopyBufferToImage(upload, upload_, texture.image.image, VK_IMAGE_LAYOUT_GENERAL,
+                           texture.levels, copies.data());
   }
 
   // A texture's view, the same for SlotView and for the deferred views of CollectBindings.
@@ -13786,7 +13786,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     stats_pass_ = context_->BeginStats(category_pass_);
     const auto before_start = std::chrono::steady_clock::now();
     PassBarrier(cmd);
-    dfn_.vkCmdBeginRenderPass(cmd, &start, VK_SUBPASS_CONTENTS_INLINE);
+    gpu_.BeginPass(cmd, start);
     ns_render_pass_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - before_start).count());
     if (time_) {
