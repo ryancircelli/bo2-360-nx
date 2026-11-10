@@ -1564,10 +1564,10 @@ constexpr uint32_t kCapacityHeap[4] = {16384, 64, 256, 512};  // 2D, 3D, cube, s
 // Work slots. The ones actually used are chosen by bo2zm_native_work_slots; this is the room reserved
 // for them, and it has to match the array in bo2zm_native_targets.cpp.
 constexpr size_t kSlotsOfJob = 3;
-constexpr VkDeviceSize kSizeUpload = VkDeviceSize(64) << 20;
+constexpr gpu::Size kSizeUpload = gpu::Size(64) << 20;
 // Separate buffer for the shared constants, per slot. ~1,400 draws x 512 bytes = 0.7 MB per frame; if it
 // fills up, the work is submitted just as with the upload buffer.
-constexpr VkDeviceSize kSizeShared = VkDeviceSize(4) << 20;  // per work slot (there are three)
+constexpr gpu::Size kSizeShared = gpu::Size(4) << 20;  // per work slot (there are three)
 // The pipeline cache and the prewarm list go in a single file in <NRO folder>/cache/ (nothing loose next to
 // the NRO, and a single pipelines .bin). Header "BZPC", version, list bytes and cache bytes (two uint32
 // and two uint64), then both parts: the list as is (its "BZPL" header and the records) and the
@@ -1728,10 +1728,10 @@ constexpr uint32_t kIndicesDomeSky = 480;
  */
 constexpr uint32_t kSkyFramesTest = 90;
 constexpr uint32_t kSkyFramesWithOne = 90;
-constexpr VkDeviceSize kUboBytesVs = 256 * 16;
+constexpr gpu::Size kUboBytesVs = 256 * 16;
 // 256, as the library's Bo2zmBlockPs declares (BO2 reads pixel constants up to c250).
-constexpr VkDeviceSize kUboBytesPs = 256 * 16;
-constexpr VkDeviceSize kUboBytesShared = 54 * 16;  // kWordsShared / 4; the library declares 54
+constexpr gpu::Size kUboBytesPs = 256 * 16;
+constexpr gpu::Size kUboBytesShared = 54 * 16;  // kWordsShared / 4; the library declares 54
 constexpr uint32_t kRemapIdentity = 0xFFF;
 constexpr uint32_t kMaxVerticesPerDraw = uint32_t(1) << 20;
 constexpr uint32_t kMemoryPhysical = 0x20000000;
@@ -2027,7 +2027,7 @@ struct UninitializedAllocator : std::allocator<T> {
   }
 };
 
-using FnBufferAddress = VkDeviceAddress(VKAPI_PTR*)(VkDevice, const VkBufferDeviceAddressInfo*);
+using FnBufferAddress = gpu::Address(VKAPI_PTR*)(VkDevice, const VkBufferDeviceAddressInfo*);
 
 float Float(uint32_t value) {
   return std::bit_cast<float>(value);
@@ -3519,7 +3519,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (input->bindings.size() > sources.size()) {
       return Reject(9, "too many vertex streams");
     }
-    VkDeviceSize bytes_vertices = 0;
+    gpu::Size bytes_vertices = 0;
     for (size_t b = 0; b < input->bindings.size(); ++b) {
       const VertexBinding& binding = input->bindings[b];
       const uint32_t d0 = r[kRegFetch + binding.slot * 2];
@@ -3550,7 +3550,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (needed >= 4096) {
         g_probe_vertex_address.store(uint32_t(address + start), std::memory_order_relaxed);
       }
-      bytes_vertices += (needed + 3) & ~VkDeviceSize(3);
+      bytes_vertices += (needed + 3) & ~gpu::Size(3);
     }
 
     // Diagnostic: one line per combination of VS, PS and render target (at most 32).
@@ -3605,7 +3605,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!fewer_copies_) {
       std::memset(shared, 0, kSharedBytes);
     }
-    VkDeviceSize bytes_textures = 0;
+    gpu::Size bytes_textures = 0;
     DiscardHashesPlanned();  // those of the previous draw that never reached UploadTexture
     textures_a_upload_.clear();
     const auto t_samplers =
@@ -3878,13 +3878,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     Stage(2, mark);
     // --- Upload buffer space ----------------------------------------------------------
-    const VkDeviceSize bytes_indices =
-        indices_16 ? VkDeviceSize(indices16_.size()) * 2 : VkDeviceSize(indices_.size()) * 4;
+    const gpu::Size bytes_indices =
+        indices_16 ? gpu::Size(indices16_.size()) * 2 : gpu::Size(indices_.size()) * 4;
     // With a single binding the copy goes to a multiple of the stride: up to stride - 4 bytes of padding.
-    const VkDeviceSize gap_base_zero =
-        vertices_base_cero_ && input->bindings.size() == 1 ? VkDeviceSize(input->bindings[0].stride) : 0;
-    const VkDeviceSize needed = gap_base_zero + bytes_vertices + bytes_indices + bytes_textures +
-                                    2 * VkDeviceSize(kRegistersConstants) * 4 +
+    const gpu::Size gap_base_zero =
+        vertices_base_cero_ && input->bindings.size() == 1 ? gpu::Size(input->bindings[0].stride) : 0;
+    const gpu::Size needed = gap_base_zero + bytes_vertices + bytes_indices + bytes_textures +
+                                    2 * gpu::Size(kRegistersConstants) * 4 +
                                     kWordsShared * 4 + 64 * 8 +
                                     // With UBOs the blocks go whole and aligned to alignment_ubo_
                                     (use_ubo_ ? kUboBytesVs + kUboBytesPs + kUboBytesShared +
@@ -3978,7 +3978,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     CutSubstage(36, t_uploads);
     reuse_valid_ = reuse_pending_ && generation_textures_ == reuse_generation_textures_ &&
                    slots_retired_ == reuse_slots_retired_;  // see reuse_textures (textures stage)
-    std::array<VkDeviceSize, 16> offsets_vertices{};
+    std::array<gpu::Size, 16> offsets_vertices{};
     // If the guest has waited for the GPU since the last draw, it may legally have rewritten an already
     // referenced range: what was recorded is no longer valid.
     if (dedupe_active_) {
@@ -3997,7 +3997,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (diag_vertices_repeated_) {
         AnnotateVerticesRepeated(source.address, source.bytes, uint32_t(source.order), source.data);
       }
-      VkDeviceSize offset;
+      gpu::Size offset;
       // In the dedupe's check frames every range carries the hash of its guest bytes; a reuse whose
       // bytes differ is counted (DedupeVertices::discrepancies) and copied as usual.
       const uint64_t hash_dedupe =
@@ -4026,8 +4026,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       // bo2zm_native_vertex_cache: bound from a persistent copy when its bytes did not change (the offset then
       // carries kVertexPoolTag; see ResolveVertexBinding).
       if (vcache_active_) {
-        const VkDeviceSize alignment =
-            vertices_base_cero_ && input->bindings.size() == 1 ? VkDeviceSize(input->bindings[0].stride) : 4;
+        const gpu::Size alignment =
+            vertices_base_cero_ && input->bindings.size() == 1 ? gpu::Size(input->bindings[0].stride) : 4;
         uint64_t hash_cache = hash_dedupe;
         if (VertexCache(source.data, source.bytes, source.order, source.address, alignment, hash_cache, offset)) {
           offsets_vertices[b] = offset;
@@ -4064,7 +4064,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                    .count());
     }
     CutSubstage(37, t_uploads);
-    VkDeviceSize offset_indices = 0;
+    gpu::Size offset_indices = 0;
     if (with_indices) {
       if (indices_pool_) {
         offset_indices = indices_pool_;  // in the index cache's pool (tagged as the vertex cache's)
@@ -4117,7 +4117,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                                                               : 2];
       // With UBOs the block goes whole (the driver may read the full range) and aligned to the device minimum
       const auto t_copy = time_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-      Reserve(use_ubo_ ? std::max<VkDeviceSize>(bytes_vs, kUboBytesVs) : bytes_vs, use_ubo_ ? alignment_ubo_ : 16,
+      Reserve(use_ubo_ ? std::max<gpu::Size>(bytes_vs, kUboBytesVs) : bytes_vs, use_ubo_ ? alignment_ubo_ : 16,
                constants_vs_offset_);
       if (vs_runs) {
         for (const auto& [first, n] : p.vs->constants_runs) {
@@ -4144,7 +4144,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                       : constants_ps_epoch_ != epoch_upload_                 ? 1
                                                                               : 2];
       const auto t_copy = time_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-      Reserve(use_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps, use_ubo_ ? alignment_ubo_ : 16,
+      Reserve(use_ubo_ ? std::max<gpu::Size>(bytes_ps, kUboBytesPs) : bytes_ps, use_ubo_ ? alignment_ubo_ : 16,
                constants_ps_offset_);
       if (ps_runs) {
         for (const auto& [first, n] : ps->constants_runs) {
@@ -4255,7 +4255,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     shared[69] = function_alpha;  // g_AlphaFunction
     std::memcpy(&shared[70], ndc, sizeof(ndc));
     std::copy(input->remaps.begin(), input->remaps.end(), shared + 74);
-    VkDeviceSize offset_shared;
+    gpu::Size offset_shared;
     /*
      * How many draws really change the shared constants.
      *
@@ -4606,7 +4606,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       c.indices_16 = indices_16;
       c.indices = uint32_t(indices_16 ? indices16_.size() : indices_.size());
       {
-        VkDeviceSize at_indices = offset_indices;
+        gpu::Size at_indices = offset_indices;
         ResolveVertexBinding(offset_indices, upload_, c.index_buffer, at_indices);  // index cache
         c.first_index = uint32_t(at_indices / (indices_16 ? 2 : 4));
       }
@@ -4745,12 +4745,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint32_t first_vertex = 0;  // offset / stride: where the copy starts, in vertices
     // Each binding's buffer (the upload buffer or a vertex cache pool) and its offset in it.
     std::array<gpu::Buffer, 16> bind_buffers;
-    std::array<VkDeviceSize, 16> bind_offsets;
+    std::array<gpu::Size, 16> bind_offsets;
     for (size_t i = 0; i < input->bindings.size(); ++i) {
       ResolveVertexBinding(offsets_vertices[i], upload_, bind_buffers[i], bind_offsets[i]);
     }
     if (vertices_base_cero_ && input->bindings.size() == 1) {
-      const VkDeviceSize stride = input->bindings[0].stride;
+      const gpu::Size stride = input->bindings[0].stride;
       if (bind_offsets[0] % stride == 0) {
         base_cero = CheckBaseZero(bind_offsets[0], stride, sources[0].bytes, vmin, first_vertex,
                                   bind_buffers[0] == upload_ ? std::min(kSizeUpload, upload_size_real_)
@@ -4773,8 +4773,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
        * mesh give exactly the same offsets.
        */
       // On the base-zero path what gets bound is the whole buffer, from 0.
-      static constexpr VkDeviceSize kBindingInZero = 0;
-      const VkDeviceSize* a_bind = base_cero ? &kBindingInZero : bind_offsets.data();
+      static constexpr gpu::Size kBindingInZero = 0;
+      const gpu::Size* a_bind = base_cero ? &kBindingInZero : bind_offsets.data();
       const uint32_t n_bindings = uint32_t(input->bindings.size());
       bool equal = n_bindings == bindings_recorded_;
       for (uint32_t i = 0; equal && i < n_bindings; ++i) {
@@ -4898,7 +4898,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       const VkIndexType type_indices = indices_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
       // Or the index cache's pool (bo2zm_native_index_cache), with the same tag as the vertex cache's.
       gpu::Buffer buffer_indices = upload_;
-      VkDeviceSize at_indices = offset_indices;
+      gpu::Size at_indices = offset_indices;
       ResolveVertexBinding(offset_indices, upload_, buffer_indices, at_indices);
       if (type_indices != type_indices_recorded_ || buffer_indices != buffer_indices_recorded_) {
         BO2ZM_SUB(9, gpu_.BindIndexBuffer(cmd, buffer_indices, indices_16));
@@ -4976,7 +4976,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     if (c.n_bindings) {
       std::array<gpu::Buffer, 16> buffers{};
-      std::array<VkDeviceSize, 16> offsets{};
+      std::array<gpu::Size, 16> offsets{};
       for (uint32_t i = 0; i < c.n_bindings; ++i) {
         ResolveVertexBinding(c.offsets_vertices[i], c.buffer, buffers[i], offsets[i]);  // bo2zm_native_vertex_cache
       }
@@ -5083,10 +5083,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * the buffer. On a single difference: that draw binds as usual, MISMATCH in the log and the path is off
    * for the rest of the run.
    */
-  bool CheckBaseZero(VkDeviceSize offset, VkDeviceSize stride, uint64_t bytes, uint32_t vmin,
-                         uint32_t& first_vertex, VkDeviceSize limit) {
-    const VkDeviceSize first = offset / stride;
-    if (first > VkDeviceSize(INT32_MAX)) {
+  bool CheckBaseZero(gpu::Size offset, gpu::Size stride, uint64_t bytes, uint32_t vmin,
+                         uint32_t& first_vertex, gpu::Size limit) {
+    const gpu::Size first = offset / stride;
+    if (first > gpu::Size(INT32_MAX)) {
       return false;  // does not fit in firstVertex/vertexOffset (cannot happen with a 64 MB buffer)
     }
     const uint64_t n = ++base_zero_checked_;
@@ -7338,7 +7338,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // Queues the vkBindImageMemory of an image. false = not queued (queue full or no thread): the usual path.
-  bool EnqueueBinding(gpu::Image image, gpu::Memory guest_memory, VkDeviceSize offset, uint64_t& ticket) {
+  bool EnqueueBinding(gpu::Image image, gpu::Memory guest_memory, gpu::Size offset, uint64_t& ticket) {
     if (!bindings_thread_.joinable()) {
       try {
         bindings_thread_ = std::thread([this] { LoopBindings(); });
@@ -7397,7 +7397,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       BindRequest& request = queue_bindings_[bindings_done_ & (kQueueBindings - 1)];
       const gpu::Image image = request.image;
       const gpu::Memory guest_memory = request.guest_memory;
-      const VkDeviceSize offset = request.offset;
+      const gpu::Size offset = request.offset;
       lock.unlock();
       const auto before = std::chrono::steady_clock::now();
       const VkResult result = gpu::vulkan::BindImage(dfn_, device_, image, guest_memory, offset);
@@ -7486,7 +7486,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image);
     gpu::Memory block = nullptr;
-    VkDeviceSize offset = 0;
+    gpu::Size offset = 0;
     uint32_t id_block = 0xFFFFFFFFu;
     if (!pool_textures_.Reserve(req, block, offset, id_block)) {
       gpu::vulkan::Destroy(dfn_, device_, image);
@@ -7574,7 +7574,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // UploadTexture for a texture with its bind in flight: the data is already in the upload buffer; record
   // where.
-  bool PostponeCopy(CachedTexture& texture, VkDeviceSize offset, gpu::CommandList upload) {
+  bool PostponeCopy(CachedTexture& texture, gpu::Size offset, gpu::CommandList upload) {
     const size_t index = size_t(texture.in_flight) - 1;
     if (index >= in_flight_.size() || in_flight_[index].texture != &texture || in_flight_[index].copy) {
       TurnOffBindings(fmt::format("MISMATCH: incoherent in-flight texture index ({} of {})", index,
@@ -8076,7 +8076,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool PlanHash(CachedTexture& texture, uint64_t key, uint32_t n_reads, const uint8_t* raw_base,
                      uint64_t extension, const uint8_t* raw_mips, uint64_t extension_mips, const HostTextureFormat& tf,
                      uint32_t order, size_t bytes_data, const std::array<size_t, 16>& offsets,
-                     uint32_t address, uint32_t width, uint32_t height, uint32_t format, VkDeviceSize& bytes_upload) {
+                     uint32_t address, uint32_t width, uint32_t height, uint32_t format, gpu::Size& bytes_upload) {
     comparison_texture_ = nullptr;
     if (hashes_phase_ == kHashesNoDecide) {
       DecideHashes();
@@ -9313,8 +9313,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (bytes_ps < kBytesTreatment) {
       return;
     }
-    VkDeviceSize offset = 0;
-    if (mode == 0 || !Reserve(use_ubo_ ? std::max<VkDeviceSize>(bytes_ps, kUboBytesPs) : bytes_ps,
+    gpu::Size offset = 0;
+    if (mode == 0 || !Reserve(use_ubo_ ? std::max<gpu::Size>(bytes_ps, kUboBytesPs) : bytes_ps,
                                use_ubo_ ? alignment_ubo_ : 16, offset)) {
       return;
     }
@@ -9324,8 +9324,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     constants_ps_generation_ = UINT64_MAX;
   }
 
-  bool Reserve(VkDeviceSize bytes, VkDeviceSize alignment, VkDeviceSize& offset) {
-    const VkDeviceSize start = (upload_used_ + alignment - 1) & ~(alignment - 1);
+  bool Reserve(gpu::Size bytes, gpu::Size alignment, gpu::Size& offset) {
+    const gpu::Size start = (upload_used_ + alignment - 1) & ~(alignment - 1);
     if (start + bytes > kSizeUpload) {
       offset = 0;
       return false;  // cannot happen: Draw checks the space first
@@ -9338,8 +9338,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // Like Reserve, but the offset is a multiple of `multiple` (the stride: a multiple of 4, not always a
   // power of 2). Draw has already asked for space including that extra padding (gap_base_zero).
-  bool ReserveMultiple(VkDeviceSize bytes, VkDeviceSize multiple, VkDeviceSize& offset) {
-    const VkDeviceSize start = (upload_used_ + multiple - 1) / multiple * multiple;
+  bool ReserveMultiple(gpu::Size bytes, gpu::Size multiple, gpu::Size& offset) {
+    const gpu::Size start = (upload_used_ + multiple - 1) / multiple * multiple;
     if (start + bytes > kSizeUpload) {
       offset = 0;
       return false;  // cannot happen: Draw checks the space first
@@ -9737,13 +9737,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // --- bo2zm_native_vertex_cache (see the cvar) --------------------------------------------------------------------
   struct VertexCacheEntry;  // with the members, below
   // An offset in offsets_vertices with kVertexPoolTag is in vpools_[(offset >> 61) & 1], not in the upload buffer.
-  static constexpr VkDeviceSize kVertexPoolTag = VkDeviceSize(1) << 62;
-  static constexpr VkDeviceSize kVertexPoolIndex = VkDeviceSize(1) << 61;
-  static constexpr VkDeviceSize kVertexOffsetMask = kVertexPoolIndex - 1;
+  static constexpr gpu::Size kVertexPoolTag = gpu::Size(1) << 62;
+  static constexpr gpu::Size kVertexPoolIndex = gpu::Size(1) << 61;
+  static constexpr gpu::Size kVertexOffsetMask = kVertexPoolIndex - 1;
   // The submissions a pool waits, once left, before it is filled again (3 work slots, with margin).
   static constexpr uint64_t kVertexPoolRest = 8;
 
-  void ResolveVertexBinding(VkDeviceSize tagged, gpu::Buffer upload, gpu::Buffer& buffer, VkDeviceSize& offset) const {
+  void ResolveVertexBinding(gpu::Size tagged, gpu::Buffer upload, gpu::Buffer& buffer, gpu::Size& offset) const {
     if (tagged & kVertexPoolTag) {
       buffer = vpools_[(tagged & kVertexPoolIndex) ? 1 : 0].buffer;
       offset = tagged & kVertexOffsetMask;
@@ -9756,7 +9756,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   void CreateVertexPools() {
     vcache_ab_ = REXCVAR_GET(bo2zm_native_vertex_cache_ab);
     vcache_sum_ab_ = REXCVAR_GET(bo2zm_native_vertex_cache_sum_ab);
-    const VkDeviceSize size = VkDeviceSize(std::clamp(REXCVAR_GET(bo2zm_native_vertex_cache_mb), 4, 256)) << 20;
+    const gpu::Size size = gpu::Size(std::clamp(REXCVAR_GET(bo2zm_native_vertex_cache_mb), 4, 256)) << 20;
     for (VertexPool& pool : vpools_) {
       // In the upload buffer's memory type (written by the CPU, read by the GPU as vertices); index cache too.
       gpu::vulkan::HostBuffer created;
@@ -9830,7 +9830,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   bool VertexCache(const uint8_t* data, uint32_t bytes, xenos::Endian order, uint64_t address,
-                   VkDeviceSize alignment, uint64_t& hash, VkDeviceSize& tagged) {
+                   gpu::Size alignment, uint64_t& hash, gpu::Size& tagged) {
     if (vcache_by_writes_) {
       return VertexCacheByWrites(data, bytes, order, address, alignment, tagged);
     }
@@ -9862,7 +9862,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       return false;
     }
     // The same bytes as last time: one copy into the pool being filled.
-    VkDeviceSize at = 0;
+    gpu::Size at = 0;
     if (!ReserveVertexPool(bytes, alignment, at)) {
       return false;
     }
@@ -9889,7 +9889,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // once into the pool being filled, in the epoch of that copy; later draws bind that copy while no page has a stamp
   // from that epoch on. A range just seen, or written since, is copied into the upload buffer as usual.
   bool VertexCacheByWrites(const uint8_t* data, uint32_t bytes, xenos::Endian order, uint64_t address,
-                           VkDeviceSize alignment, VkDeviceSize& tagged) {
+                           gpu::Size alignment, gpu::Size& tagged) {
     const uint32_t physical = uint32_t(address) & 0x1FFFFFFFu;
     const uint64_t key = (address & 0x1FFFFFFF) | (uint64_t(bytes & 0x3FFFFFF) << 29) | (uint64_t(order) << 55) |
                          (uint64_t(1) << 63);
@@ -9920,7 +9920,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       ++vcache_changed_;
       return false;
     }
-    VkDeviceSize at = 0;
+    gpu::Size at = 0;
     if (!ReserveVertexPool(bytes, alignment, at)) {
       return false;
     }
@@ -9964,26 +9964,26 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * dropped then (as the vertex pools: the one left is never read again before it has rested).
    */
   struct SkinJobRecord {  // the shader's JobRecord (std430)
-    VkDeviceAddress block;
-    VkDeviceAddress inputs;
-    VkDeviceAddress target;
+    gpu::Address block;
+    gpu::Address inputs;
+    gpu::Address target;
     uint32_t count, kernel, bones_word, records_byte, vertices_word, bones_guest, bones_lo, unused;
   };
   static_assert(sizeof(SkinJobRecord) == 56, "the shader's job record");
   struct SkinPush {
-    VkDeviceAddress jobs;
-    VkDeviceAddress groups;
+    gpu::Address jobs;
+    gpu::Address groups;
   };
   static constexpr uint32_t kSkinTableJobs = 4096;     // job records per submission
   static constexpr uint32_t kSkinTableGroups = 32768;  // workgroups of 64 vertices per submission
-  static constexpr VkDeviceSize kSkinTableBytes = VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord) +
-                                                  VkDeviceSize(kSkinTableGroups) * 8;
+  static constexpr gpu::Size kSkinTableBytes = gpu::Size(kSkinTableJobs) * sizeof(SkinJobRecord) +
+                                                  gpu::Size(kSkinTableGroups) * 8;
   // Each of the input cache's two pools. By round 15 in Town they hold ~1 MB in all.
-  static constexpr VkDeviceSize kSkinPoolBytes = VkDeviceSize(8) << 20;
+  static constexpr gpu::Size kSkinPoolBytes = gpu::Size(8) << 20;
 
   // A host-visible buffer the shader reaches by its address (the upload buffer's memory type).
-  bool CreateSkinBuffer(VkDeviceSize size, gpu::Buffer& buffer, gpu::Memory& memory, uint8_t*& data,
-                        VkDeviceAddress& address) {
+  bool CreateSkinBuffer(gpu::Size size, gpu::Buffer& buffer, gpu::Memory& memory, uint8_t*& data,
+                        gpu::Address& address) {
     gpu::vulkan::HostBuffer created;
     const gpu::vulkan::HostBufferResult result = gpu::vulkan::CreateHostBuffer(
         dfn_, device_, address_buffer_, size, gpu::kBufferStorage | gpu::kBufferAddress, upload_type_, created);
@@ -10023,7 +10023,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // The job's whole inputs in the input cache (its records from the word that holds the first one, then its input
   // vertices): their address, or 0 when they must be copied per use. records_words: the records' words there.
-  VkDeviceAddress SkinCachedInputs(const bo2zm::gpu_skin::Job& job, uint32_t halves, uint32_t& records_words) {
+  gpu::Address SkinCachedInputs(const bo2zm::gpu_skin::Job& job, uint32_t halves, uint32_t& records_words) {
     bo2zm::gpu_skin::RendererCounts& counts = bo2zm::gpu_skin::Counts();
     records_words = ((job.records_guest & 3) + job.count * halves * 2 + 3) / 4;
     uint32_t vertices_physical = 0, records_physical = 0;
@@ -10049,7 +10049,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
       counts.guard_fails.fetch_add(1, std::memory_order_relaxed);  // changed without a stamp: copied again
     }
-    const VkDeviceSize need = (VkDeviceSize(records_bytes) + vertices_bytes + 15) & ~VkDeviceSize(15);
+    const gpu::Size need = (gpu::Size(records_bytes) + vertices_bytes + 15) & ~gpu::Size(15);
     SkinPool* pool = &skin_pools_[skin_pool_];
     if (pool->used + need > kSkinPoolBytes) {
       SkinPool& other = skin_pools_[skin_pool_ ^ 1];
@@ -10064,7 +10064,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       ++pool->generation;
       pool->used = 0;
     }
-    const VkDeviceSize at = pool->used;
+    const gpu::Size at = pool->used;
     pool->used += need;
     uint8_t* target = skin_pool_data_ + skin_pool_ * kSkinPoolBytes + at;
     CopyVertices(CopyJob{records, target, records_words, xenos::Endian::k8in32});
@@ -10084,7 +10084,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   bool SkinOnGpu(const uint8_t* data, xenos::Endian order, uint32_t bytes, uint64_t address, uint32_t stride,
-                 bool single, VkDeviceSize& offset) {
+                 bool single, gpu::Size& offset) {
     const auto t0 = std::chrono::steady_clock::now();
     const uint32_t lo = uint32_t(address);
     const uint64_t hi = uint64_t(lo) + bytes;
@@ -10095,7 +10095,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     bo2zm::gpu_skin::RendererCounts& counts = bo2zm::gpu_skin::Counts();
     static constexpr uint32_t kHalves[3] = {1, 3, 5};
     const char* refused = nullptr;
-    VkDeviceSize space = VkDeviceSize(bytes) + stride + 16;  // the output, with ReserveMultiple's padding
+    gpu::Size space = gpu::Size(bytes) + stride + 16;  // the output, with ReserveMultiple's padding
     uint32_t parts = 0, groups = 0;
     if (stride != 32) {
       refused = "stride";
@@ -10159,13 +10159,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
       const uint32_t halves = kHalves[job->kernel];
       const uint32_t bones_bytes = uint32_t(job->bones.size());
       uint32_t records_words = 0;
-      VkDeviceAddress inputs = SkinCachedInputs(*job, halves, records_words);
+      gpu::Address inputs = SkinCachedInputs(*job, halves, records_words);
       // Not cached: the part's records, from the word that holds vertex v0's first one, and vertices after the bones.
       const uint32_t records_from = job->records_guest + v0 * halves * 2;
       const uint32_t records_word0 = records_from & ~3u;
       const uint32_t part_records_words = (records_from + n * halves * 2 - records_word0 + 3) / 4;
       const uint32_t block_bytes = 128 + bones_bytes + (inputs ? 0 : part_records_words * 4 + n * 24);
-      VkDeviceSize block = 0;
+      gpu::Size block = 0;
       Reserve(block_bytes, 16, block);
       uint8_t* at = upload_data_ + block;
       std::memcpy(at, job->constants, 128);
@@ -10192,11 +10192,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
         record.vertices_word = part_records_words;
         counts.uncached.fetch_add(1, std::memory_order_relaxed);
       }
-      std::memcpy(table_data + VkDeviceSize(table.jobs) * sizeof(SkinJobRecord), &record, sizeof(record));
-      uint8_t* const group_data = table_data + VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord);
+      std::memcpy(table_data + gpu::Size(table.jobs) * sizeof(SkinJobRecord), &record, sizeof(record));
+      uint8_t* const group_data = table_data + gpu::Size(kSkinTableJobs) * sizeof(SkinJobRecord);
       for (uint32_t g = 0; g < n; g += 64) {
         const uint32_t entry[2] = {table.jobs, g};
-        std::memcpy(group_data + VkDeviceSize(table.groups++) * 8, entry, 8);
+        std::memcpy(group_data + gpu::Size(table.groups++) * 8, entry, 8);
       }
       ++table.jobs;
       per_use += block_bytes;
@@ -10204,8 +10204,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       counts.dispatches.fetch_add(1, std::memory_order_relaxed);
       if (job->cpu_written) {
         // bo2zm_gpu_skin_check: the CPU kernel's output, copied next to it, compared when the buffer comes back.
-        VkDeviceSize cpu = 0;
-        Reserve(VkDeviceSize(n) * 32, 16, cpu);
+        gpu::Size cpu = 0;
+        Reserve(gpu::Size(n) * 32, 16, cpu);
         CopyVertices(CopyJob{data + (first - lo), upload_data_ + cpu, n * 8, order});
         skin_checks_.push_back({slot_current_, offset + (first - lo), cpu, n, job->kernel, uint32_t(first)});
       }
@@ -10248,16 +10248,16 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     }
     for (SkinPool& pool : skin_pools_) {
-      pool.dirty_lo = ~VkDeviceSize(0);
+      pool.dirty_lo = ~gpu::Size(0);
       pool.dirty_hi = 0;
     }
     if (!skin_bound_) {
       gpu_.BindComputePipeline(upload, skin_pipeline_);
       skin_bound_ = true;
     }
-    const VkDeviceAddress base = skin_table_address_ + slot_current_ * kSkinTableBytes;
-    const SkinPush push{base, base + VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord) +
-                                  VkDeviceSize(table.dispatched) * 8};
+    const gpu::Address base = skin_table_address_ + slot_current_ * kSkinTableBytes;
+    const SkinPush push{base, base + gpu::Size(kSkinTableJobs) * sizeof(SkinJobRecord) +
+                                  gpu::Size(table.dispatched) * 8};
     gpu_.PushConstants(upload, skin_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     gpu_.Dispatch(upload, table.groups - table.dispatched, 1, 1);
     table.dispatched = table.groups;
@@ -10301,7 +10301,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * the first 2,000.
    */
   bool IndexCacheByWrites(const uint8_t* data, uint32_t count, bool flip, uint32_t physical, uint32_t order,
-                          uint32_t& min, uint32_t& max, VkDeviceSize& tagged) {
+                          uint32_t& min, uint32_t& max, gpu::Size& tagged) {
     const uint32_t bytes = count * 2;
     const uint64_t key = physical | (uint64_t(count & 0x3FFFFFF) << 29) | (uint64_t(order & 3) << 55) |
                          (uint64_t(1) << 62) | (uint64_t(1) << 63);
@@ -10334,7 +10334,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       ++icache_changed_;
       return false;
     }
-    VkDeviceSize at = 0;
+    gpu::Size at = 0;
     if (!ReserveVertexPool(bytes, 4, at)) {
       ++icache_full_;
       return false;
@@ -10470,10 +10470,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // Room in the pool being filled; when it is full, the other one (if it has rested), dropping the full one's copies.
-  bool ReserveVertexPool(uint32_t bytes, VkDeviceSize alignment, VkDeviceSize& at) {
+  bool ReserveVertexPool(uint32_t bytes, gpu::Size alignment, gpu::Size& at) {
     for (int attempt = 0; attempt < 2; ++attempt) {
       VertexPool& pool = vpools_[vpool_];
-      const VkDeviceSize start = (pool.used + alignment - 1) / alignment * alignment;
+      const gpu::Size start = (pool.used + alignment - 1) / alignment * alignment;
       if (start + bytes <= pool.size) {
         pool.used = start + bytes;
         at = start;
@@ -10499,11 +10499,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
     for (VertexPool& pool : vpools_) {
       if (pool.dirty_hi > pool.dirty_lo) {
         if (!vcache_coherent_) {
-          const VkDeviceSize lo = pool.dirty_lo & ~VkDeviceSize(255);
+          const gpu::Size lo = pool.dirty_lo & ~gpu::Size(255);
           rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, pool.memory, upload_type_, lo, pool.size_real,
                                                         pool.dirty_hi - lo);
         }
-        pool.dirty_lo = ~VkDeviceSize(0);
+        pool.dirty_lo = ~gpu::Size(0);
         pool.dirty_hi = 0;
       }
     }
@@ -10648,7 +10648,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!REXCVAR_GET(bo2zm_native_diag_upload_memory)) {
       return;
     }
-    constexpr VkDeviceSize kBytes = VkDeviceSize(8) << 20;
+    constexpr gpu::Size kBytes = gpu::Size(8) << 20;
     std::vector<uint8_t> source(static_cast<size_t>(kBytes));
     for (size_t i = 0; i < source.size(); ++i) {
       source[i] = uint8_t((i * 131) ^ (i >> 11));
@@ -10746,7 +10746,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (diag_mips_) {
       REXLOG_INFO("[native] C3: mip diagnostic (bo2zm_native_diag_mips) = YES");
     }
-    alignment_ubo_ = std::max<VkDeviceSize>(16, vulkan_device_->properties().minUniformBufferOffsetAlignment);
+    alignment_ubo_ = std::max<gpu::Size>(16, vulkan_device_->properties().minUniformBufferOffsetAlignment);
     alternate_ubo_s_ = REXCVAR_GET(bo2zm_native_constants_ubo_alternate_s);
     REXLOG_INFO("[native] C6: constants by dynamic UBO (bo2zm_native_constants_ubo) = {}; alternate every {} s; "
                 "alignment {} bytes",
@@ -11310,7 +11310,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   void PrepareTexture(const uint32_t* f, uint32_t& slot, uint32_t& heap,
-                       VkDeviceSize& bytes_upload, bool& sampling_point, uint64_t& valid_until,
+                       gpu::Size& bytes_upload, bool& sampling_point, uint64_t& valid_until,
                        uint32_t& width_host_out, uint32_t& height_host_out) {
     slot = 0;
     heap = 0;
@@ -12993,7 +12993,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (gpu::vulkan::CreateImage(dfn_, device_, info, image_pool)) {
         const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image_pool);
         gpu::Memory block = nullptr;
-        VkDeviceSize offset = 0;
+        gpu::Size offset = 0;
         uint32_t id_block = 0xFFFFFFFFu;
         if (pool_textures_.Reserve(req, block, offset, id_block) &&
             gpu::vulkan::BindImage(dfn_, device_, image_pool, block, offset) == VK_SUCCESS) {
@@ -13077,7 +13077,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!upload || !texture.needs_upload) {
       return upload != nullptr;
     }
-    VkDeviceSize offset;
+    gpu::Size offset;
     if (!texture.regions_partial.empty()) {  // some rows of a 3D texture (UpdateVolume)
       Reserve(texture.data.size(), 16, offset);
       std::memcpy(upload_data_ + offset, texture.data.data(), texture.data.size());
@@ -13141,7 +13141,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // One range per mip level (with all its layers). Factored out for UploadTexture and for the deferred
   // copies of CollectBindings.
-  void RecordCopyTexture(gpu::CommandList upload, const CachedTexture& texture, VkDeviceSize offset) {
+  void RecordCopyTexture(gpu::CommandList upload, const CachedTexture& texture, gpu::Size offset) {
     std::array<VkBufferImageCopy, 16> copies{};
     for (uint32_t n = 0; n < texture.levels; ++n) {
       VkBufferImageCopy& copy = copies[n];
@@ -16192,10 +16192,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
   gpu::Buffer upload_ = nullptr;
   gpu::Memory upload_memory_ = nullptr;
   uint32_t upload_type_ = UINT32_MAX;
-  VkDeviceSize upload_size_real_ = 0;
+  gpu::Size upload_size_real_ = 0;
   uint8_t* upload_data_ = nullptr;
-  VkDeviceAddress upload_address_ = 0;
-  VkDeviceSize upload_used_ = 0;
+  gpu::Address upload_address_ = 0;
+  gpu::Size upload_used_ = 0;
   bool upload_coherent_ = false;
   uint64_t epoch_upload_ = 0;
   uint64_t frame_ = 0;
@@ -16272,9 +16272,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
   struct UploadBuffer {
     gpu::Buffer buffer = nullptr;
     gpu::Memory guest_memory = nullptr;
-    VkDeviceSize size_real = 0;
+    gpu::Size size_real = 0;
     uint8_t* data = nullptr;
-    VkDeviceAddress address = 0;
+    gpu::Address address = 0;
   };
   // One per work slot (there are 3). With fewer than there are slots, two slots would share a buffer and
   // the CPU would write over what the GPU is still reading.
@@ -16288,7 +16288,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   gpu::Buffer skin_table_buffer_ = nullptr;
   gpu::Memory skin_table_memory_ = nullptr;
   uint8_t* skin_table_data_ = nullptr;
-  VkDeviceAddress skin_table_address_ = 0;
+  gpu::Address skin_table_address_ = 0;
   struct SkinTable {
     uint32_t jobs = 0, groups = 0, dispatched = 0;
   };
@@ -16297,12 +16297,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   gpu::Buffer skin_pool_buffer_ = nullptr;
   gpu::Memory skin_pool_memory_ = nullptr;
   uint8_t* skin_pool_data_ = nullptr;
-  VkDeviceAddress skin_pool_address_ = 0;
+  gpu::Address skin_pool_address_ = 0;
   struct SkinPool {
-    VkDeviceSize used = 0;
+    gpu::Size used = 0;
     uint64_t generation = 1;
     uint64_t left = 0;  // frame_ when the filling moved to the other pool
-    VkDeviceSize dirty_lo = ~VkDeviceSize(0), dirty_hi = 0;
+    gpu::Size dirty_lo = ~gpu::Size(0), dirty_hi = 0;
   };
   std::array<SkinPool, 2> skin_pools_{};
   uint32_t skin_pool_ = 0;
@@ -16310,7 +16310,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint32_t records_guest = 0;
     uint32_t pool = 0;
     uint64_t generation = 0;
-    VkDeviceSize offset = 0;
+    gpu::Size offset = 0;
     uint32_t epoch = 0;
     uint32_t uses = 0;
     uint64_t sum = 0;
@@ -16319,8 +16319,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::vector<bo2zm::gpu_skin::JobRef> skin_jobs_;
   struct SkinCheck {
     uint32_t upload;     // which upload buffer
-    VkDeviceSize gpu;    // the dispatch's output
-    VkDeviceSize cpu;    // the CPU kernel's, copied
+    gpu::Size gpu;    // the dispatch's output
+    gpu::Size cpu;    // the CPU kernel's, copied
     uint32_t vertices;
     uint32_t kernel;
     uint32_t physical;
@@ -16333,8 +16333,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint32_t shared_type_ = 0;
   uint8_t* shared_data_ = nullptr;
   gpu::Memory shared_memory_ = nullptr;
-  VkDeviceSize shared_size_real_ = 0;
-  VkDeviceSize shared_used_ = 0;
+  gpu::Size shared_size_real_ = 0;
+  gpu::Size shared_used_ = 0;
   uint64_t shared_bytes_published_ = 0;
 
   std::array<gpu::SetLayout, 4> layouts_{};
@@ -16343,7 +16343,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   gpu::PipelineLayout layout_pipeline_ = nullptr;
   // Set 4, the constants through dynamic UBOs. One set per upload slot (each one is a VkBuffer).
   bool use_ubo_ = false;
-  VkDeviceSize alignment_ubo_ = 256;
+  gpu::Size alignment_ubo_ = 256;
   gpu::SetLayout layout_ubo_ = nullptr;
   gpu::SetPool pool_ubo_ = nullptr;
   std::array<gpu::Set, kSlotsOfJob> sets_ubo_{};  // one per work slot
@@ -16615,7 +16615,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   const ShaderInput* constants_ps_shader_ = nullptr;
   int32_t prefetch_ = -1;  // bo2zm_native_prefetch_cache_lines: -1 = not read yet
   bool prefetch_ab_ = false, prefetch_lines_ = false;
-  VkDeviceSize indices_pool_ = 0;
+  gpu::Size indices_pool_ = 0;
   uint64_t icache_hits_ = 0, icache_bytes_hit_ = 0, icache_filled_ = 0, icache_bytes_filled_ = 0, icache_changed_ = 0;
   uint64_t icache_full_ = 0, icache_guard_seen_ = 0, icache_checked_ = 0, icache_unstamped_ = 0;
   uint64_t icache_unstamped_interval_ = 0;
@@ -16629,7 +16629,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool fewer_copies_ = false, shared_swap_ = false;
   uint64_t shared_observed_ = 0;    // C6 report, to decide how to make the block cheaper
   uint64_t shared_changed_ = 0;
-  VkDeviceSize shared_offset_ = 0;
+  gpu::Size shared_offset_ = 0;
   uint64_t shared_epoch_ = UINT64_MAX;
 
   VertexInput input_;
@@ -16656,10 +16656,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   uint64_t constants_vs_generation_ = UINT64_MAX;
   uint64_t constants_vs_epoch_ = UINT64_MAX;
-  VkDeviceSize constants_vs_offset_ = 0;
+  gpu::Size constants_vs_offset_ = 0;
   uint64_t constants_ps_generation_ = UINT64_MAX;
   uint64_t constants_ps_epoch_ = UINT64_MAX;
-  VkDeviceSize constants_ps_offset_ = 0;
+  gpu::Size constants_ps_offset_ = 0;
   uint32_t constants_vs_bytes_ = 0;
   uint32_t constants_ps_bytes_ = 0;
 
@@ -16754,7 +16754,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     bool with_stencil = false;
     uint32_t stencil[2] = {};          // RB_STENCILREFMASK for front and back
     uint32_t n_bindings = 0;
-    std::array<VkDeviceSize, 16> offsets_vertices{};
+    std::array<gpu::Size, 16> offsets_vertices{};
     bool with_indices = false;
     bool indices_16 = false;
     uint32_t indices = 0;
@@ -16813,7 +16813,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint64_t sky_position_sum_previous_ = 0;
   uint64_t sky_position_max_ = 0;
   // The last binding made with vkCmdBindVertexBuffers, so it is not repeated.
-  std::array<VkDeviceSize, 16> offsets_recorded_{};
+  std::array<gpu::Size, 16> offsets_recorded_{};
   uint32_t bindings_recorded_ = 0;
   uint64_t bindings_saved_ = 0;
   // bo2zm_native_zero_base_vertices (see the cvar) and its guard.
@@ -16882,7 +16882,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   struct BindRequest {
     gpu::Image image = nullptr;
     gpu::Memory guest_memory = nullptr;
-    VkDeviceSize offset = 0;
+    gpu::Size offset = 0;
     VkResult result = VK_NOT_READY;  // written by the thread, under bindings_mutex_
     uint64_t ns = 0;                    // wall time inside vkBindImageMemory, on the thread
   };
@@ -16898,7 +16898,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint32_t depth3d = 0;
     uint32_t levels = 1;
     bool copy = false;  // UploadTexture already left its data in the upload buffer
-    VkDeviceSize copy_offset = 0;
+    gpu::Size copy_offset = 0;
     uint64_t copy_epoch = 0;
     gpu::CommandList copy_commands = nullptr;
   };
@@ -17094,11 +17094,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
     gpu::Buffer buffer = nullptr;
     gpu::Memory memory = nullptr;
     uint8_t* data = nullptr;
-    VkDeviceSize size = 0;
-    VkDeviceSize size_real = 0;
-    VkDeviceSize used = 0;
+    gpu::Size size = 0;
+    gpu::Size size_real = 0;
+    gpu::Size used = 0;
     uint64_t frame_left = 0;  // when the cache last stopped filling it (frame_)
-    VkDeviceSize dirty_lo = ~VkDeviceSize(0), dirty_hi = 0;  // written in this submission
+    gpu::Size dirty_lo = ~gpu::Size(0), dirty_hi = 0;  // written in this submission
   };
   struct VertexCacheEntry {
     uint64_t key = 0;        // address, bytes and order (VertexCache); 0 = empty
@@ -17107,7 +17107,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint64_t hash_pool = 0;  // XXH3 | 1 of the bytes of its persistent copy (0: none)
     uint64_t sum_pool = 0;   // ChangeSum | 1 of the same bytes
     bool seen_by_sum = false;  // hash_seen is a ChangeSum
-    VkDeviceSize offset = 0;
+    gpu::Size offset = 0;
     uint32_t pool = 0;
     uint32_t generation = 0;  // the copy is valid while vpool_generation_[pool] is this
     uint32_t copy_epoch = 0;  // by writes: the epoch of its pool copy (0 = none)

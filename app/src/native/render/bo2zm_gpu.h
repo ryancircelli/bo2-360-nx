@@ -146,6 +146,11 @@ inline constexpr BufferUsage kBufferIndex = 0x40;
 inline constexpr BufferUsage kBufferVertex = 0x80;
 inline constexpr BufferUsage kBufferAddress = 0x20000;  // the shaders reach it by its GPU address
 
+// A size or offset in GPU memory, and a buffer's GPU address (Vulkan's VkDeviceSize and VkDeviceAddress; Metal's
+// NSUInteger lengths and MTLBuffer.gpuAddress).
+using Size = uint64_t;
+using Address = uint64_t;
+
 // An image format, in Vulkan's numbering (VkFormat); the Metal backend maps it to its MTLPixelFormat with a table.
 using Format = uint32_t;
 
