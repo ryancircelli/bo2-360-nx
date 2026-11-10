@@ -1536,9 +1536,11 @@ constexpr uint32_t kCapacityHeap[4] = {16384, 64, 256, 512};  // 2D, 3D, cube, s
 // for them, and it has to match the array in bo2zm_native_targets.cpp.
 constexpr size_t kSlotsOfJob = 3;
 constexpr VkDeviceSize kSizeUpload = VkDeviceSize(64) << 20;
-// Separate buffer for the shared constants, per slot. ~1,400 draws x 512 bytes = 0.7 MB per frame; if it
-// fills up, the work is submitted just as with the upload buffer.
-constexpr VkDeviceSize kSizeShared = VkDeviceSize(4) << 20;  // per work slot (there are three)
+// Separate buffer for the shared constants, per slot. Each draw takes 688 bytes (kUboBytesShared) plus the
+// alignment: ~1,400 draws = 1 MB per frame with one player. If it fills up, the work is submitted just as with
+// the upload buffer, and the ring waits for the GPU in the middle of the frame. 4 MB held about 5,950 draws,
+// which four-player split screen (about 5,600 draws, 8,300 in the BO1 port) reaches; 16 MB holds about 23,800.
+constexpr VkDeviceSize kSizeShared = VkDeviceSize(16) << 20;  // per work slot (there are three)
 // The pipeline cache and the prewarm list go in a single file in <NRO folder>/cache/ (nothing loose next to
 // the NRO, and a single pipelines .bin). Header "BZPC", version, list bytes and cache bytes (two uint32
 // and two uint64), then both parts: the list as is (its "BZPL" header and the records) and the
