@@ -17,6 +17,10 @@ DEFINE_int32(metal_backend_telemetry_interval, 120,
              "Number of guest swaps between Metal backend telemetry summaries. "
              "Set to 0 to log only on shutdown.",
              "Metal");
+DEFINE_bool(metal_dedupe_gpu_access, true,
+            "Skip marking a shared memory range as GPU-accessed again when it "
+            "was already marked for the same submission.",
+            "Metal");
 DEFINE_bool(metal_encode_thread, false,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",

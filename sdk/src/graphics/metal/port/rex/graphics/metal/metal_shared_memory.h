@@ -14,6 +14,7 @@
 // Metal shared memory keeps a Metal-owned guest-memory buffer and updates dirty
 // guest ranges through submission-owned upload staging buffers.
 
+#include <array>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -384,6 +385,20 @@ class MetalSharedMemory : public SharedMemory {
   MetalCommandProcessor& command_processor_;
   std::unique_ptr<MetalUploadBufferPool> upload_buffer_pool_;
   std::vector<uint64_t> page_last_main_gpu_access_submission_;
+  // MarkGpuAccess dedupe: draws in one submission mark the same vertex and
+  // index ranges again and again (four times per frame in split screen), and
+  // each call walks every page of the range. A range already marked for the
+  // current submission is skipped; the result is identical because the page
+  // values only ever take the max.
+  struct MarkedGpuAccessRange {
+    uint32_t start = 0;
+    uint32_t length = 0;
+    uint64_t submission = 0;
+  };
+  static constexpr uint32_t kMarkedGpuAccessCacheSize = 1024;
+  std::array<MarkedGpuAccessRange, kMarkedGpuAccessCacheSize>
+      marked_gpu_access_cache_{};
+  bool dedupe_gpu_access_ = true;
   std::vector<uint64_t> page_last_gpu_write_submission_;
   std::vector<uint64_t> page_last_staged_copy_submission_;
   std::vector<uint64_t> page_last_precommit_copy_submission_;
