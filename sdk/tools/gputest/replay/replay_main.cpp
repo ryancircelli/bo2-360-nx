@@ -141,10 +141,12 @@ int main(int argc, char** argv) {
   char* fake_argv[] = {arg0, nullptr};
   rex::cvar::Init(1, fake_argv);
   rex::cvar::ApplyEnvironment();
+  // Cvars defined inside the plugin register when it is loaded; retry those
+  // after dlopen.
+  std::vector<std::pair<std::string, std::string>> plugin_cvars;
   for (auto& [name, value] : cvars) {
     if (!rex::cvar::SetFlagByName(name, value)) {
-      std::fprintf(stderr, "unknown cvar %s\n", name.c_str());
-      return 2;
+      plugin_cvars.emplace_back(name, value);
     }
   }
   rex::cvar::FinalizeInit();
@@ -155,6 +157,12 @@ int main(int argc, char** argv) {
   if (!lib) {
     std::fprintf(stderr, "cannot load plugin %s: %s\n", plugin_path.c_str(), dlerror());
     return 1;
+  }
+  for (auto& [name, value] : plugin_cvars) {
+    if (!rex::cvar::SetFlagByName(name, value)) {
+      std::fprintf(stderr, "unknown cvar %s\n", name.c_str());
+      return 2;
+    }
   }
   auto abi_fn = reinterpret_cast<rex::system::GpuAbiVersionFn>(
       dlsym(lib, rex::system::kGpuAbiVersionSymbol));
