@@ -2159,10 +2159,10 @@ void MslShaderTranslator::EmitScalarOp(const ParsedAluInstruction& instr,
     case AluScalarOpcode::kMaxAs:
     case AluScalarOpcode::kMaxAsf:
       if (instr.scalar_opcode == AluScalarOpcode::kMaxAsf) {
-        Line("a0 = int(fast::min(fast::max(fast::floor({}), 0.0f), 255.0f));",
+        Line("a0 = int(fast::min(fast::max(fast::floor({}), -256.0f), 255.0f));",
              a);
       } else {
-        Line("a0 = int(fast::min(fast::max(fast::floor({} + 0.5f), 0.0f), "
+        Line("a0 = int(fast::min(fast::max(fast::floor({} + 0.5f), -256.0f), "
              "255.0f));",
              a);
       }

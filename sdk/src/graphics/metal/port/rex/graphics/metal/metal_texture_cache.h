@@ -888,6 +888,11 @@ class MetalTextureCache : public TextureCache {
   };
   std::vector<DirectLoadVerify> direct_load_verify_;
   static bool TexLoadDirectVerify();
+  // [cpu-source-watch] see LoadTextureDataFromCpuGuestMemory.
+  static bool CpuSourceWatchFirst();
+  static void CpuSourceWatchThunk(const global_unique_lock_type& global_lock,
+                                  void* context, void* data, uint64_t argument,
+                                  bool invalidated_by_gpu);
   uint32_t deferred_upload_batch_depth_ = 0;
   MTL::CommandBuffer* precommit_target_cb_ = nullptr;
   struct PrecommitVerifySample {
