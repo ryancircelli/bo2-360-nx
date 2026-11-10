@@ -2304,11 +2304,11 @@ uint32_t CodeRemap(uint32_t original, uint32_t patched) {
   return code;
 }
 
-VkFormat FormatAttribute(uint32_t format, bool input_whole, bool with_sign, bool whole,
+gpu::Format FormatAttribute(uint32_t format, bool input_whole, bool with_sign, bool whole,
                          bool red_blue, bool& r11g11b10) {
   r11g11b10 = false;
-  const auto choose = [&](VkFormat unorm, VkFormat snorm, VkFormat uscaled, VkFormat sscaled,
-                          VkFormat uint_, VkFormat sint) {
+  const auto choose = [&](gpu::Format unorm, gpu::Format snorm, gpu::Format uscaled, gpu::Format sscaled,
+                          gpu::Format uint_, gpu::Format sint) {
     if (input_whole) {
       return with_sign ? sint : uint_;
     }
@@ -2384,7 +2384,7 @@ constexpr uint16_t kSwizzleRGBA = (1 << 3) | (2 << 6) | (3 << 9);
 constexpr uint16_t kSwizzleBGRA = 2 | (1 << 3) | (0 << 6) | (3 << 9);
 
 struct HostTextureFormat {
-  VkFormat format = VK_FORMAT_UNDEFINED;
+  gpu::Format format = VK_FORMAT_UNDEFINED;
   uint8_t block = 1;       // texels per block side
   uint8_t bytes = 1;        // bytes per block
   uint8_t unit_order = 0;  // 0 = no byte swap, else 2 or 4 bytes
@@ -2482,7 +2482,7 @@ void MappingComponents(uint32_t swizzle_guest, uint16_t swizzle_host, uint32_t o
 struct VertexAttribute {
   uint32_t location;
   uint32_t binding;
-  VkFormat format;
+  gpu::Format format;
   uint32_t offset;
 };
 
@@ -7470,8 +7470,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * thread. false = nothing was touched and the caller continues through CreateTexture: thread off, pool off
    * or full, queue full, or (in the observing phase) a failed bind whose fallback path also failed.
    */
-  bool CreateTextureInThread(CachedTexture& texture, VkFormat format, uint32_t width, uint32_t height, uint32_t layers,
-                          uint32_t depth3d, uint32_t levels) {
+  bool CreateTextureInThread(CachedTexture& texture, gpu::Format format, uint32_t width, uint32_t height,
+                             uint32_t layers, uint32_t depth3d, uint32_t levels) {
     if (bindings_phase_ == kBindingsNoDecide) {
       DecideBindings();
     }
@@ -7545,7 +7545,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // SlotView for an image with its bind in flight: the slot now, the view in CollectBindings.
-  uint32_t SlotViewInFlight(uint64_t key, gpu::Image image, VkFormat format, uint32_t swizzle,
+  uint32_t SlotViewInFlight(uint64_t key, gpu::Image image, gpu::Format format, uint32_t swizzle,
                               uint16_t swizzle_host, uint32_t heap) {
     View view;
     view.image = image;
@@ -11045,7 +11045,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                     d1 & 0xFFF, code);
       }
       bool r11g11b10 = false;
-      const VkFormat vk = FormatAttribute(format, InputWhole(element.use), (d1 >> 12) & 0x1,
+      const gpu::Format vk = FormatAttribute(format, InputWhole(element.use), (d1 >> 12) & 0x1,
                                           (d1 >> 13) & 0x1, false, r11g11b10);
       if (vk == VK_FORMAT_UNDEFINED) {
         Reject(300 + format, "vertex format not supported yet");
@@ -11236,7 +11236,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return hash;
   }
 
-  bool ReuseByContent(CachedTexture& texture, uint64_t key, uint64_t shape_content, VkFormat format,
+  bool ReuseByContent(CachedTexture& texture, uint64_t key, uint64_t shape_content, gpu::Format format,
                       uint32_t width_host, uint32_t height_host, uint32_t levels, uint32_t layers, uint64_t hash_raw,
                       uint32_t address) {
     const uint64_t content =
@@ -12237,7 +12237,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // The content key of a texture with a valid raw hash. Never 0 (0 = not recorded).
-  static uint64_t KeyContentOf(uint64_t shape_content, VkFormat format, uint32_t levels, uint32_t width,
+  static uint64_t KeyContentOf(uint64_t shape_content, gpu::Format format, uint32_t levels, uint32_t width,
                                uint32_t height, uint32_t layers, uint64_t hash_raw) {
     const uint64_t shape_parts[4] = {shape_content, (uint64_t(format) << 32) | levels,
                                      (uint64_t(width) << 32) | height, layers};
@@ -12971,7 +12971,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // A texture's description, factored out so CreateTexture and CreateTextureInThread create exactly the
   // same image.
-  static gpu::ImageDesc InfoImageTexture(VkFormat format, uint32_t width, uint32_t height, uint32_t layers,
+  static gpu::ImageDesc InfoImageTexture(gpu::Format format, uint32_t width, uint32_t height, uint32_t layers,
                                          uint32_t depth3d, uint32_t levels) {
     gpu::ImageDesc info;
     info.volume = depth3d != 0;
@@ -13020,7 +13020,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // `emergency` = false only from CollectBindings. Half the cache cannot be released there: that waits
   // for the GPU by submitting the work, and we are inside BeforeSubmit. Out of memory: false, and the
   // texture is recreated later.
-  bool CreateTexture(NativeImage& image, VkFormat format, uint32_t width, uint32_t height,
+  bool CreateTexture(NativeImage& image, gpu::Format format, uint32_t width, uint32_t height,
                     uint32_t layers = 1, uint32_t depth3d = 0, uint32_t levels = 1, bool emergency = true) {
     const gpu::ImageDesc info = InfoImageTexture(format, width, height, layers, depth3d, levels);
     /*
@@ -13155,8 +13155,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // A texture's view, the same for SlotView and for the deferred views of CollectBindings.
-  VkResult CreateViewTexture(gpu::Image image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap,
-                             gpu::ImageView& view) {
+  VkResult CreateViewTexture(gpu::Image image, gpu::Format format, uint32_t swizzle, uint16_t swizzle_host,
+                             uint32_t heap, gpu::ImageView& view) {
     gpu::ViewDesc desc;
     desc.type = heap == 2 ? gpu::kViewCube : heap == 1 ? gpu::kView3D : gpu::kView2D;
     desc.format = format;
@@ -13174,7 +13174,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // Heap slot (0 for 2D textures, 2 for cubemaps) for a view of the image with that swizzle.
-  uint32_t SlotView(gpu::Image image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host,
+  uint32_t SlotView(gpu::Image image, gpu::Format format, uint32_t swizzle, uint16_t swizzle_host,
                        uint32_t heap = 0) {
     const uint64_t key = KeyView(image, swizzle, swizzle_host, heap);  // The same key
     if (const auto it = views_.find(key); it != views_.end()) {
@@ -15460,7 +15460,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       VertexInput input;
       for (uint32_t k = 0; k < r.n_attributes; ++k) {
         const RegisterAttribute& a = r.attributes[k];
-        input.attributes.push_back({a.location, a.binding, VkFormat(a.format), a.offset});
+        input.attributes.push_back({a.location, a.binding, gpu::Format(a.format), a.offset});
       }
       for (uint32_t k = 0; k < r.n_bindings; ++k) {
         input.bindings.push_back({0, r.strides[k]});
@@ -16891,7 +16891,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint64_t ticket = 0;
     gpu::Image image = nullptr;  // the queued one (to remove it from images_in_flight_ and move its views)
     VkResult result = VK_NOT_READY;
-    VkFormat format = VK_FORMAT_UNDEFINED;  // the fields below, to recreate it through CreateTexture if the bind fails
+    // The fields below, to recreate it through CreateTexture if the bind fails.
+    gpu::Format format = VK_FORMAT_UNDEFINED;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t layers = 1;
@@ -16905,7 +16906,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   struct ViewInFlight {  // ring thread only
     uint64_t key = 0;
     gpu::Image image = nullptr;
-    VkFormat format = VK_FORMAT_UNDEFINED;
+    gpu::Format format = VK_FORMAT_UNDEFINED;
     uint32_t swizzle = 0;
     uint16_t swizzle_host = 0;
     uint32_t heap = 0;
