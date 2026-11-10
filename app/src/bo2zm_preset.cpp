@@ -156,6 +156,26 @@ REXCVAR_DEFINE_INT32(bo2zm_front_end_test_s, 0, "Graphics",
                      "rate is logged as '[preset] front end test'. 0 = off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Split screen. The 360 game itself changes no render, LOD or draw distance dvar for split screen (its
+// default_splitscreen.cfg only scales the HUD and compass; its LOD choice, sub_828AF1E8, uses the view's field of view
+// and r_lodScale*, with no term for the view's size), so with four players every view costs what the one view did:
+// about 1,400 draws and the game's whole scene preparation, four times a frame. Two things are scaled here instead,
+// once the game reports more than one local view (splitscreen_playerCount):
+//  - every option is capped at bo2zm_splitscreen_preset's level (the player's applies when it is lower);
+//  - the model detail factor is multiplied by bo2zm_splitscreen_model_scale with three or four views (each view is
+//    half as wide and half as tall, so a model at twice the distance covers the pixels it did in one view) and by its
+//    square root with two (half as tall only). The version a model gets therefore matches its size on screen, as in
+//    one view.
+REXCVAR_DEFINE_STRING(bo2zm_splitscreen_preset, "lowest", "Graphics",
+                      "Split screen: the highest level each option gets while more than one player plays on this "
+                      "machine, as this preset's (the player's applies when it is lower). \"same\" = no cap")
+    .allowed({"same", "lowest", "very_low", "low", "medium", "high"});
+REXCVAR_DEFINE_DOUBLE(bo2zm_splitscreen_model_scale, 2.0, "Graphics",
+                      "Split screen: the model detail factor is multiplied by this with three or four views and by "
+                      "its square root with two, so models get the version their size on screen calls for. 1 = as "
+                      "with one view")
+    .range(1.0, 4.0);
+
 namespace bo2zm::preset {
 namespace {
 
@@ -612,6 +632,42 @@ void Write32(uint8_t* base, uint32_t address, uint32_t v) {
   std::memcpy(base + address, &v, 4);
 }
 
+// Split screen: the local views the game draws (1-4), from splitscreen_playerCount (an int, its value at +0x18) while
+// splitscreen (a bool, its byte at +0x18) is set. Read on the main thread every frame (EveryFrame); a change re-applies
+// the preset.
+std::atomic<int> g_views{1};
+
+int ReadViews(const uint8_t* base) {
+  static std::optional<bo2zm::dvars::Dvar> splitscreen;
+  static std::optional<bo2zm::dvars::Dvar> count;
+  if (!splitscreen) {
+    splitscreen = bo2zm::dvars::Find("splitscreen");
+  }
+  if (!count) {
+    count = bo2zm::dvars::Find("splitscreen_playerCount");
+  }
+  if (!splitscreen || !count || base[splitscreen->pointer + 0x18] == 0) {
+    return 1;
+  }
+  return std::clamp<int>(int32_t(Read32(base, count->pointer + 0x18)), 1, 4);
+}
+
+// The split-screen cap (a preset index), or -1 with one view or bo2zm_splitscreen_preset = "same".
+int SplitCap() {
+  if (g_views.load(std::memory_order_relaxed) <= 1) {
+    return -1;
+  }
+  const std::string& name = REXCVAR_GET(bo2zm_splitscreen_preset);
+  return name == "same" ? -1 : std::min(IndexOf(name), kHighest);
+}
+
+// The model detail factor's multiplier for the views: bo2zm_splitscreen_model_scale with 3-4, its root with 2.
+float SplitModelScale() {
+  const int views = g_views.load(std::memory_order_relaxed);
+  const double scale = REXCVAR_GET(bo2zm_splitscreen_model_scale);
+  return views >= 3 ? float(scale) : views == 2 ? float(std::sqrt(scale)) : 1.0f;
+}
+
 Value ReadValue(const uint8_t* base, const DvarRecord& r) {
   Value v;
   v.type = r.type;
@@ -704,6 +760,12 @@ void Apply(PPCContext& ctx, uint8_t* base, const char* given_reason) {
   if (cap >= 0) {
     why += std::string(", campaign front end: at most ") + kNames[cap] + ", far objects simple, every model kept";
   }
+  const int split = SplitCap();
+  const int views = g_views.load(std::memory_order_relaxed);
+  if (views > 1) {
+    why += fmt::format(", split screen with {} views: at most {}, model detail factor x{:.2f}", views,
+                       split >= 0 ? kNames[split] : "the player's preset", SplitModelScale());
+  }
   const char* const reason = why.c_str();
   std::string commands;
   std::string changes;
@@ -716,6 +778,9 @@ void Apply(PPCContext& ctx, uint8_t* base, const char* given_reason) {
       levels[o] = kFarSimple;
     } else if (cap >= 0) {
       levels[o] = std::min(levels[o], kPresetLevels[cap][o]);
+    }
+    if (split >= 0 && o != kFar) {
+      levels[o] = std::min(levels[o], kPresetLevels[split][o]);
     }
     level_text += std::string(level_text.empty() ? "" : ", ") + kOptions[o].name + " " +
                   kOptions[o].level_names[levels[o]];
@@ -769,7 +834,8 @@ void Apply(PPCContext& ctx, uint8_t* base, const char* given_reason) {
     }
   }
   g_mips_minus.store(kMipsMinus[levels[kTexture]], std::memory_order_relaxed);
-  g_model_factor.store(ModelDetailNative() ? kModelFactors[levels[kModel]] : 1.0f, std::memory_order_relaxed);
+  g_model_factor.store(ModelDetailNative() ? kModelFactors[levels[kModel]] * SplitModelScale() : 1.0f,
+                       std::memory_order_relaxed);
   // The draw distance: r_zfar's value for the level (0 = the map's own), whether or not FAR OBJECTS moved the dvar.
   float far = 0.0f;
   for (const Setting& s : kSettings) {
@@ -1183,6 +1249,11 @@ void EveryFrame(PPCContext& ctx, uint8_t* base) {
   // Two seconds after the map loads (its scripts set up their dvars first), then on every change.
   if (seconds < 2.0) {
     return;
+  }
+  if (const int views = ReadViews(base); views != g_views.load(std::memory_order_relaxed)) {
+    REXLOG_INFO("[preset] split screen: {} -> {} views", g_views.load(std::memory_order_relaxed), views);
+    g_views.store(views, std::memory_order_relaxed);
+    g_pending.store(true, std::memory_order_relaxed);
   }
   const int index = g_index.load(std::memory_order_relaxed);
   if (!applied || g_pending.exchange(false, std::memory_order_relaxed)) {
