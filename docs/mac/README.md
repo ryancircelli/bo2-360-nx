@@ -42,16 +42,21 @@ printed as NOT MEASURED. Routes: smoke, town_benchmark, town4, splitscreen4, tea
 ## What the build agent must hook in
 
 Existing cvars already cover input and the benchmark (`bo2zm_test_start`, `bo2zm_test_buttons[_p2.._p4]`,
-`bo2zm_test_god`, `bo2zm_benchmark`). Missing, in priority order:
+`bo2zm_test_god`, `bo2zm_benchmark`). Done:
 
-1. `bo2zm_perf_log` (env `REX_BO2ZM_PERF_LOG`): write the log in `perf-log-format.md`. Without it the harness falls
-   back to the `[benchmark]` line (average, median, p99 only).
-2. `window_start_minimized` (env `REX_WINDOW_START_MINIMIZED`): start the window minimized; also honour
-   `SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0`. Until then the window may appear in front.
-3. `bo2zm_video_rgba` (env `REX_BO2ZM_VIDEO_RGBA`): record presented frames as raw rgba plus `<name>.txt`
+* `bo2zm_perf_log` (env `REX_BO2ZM_PERF_LOG`, `app/src/bo2zm_perf_log.cpp`): the log in `perf-log-format.md`, from
+  the native renderer. `segment` and `route_end` come from the benchmark route (`bo2zm_benchmark`); the `route` and
+  `players` header lines from `BO2ZM_ROUTE` and `BO2ZM_PLAYERS`, which `boot_test.sh` exports. Without the cvar the
+  harness falls back to the `[benchmark]` line (average, median, p99 only).
+* `window_start_minimized` (env `REX_WINDOW_START_MINIMIZED`, SDK `src/ui/window_sdl.cpp`): the window starts
+  minimized, windowed, and without activating the app.
+
+Missing, in priority order:
+
+1. `bo2zm_video_rgba` (env `REX_BO2ZM_VIDEO_RGBA`): record presented frames as raw rgba plus `<name>.txt`
    (`w h fps count`), as peggle1-nx does with `REX_PEGGLE1_VIDEO_*`. Needed for `--video` and `--reference`.
-4. `bo2zm_pso_record`, `bo2zm_pso_verify`, loading of `bo2zm_pso.psolist` (`pso-list-format.md`).
-5. Route timings: `town_benchmark.route` button timings and the whole split screen route need real values from a run.
+2. `bo2zm_pso_record`, `bo2zm_pso_verify`, loading of `bo2zm_pso.psolist` (`pso-list-format.md`).
+3. Route timings: `town_benchmark.route` button timings and the whole split screen route need real values from a run.
 
 ## Credits
 

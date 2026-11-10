@@ -167,6 +167,8 @@ class NativeTargets {
   //  output submissions, ns in the lock, ns in vkQueueSubmit; RefreshGuestOutput, ns before the callback,
   //  ns inside it, ns after}.
   virtual void CostPresent(uint64_t cost[12]) const = 0;
+  // GPU submissions sent so far (the number bo2zm::perf_log::NoteGpuJob gets for each one when it finishes).
+  virtual uint64_t JobsSubmitted() const { return 0; }
 };
 
 }  // namespace bo2zm::native

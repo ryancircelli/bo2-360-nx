@@ -27,6 +27,7 @@
 
 #include "bo2zm_cheats.h"
 #include "bo2zm_lifecycle.h"
+#include "bo2zm_perf_log.h"
 #include "bo2zm_preset.h"
 #include "native/render/bo2zm_native_capture.h"
 
@@ -803,6 +804,7 @@ void AnnotateFrame() {
   }
   if (t >= Duration()) {
     g_summarized = true;
+    bo2zm::perf_log::Event("route_end");  // the end of perf_summary.py's window
     Summarize(Duration());
 #if defined(BO2ZM_PGO_GENERATE)
     mkdir("/switch/bo2zm/pgo", 0777);
@@ -820,6 +822,20 @@ void AnnotateFrame() {
     REXLOG_INFO("[pgo] counters reset at the start of the route");
   }
 #endif
+  // bo2zm_perf_log: one segment per span of the path (30 s turning right, 30 s turning left, repeated), so the
+  // summary gives each its own statistics; "look_right_2" is the second minute's turn to the right. A spot test
+  // (bo2zm_test_spot) does not follow the path.
+  if (bo2zm::perf_log::Enabled() && !ParsedSpot().valid) {
+    constexpr double kSpan = kPath[0].until - kPath[0].since;
+    constexpr int kSpans = int(sizeof(kPath) / sizeof(kPath[0]));
+    static int segment = -1;
+    if (const int now_segment = int(t / kSpan); now_segment != segment) {
+      segment = now_segment;
+      const bool right = kPath[segment % kSpans].buttons == kLookRight;
+      bo2zm::perf_log::Event("segment",
+                             fmt::format("name={}_{}", right ? "look_right" : "look_left", segment / kSpans + 1));
+    }
+  }
   // bo2zm_benchmark_next_round_s: a soak test's round changes.
   static const int next_round_s = REXCVAR_GET(bo2zm_benchmark_next_round_s);
   static double next_round_at = double(next_round_s);
