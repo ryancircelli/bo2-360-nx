@@ -10591,39 +10591,36 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     const auto& types = vulkan_device_->memory_types();
     for (UploadBuffer& c : shared_bufs_) {
-      VkBufferCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-      info.size = kSizeShared;
-      info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-      info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-      if (dfn_.vkCreateBuffer(device_, &info, nullptr, &c.buffer) != VK_SUCCESS) {
-        REXLOG_WARN("[native] C6: could not create the shared constants buffer; they go in the upload buffer");
-        return;
+      // Host-visible memory with CPU cache.
+      const auto cached = [&types](uint32_t bits) {
+        uint32_t type = 0;
+        return rex::bit_scan_forward(bits & types.host_visible & types.host_cached, &type) ? type : UINT32_MAX;
+      };
+      gpu::vulkan::HostBuffer created;
+      const gpu::vulkan::HostBufferResult result =
+          gpu::vulkan::CreateHostBuffer(dfn_, device_, nullptr, kSizeShared, gpu::kBufferUniform, cached, created);
+      c.buffer = created.buffer;
+      c.guest_memory = created.memory;
+      switch (result) {
+        case gpu::vulkan::HostBufferResult::kNoBuffer:
+          REXLOG_WARN("[native] C6: could not create the shared constants buffer; they go in the upload buffer");
+          return;
+        case gpu::vulkan::HostBufferResult::kWrongMemory:
+          REXLOG_WARN("[native] C6: no visible memory with CPU cache; the shared constants go in the upload buffer");
+          return;
+        case gpu::vulkan::HostBufferResult::kNoMemory:
+          REXLOG_WARN("[native] C6: could not allocate the shared constants buffer; they go in the upload buffer");
+          return;
+        case gpu::vulkan::HostBufferResult::kNoMap:
+        case gpu::vulkan::HostBufferResult::kNoAddress:
+          REXLOG_WARN("[native] C6: could not map the shared constants buffer; they go in the upload buffer");
+          return;
+        case gpu::vulkan::HostBufferResult::kDone:
+          break;
       }
-      VkMemoryRequirements requirements;
-      dfn_.vkGetBufferMemoryRequirements(device_, c.buffer, &requirements);
-      uint32_t type = 0;
-      if (!rex::bit_scan_forward(requirements.memoryTypeBits & types.host_visible & types.host_cached, &type)) {
-        REXLOG_WARN("[native] C6: no visible memory with CPU cache; the shared constants go in the upload buffer");
-        return;
-      }
-      VkMemoryAllocateInfo reserve{};
-      reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-      reserve.allocationSize = requirements.size;
-      reserve.memoryTypeIndex = type;
-      if (dfn_.vkAllocateMemory(device_, &reserve, nullptr, &c.guest_memory) != VK_SUCCESS ||
-          dfn_.vkBindBufferMemory(device_, c.buffer, c.guest_memory, 0) != VK_SUCCESS) {
-        REXLOG_WARN("[native] C6: could not allocate the shared constants buffer; they go in the upload buffer");
-        return;
-      }
-      void* mapped = nullptr;
-      if (dfn_.vkMapMemory(device_, c.guest_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
-        REXLOG_WARN("[native] C6: could not map the shared constants buffer; they go in the upload buffer");
-        return;
-      }
-      c.data = static_cast<uint8_t*>(mapped);
-      c.size_real = requirements.size;
-      shared_type_ = type;
+      c.data = created.data;
+      c.size_real = created.size_real;
+      shared_type_ = created.type;
     }
     shared_coherent_ = (types.host_coherent >> shared_type_) & 0x1;
     shared_separate_ = true;
@@ -10633,64 +10630,41 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   bool CreateBufferUpload() {
-    VkBufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = kSizeUpload;
-    // UNIFORM_BUFFER because it is also bound as a dynamic UBO (constants through UBOs, set 4).
-    info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &upload_) != VK_SUCCESS) {
-      return false;
-    }
-    VkMemoryRequirements requirements;
-    dfn_.vkGetBufferMemoryRequirements(device_, upload_, &requirements);
     // bo2zm_native_upload_memory: with 1 or 2, a host-visible type with or without CPU caching is looked
     // for; if there is none, the SDK's.
     const auto& types = vulkan_device_->memory_types();
-    upload_type_ = UINT32_MAX;
     const int32_t preference = REXCVAR_GET(bo2zm_native_upload_memory);
-    if (preference == 1 || preference == 2) {
-      const uint32_t visible = requirements.memoryTypeBits & types.host_visible;
-      uint32_t type = 0;
-      if (rex::bit_scan_forward(visible & (preference == 1 ? types.host_cached : ~types.host_cached), &type)) {
-        upload_type_ = type;
+    const auto choose = [&types, preference](uint32_t bits) {
+      uint32_t chosen = UINT32_MAX;
+      if (preference == 1 || preference == 2) {
+        const uint32_t visible = bits & types.host_visible;
+        uint32_t type = 0;
+        if (rex::bit_scan_forward(visible & (preference == 1 ? types.host_cached : ~types.host_cached), &type)) {
+          chosen = type;
+        }
       }
+      if (chosen == UINT32_MAX) {
+        chosen = rex::ui::vulkan::util::ChooseMemoryType(types, bits, rex::ui::vulkan::util::MemoryPurpose::kUpload);
+      }
+      return chosen;
+    };
+    // UNIFORM_BUFFER because it is also bound as a dynamic UBO (constants through UBOs, set 4).
+    gpu::vulkan::HostBuffer created;
+    const gpu::vulkan::HostBufferResult result = gpu::vulkan::CreateHostBuffer(
+        dfn_, device_, address_buffer_, kSizeUpload,
+        gpu::kBufferVertex | gpu::kBufferIndex | gpu::kBufferStorage | gpu::kBufferCopySource | gpu::kBufferAddress |
+            gpu::kBufferUniform,
+        choose, created);
+    upload_ = created.buffer;
+    upload_memory_ = created.memory;
+    upload_type_ = created.type;
+    if (upload_type_ != UINT32_MAX) {
+      upload_coherent_ = (types.host_coherent >> upload_type_) & 0x1;
     }
-    if (upload_type_ == UINT32_MAX) {
-      upload_type_ = rex::ui::vulkan::util::ChooseMemoryType(types, requirements.memoryTypeBits,
-                                                             rex::ui::vulkan::util::MemoryPurpose::kUpload);
-    }
-    if (upload_type_ == UINT32_MAX) {
-      return false;
-    }
-    upload_coherent_ = (vulkan_device_->memory_types().host_coherent >> upload_type_) & 0x1;
-    VkMemoryAllocateFlagsInfo flags{};
-    flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    VkMemoryAllocateInfo reserve{};
-    reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    reserve.pNext = &flags;
-    reserve.allocationSize = requirements.size;
-    reserve.memoryTypeIndex = upload_type_;
-    if (dfn_.vkAllocateMemory(device_, &reserve, nullptr, &upload_memory_) != VK_SUCCESS) {
-      return false;
-    }
-    upload_size_real_ = requirements.size;
-    if (dfn_.vkBindBufferMemory(device_, upload_, upload_memory_, 0) != VK_SUCCESS) {
-      return false;
-    }
-    void* mapped = nullptr;
-    if (dfn_.vkMapMemory(device_, upload_memory_, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
-      return false;
-    }
-    upload_data_ = static_cast<uint8_t*>(mapped);
-    VkBufferDeviceAddressInfo address{};
-    address.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-    address.buffer = upload_;
-    upload_address_ = address_buffer_(device_, &address);
-    return upload_address_ != 0;
+    upload_size_real_ = created.size_real;
+    upload_data_ = created.data;
+    upload_address_ = created.address;
+    return result == gpu::vulkan::HostBufferResult::kDone;
   }
 
   // For the bo2zm_native_upload_memory A/B test: CPU write MB/s into each host-visible memory type and the
