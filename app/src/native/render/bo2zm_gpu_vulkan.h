@@ -421,6 +421,44 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
                           [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
 }
 
+// Object destruction, one overload per handle type (each is its own type on the 64-bit targets the renderer builds
+// for). Metal releases the matching objects; memory is freed with Free.
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkPipeline object) {
+  dfn.vkDestroyPipeline(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkPipelineLayout object) {
+  dfn.vkDestroyPipelineLayout(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                    VkDescriptorSetLayout object) {
+  dfn.vkDestroyDescriptorSetLayout(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorPool object) {
+  dfn.vkDestroyDescriptorPool(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkRenderPass object) {
+  dfn.vkDestroyRenderPass(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImageView object) {
+  dfn.vkDestroyImageView(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImage object) {
+  dfn.vkDestroyImage(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkBuffer object) {
+  dfn.vkDestroyBuffer(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkCommandPool object) {
+  dfn.vkDestroyCommandPool(device, object, nullptr);
+}
+inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkFence object) {
+  dfn.vkDestroyFence(device, object, nullptr);
+}
+inline void Free(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDeviceMemory memory) {
+  dfn.vkFreeMemory(device, memory, nullptr);
+}
+static_assert(sizeof(void*) == 8, "the Destroy overloads need distinct handle types");
+
 // The attachments of a render pass, `width` x `height`, one layer: true and the framebuffer in `out` if created.
 // Metal has no framebuffer object: its render pass descriptor names the textures directly.
 inline bool CreateFramebuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkRenderPass pass,

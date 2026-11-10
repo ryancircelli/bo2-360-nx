@@ -875,47 +875,47 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         gpu::vulkan::DestroyFramebuffer(dfn_, device_, f.framebuffer);
       }
     }
-    if (pipeline_ != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, pipeline_, nullptr);
+    if (pipeline_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pipeline_);
 
     for (auto& [view, fb] : conv_framebuffers_) {
       if (fb != VK_NULL_HANDLE) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb);
     }
     for (auto& [format, p] : conv_pipelines_) {
-      if (p != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, p, nullptr);
+      if (p != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, p);
     }
     for (auto& [format, rp] : conv_passes_) {
-      if (rp != VK_NULL_HANDLE) dfn_.vkDestroyRenderPass(device_, rp, nullptr);
+      if (rp != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, rp);
     }
-    if (conv_pool_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, conv_pool_, nullptr);
+    if (conv_pool_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, conv_pool_);
     if (conv_fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, conv_fs_);
     for (VkPipeline p : pipelines_ramp_) {
-      if (p != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, p, nullptr);
+      if (p != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, p);
     }
     if (fs_ramp_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_ramp_);
     // The credits line
-    if (credits_.pipeline != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, credits_.pipeline, nullptr);
+    if (credits_.pipeline != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.pipeline);
     if (credits_.fs != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, credits_.fs);
-    if (credits_.pool != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, credits_.pool, nullptr);
-    if (credits_.view != VK_NULL_HANDLE) dfn_.vkDestroyImageView(device_, credits_.view, nullptr);
-    if (credits_.image != VK_NULL_HANDLE) dfn_.vkDestroyImage(device_, credits_.image, nullptr);
-    if (credits_.memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, credits_.memory, nullptr);
-    if (credits_.staging != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, credits_.staging, nullptr);
-    if (credits_.staging_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, credits_.staging_memory, nullptr);
+    if (credits_.pool != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.pool);
+    if (credits_.view != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.view);
+    if (credits_.image != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.image);
+    if (credits_.memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, credits_.memory);
+    if (credits_.staging != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.staging);
+    if (credits_.staging_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, credits_.staging_memory);
     for (OutputRamp& ramp : ramps_output_) {
-      if (ramp.buffer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, ramp.buffer, nullptr);
-      if (ramp.guest_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, ramp.guest_memory, nullptr);
+      if (ramp.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, ramp.buffer);
+      if (ramp.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, ramp.guest_memory);
     }
     if (layout_pipeline_ != VK_NULL_HANDLE)
-      dfn_.vkDestroyPipelineLayout(device_, layout_pipeline_, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, layout_pipeline_);
     if (pool_descriptors_ != VK_NULL_HANDLE)
-      dfn_.vkDestroyDescriptorPool(device_, pool_descriptors_, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, pool_descriptors_);
     if (layout_descriptors_ != VK_NULL_HANDLE)
-      dfn_.vkDestroyDescriptorSetLayout(device_, layout_descriptors_, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, layout_descriptors_);
     if (sampler_ != VK_NULL_HANDLE) gpu::vulkan::DestroySampler(dfn_, device_, sampler_);
     if (vs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, vs_);
     if (fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_);
     if (render_pass_output_ != VK_NULL_HANDLE)
-      dfn_.vkDestroyRenderPass(device_, render_pass_output_, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, render_pass_output_);
     for (WorkSlot& slot : slots_) {
       work_.DestroyFence(slot.fence);
       work_.DestroyPool(slot.pool_job);
@@ -1181,8 +1181,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (!ramp_gamma_) {
       // Without a ramp, binding 2 stays unwritten: the pipeline without the ramp does not read it.
       for (OutputRamp& ramp : ramps_output_) {
-        if (ramp.buffer != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, ramp.buffer, nullptr);
-        if (ramp.guest_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, ramp.guest_memory, nullptr);
+        if (ramp.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, ramp.buffer);
+        if (ramp.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, ramp.guest_memory);
         ramp = OutputRamp{};
       }
     }
@@ -2715,13 +2715,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                 failed ? "no comparison"
                        : match ? "the GPU read the same bytes as the CPU"
                                : fmt::format("DIFFERENT from byte {}", first_difference));
-    if (fence != VK_NULL_HANDLE) dfn_.vkDestroyFence(device_, fence, nullptr);
-    if (pool != VK_NULL_HANDLE) dfn_.vkDestroyCommandPool(device_, pool, nullptr);
+    if (fence != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, fence);
+    if (pool != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool);
     if (mapped) dfn_.vkUnmapMemory(device_, target_memory);
-    if (target != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, target, nullptr);
-    if (target_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, target_memory, nullptr);
-    if (source != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, source, nullptr);
-    dfn_.vkFreeMemory(device_, imported, nullptr);
+    if (target != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, target);
+    if (target_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, target_memory);
+    if (source != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, source);
+    gpu::vulkan::Free(dfn_, device_, imported);
     (void)sum;
   }
 
@@ -5969,9 +5969,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         conv_framebuffers_.erase(fb);
       }
     }
-    if (image.view != VK_NULL_HANDLE) dfn_.vkDestroyImageView(device_, image.view, nullptr);
-    if (image.image != VK_NULL_HANDLE) dfn_.vkDestroyImage(device_, image.image, nullptr);
-    if (image.guest_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, image.guest_memory, nullptr);
+    if (image.view != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.view);
+    if (image.image != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.image);
+    if (image.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, image.guest_memory);
     image = OwnedImage{};
   }
 
@@ -6928,10 +6928,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (read.data) {
         dfn_.vkUnmapMemory(device_, read.guest_memory);
       }
-      dfn_.vkFreeMemory(device_, read.guest_memory, nullptr);
+      gpu::vulkan::Free(dfn_, device_, read.guest_memory);
     }
     if (read.buffer != VK_NULL_HANDLE) {
-      dfn_.vkDestroyBuffer(device_, read.buffer, nullptr);
+      gpu::vulkan::Destroy(dfn_, device_, read.buffer);
     }
     read = Readback{};
   }
