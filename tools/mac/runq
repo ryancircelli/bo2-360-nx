@@ -651,29 +651,45 @@ def cmd_scene(argv):
     env.update({k: str(v) for k, v in (scene.get('env') or {}).items()})
     env.setdefault('CAPTURE_EVERY_S', str(scene.get('capture_every_s', 0) or 3600))
     env.setdefault('SHOT_EVERY_S', '100000')
+    eol = scene.get('end_on_log')
+    if eol:
+        env['END_ON_LOG'] = eol['text']
+        env['END_ON_LOG_COUNT'] = str(eol.get('count', 1))
+        env['END_GRACE_S'] = str(eol.get('grace_s', 2))
+    # support_seed: a warm support folder (shader and pipeline caches, console id, launch options) cloned in before
+    # the run; "{renderer}" in the path picks one per renderer. A missing seed is made from the first run that passes.
     support_seed = scene.get('support_seed')
+    seed = os.path.expanduser(support_seed.replace('{renderer}', a.renderer)) if support_seed else None
+    seeded = False
     t0 = time.time()
-    if support_seed:
-        # a warm support folder (shader and pipeline caches, saved settings) cloned in before the run
-        seed = os.path.expanduser(support_seed)
-        if os.path.isdir(seed):
-            os.makedirs(run, exist_ok=True)
-            subprocess.run(['cp', '-cR', seed, os.path.join(run, 'support')])
+    if seed and os.path.isdir(seed) and not os.environ.get('RUNQ_COLD'):
+        os.makedirs(run, exist_ok=True)
+        subprocess.run(['cp', '-cR', seed, os.path.join(run, 'support')])
+        seeded = True
     bt = [os.path.join(HERE, 'boot_test.sh'), '--app', a.app, '--route', os.path.join(a.out, 'scene.route'), '--out',
           run, '--port-offset', a.port]
     rc = subprocess.run(bt, env=env).returncode
-    res = {'scene': scene.get('name'), 'renderer': a.renderer, 'boot_test_exit': rc, 'wall_s': round(time.time() - t0)}
+    res = {'scene': scene.get('name'), 'renderer': a.renderer, 'boot_test_exit': rc, 'wall_s': round(time.time() - t0),
+           'support': 'seeded' if seeded else 'cold'}
     log = os.path.join(run, 'game.log')
     text = open(log, errors='replace').read() if os.path.exists(log) else ''
     res['missing_pass_log'] = [p for p in scene.get('pass_log', []) if p not in text]
     res['fail_log_hits'] = {p: text.count(p) for p in scene.get('fail_log', []) if p in text}
-    res['timeline'] = timeline(text)
+    try:
+        launch = float(open(os.path.join(run, 'launch_time.txt')).read())
+    except (OSError, ValueError):
+        launch = None
+    res['timeline'] = timeline(text, launch)
     verdict = 'PASS'
     if rc not in (0, 1) or res['missing_pass_log'] or res['fail_log_hits']:
         verdict = 'FAIL'
     if not a.no_diff and scene.get('golden') is not None:
         gd = a.golden or os.path.join(os.path.dirname(a.scene), 'golden', scene['name'])
         sd = os.path.join(HERE, 'scenediff.py')
+    if not a.no_diff and scene.get('golden') is not None and not (os.path.isdir(gd) and os.path.exists(sd)):
+        res['diff'] = {'verdict': 'NO_GOLDEN', 'golden': gd}
+        print(f'no golden frames in {gd}: diff skipped')
+    elif not a.no_diff and scene.get('golden') is not None:
         r = subprocess.run(scene_diff_cmd(sd, a.scene, os.path.join(run, 'captures'), gd, a.out),
                            capture_output=True, text=True)
         print(r.stdout + r.stderr)
@@ -682,11 +698,31 @@ def cmd_scene(argv):
         if r.returncode != 0 or d.get('verdict') != 'PASS':
             verdict = 'FAIL'
     res['verdict'] = verdict
+    if seed and not seeded and rc in (0, 1) and not res['missing_pass_log'] and not os.path.isdir(seed) \
+            and os.path.isdir(os.path.join(run, 'support', 'cache')):
+        save_seed(os.path.join(run, 'support'), seed)
+        res['seed_saved'] = seed
     wjson(os.path.join(a.out, 'scene_result.json'), res)
     print(f'scene {scene.get("name")} {a.renderer}: {verdict}  boot_test exit {rc}  timeline {res["timeline"]}'
           + (f'  missing {res["missing_pass_log"]}' if res['missing_pass_log'] else '')
           + (f'  fail_log {res["fail_log_hits"]}' if res['fail_log_hits'] else ''))
     return 0 if verdict == 'PASS' else 1
+
+
+def save_seed(support, seed):
+    """Copy a run's support folder (without logs, captures and the data link) to a seed, atomically."""
+    os.makedirs(os.path.dirname(seed), exist_ok=True)
+    tmp = seed + f'.tmp{os.getpid()}'
+    os.makedirs(tmp)
+    for name in os.listdir(support):
+        src = os.path.join(support, name)
+        if name in ('logs', 'captures') or os.path.islink(src) or name.startswith('0000'):
+            continue
+        subprocess.run(['cp', '-cR', src, os.path.join(tmp, name)])
+    try:
+        os.rename(tmp, seed)
+    except OSError:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def scene_diff_cmd(sd, scene, caps, golden, out):
@@ -697,27 +733,42 @@ def scene_diff_cmd(sd, scene, caps, golden, out):
             scene, caps, golden, '--json', os.path.join(out, 'diff.json')]
 
 
-TL_MARKS = [('local_lobby', 'Local lobby open'), ('map_picked', 'picked'), ('match', "the game's client is in a match"),
-            ('test_start', 'test start:'), ('first_capture', 'captures/')]
+TL_MARKS = [('log_start', None), ('renderer_ready', 'Metal startup: preparation completed'),
+            ('menus', 'menus.lua installed'), ('lobby', 'test start: local lobby opened'),
+            ('map_picked', ' picked'), ('match_start', ' started'),
+            ('in_match', ("the game's client is in a match", 'player in a match', 'controller 0 is in a match')),
+            ('spot', '[spot] standing at'), ('first_capture', '[capture] /'), ('last_capture', None)]
 
 
-def timeline(text):
-    """Seconds from the log's first line to the boot milestones."""
+def timeline(text, launch=None):
+    """Seconds from launch (boot_test's launch_time.txt; else the log's first line) to the boot milestones."""
+    import datetime
+
     def ts(line):
-        m = re.match(r'^\[\d{4}-\d\d-\d\d (\d\d):(\d\d):(\d\d)(?:\.(\d+))?', line)
+        m = re.match(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)\]', line)
         if not m:
             return None
-        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + float('0.' + (m.group(4) or '0'))
-    lines = text.splitlines()
-    t0 = next((ts(l) for l in lines if ts(l) is not None), None)
+        return datetime.datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S.%f' if '.' in m.group(1)
+                                          else '%Y-%m-%d %H:%M:%S').timestamp()
+    lines = [(ts(l), l) for l in text.splitlines()]
+    lines = [(t, l) for t, l in lines if t is not None and 'Script pad' not in l]
     out = {}
-    if t0 is None:
+    if not lines:
         return out
+    t0 = launch or lines[0][0]
+    out['log_start'] = round(lines[0][0] - t0, 1)
     for key, needle in TL_MARKS:
-        for l in lines:
-            if needle in l and ts(l) is not None:
-                out[key] = round(ts(l) - t0, 1)
+        if needle is None:
+            continue
+        needles = needle if isinstance(needle, tuple) else (needle,)
+        for t, l in lines:
+            if any(n in l for n in needles) and (key not in ('map_picked', 'match_start') or 'test start:' in l):
+                out[key] = round(t - t0, 1)
                 break
+    caps = [t for t, l in lines if '[capture] /' in l]
+    if caps:
+        out['last_capture'] = round(caps[-1] - t0, 1)
+    out['log_end'] = round(lines[-1][0] - t0, 1)
     return out
 
 

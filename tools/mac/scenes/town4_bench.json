@@ -1,0 +1,51 @@
+{
+  "scene": 1,
+  "name": "town4_bench",
+  "label": "Town 4p: perf bench at the spawn pose",
+  "about": "All four views at the Pack-a-Punch spawn, nobody moves, 40 s measured with the benchmark (zombie spawns off). FPS from perf.tsv / the [benchmark] line.",
+  "players": 4,
+  "renderers": [
+    "metal",
+    "native"
+  ],
+  "duration_s": 170,
+  "pass_log": [
+    "test start: zm_transit town zstandard zsurvival started"
+  ],
+  "fail_log": [
+    "PLATFORM_MISSINGMAP",
+    "] [error] "
+  ],
+  "captures": [
+    "5:start"
+  ],
+  "end_on_log": {
+    "text": " frames in ",
+    "count": 1,
+    "grace_s": 2
+  },
+  "support_seed": "~/Games/Xbox360/bo2-build/runq/seed/{renderer}",
+  "route": {
+    "BO2ZM_TEST_START": "zm_transit town zstandard zsurvival",
+    "BO2ZM_TEST_START_WAIT_S": "10",
+    "BO2ZM_TEST_ALL_GOD": "true",
+    "BO2ZM_BENCHMARK": "true",
+    "BO2ZM_LOADING_VIDEO": "false",
+    "BO2ZM_TEST_CONSOLE": "5:png town4_bench_start",
+    "BO2ZM_TEST_BUTTONS_P2": "wait_log picked 300, 2:a",
+    "BO2ZM_TEST_BUTTONS_P3": "wait_log picked 300, 4:a",
+    "BO2ZM_TEST_BUTTONS_P4": "wait_log picked 300, 6:a",
+    "BO2ZM_BENCHMARK_S": "40",
+    "BO2ZM_TEST_CHEATS": "1:bo2zm_cheats on|2:bo2zm_zm_nospawn 1"
+  },
+  "renderer_route": {
+    "metal": {
+      "REX_GPU_PLUGIN": "metal",
+      "REX_BO2ZM_RENDERER": "xenos"
+    },
+    "native": {
+      "REX_GPU_PLUGIN": "xenos",
+      "REX_BO2ZM_RENDERER": "native"
+    }
+  }
+}

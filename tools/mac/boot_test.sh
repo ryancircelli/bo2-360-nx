@@ -96,6 +96,7 @@ exedir="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"; rm -r
 # ---- launch ----
 echo "route $rname, ${duration}s, out $out"
 start=$(date +%s)
+perl -MTime::HiRes=time -e 'printf "%.3f\n", time' > "$out/launch_time.txt"   # the scene timeline's zero
 if [ -n "$app" ] && [ "$useopen" = 1 ]; then
   oargs=(); for e in "${fullenv[@]}"; do oargs+=(--env "$e"); done
   open -g -j -n "${oargs[@]}" "$app" || { echo "open failed" >&2; exit 2; }
@@ -108,10 +109,18 @@ else
 fi
 [ -n "${pid:-}" ] || { echo "the game did not start" >&2; exit 3; }
 # wait for the run: the duration, or an early exit
-crashed=0; early=0
+crashed=0; early=0; ended=0
 mkdir -p "$out/shots"
+# END_ON_LOG: end the run (as a pass) once the game log has END_ON_LOG_COUNT (default 1) lines containing this
+# text, END_GRACE_S (default 2) seconds later; short scenes end on their last capture instead of the full duration.
 for ((i = 0; i < duration; i++)); do
   sleep 1
+  if [ -n "${END_ON_LOG:-}" ]; then
+    elog="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"
+    if [ -n "$elog" ] && [ "$(grep -cF -- "$END_ON_LOG" "$elog")" -ge "${END_ON_LOG_COUNT:-1}" ]; then
+      sleep "${END_GRACE_S:-2}"; ended=1; echo "ended on the log line \"$END_ON_LOG\" at ${i} s"; break
+    fi
+  fi
   # a screenshot every SHOT_EVERY_S seconds (default 20) and one just before the end; needs Screen Recording permission
   if [ $((i % ${SHOT_EVERY_S:-20})) = 5 ] || [ "$i" = "$((duration - 2))" ]; then screencapture -x -t jpg "$out/shots/t$(printf %04d $i).jpg" 2>/dev/null; fi
   if ! kill -0 "$pid" 2>/dev/null && ! pgrep -f "$pat" >/dev/null 2>&1; then
