@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -225,28 +226,13 @@ void CommandProcessor::WorkerThreadMain() {
     if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {
       SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
       // We've run out of commands to execute.
-      // We spin here waiting for new ones, as the overhead of waiting on our
-      // event is too high.
+      // Wait for new ones instead of spinning, as the CPU time is better spent
+      // elsewhere.
       PrepareForWait();
-#if !REX_PLATFORM_SWITCH
-      uint32_t loop_count = 0;
-#endif
       do {
-#if REX_PLATFORM_SWITCH
-        // UpdateWritePointer and CallInThread signal the event. Leave the CPU free
-        // for the guest from the first attempt, without 501 polls beforehand.
-        rex::thread::Wait(write_ptr_index_event_.get(), true, std::chrono::milliseconds(5));
-#else
-        // If we spin around too much, revert to a "low-power" state.
-        if (loop_count > 500) {
-          const int wait_time_ms = 5;
-          rex::thread::Wait(write_ptr_index_event_.get(), true,
-                            std::chrono::milliseconds(wait_time_ms));
-        }
-
-        rex::thread::MaybeYield();
-        loop_count++;
-#endif
+        const int wait_time_ms = 5;
+        rex::thread::Wait(write_ptr_index_event_.get(), true,
+                          std::chrono::milliseconds(wait_time_ms));
         write_ptr_index = write_ptr_index_.load();
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
@@ -1058,6 +1044,19 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
   bool is_memory = (wait_info & 0x10) != 0;
 
   bool matched = false;
+  uint32_t attempts = 0;
+  const auto back_off = [&attempts] {
+    constexpr uint32_t kYields = 16;
+    constexpr uint32_t kLongestSleepMicroseconds = 1000;
+    if (attempts < kYields) {
+      rex::thread::MaybeYield();
+    } else {
+      const uint32_t doublings = std::min<uint32_t>(attempts - kYields, 5);
+      rex::thread::Sleep(std::chrono::microseconds(
+          std::min<uint32_t>(kLongestSleepMicroseconds, 50u << doublings)));
+    }
+    ++attempts;
+  };
   do {
     uint32_t value = 0;
     if (is_memory) {
@@ -1103,7 +1102,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
         PrepareForWait();
         if (!REXCVAR_GET(vsync)) {
           // User wants it fast and dangerous.
-          rex::thread::MaybeYield();
+          back_off();
         } else {
           rex::thread::Sleep(std::chrono::milliseconds(wait / 0x100));
         }
@@ -1115,7 +1114,10 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
           return false;
         }
       } else {
-        rex::thread::MaybeYield();
+        back_off();
+        if (!worker_running_) {
+          return false;
+        }
       }
     }
   } while (!matched);

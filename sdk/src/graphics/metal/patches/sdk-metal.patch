@@ -5873,15 +5873,15 @@ index e5e4908..6f5d133 100644
 +
 +#endif  // XENIA_GPU_DRAW_EXTENT_ESTIMATOR_H_
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index 9ae30ab..7d209af 100644
+index 73c6627..f80774a 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
-@@ -10,10 +10,13 @@
+@@ -10,11 +10,13 @@
   */
  
  #include <algorithm>
 +#include <atomic>
-+#include <chrono>
+ #include <chrono>
  #include <cinttypes>
  #include <cmath>
  #include <cstring>
@@ -5890,7 +5890,7 @@ index 9ae30ab..7d209af 100644
  
  #include <fmt/format.h>
  
-@@ -35,7 +38,13 @@
+@@ -36,7 +38,13 @@
  #include <rex/system/kernel_state.h>
  #include <rex/system/user_module.h>
  
@@ -5904,9 +5904,9 @@ index 9ae30ab..7d209af 100644
  
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
-@@ -80,6 +89,10 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
-                     "pipelines are being prepared.")
-     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+@@ -88,6 +96,10 @@ REXCVAR_DEFINE_BOOL(shader_precompile_background, true, "GPU",
+                     "the queue.")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
  
 +// Defined by the Metal plugin (metal_command_processor.cc): ring-wait progress after the
 +// read-pointer writeback store.
@@ -5915,7 +5915,7 @@ index 9ae30ab..7d209af 100644
  namespace rex::graphics {
  
  using namespace rex::graphics::xenos;
-@@ -207,6 +220,24 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -215,6 +227,24 @@ void CommandProcessor::WorkerThreadMain() {
      return;
    }
  
@@ -5940,7 +5940,7 @@ index 9ae30ab..7d209af 100644
    while (worker_running_) {
      while (!pending_fns_.empty()) {
        auto fn = std::move(pending_fns_.front());
-@@ -214,8 +245,8 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -222,8 +252,8 @@ void CommandProcessor::WorkerThreadMain() {
        fn();
      }
  
@@ -5950,11 +5950,11 @@ index 9ae30ab..7d209af 100644
 +    if (ring_idle(write_ptr_index)) {
        SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
        // We've run out of commands to execute.
-       // We spin here waiting for new ones, as the overhead of waiting on our
-@@ -240,9 +271,7 @@ void CommandProcessor::WorkerThreadMain() {
-         rex::thread::MaybeYield();
-         loop_count++;
- #endif
+       // Wait for new ones instead of spinning, as the CPU time is better spent
+@@ -233,9 +263,7 @@ void CommandProcessor::WorkerThreadMain() {
+         const int wait_time_ms = 5;
+         rex::thread::Wait(write_ptr_index_event_.get(), true,
+                           std::chrono::milliseconds(wait_time_ms));
 -        write_ptr_index = write_ptr_index_.load();
 -      } while (worker_running_ && pending_fns_.empty() &&
 -               (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
@@ -5962,7 +5962,7 @@ index 9ae30ab..7d209af 100644
        ReturnFromWait();
        if (!worker_running_ || !pending_fns_.empty()) {
          continue;
-@@ -251,14 +280,20 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -244,14 +272,20 @@ void CommandProcessor::WorkerThreadMain() {
      assert_true(read_ptr_index_ != write_ptr_index);
  
      // Execute. Note that we handle wraparound transparently.
@@ -5985,7 +5985,7 @@ index 9ae30ab..7d209af 100644
  
      // FIXME: We're supposed to process the WAIT_UNTIL register at this point,
      // but no games seem to actually use it.
-@@ -324,9 +359,51 @@ bool CommandProcessor::SetupContext() {
+@@ -317,9 +351,51 @@ bool CommandProcessor::SetupContext() {
  void CommandProcessor::ShutdownContext() {}
  
  void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
@@ -6038,7 +6038,7 @@ index 9ae30ab..7d209af 100644
  }
  
  void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {
-@@ -762,6 +839,12 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
+@@ -755,6 +831,12 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
  
    uint32_t base_index = (packet & 0x7FFF);
    uint32_t write_one_reg = (packet >> 15) & 0x1;
