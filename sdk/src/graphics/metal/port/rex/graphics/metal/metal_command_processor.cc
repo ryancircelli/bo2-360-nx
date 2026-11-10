@@ -2748,6 +2748,17 @@ void MetalCommandProcessor::MaybeLogMemReport() {
 void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
+  {
+    // Perf log: command processor thread CPU time since the previous swap, and the submissions so far.
+    static thread_local uint64_t perf_last_cpu_ns = 0;
+    const uint64_t cpu_now = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+    auto& perf = rex::graphics::GetPerfStats();
+    if (perf_last_cpu_ns) {
+      perf.ns_working.fetch_add(cpu_now - perf_last_cpu_ns, std::memory_order_relaxed);
+    }
+    perf_last_cpu_ns = cpu_now;
+    perf.jobs_submitted.store(submission_current_, std::memory_order_relaxed);
+  }
   rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
   ZpdMaybeLogStats();
   if (hle_census::Enabled()) {
@@ -4019,6 +4030,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                       uint32_t index_count,
                                       IndexBufferInfo* index_buffer_info,
                                       bool major_mode_explicit) {
+  rex::graphics::GetPerfStats().draws.fetch_add(1, std::memory_order_relaxed);
   if (hle_census::Enabled()) {
     census_draw_site_ = hle_census::CurrentSite();
     if (hle_census::TilingTraceActive(frame_log::CurrentFrame())) {
@@ -10708,6 +10720,11 @@ MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   current_command_buffer_->addCompletedHandler(
       [this, zpd_submission = submission_current_](
           MTL::CommandBuffer* completed_cmd) {
+        {
+          const double gpu_start = completed_cmd->GPUStartTime(), gpu_end = completed_cmd->GPUEndTime();
+          const bool ok = gpu_start > 0 && gpu_end >= gpu_start;
+          rex::graphics::NotifyGpuJob(zpd_submission, ok ? uint64_t((gpu_end - gpu_start) * 1e9) : 0, ok);
+        }
         if (zpd_real_) {
           // [occlusion-real] write the results of queries that finished here.
           ZpdOnSubmissionCompleted(
@@ -10800,6 +10817,7 @@ void MetalCommandProcessor::WaitForFrameSlotSubmission(
   ++backend_telemetry_.frame_slot_wait_submission_count;
   backend_telemetry_.frame_slot_wait_submission_last = awaited_submission;
   const uint64_t trace_wait_start = gpu_time_trace::Now();
+  const uint64_t perf_slot_wait_t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
   hitch::Scope hitch_scope(hitch::kSlot);
   {
     std::unique_lock<std::mutex> lock(completion_mutex_);
@@ -10809,6 +10827,8 @@ void MetalCommandProcessor::WaitForFrameSlotSubmission(
     });
   }
   gpu_time_trace::RecordWait("tr_slot_wait_us", trace_wait_start);
+  rex::graphics::GetPerfStats().ns_present_wait.fetch_add(
+      clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - perf_slot_wait_t0, std::memory_order_relaxed);
 }
 
 void MetalCommandProcessor::OpenFrameLifetime() {

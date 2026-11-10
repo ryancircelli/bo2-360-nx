@@ -1,3 +1,4 @@
+#include <rex/graphics/swap_hook.h>
 #include <algorithm>
 #include "rex/graphics/metal/metal_frame_log.h"
 #include "rex/graphics/metal/metal_trace.h"
@@ -667,7 +668,10 @@ Presenter::PaintResult MetalPresenter::PaintAndPresentImpl(bool execute_ui_drawe
   const bool log_drawable_wait = graphics::metal::frame_log::Enabled() && !fi_async;
   const auto drawable_wait_t0 =
       log_drawable_wait ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+  const uint64_t perf_drawable_t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
   id<CAMetalDrawable> drawable = fi_async ? nil : [metal_layer_ nextDrawable];
+  rex::graphics::GetPerfStats().ns_present_wait.fetch_add(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - perf_drawable_t0,
+                                                          std::memory_order_relaxed);
   const double vsync_lock_drawable_wait =
       vsync_lock_on ? graphics::metal::vsync_lock::NowSeconds() - vsync_lock_paint_start : 0.0;
   if (log_drawable_wait) {
