@@ -681,16 +681,16 @@ int32_t ExtenderSign15(uint32_t value) {
 
 // Fixed color per render target with bo2zm_native_diag_clear: the
 // capture shows which render target reached the screen.
-VkClearColorValue ColorDiagnostic(uint32_t base, uint32_t format, uint32_t pitch) {
+gpu::ClearColor ColorDiagnostic(uint32_t base, uint32_t format, uint32_t pitch) {
   uint32_t h = base * 2654435761u ^ pitch * 2246822519u ^ format * 3266489917u;
   h ^= h >> 15;
   h *= 2246822519u;
   h ^= h >> 13;
-  VkClearColorValue color{};
+  gpu::ClearColor color{};
   for (uint32_t j = 0; j < 3; ++j) {
-    color.float32[j] = float((h >> (j * 8)) & 0xFF) * (1.0f / 255.0f);
+    color.f[j] = float((h >> (j * 8)) & 0xFF) * (1.0f / 255.0f);
   }
-  color.float32[3] = 1.0f;
+  color.f[3] = 1.0f;
   return color;
 }
 
@@ -1768,18 +1768,17 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         // clear goes to a spare image and the one with the content is kept for the front buffer (no copy).
         RotateFrontBeforeClear(*target_render);
         MarkGpu(kGpuClears);  // clears, separate from copies (C2 report)
-        VkClearColorValue color{};
+        gpu::ClearColor color{};
         if (REXCVAR_GET(bo2zm_native_diag_clear)) {
           color = ColorDiagnostic(info_color & 0xFFF, format_color, pitch_source);
         } else {
           for (uint32_t j = 0; j < 4; ++j) {
-            color.float32[j] = float((value_raw >> (j * 8)) & 0xFF) * (1.0f / 255.0f);
+            color.f[j] = float((value_raw >> (j * 8)) & 0xFF) * (1.0f / 255.0f);
           }
         }
         // bo2zm_native_clear_useful_area. Only the rows in use; the bottom band, if needed.
         if (!ClearColorAreaUseful(*target_render, color)) {
-          const gpu::ClearColor neutral = gpu::FromVk(color);
-          gpu_.ClearColorImage(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL, &neutral, 1,
+          gpu_.ClearColorImage(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL, &color, 1,
                                &kRangeColor);
           RemoveBand(*target_render);
         }
@@ -1853,7 +1852,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
     // The rectangle in the image's pixels (the shadow map can be drawn smaller than the guest thinks).
-    const auto area_in = [&b](const OwnedImage& image, VkRect2D& area) {
+    const auto area_in = [&b](const OwnedImage& image, gpu::Rect& area) {
       int64_t x0 = b.x0, y0 = b.y0, x1 = b.x1, y1 = b.y1;
       if (image.width_guest && image.height_guest &&
           (image.width_guest != image.width || image.height_guest != image.height)) {
@@ -1869,8 +1868,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (x0 >= x1 || y0 >= y1) {
         return false;
       }
-      area.offset = {int32_t(x0), int32_t(y0)};
-      area.extent = {uint32_t(x1 - x0), uint32_t(y1 - y0)};
+      area = gpu::Rect{int32_t(x0), int32_t(y0), uint32_t(x1 - x0), uint32_t(y1 - y0)};
       return true;
     };
     // Earlier draws and copies of the image finish before the clear, and the clear before what follows.
@@ -1893,15 +1891,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       const uint64_t key = (uint64_t(base) << 20) | (uint64_t(format) << 16) | pitch;
       if (depths_.count(key)) {
         OwnedImage* image = static_cast<OwnedImage*>(TargetDepth(base, format, pitch));
-        VkRect2D area{};
+        gpu::Rect area{};
         if (image && area_in(*image, area)) {
-          VkClearValue value{};
-          value.depthStencil = {std::clamp(b.z, 0.0f, 1.0f), b.value_stencil & 0xFF};
-          const VkImageAspectFlags aspects = (b.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0u) |
-                                              (b.stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
+          gpu::ClearValue value{};
+          value.depth_stencil = {std::clamp(b.z, 0.0f, 1.0f), b.value_stencil & 0xFF};
+          const gpu::Aspects aspects = (b.depth ? gpu::kAspectDepth : 0u) | (b.stencil ? gpu::kAspectStencil : 0u);
           MarkGpu(kGpuClears);
           barrier();
-          if (draws_->ClearAttachmentInPass(commands_job_, *image, aspects, gpu::FromVk(value), gpu::FromVk(area))) {
+          if (draws_->ClearAttachmentInPass(commands_job_, *image, aspects, value, area)) {
             barrier();
             ForgetClear(*image);
             ++clears_depth_;
@@ -1917,16 +1914,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           (uint64_t(base) << 20) | (uint64_t(bo2zm_formats::Storage(format)) << 16) | pitch;
       if (bo2zm_formats::ColorApprox(format) && targets_.count(key)) {
         OwnedImage* image = static_cast<OwnedImage*>(TargetColor(base, format, pitch));
-        VkRect2D area{};
+        gpu::Rect area{};
         if (image && area_in(*image, area)) {
-          VkClearValue value{};
+          gpu::ClearValue value{};
           for (uint32_t i = 0; i < 4; ++i) {
-            value.color.float32[i] = b.rgba[i];
+            value.color.f[i] = b.rgba[i];
           }
           MarkGpu(kGpuClears);
           barrier();
-          if (draws_->ClearAttachmentInPass(commands_job_, *image, gpu::kAspectColor, gpu::FromVk(value),
-                                            gpu::FromVk(area))) {
+          if (draws_->ClearAttachmentInPass(commands_job_, *image, gpu::kAspectColor, value, area)) {
             barrier();
             ForgetClear(*image);
             if (auto front = front_compositions_.find(image); front != front_compositions_.end()) {
@@ -1934,7 +1930,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                 REXLOG_INFO("[front-trace] guest-clear target {:p} front {:08X} write_frame {} -> {} "
                             "area {},{} {}x{}",
                             static_cast<const void*>(image), front->second.address, front->second.write_frame,
-                            presented_, area.offset.x, area.offset.y, area.extent.width, area.extent.height);
+                            presented_, area.x, area.y, area.width, area.height);
               }
               front->second.write_frame = presented_;  // an explicit guest clear already began this composition
             }
@@ -4050,7 +4046,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     bool band = false;
     uint32_t band_since = 0;
     gpu::Image band_image = nullptr;
-    VkClearColorValue band_color{};
+    gpu::ClearColor band_color{};
     uint32_t bands_completed = 0;
     bool area_useful_off = false;  // its useful area is not stable: cleared entirely
   };
@@ -4118,7 +4114,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   // bo2zm_native_clear_useful_area. Clears only the rows that render target uses, if they are already known.
   // Returns false if it has to be cleared entirely, as always.
-  bool ClearColorAreaUseful(OwnedImage& target, const VkClearColorValue& color) {
+  bool ClearColorAreaUseful(OwnedImage& target, const gpu::ClearColor& color) {
     if (!clear_area_useful_ || !diag_clears_ || !draws_ || target.format != kFormatColor) {
       return false;
     }
@@ -4136,7 +4132,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (height >= target.height) {
       return false;
     }
-    if (!draws_->ClearColorInPass(commands_job_, target, gpu::FromVk(color), gpu::Rect{0, 0, target.width, height})) {
+    if (!draws_->ClearColorInPass(commands_job_, target, color, gpu::Rect{0, 0, target.width, height})) {
       return false;
     }
     if (!u.band) {
@@ -4181,7 +4177,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const uint32_t height_band = image.height > u.band_since ? image.height - u.band_since : 0;
     if (same_image && (!height_band || (draws_ && Record() &&
                                          draws_->ClearColorInPass(
-                                             commands_job_, image, gpu::FromVk(u.band_color),
+                                             commands_job_, image, u.band_color,
                                              gpu::Rect{0, int32_t(u.band_since), image.width, height_band})))) {
       return;
     }
@@ -4963,11 +4959,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       Reject(8, "could not create a render target");
       return nullptr;
     }
-    const VkClearColorValue diag = ColorDiagnostic(base, format, pitch);
+    const gpu::ClearColor diag = ColorDiagnostic(base, format, pitch);
     REXLOG_INFO("[native] C2: render target base {:03X}, format {}, {}x{} (diagnostic color {:02X}{:02X}{:02X})",
-                base, format, pitch, height, uint32_t(std::lround(diag.float32[0] * 255.0f)),
-                uint32_t(std::lround(diag.float32[1] * 255.0f)),
-                uint32_t(std::lround(diag.float32[2] * 255.0f)));
+                base, format, pitch, height, uint32_t(std::lround(diag.f[0] * 255.0f)),
+                uint32_t(std::lround(diag.f[1] * 255.0f)),
+                uint32_t(std::lround(diag.f[2] * 255.0f)));
     return &targets_.emplace(key, image).first->second;
   }
 
