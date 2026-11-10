@@ -108,4 +108,14 @@ struct BlendEquation {
   uint32_t alpha_op = 0;
 };
 
+// What a buffer is used for, in Vulkan's bits (VkBufferUsageFlagBits). Metal buffers need none of it.
+using BufferUsage = uint32_t;
+inline constexpr BufferUsage kBufferCopySource = 0x1;
+inline constexpr BufferUsage kBufferCopyTarget = 0x2;
+inline constexpr BufferUsage kBufferUniform = 0x10;
+inline constexpr BufferUsage kBufferStorage = 0x20;
+inline constexpr BufferUsage kBufferIndex = 0x40;
+inline constexpr BufferUsage kBufferVertex = 0x80;
+inline constexpr BufferUsage kBufferAddress = 0x20000;  // the shaders reach it by its GPU address
+
 }  // namespace bo2zm::native::gpu
