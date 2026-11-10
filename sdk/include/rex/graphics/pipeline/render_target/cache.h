@@ -609,7 +609,7 @@ class RenderTargetCache {
         // or by a depth render target of a different format.
         return false;
       }
-      if (host_depth_encoding_different && !key.is_depth &&
+      if (host_depth_encoding_different && key.is_depth &&
           GetHostDepthRenderTarget(key.GetDepthFormat()) != key) {
         // Depth encoding is the same, but different addressing is needed.
         return false;

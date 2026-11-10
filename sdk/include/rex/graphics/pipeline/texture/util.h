@@ -295,7 +295,7 @@ inline uint32_t GetTiledAddressLowerBound3D(uint32_t left, uint32_t top, uint32_
                                             uint32_t bytes_per_block_log2) {
   return uint32_t(GetTiledOffset3D(int32_t(left & ~(xenos::kTextureTileWidthHeight - 1)),
                                    int32_t(top & ~(xenos::kTextureTileWidthHeight - 1)),
-                                   int32_t(front & ~(xenos::kTextureTileDepth)), pitch, height,
+                                   int32_t(front & ~(xenos::kTextureTileDepth - 1)), pitch, height,
                                    bytes_per_block_log2));
 }
 // Supporting the right > pitch and bottom > height (in tiles) cases also, for
