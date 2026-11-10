@@ -7081,6 +7081,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     binding.up_to_date = true;
     if (cbv_slot < backend_telemetry_.cbv_uploads.size()) {
       ++backend_telemetry_.cbv_uploads[cbv_slot];
+      backend_telemetry_.cbv_upload_bytes[cbv_slot] += size;
     }
     return true;
   };
@@ -7274,11 +7275,35 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     }
   }
   const size_t fetch_size = kFetchConstantCount * sizeof(uint32_t);
+  const bool fetch_shared = REXCVAR_GET(metal_fetch_constants_shared);
   for (size_t stage = 0; stage < kStageCount; ++stage) {
     if (!fetch_binding_active[stage]) {
       continue;
     }
-    if (!cbuffer_binding_fetch_[stage].up_to_date) {
+    if (!cbuffer_binding_fetch_[stage].up_to_date && fetch_shared) {
+      // [fetch-shared] the payload is the raw fetch register file, so one
+      // upload per generation serves every stage and draw in the frame.
+      if (shared_fetch_binding_.buffer &&
+          shared_fetch_generation_ == fetch_constants_generation_ &&
+          shared_fetch_binding_.upload_frame == frame_current_) {
+        cbuffer_binding_fetch_[stage] = shared_fetch_binding_;
+        ++backend_telemetry_.cbv_reuse_hits[kCbvSlotFetch];
+      } else {
+        if (!upload_binding(
+                cbuffer_binding_fetch_[stage], kCbvSlotFetch, fetch_size,
+                "fetch", [&](uint8_t* data, size_t) {
+                  std::memcpy(
+                      data, &regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0],
+                      fetch_size);
+                })) {
+          return false;
+        }
+        shared_fetch_binding_ = cbuffer_binding_fetch_[stage];
+        shared_fetch_generation_ = fetch_constants_generation_;
+      }
+      cbuffer_binding_fetch_[stage].up_to_date = true;
+      fetch_constant_dirty_masks_[stage].fill(0);
+    } else if (!cbuffer_binding_fetch_[stage].up_to_date) {
       if (!try_reuse_or_upload(
               cbuffer_binding_fetch_[stage], kCbvSlotFetch,
               kConstantPayloadSharedStage, current_payload_fetch_[stage],
@@ -10532,8 +10557,23 @@ void MetalCommandProcessor::WriteFetchConstantsFromMem(uint32_t start_index,
   const uint32_t dword_start =
       start_index - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
   const uint32_t dword_end = dword_start + num_registers;
-  for (uint32_t dword = dword_start; dword < dword_end; ++dword) {
-    MarkFetchConstantDword(written_fetch_dword_mask, dword);
+  if (REXCVAR_GET(metal_fetch_constants_shared)) {
+    // [fetch-shared] only dwords whose value changes dirty the snapshots.
+    const uint32_t* old_values = &register_file_->values[start_index];
+    bool any_changed = false;
+    for (uint32_t i = 0; i < num_registers; ++i) {
+      if (rex::memory::load_and_swap<uint32_t>(base + i) != old_values[i]) {
+        MarkFetchConstantDword(written_fetch_dword_mask, dword_start + i);
+        any_changed = true;
+      }
+    }
+    if (any_changed) {
+      ++fetch_constants_generation_;
+    }
+  } else {
+    for (uint32_t dword = dword_start; dword < dword_end; ++dword) {
+      MarkFetchConstantDword(written_fetch_dword_mask, dword);
+    }
   }
 
   // [draw-prep-lite] texture fetch constant slots whose dwords actually change:
@@ -10661,9 +10701,15 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   } else if (index >= XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 &&
              index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5) {
     const uint32_t fetch_dword = index - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
-    DxbcShader::FetchConstantDwordMask changed_fetch_dword_mask = {};
-    MarkFetchConstantDword(changed_fetch_dword_mask, fetch_dword);
-    DirtyFetchConstantDwords(changed_fetch_dword_mask);
+    const bool fetch_shared = REXCVAR_GET(metal_fetch_constants_shared);
+    if (fetch_shared && value_changed) {
+      ++fetch_constants_generation_;
+    }
+    if (!fetch_shared || value_changed) {
+      DxbcShader::FetchConstantDwordMask changed_fetch_dword_mask = {};
+      MarkFetchConstantDword(changed_fetch_dword_mask, fetch_dword);
+      DirtyFetchConstantDwords(changed_fetch_dword_mask);
+    }
     // [draw-prep-lite] an unchanged value keeps the texture binding in sync.
     if (texture_cache_ && (value_changed || !DrawPrepLiteEnabled())) {
       texture_cache_->TextureFetchConstantWritten(fetch_dword / 6);
@@ -10998,6 +11044,8 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
       backend_telemetry_.cbv_uploads, MetalTelemetryCbvSlotName);
   const std::string cbv_reuse_hits = MetalFormatNamedCounts(
       backend_telemetry_.cbv_reuse_hits, MetalTelemetryCbvSlotName);
+  const std::string cbv_upload_bytes = MetalFormatNamedCounts(
+      backend_telemetry_.cbv_upload_bytes, MetalTelemetryCbvSlotName);
   const std::string descriptor_index_uploads =
       MetalFormatNamedCounts(backend_telemetry_.descriptor_index_uploads,
                              MetalTelemetryShaderStageName);
@@ -11184,11 +11232,13 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
       prepared_draw_queue_flush_reasons, prepared_draw_queue_reject_reasons);
   REXLOG_INFO(
       "MetalTelemetry[{}]: constants cbv_uploads={{ {} }} "
-      "cbv_reuse={{ {} }} descriptor_index_uploads={{ {} }} "
+      "cbv_reuse={{ {} }} cbv_upload_bytes={{ {} }} "
+      "descriptor_index_uploads={{ {} }} "
       "root_allocations={{ {} }} root_reuse={{ {} }} "
       "root_rebuild_reasons={{ {} }} frame_slot_waits={} "
       "waited_submissions={} last_wait_submission={}",
-      reason, cbv_uploads, cbv_reuse_hits, descriptor_index_uploads,
+      reason, cbv_uploads, cbv_reuse_hits, cbv_upload_bytes,
+      descriptor_index_uploads,
       bindless_root_allocations, bindless_root_reuse_hits,
       bindless_root_rebuild_reasons, backend_telemetry_.frame_slot_waits,
       backend_telemetry_.frame_slot_wait_submission_count,

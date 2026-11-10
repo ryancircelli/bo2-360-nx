@@ -999,6 +999,7 @@ class MetalCommandProcessor final : public CommandProcessor {
 
     std::array<uint64_t, kCbvSlotCount> cbv_uploads = {};
     std::array<uint64_t, kCbvSlotCount> cbv_reuse_hits = {};
+    std::array<uint64_t, kCbvSlotCount> cbv_upload_bytes = {};
     std::array<uint64_t, kStageCount> descriptor_index_uploads = {};
     std::array<uint64_t, kCbvSlotCount> constant_payload_cache_hits = {};
     std::array<uint64_t, kCbvSlotCount> constant_payload_cache_misses = {};
@@ -1634,6 +1635,12 @@ class MetalCommandProcessor final : public CommandProcessor {
   // its own snapshot so one stage's fetch-register churn doesn't force the
   // other stage's root CBV pointer to move.
   std::array<ConstantBufferBinding, kStageCount> cbuffer_binding_fetch_ = {};
+  // [fetch-shared] (metal_fetch_constants_shared) bumped whenever a fetch
+  // register changes value; the last fetch upload is shared by every stage
+  // and draw while the generation and frame still match.
+  uint64_t fetch_constants_generation_ = 1;
+  uint64_t shared_fetch_generation_ = 0;
+  ConstantBufferBinding shared_fetch_binding_;
   ConstantBufferBinding cbuffer_binding_descriptor_indices_vertex_;
   ConstantBufferBinding cbuffer_binding_descriptor_indices_pixel_;
 

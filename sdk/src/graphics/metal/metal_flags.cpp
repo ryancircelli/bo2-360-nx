@@ -21,6 +21,13 @@ DEFINE_bool(metal_dedupe_gpu_access, true,
             "Skip marking a shared memory range as GPU-accessed again when it "
             "was already marked for the same submission.",
             "Metal");
+DEFINE_bool(metal_fetch_constants_shared, true,
+            "Fetch constant uploads: dirty only fetch registers whose value "
+            "changed, and let every shader stage and draw share one upload "
+            "until a fetch register changes (generation counter), instead "
+            "of packing and comparing a per-stage copy. Disable for the old "
+            "per-stage path.",
+            "Metal");
 DEFINE_bool(metal_tile_resolve_half_bits, true,
             "Let integer 64bpp resolves of RGBA16Float render targets run "
             "inside the open draw pass (tile resolve) instead of ending it.",
