@@ -198,6 +198,29 @@ REXCVAR_DEFINE_BOOL(bo2zm_shadows_without_vegetation, true, "BO2",
  * hard to notice next to the 360 footage, so it stays removed. It only acts on the composite kHashComposite
  * names, which no BO2 shader has. false = keep the blur, as on the Xbox 360.
  */
+/*
+ * A full barrier on each side of every render pass (bo2zm_native_pass_barriers).
+ *
+ * The passes declare no subpass dependencies and the resolves copy out of a render target right after its pass
+ * (and the next pass samples the copy) without a barrier: on NVK the GPU runs them in order anyway. MoltenVK
+ * (argument buffers + residency sets) creates its resources without Metal hazard tracking and only orders work
+ * through the fences it derives from vkCmdPipelineBarrier, so there a copy can read a depth or color target the
+ * pass has not finished storing, and a draw can sample a resolved texture still being copied. The soft particles
+ * read the scene depth that way: whole tiles of garbage depth turned sparks and embers into magenta, cyan and
+ * yellow squares (the "purple particles"). Synchronization validation reports the same hazards
+ * (SYNC-HAZARD-READ-AFTER-WRITE: vkCmdCopyImage reads an image written by the storeOp of vkCmdEndRenderPass).
+ */
+REXCVAR_DEFINE_BOOL(bo2zm_native_pass_barriers,
+#if defined(__APPLE__)
+                    true,
+#else
+                    false,
+#endif
+                    "BO2",
+                    "Native renderer: a memory barrier before and after every render pass, so copies and samples "
+                    "of render targets wait for the pass (on by default on Mac: MoltenVK does not order them "
+                    "by itself; without it particles can turn into magenta squares)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(bo2zm_native_no_blur, true, "BO2",
                     "Remove the radial blur from a final composite the renderer recognizes by hash (no BO2 shader "
                     "has it, so this does nothing in BO2). You lose the blur at the edges of the screen: the image is "
@@ -5877,6 +5900,21 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                       .count());
   }
 
+  // bo2zm_native_pass_barriers: everything recorded before (passes, copies, clears) finishes and is visible to
+  // everything after. Outside a render pass only.
+  void PassBarrier(VkCommandBuffer commands) {
+    static const bool on = REXCVAR_GET(bo2zm_native_pass_barriers);
+    if (!on) {
+      return;
+    }
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    dfn_.vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
+                              &barrier, 0, nullptr, 0, nullptr);
+  }
+
   void FinishPass() override {
     if (pass_active_) {
       /*
@@ -5896,6 +5934,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
       const auto before_end = std::chrono::steady_clock::now();
       dfn_.vkCmdEndRenderPass(pass_commands_);
+      PassBarrier(pass_commands_);
       if (stats_pass_ != UINT32_MAX) {
         context_->FinishStats(stats_pass_);
         stats_pass_ = UINT32_MAX;
@@ -6869,8 +6908,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     start.renderArea.extent = {image.width, image.height};
     start.clearValueCount = 1;
     start.pClearValues = &clear;
+    PassBarrier(commands);
     dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
     dfn_.vkCmdEndRenderPass(commands);
+    PassBarrier(commands);
     ++clears_depth_in_pass_;
     return true;
   }
@@ -6906,8 +6947,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     start.renderArea = area;
     start.clearValueCount = 1;
     start.pClearValues = &clear;
+    PassBarrier(commands);
     dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
     dfn_.vkCmdEndRenderPass(commands);
+    PassBarrier(commands);
     return true;
   }
 
@@ -6941,6 +6984,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     start.renderPass = pass;
     start.framebuffer = framebuffer;
     start.renderArea = area;
+    PassBarrier(commands);
     dfn_.vkCmdBeginRenderPass(commands, &start, VK_SUBPASS_CONTENTS_INLINE);
     VkClearAttachment attachment{};
     attachment.aspectMask = aspects;
@@ -6952,6 +6996,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     rectangle.layerCount = 1;
     dfn_.vkCmdClearAttachments(commands, 1, &attachment, 1, &rectangle);
     dfn_.vkCmdEndRenderPass(commands);
+    PassBarrier(commands);
     return true;
   }
 
@@ -13609,6 +13654,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // The statistics cover the whole pass, from here to after EndRenderPass.
     stats_pass_ = context_->BeginStats(category_pass_);
     const auto before_start = std::chrono::steady_clock::now();
+    PassBarrier(cmd);
     dfn_.vkCmdBeginRenderPass(cmd, &start, VK_SUBPASS_CONTENTS_INLINE);
     ns_render_pass_ += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - before_start).count());
