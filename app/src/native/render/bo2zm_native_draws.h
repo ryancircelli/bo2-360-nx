@@ -11,6 +11,8 @@
 
 #include <rex/ui/vulkan/device.h>
 
+#include "bo2zm_gpu.h"
+
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -308,8 +310,8 @@ class VulkanDraws {
                                        float depth, uint32_t stencil) = 0;
   // bo2zm_native_clear_useful_area. Clears only the `area` rectangle of a color image by opening a pass
   // with loadOp = CLEAR. Returns false if it could not.
-  virtual bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& image, const VkClearColorValue& color,
-                                 const VkRect2D& area) {
+  virtual bool ClearColorInPass(VkCommandBuffer commands, const NativeImage& image, const gpu::ClearColor& color,
+                                const gpu::Rect& area) {
     (void)commands;
     (void)image;
     (void)color;
@@ -319,8 +321,8 @@ class VulkanDraws {
   // Clears the `area` rectangle of one render target, only the `aspects` given (color, or depth
   // and/or stencil), with vkCmdClearAttachments inside a pass that loads the image: everything else keeps its
   // content. For BO2's Direct3D Clear(), which is a draw. Returns false if it could not.
-  virtual bool ClearAttachmentInPass(VkCommandBuffer commands, const NativeImage& image, VkImageAspectFlags aspects,
-                                   const VkClearValue& value, const VkRect2D& area) {
+  virtual bool ClearAttachmentInPass(VkCommandBuffer commands, const NativeImage& image, gpu::Aspects aspects,
+                                     const gpu::ClearValue& value, const gpu::Rect& area) {
     (void)commands;
     (void)image;
     (void)aspects;
