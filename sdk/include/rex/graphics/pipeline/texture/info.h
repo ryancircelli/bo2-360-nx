@@ -129,6 +129,7 @@ struct FormatInfo {
 
   uint32_t bytes_per_block() const { return block_width * block_height * bits_per_pixel / 8; }
 
+  static const char* GetName(xenos::TextureFormat format) { return Get(format)->name; }
   static const FormatInfo* Get(uint32_t gpu_format);
 
   static const FormatInfo* Get(xenos::TextureFormat format) {
