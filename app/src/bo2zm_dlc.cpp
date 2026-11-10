@@ -48,6 +48,7 @@ namespace {
 constexpr uint32_t kDlcRecords = 0x83880EF8;
 constexpr uint32_t kDlcRecordSize = 76;
 constexpr uint32_t kDlcRecordCount = 8;
+constexpr uint32_t kDlcContentBit = 0;  // uint32, big-endian; dlczm0.id names bit 8
 constexpr uint32_t kDlcLicenseMask = 64;  // uint32, big-endian
 constexpr uint32_t kDlcMounted = 69;      // byte
 constexpr uint32_t kSessionModeFlags = 0x837F8CB4;  // uint32, big-endian; sub_82406460 tests bit 0x4
@@ -65,11 +66,13 @@ REX_HOOK_RAW(sub_82412840) {
   const uint8_t* entry = base + kDlcRecords + record * kDlcRecordSize;
   uint32_t mask;
   std::memcpy(&mask, entry + kDlcLicenseMask, sizeof(mask));
+  uint32_t content_bit;
+  std::memcpy(&content_bit, entry + kDlcContentBit, sizeof(content_bit));
   uint32_t session;
   std::memcpy(&session, base + kSessionModeFlags, sizeof(session));
   // Only the one refusal this is about: a mounted record, license mask exactly 1, and no online session (online, the
   // game decides by itself, through the server's content_trialcontentpackbits).
-  if (entry[kDlcMounted] == 0 || __builtin_bswap32(mask) != 1 ||
+  if (entry[kDlcMounted] == 0 || __builtin_bswap32(content_bit) != 8 || __builtin_bswap32(mask) != 1 ||
       (__builtin_bswap32(session) & kSessionModeOnline) != 0) {
     return;
   }
