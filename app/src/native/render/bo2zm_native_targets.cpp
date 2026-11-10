@@ -492,6 +492,26 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_precise_marks, true, "BO2",
                     "Native renderer (measurement): GPU timestamps between categories with BOTTOM_OF_PIPE (released "
                     "when the previous work finishes) instead of TOP_OF_PIPE (when the command is read): exact split by "
                     "category. Does not change the image");
+/*
+ * Each GPU timestamp costs MoltenVK a whole Metal blit pass at the end of the current encoder (a fence wait and a
+ * one-byte fill: MVKCommandEncoder::encodeTimestampStageCounterSamples), encoded on the thread that submits. With
+ * one mark per change of category that was ~6 % of the ring thread in four-player split screen. Off: one mark at
+ * the start of each job and the final one, so gpu_ms and "real GPU per Swap" still measure the whole job, but the
+ * C2 split by category has only the first category.
+ */
+/*
+ * The 3D texture built from a 2D resolve (BO2's 32x32x32 color-grading table): a vkCmdCopyImage of 512 regions, which
+ * MoltenVK encodes as 512 Metal blits on the thread that submits (~16 % of it in four-player split screen, where the
+ * table is rebuilt for each view). On: the resolve copied to a buffer, one compute dispatch that puts each texel in
+ * its place, one copy to the 3D image. The same texels; off (or if the compute pipeline cannot be made) the copy.
+ */
+REXCVAR_DEFINE_BOOL(bo2zm_native_volume_gather, true, "BO2",
+                    "Native renderer: build the 3D color-grading table from its resolve with one compute dispatch "
+                    "instead of a 512-region image copy (much cheaper to encode on MoltenVK). Same image");
+REXCVAR_DEFINE_BOOL(bo2zm_native_gpu_categories, true, "BO2",
+                    "Native renderer (measurement): a GPU timestamp at every change of category (copies, clears, "
+                    "passes) for the C2 split of GPU time; false keeps only the first and last of each job (the GPU "
+                    "total stays). Does not change the image");
 REXCVAR_DEFINE_INT32(bo2zm_native_precise_marks_alternate_s, 0, "BO2",
                      "Native renderer (measurement): with N > 0 alternates normal marks (even spans) and precise marks "
                      "(odd spans) every N seconds and annotates each switch, to compare in the same run");
@@ -523,6 +543,7 @@ namespace shaders {
 // (shaders/bo2zm_output_gamma_ramp.frag).
 #include "shaders/bo2zm_output_gamma_ramp_ps.h"
 #include "shaders/bo2zm_credits_ps.h"  // The home screen's credits line (bo2zm_credits.cpp)
+#include "shaders/bo2zm_volume_gather_cs.h"  // TextureResolved3D in one dispatch (bo2zm_native_volume_gather)
 #include "../shaders/bo2zm_resolve_copy_ps.h"
 }  // namespace shaders
 
@@ -837,7 +858,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     for (auto& [key, volume] : volumes_) {
       Destroy(volume.image);
+      if (volume.gather != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, volume.gather, nullptr);
+      if (volume.gather_memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, volume.gather_memory, nullptr);
     }
+    if (gather_pipeline_ != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, gather_pipeline_, nullptr);
+    if (gather_layout_ != VK_NULL_HANDLE) dfn_.vkDestroyPipelineLayout(device_, gather_layout_, nullptr);
     Destroy(tiled_);
     for (FrontImage& spare : fronts_images_) {  // bo2zm_native_lazy_front
       Destroy(spare.image);
@@ -1017,6 +1042,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     REXLOG_INFO("[native] C2: output without waiting for the previous one (bo2zm_native_output_without_wait) = {}",
                 output_no_wait_ ? "SI" : "no");
     marks_precise_ = REXCVAR_GET(bo2zm_native_precise_marks);
+    marks_categories_ = REXCVAR_GET(bo2zm_native_gpu_categories);
     alternate_marks_s_ = REXCVAR_GET(bo2zm_native_precise_marks_alternate_s);
     start_marks_ = std::chrono::steady_clock::now();
     REXLOG_INFO("[native] C2: precise GPU marks (bo2zm_native_precise_marks) = {}; alternate every {} s",
@@ -3923,6 +3949,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       REXLOG_INFO("[native] BO2: 3D texture {}x{}x{} at {:08X} made from the resolved {}x{} ({} regions of {}x{})",
                   width, height, depth3d, address, flat->width, flat->height, v.regions.size(), v.block & 0xFFFF,
                   v.block >> 16);
+      if (REXCVAR_GET(bo2zm_native_volume_gather)) {
+        CreateVolumeGather(*flat, v);
+      }
       it = volumes_.emplace(address, std::move(v)).first;
     }
     ResolvedVolume& v = it->second;
@@ -3949,13 +3978,47 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     first.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     dfn_.vkCmdPipelineBarrier(commands_job_,
                               VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                  (v.gather != VK_NULL_HANDLE ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
                               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, v.image.prepared ? 0 : 1,
                               &first);
     v.image.prepared = true;
     MarkGpu(kGpuCopies);
-    copy_image_(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.image.image, VK_IMAGE_LAYOUT_GENERAL,
-                   uint32_t(v.regions.size()), v.regions.data());
+    if (v.gather != VK_NULL_HANDLE) {
+      // bo2zm_native_volume_gather: resolve -> buffer, the shader puts each texel in its 3D place, buffer -> 3D.
+      // The barrier above already waits for the previous rebuild's reads of the buffer (transfer and compute).
+      const VkDeviceSize bytes_flat = VkDeviceSize(v.texels_flat) * 4;
+      const VkDeviceSize at_src = VkDeviceSize(v.texels) * 4, at_dst = at_src + bytes_flat;
+      VkBufferImageCopy out{};
+      out.bufferOffset = at_src;
+      out.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      out.imageExtent = {flat->width, flat->height, 1};
+      dfn_.vkCmdCopyImageToBuffer(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.gather, 1, &out);
+      VkMemoryBarrier to_compute{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      to_compute.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      to_compute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                0, 1, &to_compute, 0, nullptr, 0, nullptr);
+      const VolumeGatherPush push{v.gather_address, v.gather_address + at_src, v.gather_address + at_dst, v.texels,
+                                  0};
+      dfn_.vkCmdBindPipeline(commands_job_, VK_PIPELINE_BIND_POINT_COMPUTE, gather_pipeline_);
+      dfn_.vkCmdPushConstants(commands_job_, gather_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+      dfn_.vkCmdDispatch(commands_job_, (v.texels + 63) / 64, 1, 1);
+      VkMemoryBarrier to_copy{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      to_copy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      to_copy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      dfn_.vkCmdPipelineBarrier(commands_job_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                0, 1, &to_copy, 0, nullptr, 0, nullptr);
+      VkBufferImageCopy in{};
+      in.bufferOffset = at_dst;
+      in.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      in.imageExtent = {v.image.width, v.image.height, v.depth3d};
+      dfn_.vkCmdCopyBufferToImage(commands_job_, v.gather, v.image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
+      ++volumes_gathered_;
+    } else {
+      copy_image_(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.image.image, VK_IMAGE_LAYOUT_GENERAL,
+                     uint32_t(v.regions.size()), v.regions.data());
+    }
     VkMemoryBarrier later{};
     later.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     later.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -3970,6 +4033,115 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     return &v.image;
   }
 
+  private:
+  struct ResolvedVolume;
+  struct VolumeGatherPush {
+    VkDeviceAddress table, src, dst;
+    uint32_t count, pad;
+  };
+
+  // bo2zm_native_volume_gather: the compute pipeline (once) and this volume's buffer with its table. On any failure
+  // v.gather stays null and the volume is built by the region copy.
+  void CreateVolumeGather(const OwnedImage& flat, ResolvedVolume& v) {
+    if (!gather_tried_) {
+      gather_tried_ = true;
+      const auto& ifn = vulkan_device_->vulkan_instance()->functions();
+      gather_address_fn_ =
+          reinterpret_cast<PFN_vkGetBufferDeviceAddress>(ifn.vkGetDeviceProcAddr(device_, "vkGetBufferDeviceAddress"));
+      VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+      info.codeSize = sizeof(shaders::kSpirvBo2zmVolumeGather);
+      info.pCode = shaders::kSpirvBo2zmVolumeGather;
+      VkShaderModule module = VK_NULL_HANDLE;
+      const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(VolumeGatherPush)};
+      VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+      layout.pushConstantRangeCount = 1;
+      layout.pPushConstantRanges = &range;
+      if (gather_address_fn_ && dfn_.vkCreateShaderModule(device_, &info, nullptr, &module) == VK_SUCCESS) {
+        if (dfn_.vkCreatePipelineLayout(device_, &layout, nullptr, &gather_layout_) == VK_SUCCESS) {
+          VkComputePipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+          pipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          pipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+          pipeline.stage.module = module;
+          pipeline.stage.pName = "main";
+          pipeline.layout = gather_layout_;
+          if (dfn_.vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipeline, nullptr, &gather_pipeline_) !=
+              VK_SUCCESS) {
+            gather_pipeline_ = VK_NULL_HANDLE;
+          }
+        }
+        dfn_.vkDestroyShaderModule(device_, module, nullptr);
+      }
+      REXLOG_INFO("[native] C2: 3D textures from resolves by one compute dispatch (bo2zm_native_volume_gather): {}",
+                  gather_pipeline_ != VK_NULL_HANDLE ? "ready" : "the pipeline could not be made, the region copy");
+    }
+    if (gather_pipeline_ == VK_NULL_HANDLE) {
+      return;
+    }
+    const uint32_t texels = v.image.width * v.image.height * v.depth3d;
+    const uint32_t texels_flat = flat.width * flat.height;
+    std::vector<uint32_t> table(texels, UINT32_MAX);
+    for (const VkImageCopy& r : v.regions) {
+      for (uint32_t y = 0; y < r.extent.height; ++y) {
+        for (uint32_t x = 0; x < r.extent.width; ++x) {
+          const uint32_t d = (uint32_t(r.dstOffset.z) * v.image.height + uint32_t(r.dstOffset.y) + y) * v.image.width +
+                             uint32_t(r.dstOffset.x) + x;
+          const uint32_t from = (uint32_t(r.srcOffset.y) + y) * flat.width + uint32_t(r.srcOffset.x) + x;
+          if (d >= texels || from >= texels_flat) {
+            return;
+          }
+          table[d] = from;
+        }
+      }
+    }
+    for (uint32_t t : table) {
+      if (t == UINT32_MAX) {
+        return;  // a texel no region writes: keep the copy (it leaves it as it is)
+      }
+    }
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    info.size = (VkDeviceSize(texels) * 2 + texels_flat) * 4;
+    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void* mapped = nullptr;
+    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &buffer) != VK_SUCCESS) {
+      return;
+    }
+    VkMemoryRequirements requirements;
+    dfn_.vkGetBufferMemoryRequirements(device_, buffer, &requirements);
+    uint32_t type = 0;
+    VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocate.pNext = &flags;
+    allocate.allocationSize = requirements.size;
+    if (!rex::bit_scan_forward(requirements.memoryTypeBits & vulkan_device_->memory_types().host_visible, &type) ||
+        (allocate.memoryTypeIndex = type,
+         dfn_.vkAllocateMemory(device_, &allocate, nullptr, &memory) != VK_SUCCESS) ||
+        dfn_.vkBindBufferMemory(device_, buffer, memory, 0) != VK_SUCCESS ||
+        dfn_.vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+      dfn_.vkDestroyBuffer(device_, buffer, nullptr);
+      if (memory != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, memory, nullptr);
+      return;
+    }
+    std::memcpy(mapped, table.data(), size_t(texels) * 4);
+    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+    range.memory = memory;
+    range.size = VK_WHOLE_SIZE;
+    dfn_.vkFlushMappedMemoryRanges(device_, 1, &range);
+    dfn_.vkUnmapMemory(device_, memory);
+    VkBufferDeviceAddressInfo where{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    where.buffer = buffer;
+    v.gather = buffer;
+    v.gather_memory = memory;
+    v.gather_address = gather_address_fn_(device_, &where);
+    v.texels = texels;
+    v.texels_flat = texels_flat;
+  }
+
+  public:
   // The copy regions that move a 2D resolve (tiled, 4-byte texels, pitch = its width) into a tiled 3D texture of
   // the same memory: the largest block size whose texels all keep their relative positions, down to 1x1.
   // `block` returns its width | height << 16. false if a 3D texel falls outside the resolve.
@@ -4773,7 +4945,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return;
     }
     WorkSlot& slot = slots_[slot_];
-    if (slot.categories.size() + 1 >= kMarksPerSlot ||
+    if ((!marks_categories_ && !slot.categories.empty()) || slot.categories.size() + 1 >= kMarksPerSlot ||
         (!slot.categories.empty() && slot.categories.back() == category)) {
       return;  // no room (the last one is for the end mark) or same category continues
     }
@@ -6525,6 +6697,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       pixels_restored_previous_ = pixels_restored_;
       pixels_restore_saved_previous_ = pixels_restore_saved_;
     }
+    if (volumes_done_ != volumes_done_previous_) {
+      const double frames = double(presented_ - presented_report_copies_);
+      BO2ZM_REPORT_RING("[native] C2 3D textures rebuilt from resolves: {} ({:.2f} per frame; {} by compute since boot)",
+                        volumes_done_ - volumes_done_previous_,
+                        frames > 0.0 ? double(volumes_done_ - volumes_done_previous_) / frames : 0.0, volumes_gathered_);
+      volumes_done_previous_ = volumes_done_;
+    }
     if (clears_skipped_ || clears_skipped_depth_) {
       // Clears that did not change a single bit (bo2zm_native_skip_repeated_clears). A clear costs
       // 0.075 real ms per Mpixel: ten times less than a copy, but it adds up.
@@ -7147,6 +7326,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   using FnReadQueries = VkResult(VKAPI_PTR*)(VkDevice, VkQueryPool, uint32_t, uint32_t, size_t,
                                               void*, VkDeviceSize, VkQueryResultFlags);
   FnWriteMark write_mark_ = nullptr;
+  bool marks_categories_ = true;  // bo2zm_native_gpu_categories
   FnReadQueries read_queries_ = nullptr;
   VkQueryPool queries_ = VK_NULL_HANDLE;
   // The game's occlusion queries. The open one (0 = none), those waiting for their spans by number, the last
@@ -7409,11 +7589,24 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     uint64_t write = 0;    // writes_resolved_ value it was built from
     VkImage source = VK_NULL_HANDLE;
     std::vector<VkImageCopy> regions;
+    // bo2zm_native_volume_gather: one host-visible buffer, by its device address: the table (texels words: the
+    // index in the resolve of each 3D texel), the resolve's texels (texels_flat words), the 3D texels (texels words).
+    VkBuffer gather = VK_NULL_HANDLE;
+    VkDeviceMemory gather_memory = VK_NULL_HANDLE;
+    VkDeviceAddress gather_address = 0;
+    uint32_t texels = 0;
+    uint32_t texels_flat = 0;
   };
   std::unordered_map<uint32_t, ResolvedVolume> volumes_;
   std::unordered_map<uint32_t, uint64_t> writes_resolved_;  // resolve address -> its last write
   uint64_t counter_writes_ = 0;
   uint64_t volumes_done_ = 0;
+  uint64_t volumes_done_previous_ = 0;
+  uint64_t volumes_gathered_ = 0;  // of volumes_done_, by bo2zm_native_volume_gather
+  bool gather_tried_ = false;
+  PFN_vkGetBufferDeviceAddress gather_address_fn_ = nullptr;
+  VkPipelineLayout gather_layout_ = VK_NULL_HANDLE;
+  VkPipeline gather_pipeline_ = VK_NULL_HANDLE;
   uint64_t clears_skipped_ = 0;             // color ones
   uint64_t clears_skipped_depth_ = 0;
   uint64_t pixels_clears_skipped_ = 0;

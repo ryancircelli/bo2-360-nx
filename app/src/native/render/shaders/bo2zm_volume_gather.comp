@@ -1,0 +1,39 @@
+#version 450
+// The 3D texture built from a 2D resolve (TextureResolved3D in bo2zm_native_targets.cpp: BO2's 32x32x32
+// color-grading table, rebuilt whenever its resolve is written) in one dispatch. The resolve is first copied to a
+// buffer (texels in rows), this shader moves each texel to its place in the 3D texture's rows, and one copy puts
+// those in the 3D image. It replaces a vkCmdCopyImage of 512 regions: MoltenVK encodes each region as its own Metal
+// blit, and in four-player split screen those 512 blits per rebuild were ~16 % of the thread that submits.
+//
+// One invocation per 3D texel: dst[i] = src[table[i]], 4-byte texels. The table is built once on the CPU from the
+// same regions the copy would use.
+//
+// The header is generated with:
+//   glslangValidator -V --target-env vulkan1.1 --vn kSpirvBo2zmVolumeGather -o bo2zm_volume_gather_cs.h bo2zm_volume_gather.comp
+
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Words {
+  uint w[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer WordsOut {
+  uint w[];
+};
+
+layout(push_constant) uniform Push {
+  uint64_t table;  // count words: the index in src of each 3D texel
+  uint64_t src;    // the resolve's texels, row by row
+  uint64_t dst;    // count words: the 3D texture's texels, row by row, slice by slice
+  uint count;
+} p;
+
+void main() {
+  const uint i = gl_GlobalInvocationID.x;
+  if (i >= p.count) {
+    return;
+  }
+  WordsOut(p.dst).w[i] = Words(p.src).w[Words(p.table).w[i]];
+}
