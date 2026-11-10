@@ -467,7 +467,7 @@ struct NvkSwitchDraw {
   NvkSwImprovement improvements[5];  // emission, cbufs, dynamic, set4_fast (not applied), prefetch
 };
 extern NvkSwitchDraw nvk_switch_draw __attribute__((weak));
-void vk_switch_prefetch_pipeline(VkPipeline pipeline) __attribute__((weak));
+void vk_switch_prefetch_pipeline(gpu::Pipeline pipeline) __attribute__((weak));
 }
 static_assert(sizeof(NvkSwitchDraw) == 24 + 16 * 16 + 13 * 8 + 5 * 40, "NvkSwitchDraw: the same size as in NVK");
 #endif
@@ -2877,8 +2877,8 @@ struct CachedTexture {
 };
 
 struct View {
-  VkImage image = VK_NULL_HANDLE;
-  VkImageView view = VK_NULL_HANDLE;
+  gpu::Image image = nullptr;
+  gpu::ImageView view = nullptr;
   uint32_t slot = 0;
   uint32_t heap = 0;  // 0 2D textures, 2 cubemaps
 };
@@ -2905,13 +2905,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
     for (auto& [key, pair] : pipelines_) {
       gpu::vulkan::Destroy(dfn_, device_, pair.second);
     }
-    if (cache_pipelines_ != VK_NULL_HANDLE) {
+    if (cache_pipelines_ != nullptr) {
       destroy_cache_(device_, cache_pipelines_, nullptr);
     }
     for (auto& [key, framebuffer] : framebuffers_) {
       gpu::vulkan::DestroyFramebuffer(dfn_, device_, framebuffer);
     }
-    for (VkFramebuffer framebuffer : fb_retired_) {  // the ones ForgetView retired
+    for (gpu::Framebuffer framebuffer : fb_retired_) {  // the ones ForgetView retired
       gpu::vulkan::DestroyFramebuffer(dfn_, device_, framebuffer);
     }
     for (auto& [key, pass] : passes_) {
@@ -2921,17 +2921,17 @@ class VulkanDrawsImpl final : public VulkanDraws {
       gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
     }
     for (auto& [input, shader_module] : modules_only_alpha_) {
-      if (shader_module != VK_NULL_HANDLE) {
+      if (shader_module != nullptr) {
         gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
       }
     }
     for (auto& [input, shader_module] : modules_z_early_) {
-      if (shader_module != VK_NULL_HANDLE) {
+      if (shader_module != nullptr) {
         gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
       }
     }
-    for (VkShaderModule shader_module : modules_variants_) {
-      if (shader_module != VK_NULL_HANDLE) {
+    for (gpu::Shader shader_module : modules_variants_) {
+      if (shader_module != nullptr) {
         gpu::vulkan::DestroyShader(dfn_, device_, shader_module);
       }
     }
@@ -2950,36 +2950,36 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // The pool's slabs are released after destroying every image that lives in them. The other way round
     // would free memory that the VkImages still have bound.
     pool_textures_.Finish();
-    if (sampler_empty_ != VK_NULL_HANDLE) gpu::vulkan::DestroySampler(dfn_, device_, sampler_empty_);
-    if (layout_pipeline_ != VK_NULL_HANDLE)
+    if (sampler_empty_ != nullptr) gpu::vulkan::DestroySampler(dfn_, device_, sampler_empty_);
+    if (layout_pipeline_ != nullptr)
       gpu::vulkan::Destroy(dfn_, device_, layout_pipeline_);
     bo2zm::gpu_skin::SetRendererReady(false);
-    if (skin_pipeline_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_pipeline_);
-    if (skin_layout_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_layout_);
-    if (skin_table_buffer_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_table_buffer_);
-    if (skin_table_memory_ != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, skin_table_memory_);
-    if (skin_pool_buffer_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, skin_pool_buffer_);
-    if (skin_pool_memory_ != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, skin_pool_memory_);
-    if (pool_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool_);
-    if (pool_ubo_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool_ubo_);
-    if (layout_ubo_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, layout_ubo_);
-    for (VkDescriptorSetLayout layout : layouts_) {
-      if (layout != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, layout);
+    if (skin_pipeline_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, skin_pipeline_);
+    if (skin_layout_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, skin_layout_);
+    if (skin_table_buffer_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, skin_table_buffer_);
+    if (skin_table_memory_ != nullptr) gpu::vulkan::Free(dfn_, device_, skin_table_memory_);
+    if (skin_pool_buffer_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, skin_pool_buffer_);
+    if (skin_pool_memory_ != nullptr) gpu::vulkan::Free(dfn_, device_, skin_pool_memory_);
+    if (pool_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, pool_);
+    if (pool_ubo_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, pool_ubo_);
+    if (layout_ubo_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, layout_ubo_);
+    for (gpu::SetLayout layout : layouts_) {
+      if (layout != nullptr) gpu::vulkan::Destroy(dfn_, device_, layout);
     }
     for (const UploadBuffer& s : shared_bufs_) {
       if (s.data) gpu::vulkan::Unmap(dfn_, device_, s.guest_memory);
-      if (s.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
-      if (s.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
+      if (s.buffer != nullptr) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
+      if (s.guest_memory != nullptr) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
     }
     for (const UploadBuffer& s : uploads_) {
       if (s.data) gpu::vulkan::Unmap(dfn_, device_, s.guest_memory);
-      if (s.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
-      if (s.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
+      if (s.buffer != nullptr) gpu::vulkan::Destroy(dfn_, device_, s.buffer);
+      if (s.guest_memory != nullptr) gpu::vulkan::Free(dfn_, device_, s.guest_memory);
     }
     for (const VertexPool& v : vpools_) {  // bo2zm_native_vertex_cache
       if (v.data) gpu::vulkan::Unmap(dfn_, device_, v.memory);
-      if (v.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, v.buffer);
-      if (v.memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, v.memory);
+      if (v.buffer != nullptr) gpu::vulkan::Destroy(dfn_, device_, v.buffer);
+      if (v.memory != nullptr) gpu::vulkan::Free(dfn_, device_, v.memory);
     }
   }
 
@@ -3954,10 +3954,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
         return false;
       }
     }
-    const VkCommandBuffer cmd = pass_commands_;
+    const gpu::CommandList cmd = pass_commands_;
     if (recording_generation_ != context_->GenerationCommands()) {
       recording_generation_ = context_->GenerationCommands();
-      pipeline_bound_ = VK_NULL_HANDLE;
+      pipeline_bound_ = nullptr;
       eds_valid_ = false;  // phases 1 and 2: nothing is set in the new buffer
       key_bound_valid_ = false;  // New command buffer (CountChangePipeline)
       sets_bound_ = false;
@@ -4402,13 +4402,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
       key.depth |= 0x7 << 4;  // test: Z function always
     }
     key.rasterization = (mode_sc & 0x7) | (restart ? 0x8 : 0) | (with_bias ? 0x10 : 0);
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    gpu::Pipeline pipeline = nullptr;
     // Looked up with LookupKey (phase 0a: canonical form; phases 1 and 2: without the state set through
     // vkCmdSet*). key stays raw: the deferred sky (opaque_in_all), the counter and the dynamic state read
     // it.
     CutSubstage(49, t_pipeline);
     BO2ZM_SUB(11, pipeline = PipelineOf(LookupKey(key), *input, p));
-    if (pipeline == VK_NULL_HANDLE) {
+    if (pipeline == nullptr) {
       return false;
     }
 #if REX_PLATFORM_SWITCH
@@ -4634,7 +4634,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     if (pipeline != pipeline_bound_) {
       if (count_changes_pipeline_) {  // Measurement only (bo2zm_native_count_pipeline_changes)
-        CountChangePipeline(key, pipeline_bound_ == VK_NULL_HANDLE);
+        CountChangePipeline(key, pipeline_bound_ == nullptr);
       }
       BO2ZM_SUB(0, gpu_.BindGraphicsPipeline(cmd, pipeline));
       pipeline_bound_ = pipeline;
@@ -4643,7 +4643,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // difference, dynamic state switches off and this same draw is bound with its usual pipeline.
     if (eds_mode_ && !SetStateDynamic(cmd, key)) {
       BO2ZM_SUB(11, pipeline = PipelineOf(LookupKey(key), *input, p));
-      if (pipeline == VK_NULL_HANDLE) {
+      if (pipeline == nullptr) {
         return false;
       }
       BO2ZM_SUB(0, gpu_.BindGraphicsPipeline(cmd, pipeline));
@@ -4744,7 +4744,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     bool base_cero = false;
     uint32_t first_vertex = 0;  // offset / stride: where the copy starts, in vertices
     // Each binding's buffer (the upload buffer or a vertex cache pool) and its offset in it.
-    std::array<VkBuffer, 16> bind_buffers;
+    std::array<gpu::Buffer, 16> bind_buffers;
     std::array<VkDeviceSize, 16> bind_offsets;
     for (size_t i = 0; i < input->bindings.size(); ++i) {
       ResolveVertexBinding(offsets_vertices[i], upload_, bind_buffers[i], bind_offsets[i]);
@@ -4897,7 +4897,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       // The upload buffer is bound once per index type and each draw uses firstIndex.
       const VkIndexType type_indices = indices_16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
       // Or the index cache's pool (bo2zm_native_index_cache), with the same tag as the vertex cache's.
-      VkBuffer buffer_indices = upload_;
+      gpu::Buffer buffer_indices = upload_;
       VkDeviceSize at_indices = offset_indices;
       ResolveVertexBinding(offset_indices, upload_, buffer_indices, at_indices);
       if (type_indices != type_indices_recorded_ || buffer_indices != buffer_indices_recorded_) {
@@ -4941,8 +4941,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * The upload buffer offsets are still valid because Reserve only moves forward and the buffer is not
    * reset until UseSlot, which always comes after BeforeSubmit -> FinishPass.
    */
-  void EmitSkyPostponed(VkCommandBuffer cmd, uint32_t reason) {
-    if (!sky_pending_ || cmd == VK_NULL_HANDLE) {
+  void EmitSkyPostponed(gpu::CommandList cmd, uint32_t reason) {
+    if (!sky_pending_ || cmd == nullptr) {
       return;
     }
     sky_pending_ = false;
@@ -4975,7 +4975,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       gpu_.SetStencilValues(cmd, c.stencil[0], c.stencil[1]);
     }
     if (c.n_bindings) {
-      std::array<VkBuffer, 16> buffers{};
+      std::array<gpu::Buffer, 16> buffers{};
       std::array<VkDeviceSize, 16> offsets{};
       for (uint32_t i = 0; i < c.n_bindings; ++i) {
         ResolveVertexBinding(c.offsets_vertices[i], c.buffer, buffers[i], offsets[i]);  // bo2zm_native_vertex_cache
@@ -4988,7 +4988,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                   : context_->BeginStatsDraw(c.ps_more_one, c.category);
     if (c.with_indices) {
       gpu_.BindIndexBuffer(cmd, c.index_buffer, c.indices_16);
-      buffer_indices_recorded_ = VK_NULL_HANDLE;
+      buffer_indices_recorded_ = nullptr;
       gpu_.DrawIndexed(cmd, c.indices, c.first_index, -int32_t(c.vmin));
     } else {
       gpu_.Draw(cmd, c.count, 0);
@@ -5731,9 +5731,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // The guard of the direct-mapped pipeline cache. The same key in the map (the usual path) must give the
   // same VkPipeline as the slot. Otherwise it switches off and returns false.
-  bool CheckCellPipeline(uint64_t hash, const PipelineKey& key, VkPipeline in_cell, uint64_t n) {
+  bool CheckCellPipeline(uint64_t hash, const PipelineKey& key, gpu::Pipeline in_cell, uint64_t n) {
     ++pipelines_direct_checked_;
-    VkPipeline of_map = VK_NULL_HANDLE;
+    gpu::Pipeline of_map = nullptr;
     if (const auto it = pipelines_.find(hash);
         it != pipelines_.end() && std::memcmp(&it->second.first, &key, sizeof(key)) == 0) {
       of_map = it->second.second;
@@ -6024,7 +6024,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // bo2zm_native_pass_barriers: everything recorded before (passes, copies, clears) finishes and is visible to
   // everything after. Outside a render pass only.
-  void PassBarrier(VkCommandBuffer commands) {
+  void PassBarrier(gpu::CommandList commands) {
     static const bool on = REXCVAR_GET(bo2zm_native_pass_barriers);
     if (!on) {
       return;
@@ -6622,8 +6622,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // image); what has to be redone is which slot each fetch constant gets. By their slots' generations,
   // without walking the caches.
   void InvalidateImages(gpu::Image a, gpu::Image b) override {
-    for (VkImage image : {a, b}) {
-      if (image == VK_NULL_HANDLE || (image == b && a == b)) {
+    for (gpu::Image image : {a, b}) {
+      if (image == nullptr || (image == b && a == b)) {
         continue;
       }
       const auto it = views_per_image_.find(image);
@@ -6757,7 +6757,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // Whether a texture may be released by the gradual eviction: cold, with an image, and nothing pending on it.
   bool ColdForRelease(const CachedTexture& texture) const {
-    return texture.image.image != VK_NULL_HANDLE && !texture.needs_upload && !texture.in_flight && !texture.hash_job &&
+    return texture.image.image != nullptr && !texture.needs_upload && !texture.in_flight && !texture.hash_job &&
            texture.frame != UINT64_MAX && texture.frame + kFramesNoUseForRelease < frame_;
   }
 
@@ -6831,8 +6831,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (it == textures_.end()) {
         continue;
       }
-      const VkImage image = it->second.image.image;
-      const auto index = image != VK_NULL_HANDLE ? views_per_image_.find(image) : views_per_image_.end();
+      const gpu::Image image = it->second.image.image;
+      const auto index = image != nullptr ? views_per_image_.find(image) : views_per_image_.end();
       if (index != views_per_image_.end()) {
         for (const uint64_t view_key : index->second) {
           const auto v = views_.find(view_key);
@@ -6863,7 +6863,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint32_t how_many = 0;
     for (const auto& [key, texture] : textures_) {
       // Nor those with a bind in flight, nor those owned by the hash thread.
-      if (texture.image.image == VK_NULL_HANDLE || texture.needs_upload || texture.in_flight || texture.hash_job ||
+      if (texture.image.image == nullptr || texture.needs_upload || texture.in_flight || texture.hash_job ||
           texture.frame == UINT64_MAX ||
           texture.frame + kFramesNoUseForRelease >= frame_) {
         continue;
@@ -6886,7 +6886,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (how_many == 0) {
       return;  // all hot: let it grow rather than thrash
     }
-    std::unordered_set<VkImage> images;
+    std::unordered_set<gpu::Image> images;
     for (uint32_t i = 0; i < how_many; ++i) {
       auto it = textures_.find(chosen[i].second);
       if (it == textures_.end()) {
@@ -6937,7 +6937,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // Actually retires a group of images. First the views and their slots (pointed at the empty texture),
   // then the images. Used by both the gradual and the batch eviction.
-  void ReleaseImages(const std::unordered_set<VkImage>& images) {
+  void ReleaseImages(const std::unordered_set<gpu::Image>& images) {
     ++invalidations_retired_;
     for (auto it = views_.begin(); it != views_.end();) {
       if (!images.count(it->second.image)) {
@@ -6968,7 +6968,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     std::vector<std::pair<uint64_t, uint64_t>> candidates;  // (last frame it was prepared, key)
     for (const auto& [key, texture] : textures_) {
       // Nor those with a bind in flight (their image has no memory yet), nor those owned by the hash thread.
-      if (&texture.image != keep && texture.image.image != VK_NULL_HANDLE &&
+      if (&texture.image != keep && texture.image.image != nullptr &&
           !texture.needs_upload && !texture.in_flight && !texture.hash_job &&
           texture.frame != UINT64_MAX &&
           texture.frame + min_age < frame_) {
@@ -6977,7 +6977,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     std::sort(candidates.begin(), candidates.end());
     const uint64_t before = bytes_textures_;
-    std::unordered_set<VkImage> images;
+    std::unordered_set<gpu::Image> images;
     for (const auto& [last, key] : candidates) {
       if (bytes_textures_ <= goal) {
         break;
@@ -7005,20 +7005,20 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // loadOp = CLEAR).
   bool ClearDepthInPass(gpu::CommandList commands, const NativeImage& image,
                                float depth, uint32_t stencil) override {
-    if (commands == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || !image.width ||
+    if (commands == nullptr || image.view == nullptr || !image.width ||
         !image.height) {
       return false;
     }
     FinishPass();  // a pass cannot be opened inside another
     uint32_t formats[5] = {0, 0, 0, 0, uint32_t(image.format)};
-    const VkRenderPass pass = PassOf(formats, kLoadClear);
-    if (pass == VK_NULL_HANDLE) {
+    const gpu::Pass pass = PassOf(formats, kLoadClear);
+    if (pass == nullptr) {
       return false;
     }
-    std::array<VkImageView, 5> views{};
+    std::array<gpu::ImageView, 5> views{};
     views[4] = image.view;
-    const VkFramebuffer framebuffer = FramebufferOf(pass, views, image.width, image.height);
-    if (framebuffer == VK_NULL_HANDLE) {
+    const gpu::Framebuffer framebuffer = FramebufferOf(pass, views, image.width, image.height);
+    if (framebuffer == nullptr) {
       return false;
     }
     VkClearValue clear{};
@@ -7045,21 +7045,21 @@ class VulkanDrawsImpl final : public VulkanDraws {
                         const gpu::Rect& clear_area) override {
     const VkClearColorValue color = gpu::ToVk(clear_color);
     const VkRect2D area = gpu::ToVk(clear_area);
-    if (commands == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || !area.extent.width || !area.extent.height ||
+    if (commands == nullptr || image.view == nullptr || !area.extent.width || !area.extent.height ||
         area.offset.x < 0 || area.offset.y < 0 || uint32_t(area.offset.x) + area.extent.width > image.width ||
         uint32_t(area.offset.y) + area.extent.height > image.height) {
       return false;
     }
     FinishPass();  // a pass cannot be opened inside another
     uint32_t formats[5] = {uint32_t(image.format), 0, 0, 0, 0};
-    const VkRenderPass pass = PassOf(formats, kLoadClear);
-    if (pass == VK_NULL_HANDLE) {
+    const gpu::Pass pass = PassOf(formats, kLoadClear);
+    if (pass == nullptr) {
       return false;
     }
-    std::array<VkImageView, 5> views{};
+    std::array<gpu::ImageView, 5> views{};
     views[0] = image.view;
-    const VkFramebuffer framebuffer = FramebufferOf(pass, views, image.width, image.height);
-    if (framebuffer == VK_NULL_HANDLE) {
+    const gpu::Framebuffer framebuffer = FramebufferOf(pass, views, image.width, image.height);
+    if (framebuffer == nullptr) {
       return false;
     }
     VkClearValue clear{};
@@ -7086,7 +7086,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const VkImageAspectFlags aspects = gpu::ToVk(clear_aspects);
     const VkClearValue value = gpu::ToVk(clear_value);
     const VkRect2D area = gpu::ToVk(clear_area);
-    if (commands == VK_NULL_HANDLE || image.view == VK_NULL_HANDLE || !aspects || !area.extent.width ||
+    if (commands == nullptr || image.view == nullptr || !aspects || !area.extent.width ||
         !area.extent.height || area.offset.x < 0 || area.offset.y < 0 ||
         uint32_t(area.offset.x) + area.extent.width > image.width ||
         uint32_t(area.offset.y) + area.extent.height > image.height) {
@@ -7096,14 +7096,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const uint32_t slot = (aspects & VK_IMAGE_ASPECT_COLOR_BIT) ? 0 : 4;
     uint32_t formats[5] = {};
     formats[slot] = uint32_t(image.format);
-    const VkRenderPass pass = PassOf(formats, kLoadRead);
-    if (pass == VK_NULL_HANDLE) {
+    const gpu::Pass pass = PassOf(formats, kLoadRead);
+    if (pass == nullptr) {
       return false;
     }
-    std::array<VkImageView, 5> views{};
+    std::array<gpu::ImageView, 5> views{};
     views[slot] = image.view;
-    const VkFramebuffer framebuffer = FramebufferOf(pass, views, image.width, image.height);
-    if (framebuffer == VK_NULL_HANDLE) {
+    const gpu::Framebuffer framebuffer = FramebufferOf(pass, views, image.width, image.height);
+    if (framebuffer == nullptr) {
       return false;
     }
     VkRenderPassBeginInfo start{};
@@ -7136,7 +7136,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // (or the whole cache, if they are out of step) are retired and destroyed at shutdown, which is never
   // worse than keeping everything until the destructor.
   void ForgetView(gpu::ImageView view) override {
-    if (view == VK_NULL_HANDLE || !REXCVAR_GET(bo2zm_native_framebuffers_forget_views)) {
+    if (view == nullptr || !REXCVAR_GET(bo2zm_native_framebuffers_forget_views)) {
       return;
     }
     const bool a_pair = framebuffers_views_.size() == framebuffers_.size();
@@ -7338,7 +7338,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // Queues the vkBindImageMemory of an image. false = not queued (queue full or no thread): the usual path.
-  bool EnqueueBinding(VkImage image, VkDeviceMemory guest_memory, VkDeviceSize offset, uint64_t& ticket) {
+  bool EnqueueBinding(gpu::Image image, gpu::Memory guest_memory, VkDeviceSize offset, uint64_t& ticket) {
     if (!bindings_thread_.joinable()) {
       try {
         bindings_thread_ = std::thread([this] { LoopBindings(); });
@@ -7395,8 +7395,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
       // The slot is not reused until the ring collects it (bindings_collected_): it stays ours without the lock.
       BindRequest& request = queue_bindings_[bindings_done_ & (kQueueBindings - 1)];
-      const VkImage image = request.image;
-      const VkDeviceMemory guest_memory = request.guest_memory;
+      const gpu::Image image = request.image;
+      const gpu::Memory guest_memory = request.guest_memory;
       const VkDeviceSize offset = request.offset;
       lock.unlock();
       const auto before = std::chrono::steady_clock::now();
@@ -7480,12 +7480,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
       return false;
     }
     const gpu::ImageDesc info = InfoImageTexture(format, width, height, layers, depth3d, levels);
-    VkImage image = VK_NULL_HANDLE;
+    gpu::Image image = nullptr;
     if (!gpu::vulkan::CreateImage(dfn_, device_, info, image)) {
       return false;
     }
     const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image);
-    VkDeviceMemory block = VK_NULL_HANDLE;
+    gpu::Memory block = nullptr;
     VkDeviceSize offset = 0;
     uint32_t id_block = 0xFFFFFFFFu;
     if (!pool_textures_.Reserve(req, block, offset, id_block)) {
@@ -7499,7 +7499,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       return false;
     }
     texture.image.image = image;
-    texture.image.guest_memory = VK_NULL_HANDLE;  // from the pool: not freed on its own
+    texture.image.guest_memory = nullptr;  // from the pool: not freed on its own
     texture.image.pool_block = id_block;
     texture.image.width = width;
     texture.image.height = height;
@@ -7521,7 +7521,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (bindings_phase_ == kBindingsObserving) {
       // Observing phase: wait now, before SlotView and UploadTexture: everything stays as without the thread.
       CollectBindings(true);
-      if (texture.image.image == VK_NULL_HANDLE) {
+      if (texture.image.image == nullptr) {
         return false;  // neither the thread nor the fallback (already logged): CreateTexture, with its emergency path
       }
       if (++bindings_checked_ >= kBindingsACheck && bindings_phase_ == kBindingsObserving) {
@@ -7545,7 +7545,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // SlotView for an image with its bind in flight: the slot now, the view in CollectBindings.
-  uint32_t SlotViewInFlight(uint64_t key, VkImage image, VkFormat format, uint32_t swizzle,
+  uint32_t SlotViewInFlight(uint64_t key, gpu::Image image, VkFormat format, uint32_t swizzle,
                               uint16_t swizzle_host, uint32_t heap) {
     View view;
     view.image = image;
@@ -7574,7 +7574,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // UploadTexture for a texture with its bind in flight: the data is already in the upload buffer; record
   // where.
-  bool PostponeCopy(CachedTexture& texture, VkDeviceSize offset, VkCommandBuffer upload) {
+  bool PostponeCopy(CachedTexture& texture, VkDeviceSize offset, gpu::CommandList upload) {
     const size_t index = size_t(texture.in_flight) - 1;
     if (index >= in_flight_.size() || in_flight_[index].texture != &texture || in_flight_[index].copy) {
       TurnOffBindings(fmt::format("MISMATCH: incoherent in-flight texture index ({} of {})", index,
@@ -7592,7 +7592,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // The deferred views of an image that had to be recreated: new key (it goes with the image) and its list.
-  void MoveViewsInFlight(VkImage old, VkImage fresh) {
+  void MoveViewsInFlight(gpu::Image old, gpu::Image fresh) {
     if (old == fresh) {
       return;
     }
@@ -7609,7 +7609,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       views_.erase(it);
       view.image = fresh;
       postponed.image = fresh;
-      if (fresh != VK_NULL_HANDLE) {
+      if (fresh != nullptr) {
         postponed.key = KeyView(fresh, postponed.swizzle, postponed.swizzle_host, postponed.heap);
       }
       if (!views_.emplace(postponed.key, view).second) {
@@ -7619,7 +7619,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       keys.push_back(postponed.key);
     }
     views_per_image_.erase(old);  // an image in flight only has deferred views
-    if (fresh != VK_NULL_HANDLE && !keys.empty()) {
+    if (fresh != nullptr && !keys.empty()) {
       auto& list = views_per_image_[fresh];
       list.insert(list.end(), keys.begin(), keys.end());
     }
@@ -7671,7 +7671,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                 int32_t(flight.result), flight.width, flight.height, flight.levels, flight.layers));
       gpu::vulkan::Destroy(dfn_, device_, flight.image);
       pool_textures_.Free(texture.image.pool_block);
-      texture.image.image = VK_NULL_HANDLE;
+      texture.image.image = nullptr;
       texture.image.pool_block = 0xFFFFFFFFu;
       if (!CreateTexture(texture.image, flight.format, flight.width, flight.height, flight.layers, flight.depth3d,
                         flight.levels, false)) {
@@ -7689,7 +7689,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     //    references it (it is counted).
     for (const ViewInFlight& postponed : views_in_flight_) {
       const auto it = postponed.key ? views_.find(postponed.key) : views_.end();
-      if (it != views_.end() && it->second.image != VK_NULL_HANDLE &&
+      if (it != views_.end() && it->second.image != nullptr &&
           CreateViewTexture(it->second.image, postponed.format, postponed.swizzle, postponed.swizzle_host,
                             postponed.heap, it->second.view) == VK_SUCCESS) {
         WriteImage(postponed.heap, postponed.slot, it->second.view);
@@ -7704,19 +7704,19 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     views_in_flight_.clear();
     // 3. Deferred barriers and copies, in the upload buffer where UploadTexture left their data.
-    VkCommandBuffer upload = VK_NULL_HANDLE;
+    gpu::CommandList upload = nullptr;
     for (const TextureInFlight& flight : in_flight_) {
       if (!flight.copy) {
         continue;
       }
       CachedTexture& texture = *flight.texture;
-      if (texture.image.image == VK_NULL_HANDLE) {
+      if (texture.image.image == nullptr) {
         continue;  // no image: created and fully uploaded next time it is used
       }
-      if (with_copies && upload == VK_NULL_HANDLE) {
+      if (with_copies && upload == nullptr) {
         upload = context_->CommandsUpload();
       }
-      if (!with_copies || upload == VK_NULL_HANDLE || upload != flight.copy_commands ||
+      if (!with_copies || upload == nullptr || upload != flight.copy_commands ||
           flight.copy_epoch != epoch_upload_) {
         TurnOffBindings(fmt::format("MISMATCH: a postponed copy can no longer go into its upload buffer (epoch {} "
                                   "versus {}, {})",
@@ -9438,13 +9438,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
       info.pInitialData = nullptr;
       data.clear();
       if (create(device_, &info, nullptr, &cache_pipelines_) != VK_SUCCESS) {
-        cache_pipelines_ = VK_NULL_HANDLE;
+        cache_pipelines_ = nullptr;
       }
     }
     bytes_cache_saved_ = data.size();
     cache_saved_ = std::chrono::steady_clock::now();
     REXLOG_INFO("[native] C6: pipeline cache {} ({} KB read from {}{})",
-                cache_pipelines_ != VK_NULL_HANDLE ? "on" : "not available",
+                cache_pipelines_ != nullptr ? "on" : "not available",
                 data.size() >> 10, path.string(), files_old_ ? ", from the two earlier files" : "");
     // The writer thread always saves both parts; it starts from what is on disk.
     written_cache_ = std::move(data);
@@ -9472,7 +9472,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       list_no_save_ = 0;
       list = SerializeListPipelines();
     }
-    const bool want_cache = pipelines_no_save_ != 0 && cache_pipelines_ != VK_NULL_HANDLE;
+    const bool want_cache = pipelines_no_save_ != 0 && cache_pipelines_ != nullptr;
     pipelines_no_save_ = 0;
     pipelines_seen_ = 0;
     // A list held back in a match is written now, outside one.
@@ -9515,7 +9515,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // (the precompile found the whole list in the cache, or the prewarm finished without compiling).
   void RequestVouch() {
     vouch_requested_ = true;
-    if (REXCVAR_GET(bo2zm_native_test_fresh_pipelines) || cache_pipelines_ == VK_NULL_HANDLE) {
+    if (REXCVAR_GET(bo2zm_native_test_fresh_pipelines) || cache_pipelines_ == nullptr) {
       return;
     }
     std::lock_guard<std::mutex> lock(writer_mutex_);
@@ -9539,7 +9539,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // it is not rewritten), or always for a test resave; empty otherwise.
   std::vector<uint8_t> TakeCacheData(bool always) {
     size_t bytes = 0;
-    if (cache_pipelines_ == VK_NULL_HANDLE || data_cache_(device_, cache_pipelines_, &bytes, nullptr) != VK_SUCCESS ||
+    if (cache_pipelines_ == nullptr || data_cache_(device_, cache_pipelines_, &bytes, nullptr) != VK_SUCCESS ||
         !bytes || (bytes == bytes_cache_saved_ && !always)) {
       return {};
     }
@@ -9715,8 +9715,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     for (UploadBuffer& s : uploads_) {
       const bool created = CreateBufferUpload();
       s = {upload_, upload_memory_, upload_size_real_, upload_data_, upload_address_};
-      upload_ = VK_NULL_HANDLE;
-      upload_memory_ = VK_NULL_HANDLE;
+      upload_ = nullptr;
+      upload_memory_ = nullptr;
       upload_data_ = nullptr;
       if (!created) {
         return false;
@@ -9743,7 +9743,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // The submissions a pool waits, once left, before it is filled again (3 work slots, with margin).
   static constexpr uint64_t kVertexPoolRest = 8;
 
-  void ResolveVertexBinding(VkDeviceSize tagged, VkBuffer upload, VkBuffer& buffer, VkDeviceSize& offset) const {
+  void ResolveVertexBinding(VkDeviceSize tagged, gpu::Buffer upload, gpu::Buffer& buffer, VkDeviceSize& offset) const {
     if (tagged & kVertexPoolTag) {
       buffer = vpools_[(tagged & kVertexPoolIndex) ? 1 : 0].buffer;
       offset = tagged & kVertexOffsetMask;
@@ -9982,7 +9982,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   static constexpr VkDeviceSize kSkinPoolBytes = VkDeviceSize(8) << 20;
 
   // A host-visible buffer the shader reaches by its address (the upload buffer's memory type).
-  bool CreateSkinBuffer(VkDeviceSize size, VkBuffer& buffer, VkDeviceMemory& memory, uint8_t*& data,
+  bool CreateSkinBuffer(VkDeviceSize size, gpu::Buffer& buffer, gpu::Memory& memory, uint8_t*& data,
                         VkDeviceAddress& address) {
     gpu::vulkan::HostBuffer created;
     const gpu::vulkan::HostBufferResult result = gpu::vulkan::CreateHostBuffer(
@@ -9998,7 +9998,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!bo2zm::gpu_skin::RendererOn()) {
       return;
     }
-    VkShaderModule module = VK_NULL_HANDLE;
+    gpu::Shader module = nullptr;
     if (!gpu::vulkan::CreateShader(dfn_, device_, kSpirvBo2zmGpuSkin, sizeof(kSpirvBo2zmGpuSkin), module)) {
       REXLOG_ERROR("[gpu_skin] the compute shader could not be created: skinning stays on the CPU");
       return;
@@ -10009,7 +10009,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     gpu::vulkan::DestroyShader(dfn_, device_, module);
     const bool buffers =
-        skin_pipeline_ != VK_NULL_HANDLE &&
+        skin_pipeline_ != nullptr &&
         CreateSkinBuffer(kSkinTableBytes * kSlotsOfJob, skin_table_buffer_, skin_table_memory_, skin_table_data_,
                          skin_table_address_) &&
         CreateSkinBuffer(kSkinPoolBytes * 2, skin_pool_buffer_, skin_pool_memory_, skin_pool_data_,
@@ -10231,7 +10231,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (table.groups == table.dispatched) {
       return;
     }
-    const VkCommandBuffer upload = context_->CommandsUpload();
+    const gpu::CommandList upload = context_->CommandsUpload();
     if (!upload) {
       return;
     }
@@ -10663,7 +10663,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
       reserve.allocationSize = kBytes;
       reserve.memoryTypeIndex = type;
-      VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+      gpu::Memory guest_memory = nullptr;
       if (dfn_.vkAllocateMemory(device_, &reserve, nullptr, &guest_memory) != VK_SUCCESS) {
         continue;
       }
@@ -10766,7 +10766,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!gpu::vulkan::CreatePool(dfn_, device_, counts_ubo, pool_ubo_)) {
       return false;
     }
-    std::array<VkDescriptorSetLayout, kSlotsOfJob> layouts_ubo;
+    std::array<gpu::SetLayout, kSlotsOfJob> layouts_ubo;
     layouts_ubo.fill(layout_ubo_);
     if (!gpu::vulkan::AllocateSets(dfn_, device_, pool_ubo_, uint32_t(sets_ubo_.size()), layouts_ubo.data(),
                                    sets_ubo_.data())) {
@@ -10781,7 +10781,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       gpu::vulkan::WriteUniforms(dfn_, device_, sets_ubo_[slot], 0, 3, blocks, true);
     }
     const gpu::PushRange range{gpu::kStageVertex | gpu::kStageFragment, 0, 24};
-    const std::array<VkDescriptorSetLayout, 5> layouts_pipeline = {layouts_[0], layouts_[1], layouts_[2],
+    const std::array<gpu::SetLayout, 5> layouts_pipeline = {layouts_[0], layouts_[1], layouts_[2],
                                                                     layouts_[3], layout_ubo_};
     return gpu::vulkan::CreatePipelineLayout(dfn_, device_, 5, layouts_pipeline.data(), 1, &range,
                                              layout_pipeline_);
@@ -10827,7 +10827,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (empty_prepared_) {
       return true;
     }
-    const VkCommandBuffer upload = context_->CommandsUpload();
+    const gpu::CommandList upload = context_->CommandsUpload();
     if (!upload) {
       return false;
     }
@@ -10848,7 +10848,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return true;
   }
 
-  void Barrier(VkCommandBuffer cmd, VkImage image, uint32_t layers) {
+  void Barrier(gpu::CommandList cmd, gpu::Image image, uint32_t layers) {
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -10867,7 +10867,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     gpu::vulkan::WriteSampledImage(dfn_, device_, sets_[heap], 0, slot, view);
   }
 
-  void WriteSampler(uint32_t slot, VkSampler sampler) {
+  void WriteSampler(uint32_t slot, gpu::Sampler sampler) {
     gpu::vulkan::WriteSampler(dfn_, device_, sets_[3], 0, slot, sampler);
   }
 
@@ -11253,7 +11253,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         continue;
       }
       const CachedTexture& t = other->second;
-      if (t.key_content == content && t.image.image != VK_NULL_HANDLE && t.image.prepared && !t.needs_upload &&
+      if (t.key_content == content && t.image.image != nullptr && t.image.prepared && !t.needs_upload &&
           !t.in_flight && !t.hash_job && &t != comparison_texture_ && t.frame != UINT64_MAX &&
           t.frame + kFramesNoUseForRelease < frame_) {
         taken_key = it->second;
@@ -11525,7 +11525,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (resolved_list) {
         const uint64_t key_resolved = key ^ 0x9E3779B97F4A7C15ull;
         CachedTexture& texture = textures_[key_resolved];
-        if (texture.image.image == VK_NULL_HANDLE) {
+        if (texture.image.image == nullptr) {
           if (!CreateTexture(texture.image, VK_FORMAT_R8G8B8A8_UNORM, width, height, layers)) {
             textures_.erase(key_resolved);
             Warn(32, "could not create a texture");
@@ -11539,7 +11539,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                       base, width, height, f[0], f[1], f[2], f[3], f[4], f[5]);
         }
         if (texture.frame != frame_) {
-          const VkCommandBuffer upload = context_->CommandsUpload();
+          const gpu::CommandList upload = context_->CommandsUpload();
           if (!upload) {
             return;
           }
@@ -11583,7 +11583,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint64_t hash_raw_known = 0;  // the raw hash ReuseByContent already took, if hash_known
     bool hash_known = false;
     auto t_new = std::chrono::steady_clock::time_point{};  // a new texture's parts (C6 substages 31-35)
-    if (texture.image.image == VK_NULL_HANDLE) {
+    if (texture.image.image == nullptr) {
       if (time_) {
         t_new = std::chrono::steady_clock::now();
       }
@@ -12297,7 +12297,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
           continue;
         }
         const CachedTexture& t = other->second;
-        if (t.key_content != content || t.image.image == VK_NULL_HANDLE || !t.image.prepared ||
+        if (t.key_content != content || t.image.image == nullptr || !t.image.prepared ||
             t.hash_job) {
           continue;
         }
@@ -12989,16 +12989,16 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool TryAllocateTexture(NativeImage& image, const gpu::ImageDesc& info) {
     bool reserved = false;
     if (pool_textures_.IsActive()) {
-      VkImage image_pool = VK_NULL_HANDLE;
+      gpu::Image image_pool = nullptr;
       if (gpu::vulkan::CreateImage(dfn_, device_, info, image_pool)) {
         const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image_pool);
-        VkDeviceMemory block = VK_NULL_HANDLE;
+        gpu::Memory block = nullptr;
         VkDeviceSize offset = 0;
         uint32_t id_block = 0xFFFFFFFFu;
         if (pool_textures_.Reserve(req, block, offset, id_block) &&
             gpu::vulkan::BindImage(dfn_, device_, image_pool, block, offset) == VK_SUCCESS) {
           image.image = image_pool;
-          image.guest_memory = VK_NULL_HANDLE;  // from the pool: not freed on its own
+          image.guest_memory = nullptr;  // from the pool: not freed on its own
           image.pool_block = id_block;
           reserved = true;
         } else {
@@ -13073,9 +13073,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   bool UploadTexture(CachedTexture& texture) {
-    const VkCommandBuffer upload = context_->CommandsUpload();
+    const gpu::CommandList upload = context_->CommandsUpload();
     if (!upload || !texture.needs_upload) {
-      return upload != VK_NULL_HANDLE;
+      return upload != nullptr;
     }
     VkDeviceSize offset;
     if (!texture.regions_partial.empty()) {  // some rows of a 3D texture (UpdateVolume)
@@ -13115,7 +13115,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (texture.in_flight && !PostponeCopy(texture, offset, upload)) {
       CollectBindings(true);  // inconsistent index (PostponeCopy already logged it and switched off): collect everything here
     }
-    if (!texture.in_flight && texture.image.image != VK_NULL_HANDLE) {
+    if (!texture.in_flight && texture.image.image != nullptr) {
       if (!texture.image.prepared) {
         Barrier(upload, texture.image.image, texture.layers);
         texture.image.prepared = true;
@@ -13141,7 +13141,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // One range per mip level (with all its layers). Factored out for UploadTexture and for the deferred
   // copies of CollectBindings.
-  void RecordCopyTexture(VkCommandBuffer upload, const CachedTexture& texture, VkDeviceSize offset) {
+  void RecordCopyTexture(gpu::CommandList upload, const CachedTexture& texture, VkDeviceSize offset) {
     std::array<VkBufferImageCopy, 16> copies{};
     for (uint32_t n = 0; n < texture.levels; ++n) {
       VkBufferImageCopy& copy = copies[n];
@@ -13155,8 +13155,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // A texture's view, the same for SlotView and for the deferred views of CollectBindings.
-  VkResult CreateViewTexture(VkImage image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap,
-                             VkImageView& view) {
+  VkResult CreateViewTexture(gpu::Image image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap,
+                             gpu::ImageView& view) {
     gpu::ViewDesc desc;
     desc.type = heap == 2 ? gpu::kViewCube : heap == 1 ? gpu::kView3D : gpu::kView2D;
     desc.format = format;
@@ -13168,13 +13168,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   // The views_ key (image, heap and both swizzles), factored out for CollectBindings.
-  static uint64_t KeyView(VkImage image, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap) {
+  static uint64_t KeyView(gpu::Image image, uint32_t swizzle, uint16_t swizzle_host, uint32_t heap) {
     return XXH3_64bits_withSeed(&image, sizeof(image),
                                 (uint64_t(heap) << 40) | (uint64_t(swizzle) << 16) | swizzle_host);
   }
 
   // Heap slot (0 for 2D textures, 2 for cubemaps) for a view of the image with that swizzle.
-  uint32_t SlotView(VkImage image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host,
+  uint32_t SlotView(gpu::Image image, VkFormat format, uint32_t swizzle, uint16_t swizzle_host,
                        uint32_t heap = 0) {
     const uint64_t key = KeyView(image, swizzle, swizzle_host, heap);  // The same key
     if (const auto it = views_.find(key); it != views_.end()) {
@@ -13313,7 +13313,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         }
       }
     }
-    VkSampler sampler;
+    gpu::Sampler sampler;
     if (!gpu::vulkan::CreateSampler(dfn_, device_, info, sampler)) {
       Warn(36, "could not create a sampler");
       return 0;
@@ -13524,7 +13524,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
           after_targets - start_pass_).count());
     }
     uint32_t width = UINT32_MAX, height = UINT32_MAX;
-    std::array<VkImageView, 5> views{};
+    std::array<gpu::ImageView, 5> views{};
     uint32_t formats[5] = {};
     for (uint32_t i = 0; i < 5; ++i) {
       if (images[i]) {
@@ -13547,12 +13547,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     context_->MarkGpu(category_pass_);
     const bool shadows_no_load =
         is_shadows && REXCVAR_GET(bo2zm_native_shadow_pass_without_load);
-    const VkRenderPass pass = PassOf(formats, shadows_no_load ? kLoadIgnore : kLoadRead);
-    if (pass == VK_NULL_HANDLE) {
+    const gpu::Pass pass = PassOf(formats, shadows_no_load ? kLoadIgnore : kLoadRead);
+    if (pass == nullptr) {
       return Reject(42, "could not create the render pass");
     }
-    const VkFramebuffer framebuffer = FramebufferOf(pass, views, width, height);
-    if (framebuffer == VK_NULL_HANDLE) {
+    const gpu::Framebuffer framebuffer = FramebufferOf(pass, views, width, height);
+    if (framebuffer == nullptr) {
       return Reject(43, "could not create the framebuffer");
     }
     if (time_) {
@@ -13561,7 +13561,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     const auto before_open = time_ ? std::chrono::steady_clock::now()
                                           : std::chrono::steady_clock::time_point{};
-    const VkCommandBuffer cmd = context_->CommandsJob();
+    const gpu::CommandList cmd = context_->CommandsJob();
     if (!cmd) {
       return false;
     }
@@ -13624,12 +13624,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // same buffer: the pass's first draw only binds again if its key differs. A new buffer still starts
     // with nothing bound (Draw, recording_generation_).
     if (!pipeline_between_passes_) {
-      pipeline_bound_ = VK_NULL_HANDLE;
-    } else if (pipeline_bound_ != VK_NULL_HANDLE) {
+      pipeline_bound_ = nullptr;
+    } else if (pipeline_bound_ != nullptr) {
       ++passes_with_pipeline_;
     }
     state_recorded_ = false;
-    if (pipeline_bound_ == VK_NULL_HANDLE) {
+    if (pipeline_bound_ == nullptr) {
       eds_valid_ = false;  // pass that forgets the pipeline (without 0b): set everything again
     }
     return true;
@@ -13639,7 +13639,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // TRANSFER_DST, the only ones eligible for a ZCULL plane.
   enum : uint32_t { kLoadRead = 0, kLoadIgnore = 1, kLoadClear = 2 };
 
-  VkRenderPass PassOf(const uint32_t formats[5], uint32_t mode_load = kLoadRead) {
+  gpu::Pass PassOf(const uint32_t formats[5], uint32_t mode_load = kLoadRead) {
     // The mode is part of the key: two render passes with the same formats but a different loadOp are
     // different.
     const uint64_t key =
@@ -13647,9 +13647,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (const auto it = passes_.find(key); it != passes_.end()) {
       return it->second;
     }
-    const VkRenderPass pass = CreatePass(formats, mode_load);  // the usual code, factored out
-    if (pass == VK_NULL_HANDLE) {
-      return VK_NULL_HANDLE;
+    const gpu::Pass pass = CreatePass(formats, mode_load);  // the usual code, factored out
+    if (pass == nullptr) {
+      return nullptr;
     }
     passes_.emplace(key, pass);
     return pass;
@@ -13783,7 +13783,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // The PassOf render pass without its cache, with nothing changed. The pipeline prewarm also uses it
   // from its thread (a compatible one: the same formats). It only reads its arguments.
-  VkRenderPass CreatePass(const uint32_t formats[5], uint32_t mode_load) const {
+  gpu::Pass CreatePass(const uint32_t formats[5], uint32_t mode_load) const {
     gpu::PassDesc desc{};
     for (uint32_t i = 0; i < 5; ++i) {
       if (!formats[i]) {
@@ -13803,34 +13803,34 @@ class VulkanDrawsImpl final : public VulkanDraws {
       a.stencil_store = i == 4 ? gpu::kStoreStore : gpu::kStoreDontCare;
       desc.has_depth = desc.has_depth || i == 4;
     }
-    VkRenderPass pass;
+    gpu::Pass pass;
     if (!gpu::vulkan::CreatePass(dfn_, device_, desc, pass)) {
-      return VK_NULL_HANDLE;
+      return nullptr;
     }
     return pass;
   }
 
-  VkFramebuffer FramebufferOf(VkRenderPass pass, const std::array<VkImageView, 5>& views,
+  gpu::Framebuffer FramebufferOf(gpu::Pass pass, const std::array<gpu::ImageView, 5>& views,
                               uint32_t width, uint32_t height) {
     struct Key {
-      VkRenderPass pass;
-      std::array<VkImageView, 5> views;
+      gpu::Pass pass;
+      std::array<gpu::ImageView, 5> views;
       uint32_t width, height;
     } key{pass, views, width, height};
     const uint64_t hash = XXH3_64bits(&key, sizeof(key));
     if (const auto it = framebuffers_.find(hash); it != framebuffers_.end()) {
       return it->second;
     }
-    std::array<VkImageView, 5> attachments{};
+    std::array<gpu::ImageView, 5> attachments{};
     uint32_t n = 0;
-    for (VkImageView view : views) {
-      if (view != VK_NULL_HANDLE) {
+    for (gpu::ImageView view : views) {
+      if (view != nullptr) {
         attachments[n++] = view;
       }
     }
-    VkFramebuffer framebuffer;
+    gpu::Framebuffer framebuffer;
     if (!gpu::vulkan::CreateFramebuffer(dfn_, device_, pass, n, attachments.data(), width, height, framebuffer)) {
-      return VK_NULL_HANDLE;
+      return nullptr;
     }
     framebuffers_.emplace(hash, framebuffer);
     framebuffers_views_[hash] = views;  // For ForgetView
@@ -13839,11 +13839,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // The bright pass variants of bo2zm_sky_glow (1 natural, 2 soft), compiled with the same DXC
   // options as the library.
-  VkShaderModule ModuleVariant(size_t index, const uint32_t* spirv, size_t bytes) {
+  gpu::Shader ModuleVariant(size_t index, const uint32_t* spirv, size_t bytes) {
     if (!modules_variants_created_[index]) {
       modules_variants_created_[index] = true;
       if (!gpu::vulkan::CreateShader(dfn_, device_, spirv, bytes, modules_variants_[index])) {
-        modules_variants_[index] = VK_NULL_HANDLE;
+        modules_variants_[index] = nullptr;
       }
     }
     return modules_variants_[index];
@@ -14016,14 +14016,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
   }
 
-  VkShaderModule ModuleOf(const ShaderInput& input) {
+  gpu::Shader ModuleOf(const ShaderInput& input) {
     if (const auto it = modules_.find(&input); it != modules_.end()) {
       return it->second;
     }
     const auto& spirv = bo2zm::shaderlib::Spirv(*input.shader);
-    VkShaderModule shader_module = VK_NULL_HANDLE;
+    gpu::Shader shader_module = nullptr;
     if (!gpu::vulkan::CreateShader(dfn_, device_, spirv.data(), spirv.size() * sizeof(uint32_t), shader_module)) {
-      shader_module = VK_NULL_HANDLE;
+      shader_module = nullptr;
     }
     modules_.emplace(&input, shader_module);
     return shader_module;
@@ -14031,23 +14031,23 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   // Pixel shader module without the color writes, one per shader. If it cannot be pruned, the normal one
   // is returned: the image is the same, only the saving is lost.
-  VkShaderModule ModuleOnlyAlpha(const ShaderInput& input) {
+  gpu::Shader ModuleOnlyAlpha(const ShaderInput& input) {
     if (const auto it = modules_only_alpha_.find(&input); it != modules_only_alpha_.end()) {
-      return it->second != VK_NULL_HANDLE ? it->second : ModuleOf(input);
+      return it->second != nullptr ? it->second : ModuleOf(input);
     }
     uint32_t removed = 0;
     const std::vector<uint32_t> pruned = PruneColorWrites(bo2zm::shaderlib::Spirv(*input.shader), removed);
-    VkShaderModule shader_module = VK_NULL_HANDLE;
+    gpu::Shader shader_module = nullptr;
     if (!pruned.empty()) {
       if (!gpu::vulkan::CreateShader(dfn_, device_, pruned.data(), pruned.size() * sizeof(uint32_t), shader_module)) {
-        shader_module = VK_NULL_HANDLE;
+        shader_module = nullptr;
       }
     }
     REXLOG_INFO("[native] C5a: PS n{} without color writes: {} removed, {} words of {} ({})",
                 input.number, removed, pruned.size(), input.shader->spirv_words,
-                shader_module != VK_NULL_HANDLE ? "module created" : "the normal one is used");
+                shader_module != nullptr ? "module created" : "the normal one is used");
     modules_only_alpha_.emplace(&input, shader_module);
-    return shader_module != VK_NULL_HANDLE ? shader_module : ModuleOf(input);
+    return shader_module != nullptr ? shader_module : ModuleOf(input);
   }
 
   /*
@@ -14055,28 +14055,28 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * already had it, it writes gl_FragDepth...), the normal one is returned: the image is the same and only
    * the saving is lost. It is logged once per shader so the log shows which ones qualified.
    */
-  VkShaderModule ModuleZEarly(const ShaderInput& input) {
+  gpu::Shader ModuleZEarly(const ShaderInput& input) {
     if (const auto it = modules_z_early_.find(&input); it != modules_z_early_.end()) {
-      return it->second != VK_NULL_HANDLE ? it->second : ModuleOf(input);
+      return it->second != nullptr ? it->second : ModuleOf(input);
     }
     const char* reason = "";
     const std::vector<uint32_t> patched = WithTestsEarly(bo2zm::shaderlib::Spirv(*input.shader), reason);
-    VkShaderModule shader_module = VK_NULL_HANDLE;
+    gpu::Shader shader_module = nullptr;
     if (!patched.empty()) {
       if (!gpu::vulkan::CreateShader(dfn_, device_, patched.data(), patched.size() * sizeof(uint32_t), shader_module)) {
-        shader_module = VK_NULL_HANDLE;
+        shader_module = nullptr;
       }
     }
     REXLOG_INFO("[native] C6 early Z: PS n{} {} ({} kills, {} words)", input.number,
-                shader_module != VK_NULL_HANDLE
+                shader_module != nullptr
                     ? std::string("tests depth before shading")
                     : fmt::format("stays as it was: {}", reason),
                 input.kills, input.shader->spirv_words);
     modules_z_early_.emplace(&input, shader_module);
-    if (shader_module == VK_NULL_HANDLE) {
+    if (shader_module == nullptr) {
       ++z_early_no_module_;
     }
-    return shader_module != VK_NULL_HANDLE ? shader_module : ModuleOf(input);
+    return shader_module != nullptr ? shader_module : ModuleOf(input);
   }
 
   /*
@@ -14546,7 +14546,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * re-recorded if only that changed; with everything = true it is recorded anyway, so everything is set at least
    * once in the buffer.
    */
-  void EmitStateDynamic(VkCommandBuffer cmd, const EdsState& d, bool everything, uint32_t mode) {
+  void EmitStateDynamic(gpu::CommandList cmd, const EdsState& d, bool everything, uint32_t mode) {
     EdsState& g = eds_recorded_;
     eds_calls_[kEdsEverything] += everything ? 1 : 0;
     if (mode & kEds12) {
@@ -14731,7 +14731,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       eds_off_ = true;
       eds_mode_ = 0;
       eds_valid_ = false;
-      pipeline_bound_ = VK_NULL_HANDLE;
+      pipeline_bound_ = nullptr;
       REXLOG_ERROR("[native] C6 dynamic state: MISMATCH in {} (check {}: set {} and the usual pipeline would carry {}; "
                    "VS {} PS {}, topology {}, depth {:08X}, rasterization {:02X}, masks {:04X}). Off for the rest of "
                    "the session: the pipelines with all the fixed state come back",
@@ -14752,7 +14752,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * this buffer there is nothing to do; otherwise what changed is set and the guard checks it for the
    * first 200,000 changes and then 1 in 4,096. Returns false if the guard has switched dynamic state off.
    */
-  bool SetStateDynamic(VkCommandBuffer cmd, const PipelineKey& key) {
+  bool SetStateDynamic(gpu::CommandList cmd, const PipelineKey& key) {
     ++eds_draws_;
     if (eds_valid_ && std::memcmp(&key, &eds_key_, sizeof(key)) == 0) {
       ++eds_repeated_;
@@ -14874,7 +14874,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
   }
 
-  VkPipeline PipelineOf(const PipelineKey& key, const VertexInput& input,
+  gpu::Pipeline PipelineOf(const PipelineKey& key, const VertexInput& input,
                         const DrawRequest& p) {
     /*
      * One-entry shortcut.
@@ -14890,7 +14890,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const uint64_t hash = XXH3_64bits(&key, sizeof(key));
     // The direct-mapped cache (bo2zm_native_direct_pipelines) before the map.
     PipelineCell& cell = cells_pipeline_[hash & (kCellsPipeline - 1)];
-    if (pipelines_direct_ && cell.pipeline != VK_NULL_HANDLE &&
+    if (pipelines_direct_ && cell.pipeline != nullptr &&
         std::memcmp(&cell.key, &key, sizeof(key)) == 0) {
       const uint64_t n = ++pipelines_direct_hits_;
       if (!(n <= kPipelinesACheck || (n & 4095) == 0) ||
@@ -14917,7 +14917,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         return it->second.second;
       }
       Warn(50, "pipeline hash collision");
-      return VK_NULL_HANDLE;
+      return nullptr;
     }
     // Compiling on the compile thread (see CompilePipelinesLoop): this draw is skipped.
     if (!compile_pending_.empty()) {
@@ -14928,11 +14928,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
           pending->second.first = true;
           PromoteCompile(hash);
         }
-        return VK_NULL_HANDLE;
+        return nullptr;
       }
     }
-    const VkShaderModule vs = ModuleOf(*p.vs);
-    VkShaderModule ps = VK_NULL_HANDLE;
+    const gpu::Shader vs = ModuleOf(*p.vs);
+    gpu::Shader ps = nullptr;
     if (key.ps && bo2zm::native::DebugMagenta()) {  // diagnostics
       ps = ModuleVariant(3, kSpirvBo2zmMagenta, sizeof(kSpirvBo2zmMagenta));
     } else if (key.ps && (key.specialization & kSpecGlowNatural)) {
@@ -14946,14 +14946,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
     } else if (key.ps) {
       ps = ModuleOf(*p.ps);
     }
-    if (vs == VK_NULL_HANDLE || (key.ps && ps == VK_NULL_HANDLE)) {
+    if (vs == nullptr || (key.ps && ps == nullptr)) {
       Reject(51, "could not create a shader module");
-      return VK_NULL_HANDLE;
+      return nullptr;
     }
     // The VkGraphicsPipelineCreateInfo lives in CreatePipelineVulkan, the same function the prewarm uses from
     // its thread; what surrounds it stays here, as it was.
     uint32_t n_colors = 0;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    gpu::Pipeline pipeline = nullptr;
     const auto start_creation = std::chrono::steady_clock::now();
     // From the driver's cache only (it answers VK_PIPELINE_COMPILE_REQUIRED instead of compiling); one
     // that needs compiling goes to the compile thread and this draw is skipped.
@@ -14967,7 +14967,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (created == VK_PIPELINE_COMPILE_REQUIRED) {
         QueueCompile(hash, key, input, vs, ps, p);
         ++draws_waiting_pipeline_;
-        return VK_NULL_HANDLE;
+        return nullptr;
       }
     } else {
       created = CreatePipelineVulkan(key, input, vs, ps, pass_rp_, true, pipeline, n_colors);
@@ -14975,7 +14975,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     if (created != VK_SUCCESS) {
       Reject(53, "could not create a pipeline");
-      pipeline = VK_NULL_HANDLE;
+      pipeline = nullptr;
     } else {
       ++pipelines_no_save_;
     }
@@ -14989,7 +14989,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     AnnotatePipelineCreated(key, input, p.vs, key.ps ? p.ps : nullptr, pipeline, ns_creation);  // List and measurement
     pipelines_.emplace(hash, std::make_pair(key, pipeline));
     ++pipelines_per_mode_[key.padding2 & 3];  // Dynamic state report
-    if (pipelines_direct_ && pipeline != VK_NULL_HANDLE) {  // the same pair as the map
+    if (pipelines_direct_ && pipeline != nullptr) {  // the same pair as the map
       cell.key = key;
       cell.pipeline = pipeline;
     }
@@ -15009,8 +15009,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * as the ring. It only reads its arguments, layout_pipeline_ and the
    * pipeline cache, which Vulkan synchronizes internally; warn = false outside the ring.
    */
-  VkResult CreatePipelineVulkan(const PipelineKey& key, const VertexInput& input, VkShaderModule vs,
-                               VkShaderModule ps, VkRenderPass pass, bool warn, VkPipeline& pipeline,
+  VkResult CreatePipelineVulkan(const PipelineKey& key, const VertexInput& input, gpu::Shader vs,
+                               gpu::Shader ps, gpu::Pass pass, bool warn, gpu::Pipeline& pipeline,
                                uint32_t& n_colors_output, VkPipelineCreateFlags create_flags = 0) {
     std::vector<uint32_t> strides;
     for (const VertexBinding& b : input.bindings) {
@@ -15311,7 +15311,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // Ring only (PipelineOf), with every pipeline it creates: the measurement for the report and the guard,
   // and new ones go to the list.
   void AnnotatePipelineCreated(const PipelineKey& key, const VertexInput& input, const ShaderInput* vs,
-                               const ShaderInput* ps, VkPipeline pipeline, uint64_t ns) {
+                               const ShaderInput* ps, gpu::Pipeline pipeline, uint64_t ns) {
     const uint64_t hash = XXH3_64bits(&key, sizeof(key));
     if (pipeline != VK_NULL_HANDLE && vs && vs->shader && (!key.ps || (ps && ps->shader)) &&
         input.attributes.size() <= PipelineRecord::kMaxAttributes &&
@@ -15348,7 +15348,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     ++ring_new_;
     ns_ring_new_ += ns;
-    if (pipeline == VK_NULL_HANDLE || !vs || !vs->shader || (key.ps && (!ps || !ps->shader)) ||
+    if (pipeline == nullptr || !vs || !vs->shader || (key.ps && (!ps || !ps->shader)) ||
         input.attributes.size() > PipelineRecord::kMaxAttributes ||
         input.bindings.size() > PipelineRecord::kMaxBindings ||
         list_file_.size() + list_session_.size() >= kMaxRegistersList) {
@@ -15378,18 +15378,18 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (prewarm_decided_) {
       return;
     }
-    if (list_file_.empty() || cache_pipelines_ == VK_NULL_HANDLE ||
+    if (list_file_.empty() || cache_pipelines_ == nullptr ||
         !REXCVAR_GET(bo2zm_native_prewarm_pipelines)) {
       prewarm_decided_ = true;
       if (!list_file_.empty()) {
         REXLOG_INFO("[native] C6 prewarm: no prewarming ({})",
-                    cache_pipelines_ == VK_NULL_HANDLE ? "no pipeline cache"
+                    cache_pipelines_ == nullptr ? "no pipeline cache"
                                                        : "bo2zm_native_prewarm_pipelines = false");
       }
       return;
     }
     const NativeShaders* library = LibraryActive();
-    if (!library || !library->loaded() || layout_pipeline_ == VK_NULL_HANDLE) {
+    if (!library || !library->loaded() || layout_pipeline_ == nullptr) {
       return;  // not yet: check again on the next submission
     }
     prewarm_decided_ = true;
@@ -15420,12 +15420,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     Warmer(VulkanDrawsImpl& draws, const NativeShaders& library) : d_(draws), library_(library) {}
     ~Warmer() {
       for (const auto& [key, shader_module] : modules_) {
-        if (shader_module != VK_NULL_HANDLE) {
+        if (shader_module != nullptr) {
           gpu::vulkan::DestroyShader(d_.dfn_, d_.device_, shader_module);
         }
       }
       for (const auto& [key, pass] : passes_) {
-        if (pass != VK_NULL_HANDLE) {
+        if (pass != nullptr) {
           gpu::vulkan::Destroy(d_.dfn_, d_.device_, pass);
         }
       }
@@ -15438,7 +15438,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // as the ring asks for it (VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT); compiled then says whether
     // the driver had to compile it. Without probe, compiled stays false (the prewarm tells by the time, kNsCompiled).
     // keep (the precompile, bo2zm_native_precompile_keep): the pipeline is handed back instead of destroyed.
-    uint8_t Warm(const PipelineRecord& r, uint64_t& ns, bool probe, bool& compiled, VkPipeline* keep = nullptr) {
+    uint8_t Warm(const PipelineRecord& r, uint64_t& ns, bool probe, bool& compiled, gpu::Pipeline* keep = nullptr) {
       ns = 0;
       compiled = false;
       const ShaderInput* vs = r.key.vs ? library_.PerNumber(r.key.vs - 1) : nullptr;
@@ -15450,8 +15450,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (r.key.padding2 != d_.prewarm_eds_) {
         return kListOtherMode;
       }
-      const VkShaderModule module_vs = Normal(*vs);
-      const VkShaderModule module_ps = r.key.ps ? Pixel(r.key, *ps) : VK_NULL_HANDLE;
+      const gpu::Shader module_vs = Normal(*vs);
+      const gpu::Shader module_ps = r.key.ps ? Pixel(r.key, *ps) : nullptr;
       const uint64_t key_pass = XXH3_64bits(r.key.formats, sizeof(r.key.formats));
       auto it_pass = passes_.find(key_pass);
       if (it_pass == passes_.end()) {
@@ -15465,11 +15465,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
       for (uint32_t k = 0; k < r.n_bindings; ++k) {
         input.bindings.push_back({0, r.strides[k]});
       }
-      if (module_vs == VK_NULL_HANDLE || (r.key.ps && module_ps == VK_NULL_HANDLE) ||
-          it_pass->second == VK_NULL_HANDLE) {
+      if (module_vs == nullptr || (r.key.ps && module_ps == nullptr) ||
+          it_pass->second == nullptr) {
         return kListFailed;
       }
-      VkPipeline pipeline = VK_NULL_HANDLE;
+      gpu::Pipeline pipeline = nullptr;
       uint32_t n_colors = 0;
       const auto t0 = std::chrono::steady_clock::now();
       VkResult result = VK_PIPELINE_COMPILE_REQUIRED;
@@ -15479,13 +15479,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
       if (result == VK_PIPELINE_COMPILE_REQUIRED) {
         compiled = probe;
-        pipeline = VK_NULL_HANDLE;
+        pipeline = nullptr;
         result = d_.CreatePipelineVulkan(r.key, input, module_vs, module_ps, it_pass->second, false, pipeline,
                                          n_colors);
       }
       ns = uint64_t(
           std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
-      if (result != VK_SUCCESS || pipeline == VK_NULL_HANDLE) {
+      if (result != VK_SUCCESS || pipeline == nullptr) {
         return kListFailed;
       }
       if (keep) {
@@ -15497,15 +15497,15 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
 
    private:
-    VkShaderModule Create(const uint32_t* spirv, size_t bytes) {
-      VkShaderModule shader_module = VK_NULL_HANDLE;
+    gpu::Shader Create(const uint32_t* spirv, size_t bytes) {
+      gpu::Shader shader_module = nullptr;
       if (!gpu::vulkan::CreateShader(d_.dfn_, d_.device_, spirv, bytes, shader_module)) {
-        shader_module = VK_NULL_HANDLE;
+        shader_module = nullptr;
       }
       return shader_module;
     }
     // ModuleOf: the library's SPIR-V as is.
-    VkShaderModule Normal(const ShaderInput& e) {
+    gpu::Shader Normal(const ShaderInput& e) {
       auto it = modules_.find(e.number);
       if (it == modules_.end()) {
         const auto& spirv = bo2zm::shaderlib::Spirv(*e.shader);
@@ -15516,7 +15516,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // The pixel shader PipelineOf would choose, in the same order: the bright pass variants
     // (ModuleVariant), without color writes (ModuleOnlyAlpha) and with early tests (ModuleZEarly); the
     // latter two with the same fallback: if it cannot be pruned or patched, the normal one.
-    VkShaderModule Pixel(const PipelineKey& key, const ShaderInput& e) {
+    gpu::Shader Pixel(const PipelineKey& key, const ShaderInput& e) {
       const uint32_t spec = key.specialization;
       const uint32_t variant = (spec & kSpecGlowNatural) ? 1
                                 : (spec & kSpecGlowSmooth) ? 2
@@ -15529,7 +15529,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       const uint64_t key_module = (uint64_t(variant) << 32) | (variant <= 2 ? 0xFFFFFFFFull : uint64_t(e.number));
       auto it = modules_.find(key_module);
       if (it == modules_.end()) {
-        VkShaderModule shader_module = VK_NULL_HANDLE;
+        gpu::Shader shader_module = nullptr;
         if (variant == 1) {
           shader_module = Create(kSpirvGlowEnergy, sizeof(kSpirvGlowEnergy));
         } else if (variant == 2) {
@@ -15549,7 +15549,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         }
         it = modules_.emplace(key_module, shader_module).first;
       }
-      if (it->second != VK_NULL_HANDLE || variant <= 2) {
+      if (it->second != nullptr || variant <= 2) {
         return it->second;
       }
       return Normal(e);
@@ -15557,8 +15557,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
     VulkanDrawsImpl& d_;
     const NativeShaders& library_;
-    std::unordered_map<uint64_t, VkShaderModule> modules_;  // (variant << 32) | number
-    std::unordered_map<uint64_t, VkRenderPass> passes_;       // by formats
+    std::unordered_map<uint64_t, gpu::Shader> modules_;  // (variant << 32) | number
+    std::unordered_map<uint64_t, gpu::Pass> passes_;       // by formats
   };
 
   // The thread. It only reads list_file_, the library, the layout and the cache; it writes
@@ -15676,8 +15676,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   void Precompile() override {
     const NativeShaders* library = LibraryActive();
     const size_t n = list_file_.size();
-    if (prewarm_decided_ || !library || !library->loaded() || layout_pipeline_ == VK_NULL_HANDLE ||
-        cache_pipelines_ == VK_NULL_HANDLE || n == 0) {
+    if (prewarm_decided_ || !library || !library->loaded() || layout_pipeline_ == nullptr ||
+        cache_pipelines_ == nullptr || n == 0) {
       bo2zm::native::precompile::Begin(0, 0);  // nothing to do: the prewarm decides on its own (TryPrewarm)
       return;
     }
@@ -15696,7 +15696,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // creates it in a match. Kept, the precompile's pipelines are the ring's own and a match creates none of them.
     // Not while recording a pipeline list: that has to see what the session really asks for.
     const bool keep = bo2zm::native::precompile::Keep() && bo2zm::native::pso::RecordPath().empty();
-    std::vector<VkPipeline> kept(keep ? n : 0, VK_NULL_HANDLE);
+    std::vector<gpu::Pipeline> kept(keep ? n : 0, VK_NULL_HANDLE);
     std::atomic<size_t> next{0};
     std::atomic<uint32_t> done{0}, compiled{0}, no_shader{0}, other_mode{0}, failed{0};
     std::atomic<uint64_t> ns_compiled{0}, ns_cached{0};
@@ -15873,12 +15873,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     uint64_t hash = 0;
     PipelineKey key;
     VertexInput input;
-    VkShaderModule vs = VK_NULL_HANDLE;
-    VkShaderModule ps = VK_NULL_HANDLE;
-    VkRenderPass pass = VK_NULL_HANDLE;
+    gpu::Shader vs = nullptr;
+    gpu::Shader ps = nullptr;
+    gpu::Pass pass = nullptr;
     const ShaderInput* vs_input = nullptr;
     const ShaderInput* ps_input = nullptr;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    gpu::Pipeline pipeline = nullptr;
     VkResult result = VK_SUCCESS;
     uint64_t ns = 0;
     bool first = false;  // bo2zm_native_compile_first: ahead of the others
@@ -15908,8 +15908,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return async_compiles_ > 0;
   }
 
-  void QueueCompile(uint64_t hash, const PipelineKey& key, const VertexInput& input, VkShaderModule vs,
-                    VkShaderModule ps, const DrawRequest& p) {
+  void QueueCompile(uint64_t hash, const PipelineKey& key, const VertexInput& input, gpu::Shader vs,
+                    gpu::Shader ps, const DrawRequest& p) {
     CompileJob job;
     job.hash = hash;
     job.key = key;
@@ -16055,7 +16055,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         // shaders it compiled, so on the console the others come back from the ring at once.
         lock.lock();
         const bool vs_new = compile_modules_seen_.insert(job.vs).second;
-        const bool ps_new = job.ps != VK_NULL_HANDLE && compile_modules_seen_.insert(job.ps).second;
+        const bool ps_new = job.ps != nullptr && compile_modules_seen_.insert(job.ps).second;
         lock.unlock();
         if (vs_new || ps_new) {
           std::this_thread::sleep_for(std::chrono::milliseconds(delay));
@@ -16082,7 +16082,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     std::lock_guard<std::mutex> lock(compile_mutex_);
     for (CompileJob& job : compile_done_) {  // finished but never collected
-      if (job.pipeline != VK_NULL_HANDLE) {
+      if (job.pipeline != nullptr) {
         gpu::vulkan::Destroy(dfn_, device_, job.pipeline);
       }
     }
@@ -16118,7 +16118,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       compile_pending_.erase(job.hash);
       if (job.result != VK_SUCCESS) {
         Reject(53, "could not create a pipeline");
-        job.pipeline = VK_NULL_HANDLE;
+        job.pipeline = nullptr;
       } else {
         ++pipelines_no_save_;
       }
@@ -16160,12 +16160,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   void DestroyImage(NativeImage& image) {
-    if (image.view != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.view);
-    if (image.image != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.image);
+    if (image.view != nullptr) gpu::vulkan::Destroy(dfn_, device_, image.view);
+    if (image.image != nullptr) gpu::vulkan::Destroy(dfn_, device_, image.image);
     // The pool chunk is returned after destroying the image that used it, and in that case `guest_memory` is
     // NULL on purpose: the memory belongs to a shared slab and is not freed on its own.
     if (image.pool_block != 0xFFFFFFFFu) pool_textures_.Free(image.pool_block);
-    if (image.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, image.guest_memory);
+    if (image.guest_memory != nullptr) gpu::vulkan::Free(dfn_, device_, image.guest_memory);
     image = NativeImage{};
   }
 
@@ -16189,8 +16189,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   TargetContext* context_;
   FnBufferAddress address_buffer_ = nullptr;
 
-  VkBuffer upload_ = VK_NULL_HANDLE;
-  VkDeviceMemory upload_memory_ = VK_NULL_HANDLE;
+  gpu::Buffer upload_ = nullptr;
+  gpu::Memory upload_memory_ = nullptr;
   uint32_t upload_type_ = UINT32_MAX;
   VkDeviceSize upload_size_real_ = 0;
   uint8_t* upload_data_ = nullptr;
@@ -16270,8 +16270,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint64_t copies_thread_n_previous_ = 0;
   uint64_t copies_thread_bytes_previous_ = 0;
   struct UploadBuffer {
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+    gpu::Buffer buffer = nullptr;
+    gpu::Memory guest_memory = nullptr;
     VkDeviceSize size_real = 0;
     uint8_t* data = nullptr;
     VkDeviceAddress address = 0;
@@ -16281,12 +16281,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::array<UploadBuffer, kSlotsOfJob> uploads_{};  // upload_* are the current slot's
   // GPU skinning (SkinOnGpu).
   bool skin_on_ = false;
-  VkPipelineLayout skin_layout_ = VK_NULL_HANDLE;
-  VkPipeline skin_pipeline_ = VK_NULL_HANDLE;
+  gpu::PipelineLayout skin_layout_ = nullptr;
+  gpu::Pipeline skin_pipeline_ = nullptr;
   bool skin_bound_ = false;  // the pipeline is bound in this recording's upload command buffer
   // The job tables, one per upload buffer (kSkinTableBytes each: the job records, then the workgroups).
-  VkBuffer skin_table_buffer_ = VK_NULL_HANDLE;
-  VkDeviceMemory skin_table_memory_ = VK_NULL_HANDLE;
+  gpu::Buffer skin_table_buffer_ = nullptr;
+  gpu::Memory skin_table_memory_ = nullptr;
   uint8_t* skin_table_data_ = nullptr;
   VkDeviceAddress skin_table_address_ = 0;
   struct SkinTable {
@@ -16294,8 +16294,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   };
   std::array<SkinTable, kSlotsOfJob> skin_tables_{};
   // The input cache (SkinCachedInputs): two pools of kSkinPoolBytes in one buffer.
-  VkBuffer skin_pool_buffer_ = VK_NULL_HANDLE;
-  VkDeviceMemory skin_pool_memory_ = VK_NULL_HANDLE;
+  gpu::Buffer skin_pool_buffer_ = nullptr;
+  gpu::Memory skin_pool_memory_ = nullptr;
   uint8_t* skin_pool_data_ = nullptr;
   VkDeviceAddress skin_pool_address_ = 0;
   struct SkinPool {
@@ -16332,21 +16332,21 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool shared_coherent_ = true;
   uint32_t shared_type_ = 0;
   uint8_t* shared_data_ = nullptr;
-  VkDeviceMemory shared_memory_ = VK_NULL_HANDLE;
+  gpu::Memory shared_memory_ = nullptr;
   VkDeviceSize shared_size_real_ = 0;
   VkDeviceSize shared_used_ = 0;
   uint64_t shared_bytes_published_ = 0;
 
-  std::array<VkDescriptorSetLayout, 4> layouts_{};
-  VkDescriptorPool pool_ = VK_NULL_HANDLE;
-  std::array<VkDescriptorSet, 4> sets_{};
-  VkPipelineLayout layout_pipeline_ = VK_NULL_HANDLE;
+  std::array<gpu::SetLayout, 4> layouts_{};
+  gpu::SetPool pool_ = nullptr;
+  std::array<gpu::Set, 4> sets_{};
+  gpu::PipelineLayout layout_pipeline_ = nullptr;
   // Set 4, the constants through dynamic UBOs. One set per upload slot (each one is a VkBuffer).
   bool use_ubo_ = false;
   VkDeviceSize alignment_ubo_ = 256;
-  VkDescriptorSetLayout layout_ubo_ = VK_NULL_HANDLE;
-  VkDescriptorPool pool_ubo_ = VK_NULL_HANDLE;
-  std::array<VkDescriptorSet, kSlotsOfJob> sets_ubo_{};  // one per work slot
+  gpu::SetLayout layout_ubo_ = nullptr;
+  gpu::SetPool pool_ubo_ = nullptr;
+  std::array<gpu::Set, kSlotsOfJob> sets_ubo_{};  // one per work slot
   uint32_t slot_current_ = 0;
   bool ubo_bound_ = false;
   uint32_t slot_ubo_bound_ = UINT32_MAX;
@@ -16394,22 +16394,22 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::chrono::steady_clock::time_point start_ubo_ = std::chrono::steady_clock::now();
   std::array<Heap, 4> heaps_{};
   std::array<NativeImage, 3> empty_{};
-  VkSampler sampler_empty_ = VK_NULL_HANDLE;
+  gpu::Sampler sampler_empty_ = nullptr;
   bool empty_prepared_ = false;
 
-  std::unordered_map<const ShaderInput*, VkShaderModule> modules_;
-  std::array<VkShaderModule, 4> modules_variants_{};  // 1 natural, 2 soft, 3 debug magenta
+  std::unordered_map<const ShaderInput*, gpu::Shader> modules_;
+  std::array<gpu::Shader, 4> modules_variants_{};  // 1 natural, 2 soft, 3 debug magenta
   std::array<bool, 4> modules_variants_created_{};
   int glow_annotated_ = 0;
-  std::unordered_map<uint64_t, std::pair<PipelineKey, VkPipeline>> pipelines_;
+  std::unordered_map<uint64_t, std::pair<PipelineKey, gpu::Pipeline>> pipelines_;
   // One-entry shortcut for PipelineOf (see the comment there).
   PipelineKey last_key_{};
-  VkPipeline last_pipeline_ = VK_NULL_HANDLE;
+  gpu::Pipeline last_pipeline_ = nullptr;
   bool last_key_valid_ = false;
   // direct cache in front of pipelines_ (bo2zm_native_direct_pipelines).
   struct PipelineCell {
     PipelineKey key{};
-    VkPipeline pipeline = VK_NULL_HANDLE;  // VK_NULL_HANDLE = empty cell
+    gpu::Pipeline pipeline = nullptr;  // VK_NULL_HANDLE = empty cell
   };
   static constexpr size_t kCellsPipeline = 256;  // power of 2; 256 x 88 bytes = 22 KB contiguous
   std::array<PipelineCell, kCellsPipeline> cells_pipeline_{};
@@ -16536,12 +16536,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
       VK_BLEND_FACTOR_SRC_ALPHA_SATURATE,
   };
   bool eds3_available_ = false;  // the SDK enables the extension and its three features; the driver provides the functions
-  std::unordered_map<uint64_t, VkRenderPass> passes_;
-  std::unordered_map<uint64_t, VkFramebuffer> framebuffers_;
+  std::unordered_map<uint64_t, gpu::Pass> passes_;
+  std::unordered_map<uint64_t, gpu::Framebuffer> framebuffers_;
   // bo2zm_native_framebuffers_forget_views. The views of each cached framebuffer (by the same key), the
   // ones retired by the guard, and the counts for the warning.
-  std::unordered_map<uint64_t, std::array<VkImageView, 5>> framebuffers_views_;
-  std::vector<VkFramebuffer> fb_retired_;
+  std::unordered_map<uint64_t, std::array<gpu::ImageView, 5>> framebuffers_views_;
+  std::vector<gpu::Framebuffer> fb_retired_;
   bool fb_retire_ = false;
   uint64_t fb_views_forgotten_ = 0;
   uint64_t fb_forgotten_ = 0;
@@ -16564,8 +16564,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // The views_ keys of each image, so InvalidateImages (every resolve and every copy) does not walk all of
   // views_ (that is 2.7 % of the ring thread in gameplay). Maintained together with views_: SlotView inserts,
   // and every removal of a view removes its key.
-  std::unordered_map<VkImage, std::vector<uint64_t>> views_per_image_;
-  std::unordered_map<uint64_t, std::pair<VkSampler, uint32_t>> samplers_;
+  std::unordered_map<gpu::Image, std::vector<uint64_t>> views_per_image_;
+  std::unordered_map<uint64_t, std::pair<gpu::Sampler, uint32_t>> samplers_;
   // Diagnostic: filter values already logged (SlotSampler).
   uint32_t aniso_seen_ = 0;
   bool aniso_annotated_ = false;  // bo2zm_native_anisotropic, one line when the first one is created
@@ -16602,7 +16602,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint32_t stencil_recorded_[2] = {};  // RB_STENCILREFMASK for front and back
   bool stencil_recorded_valid_ = false;
   VkIndexType type_indices_recorded_ = VK_INDEX_TYPE_MAX_ENUM;
-  VkBuffer buffer_indices_recorded_ = VK_NULL_HANDLE;  // with the index cache, the upload buffer or a pool
+  gpu::Buffer buffer_indices_recorded_ = nullptr;  // with the index cache, the upload buffer or a pool
   // bo2zm_native_index_cache (IndexCacheByWrites): -1 = not read yet; this slot's arm; this draw's pool binding
   // (tagged as the vertex cache's; 0 = none); the 10 s counters.
   int32_t icache_ = -1;
@@ -16679,7 +16679,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool diag_vertices_repeated_ = false;
   bool diag_stats_draw_ = false;
   uint32_t scissor_test_ = 0;
-  std::array<VkBuffer, 16> buffers_vertices_{};
+  std::array<gpu::Buffer, 16> buffers_vertices_{};
   // Height actually used by each render target, deduced from the scissor. It only grows.
   std::unordered_map<uint32_t, uint32_t> height_useful_;
   bool area_util_ = true;
@@ -16741,8 +16741,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     kSkyReasons
   };
   struct PostponedSky {
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    VkBuffer buffer = VK_NULL_HANDLE;   // the upload one: vertices and indices
+    gpu::Pipeline pipeline = nullptr;
+    gpu::Buffer buffer = nullptr;   // the upload one: vertices and indices
     bool uses_ubo = false;
     uint64_t push[3] = {};             // only with constants through pointers
     std::array<uint32_t, 3> offsets_ubo{};
@@ -16759,7 +16759,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     bool indices_16 = false;
     uint32_t indices = 0;
     uint32_t first_index = 0;
-    VkBuffer index_buffer = VK_NULL_HANDLE;  // the upload buffer, or the index cache's pool
+    gpu::Buffer index_buffer = nullptr;  // the upload buffer, or the index cache's pool
     uint32_t vmin = 0;
     uint32_t count = 0;               // no indices
     uint32_t ps_more_one = 0;           // for the diagnostic per-draw query
@@ -16836,7 +16836,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint32_t stats_pass_ = UINT32_MAX;
   uint32_t warnings_occlusion_draw_ = 0;  // diagnostic of the query draws
   std::chrono::steady_clock::time_point last_warning_occlusion_draw_{};
-  VkCommandBuffer pass_commands_ = VK_NULL_HANDLE;
+  gpu::CommandList pass_commands_ = nullptr;
   uint64_t pass_key_ = 0;
   uint64_t pass_generation_ = UINT64_MAX;
   uint32_t pass_width_ = 0;
@@ -16845,9 +16845,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint64_t clears_depth_in_pass_ = 0;  // ZCULL
   std::chrono::steady_clock::time_point start_pass_{};  // pass change breakdown
   uint32_t pass_formats_[5] = {};
-  VkRenderPass pass_rp_ = VK_NULL_HANDLE;
+  gpu::Pass pass_rp_ = nullptr;
   uint64_t recording_generation_ = UINT64_MAX;
-  VkPipeline pipeline_bound_ = VK_NULL_HANDLE;
+  gpu::Pipeline pipeline_bound_ = nullptr;
   bool sets_bound_ = false;
 
   uint32_t diagnostics_ = 0;
@@ -16880,8 +16880,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   TexturePool pool_textures_;
   // Texture bind thread (bo2zm_native_texture_bind_thread). See the LoopBindings block.
   struct BindRequest {
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+    gpu::Image image = nullptr;
+    gpu::Memory guest_memory = nullptr;
     VkDeviceSize offset = 0;
     VkResult result = VK_NOT_READY;  // written by the thread, under bindings_mutex_
     uint64_t ns = 0;                    // wall time inside vkBindImageMemory, on the thread
@@ -16889,7 +16889,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   struct TextureInFlight {  // ring thread only
     CachedTexture* texture = nullptr;
     uint64_t ticket = 0;
-    VkImage image = VK_NULL_HANDLE;  // the queued one (to remove it from images_in_flight_ and move its views)
+    gpu::Image image = nullptr;  // the queued one (to remove it from images_in_flight_ and move its views)
     VkResult result = VK_NOT_READY;
     VkFormat format = VK_FORMAT_UNDEFINED;  // the fields below, to recreate it through CreateTexture if the bind fails
     uint32_t width = 0;
@@ -16900,11 +16900,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
     bool copy = false;  // UploadTexture already left its data in the upload buffer
     VkDeviceSize copy_offset = 0;
     uint64_t copy_epoch = 0;
-    VkCommandBuffer copy_commands = VK_NULL_HANDLE;
+    gpu::CommandList copy_commands = nullptr;
   };
   struct ViewInFlight {  // ring thread only
     uint64_t key = 0;
-    VkImage image = VK_NULL_HANDLE;
+    gpu::Image image = nullptr;
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t swizzle = 0;
     uint16_t swizzle_host = 0;
@@ -16940,7 +16940,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool collecting_bindings_ = false;
   std::vector<TextureInFlight> in_flight_;
   std::vector<ViewInFlight> views_in_flight_;
-  std::unordered_set<VkImage> images_in_flight_;
+  std::unordered_set<gpu::Image> images_in_flight_;
   uint64_t bindings_checked_ = 0;
   uint64_t bindings_thread_total_ = 0;
   uint64_t bindings_failed_ = 0;
@@ -17091,8 +17091,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool dedupe_active_ = true;
   // bo2zm_native_vertex_cache.
   struct VertexPool {
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
+    gpu::Buffer buffer = nullptr;
+    gpu::Memory memory = nullptr;
     uint8_t* data = nullptr;
     VkDeviceSize size = 0;
     VkDeviceSize size_real = 0;
@@ -17225,9 +17225,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint32_t dedupe_sync_view_ = 0;  // last value seen of g_syncs_ring
   std::set<uint64_t> warnings_invsize_resolved_;  // one trace per size
   bool alternation_scissor_annotated_ = false;
-  std::unordered_map<const ShaderInput*, VkShaderModule> modules_only_alpha_;
+  std::unordered_map<const ShaderInput*, gpu::Shader> modules_only_alpha_;
   // The same module with OpExecutionMode EarlyFragmentTests (bo2zm_native_early_z).
-  std::unordered_map<const ShaderInput*, VkShaderModule> modules_z_early_;
+  std::unordered_map<const ShaderInput*, gpu::Shader> modules_z_early_;
   uint64_t draws_ps_useless_ = 0;     // no color and a PS that does not discard
   uint64_t draws_ps_needed_ = 0;  // no color, but the PS is needed
   uint64_t shadows_alpha_active_ = 0;
@@ -17409,13 +17409,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // On-disk pipeline cache (LoadCachePipelines and SaveCachePipelines).
   using FnCreatePipelineCache = VkResult(VKAPI_PTR*)(VkDevice, const VkPipelineCacheCreateInfo*,
                                                      const VkAllocationCallbacks*,
-                                                     VkPipelineCache*);
-  using FnPipelineCacheData = VkResult(VKAPI_PTR*)(VkDevice, VkPipelineCache, size_t*, void*);
-  using FnDestroyPipelineCache = void(VKAPI_PTR*)(VkDevice, VkPipelineCache,
+                                                     gpu::PipelineCache*);
+  using FnPipelineCacheData = VkResult(VKAPI_PTR*)(VkDevice, gpu::PipelineCache, size_t*, void*);
+  using FnDestroyPipelineCache = void(VKAPI_PTR*)(VkDevice, gpu::PipelineCache,
                                                     const VkAllocationCallbacks*);
   FnPipelineCacheData data_cache_ = nullptr;
   FnDestroyPipelineCache destroy_cache_ = nullptr;
-  VkPipelineCache cache_pipelines_ = VK_NULL_HANDLE;
+  gpu::PipelineCache cache_pipelines_ = nullptr;
   uint32_t pipelines_no_save_ = 0;
   uint32_t saved_cache_ = 0;
   size_t bytes_cache_saved_ = 0;  // size of the last file read or saved (the writer thread's once it runs)
@@ -17507,7 +17507,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   uint32_t compile_first_ = 0;  // bo2zm_native_compile_first, read when the renderer starts
   uint64_t compiles_promoted_ = 0, compiles_first_ = 0;
   uint32_t compile_ids_ = 0;  // bo2zm_native_test_compile_log
-  std::unordered_set<VkShaderModule> compile_modules_seen_;  // bo2zm_native_test_compile_delay_ms, under compile_mutex_
+  std::unordered_set<gpu::Shader> compile_modules_seen_;  // bo2zm_native_test_compile_delay_ms, under compile_mutex_
   std::mutex compile_mutex_;
   std::condition_variable compile_cv_;
   std::deque<CompileJob> compile_queue_;
