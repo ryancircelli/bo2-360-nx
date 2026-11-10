@@ -483,6 +483,9 @@ class MetalCommandProcessor final : public CommandProcessor {
   const char* draw_skip_reason_ = nullptr;
   int census_draw_site_ = -1;  // [hle-census] site of the draw being issued
   bool IssueCopy() override;
+  // GPU trace replay: resolves live in the shared memory buffer, copy them to
+  // guest memory so the replayer can read the per-draw readback.
+  void TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) override;
 
   void WriteRegister(uint32_t index, uint32_t value) override;
   void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,

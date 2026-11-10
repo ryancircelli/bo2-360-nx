@@ -1,0 +1,60 @@
+diff --color -ruN a/src/graphics/metal/CMakeLists.txt b/src/graphics/metal/CMakeLists.txt
+--- a/src/graphics/metal/CMakeLists.txt	2026-11-09 23:17:36
++++ b/src/graphics/metal/CMakeLists.txt	2026-11-09 23:17:37
+@@ -195,6 +195,19 @@
+     FABLE2_NO_CONVERTER=1
+ )
+ 
++# GPU frame capture and offline replay (tools/gputest/replay in the SDK). The
++# trace sources come from the private SDK copy, so capture and replay run the
++# same command processor code the plugin uses.
++if(REXGLUE_BUILD_GPUTEST AND EXISTS ${_sdk_private}/src/graphics/trace/frame_replay.cpp)
++    target_sources(rexgpu-metal PRIVATE
++        ${_sdk_private}/src/graphics/trace/trace_writer.cpp
++        ${_sdk_private}/src/graphics/trace/frame_capture.cpp
++        ${_sdk_private}/src/graphics/trace/frame_replay.cpp
++        ${_sdk_private}/src/graphics/trace/replay_export.cpp
++    )
++    target_compile_definitions(rexgpu-metal PRIVATE REX_GPU_TRACE=1)
++endif()
++
+ target_compile_options(rexgpu-metal PRIVATE
+     -include ${_metal_dir}/compat.h
+     -fno-strict-aliasing
+diff --color -ruN a/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.cc b/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.cc
+--- a/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.cc	2026-11-09 23:17:36
++++ b/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.cc	2026-11-09 23:17:37
+@@ -9984,6 +9984,20 @@
+ }
+ 
+ 
++void MetalCommandProcessor::TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) {
++  physical_address &= 0x1FFFFFFF;
++  if (!length || !shared_memory_ || !shared_memory_->GetBuffer()) {
++    return;
++  }
++  FlushCommandBufferAndWait(5000000000ULL, "gputest trace readback");
++  const uint8_t* gpu = static_cast<const uint8_t*>(shared_memory_->GetBuffer()->contents());
++  if (!gpu) {
++    return;
++  }
++  std::atomic_thread_fence(std::memory_order_acquire);
++  std::memcpy(memory_->TranslatePhysical(physical_address), gpu + physical_address, length);
++}
++
+ bool MetalCommandProcessor::IssueCopy() {
+   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kIssueCopy)) {
+     return false;
+diff --color -ruN a/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.h b/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.h
+--- a/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.h	2026-11-09 23:17:36
++++ b/src/graphics/metal/port/rex/graphics/metal/metal_command_processor.h	2026-11-09 23:17:37
+@@ -478,6 +478,9 @@
+   const char* draw_skip_reason_ = nullptr;
+   int census_draw_site_ = -1;  // [hle-census] site of the draw being issued
+   bool IssueCopy() override;
++  // GPU trace replay: resolves live in the shared memory buffer, copy them to
++  // guest memory so the replayer can read the per-draw readback.
++  void TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) override;
+ 
+   void WriteRegister(uint32_t index, uint32_t value) override;
+   void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,
