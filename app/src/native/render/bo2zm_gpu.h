@@ -21,6 +21,11 @@ struct VkImageView_T;
 struct VkDeviceMemory_T;
 struct VkSampler_T;
 struct VkDescriptorSetLayout_T;
+struct VkShaderModule_T;
+struct VkRenderPass_T;
+struct VkPipelineLayout_T;
+struct VkPipeline_T;
+struct VkPipelineCache_T;
 
 namespace bo2zm::native::gpu {
 
@@ -30,6 +35,11 @@ using ImageView = VkImageView_T*;
 using Memory = VkDeviceMemory_T*;  // a dedicated allocation
 using Sampler = VkSampler_T*;
 using SetLayout = VkDescriptorSetLayout_T*;  // what a descriptor set holds
+using Shader = VkShaderModule_T*;  // Metal: an MTLFunction from the prebuilt libraries
+using Pass = VkRenderPass_T*;  // the formats and load/store of a pass
+using PipelineLayout = VkPipelineLayout_T*;
+using Pipeline = VkPipeline_T*;
+using PipelineCache = VkPipelineCache_T*;  // Metal: an MTLBinaryArchive
 
 enum class Backend : uint8_t { kVulkan, kMetal };
 
@@ -302,6 +312,43 @@ struct PipelineState {
   StencilOps back;
   uint32_t n_colors = 0;  // the targets of the pass, compacted: blends[0..n_colors)
   BlendTarget blends[4];
+};
+
+// A vertex attribute: shader location, vertex buffer binding, format and offset (layout of
+// VkVertexInputAttributeDescription). Every binding steps per vertex.
+struct VertexAttribute {
+  uint32_t location = 0;
+  uint32_t binding = 0;
+  Format format = 0;
+  uint32_t offset = 0;
+};
+
+// The state set while recording instead of carried by the pipeline, by groups (Metal sets all of it on the
+// encoder, so there it only matters for the Vulkan pipelines).
+using DynamicGroups = uint32_t;
+inline constexpr DynamicGroups kDynamicView = 0x1;  // viewport and scissor
+inline constexpr DynamicGroups kDynamicDraw = 0x2;  // blend constants, stencil masks and reference, depth bias
+inline constexpr DynamicGroups kDynamicEds12 = 0x4;  // cull, winding, topology, restart, depth and stencil state
+inline constexpr DynamicGroups kDynamicEds3 = 0x8;  // blend enables, equations and write masks
+
+// A graphics pipeline. Without a pixel shader it only runs the vertex shader. Specialization constants are 32-bit,
+// ids 0..n_constants-1, given to the stages in constant_stages. Pipelines drawing in a pass without depth may leave
+// the depth state out (with_depth false).
+struct GraphicsPipelineDesc {
+  Shader vs = nullptr;
+  Shader ps = nullptr;
+  const uint32_t* constants = nullptr;
+  uint32_t n_constants = 0;
+  ShaderStages constant_stages = 0;
+  const uint32_t* strides = nullptr;  // one per vertex buffer binding
+  uint32_t n_bindings = 0;
+  const VertexAttribute* attributes = nullptr;
+  uint32_t n_attributes = 0;
+  const PipelineState* state = nullptr;
+  bool with_depth = true;
+  DynamicGroups dynamic = kDynamicView | kDynamicDraw;
+  PipelineLayout layout = nullptr;
+  Pass pass = nullptr;  // the pass it draws in, or one with the same formats
 };
 
 }  // namespace bo2zm::native::gpu
