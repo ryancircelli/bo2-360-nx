@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
+#include <vector>
 
 static_assert(std::is_same_v<bo2zm::native::gpu::CommandList, VkCommandBuffer>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Image, VkImage>);
@@ -18,6 +19,11 @@ static_assert(std::is_same_v<bo2zm::native::gpu::ImageView, VkImageView>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Memory, VkDeviceMemory>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Sampler, VkSampler>);
 static_assert(std::is_same_v<bo2zm::native::gpu::SetLayout, VkDescriptorSetLayout>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Shader, VkShaderModule>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Pass, VkRenderPass>);
+static_assert(std::is_same_v<bo2zm::native::gpu::PipelineLayout, VkPipelineLayout>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Pipeline, VkPipeline>);
+static_assert(std::is_same_v<bo2zm::native::gpu::PipelineCache, VkPipelineCache>);
 static_assert(bo2zm::native::gpu::kStageVertex == VK_SHADER_STAGE_VERTEX_BIT &&
               bo2zm::native::gpu::kStageFragment == VK_SHADER_STAGE_FRAGMENT_BIT &&
               bo2zm::native::gpu::kStageCompute == VK_SHADER_STAGE_COMPUTE_BIT);
@@ -862,6 +868,118 @@ struct FixedState {
   FixedState(const FixedState&) = delete;
   FixedState& operator=(const FixedState&) = delete;
 };
+
+static_assert(sizeof(VertexAttribute) == sizeof(VkVertexInputAttributeDescription) &&
+              offsetof(VertexAttribute, offset) == offsetof(VkVertexInputAttributeDescription, offset));
+
+/*
+ * Creates a graphics pipeline from its description. The dynamic states are declared in a fixed order: viewport and
+ * scissor; blend constants, stencil compare mask, write mask and reference, depth bias; then the extended groups.
+ * flags is Vulkan's (VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT for the cache probe).
+ */
+inline VkResult CreateGraphicsPipeline(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                       PipelineCache cache, const GraphicsPipelineDesc& desc, Pipeline& out,
+                                       VkPipelineCreateFlags flags = 0) {
+  VkSpecializationMapEntry map[8]{};
+  const uint32_t n_constants = desc.n_constants < 8 ? desc.n_constants : 8;
+  for (uint32_t i = 0; i < n_constants; ++i) {
+    map[i] = {i, uint32_t(i * sizeof(uint32_t)), sizeof(uint32_t)};
+  }
+  const VkSpecializationInfo specialization{n_constants, map, n_constants * sizeof(uint32_t), desc.constants};
+  VkPipelineShaderStageCreateInfo stages[2]{};
+  const Shader modules[2] = {desc.vs, desc.ps};
+  const VkShaderStageFlagBits kinds[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+  for (uint32_t i = 0; i < 2; ++i) {
+    stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[i].stage = kinds[i];
+    stages[i].module = modules[i];
+    stages[i].pName = "main";
+    if (n_constants && (desc.constant_stages & kinds[i])) {
+      stages[i].pSpecializationInfo = &specialization;
+    }
+  }
+
+  std::vector<VkVertexInputBindingDescription> bindings;
+  bindings.reserve(desc.n_bindings);
+  for (uint32_t i = 0; i < desc.n_bindings; ++i) {
+    bindings.push_back({i, desc.strides[i], VK_VERTEX_INPUT_RATE_VERTEX});
+  }
+  VkPipelineVertexInputStateCreateInfo vertices{};
+  vertices.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  vertices.vertexBindingDescriptionCount = desc.n_bindings;
+  vertices.pVertexBindingDescriptions = bindings.data();
+  vertices.vertexAttributeDescriptionCount = desc.n_attributes;
+  vertices.pVertexAttributeDescriptions = reinterpret_cast<const VkVertexInputAttributeDescription*>(desc.attributes);
+
+  const FixedState fixed(*desc.state);
+
+  static constexpr VkDynamicState kView[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+  static constexpr VkDynamicState kDraw[] = {VK_DYNAMIC_STATE_BLEND_CONSTANTS, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+                                             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+                                             VK_DYNAMIC_STATE_DEPTH_BIAS};
+  static constexpr VkDynamicState kEds12[] = {
+      VK_DYNAMIC_STATE_CULL_MODE,           VK_DYNAMIC_STATE_FRONT_FACE,
+      VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,  VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
+      VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,   VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+      VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,  VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+      VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP};
+  static constexpr VkDynamicState kEds3[] = {VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,
+                                             VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT,
+                                             VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT};
+  VkDynamicState dynamic_states[24];
+  uint32_t n_dynamic = 0;
+  const auto add = [&](DynamicGroups group, const auto& states) {
+    if (desc.dynamic & group) {
+      for (const VkDynamicState state : states) {
+        dynamic_states[n_dynamic++] = state;
+      }
+    }
+  };
+  add(kDynamicView, kView);
+  add(kDynamicDraw, kDraw);
+  add(kDynamicEds12, kEds12);
+  add(kDynamicEds3, kEds3);
+  VkPipelineDynamicStateCreateInfo dynamic{};
+  dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  dynamic.dynamicStateCount = n_dynamic;
+  dynamic.pDynamicStates = dynamic_states;
+
+  VkGraphicsPipelineCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  info.stageCount = desc.ps ? 2 : 1;
+  info.pStages = stages;
+  info.pVertexInputState = &vertices;
+  info.pInputAssemblyState = &fixed.assembly;
+  info.pViewportState = &fixed.view;
+  info.pRasterizationState = &fixed.rasterization;
+  info.pMultisampleState = &fixed.sampling;
+  info.pDepthStencilState = desc.with_depth ? &fixed.depth : nullptr;
+  info.pColorBlendState = &fixed.blend;
+  info.pDynamicState = &dynamic;
+  info.layout = desc.layout;
+  info.renderPass = desc.pass;
+  info.basePipelineIndex = -1;
+  info.flags = flags;
+  out = VK_NULL_HANDLE;
+  return dfn.vkCreateGraphicsPipelines(device, cache, 1, &info, nullptr, &out);
+}
+
+// A compute pipeline from one shader (entry main) and its layout.
+inline bool CreateComputePipeline(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, Shader shader,
+                                  PipelineLayout layout, Pipeline& out) {
+  VkComputePipelineCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  info.stage.module = shader;
+  info.stage.pName = "main";
+  info.layout = layout;
+  if (dfn.vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &out) != VK_SUCCESS) {
+    out = VK_NULL_HANDLE;
+    return false;
+  }
+  return true;
+}
 
 }  // namespace vulkan
 
