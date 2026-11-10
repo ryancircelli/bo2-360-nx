@@ -1319,7 +1319,8 @@ void Mirror::Showed(ImageView view) {
   auto found = s.views.find(view);
   s.shown = found == s.views.end() ? nil : found->second.texture;
   if (++s.frames % 600 == 1) {
-    REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made, {} skipped", s.frames, s.draws, s.draws_skipped);
+    REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made, {} skipped, shown {}x{}", s.frames, s.draws,
+                s.draws_skipped, s.shown ? s.shown.width : 0, s.shown ? s.shown.height : 0);
   }
 }
 
