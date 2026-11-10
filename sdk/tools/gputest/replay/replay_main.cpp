@@ -34,6 +34,7 @@ void Usage() {
                "usage: rexgpu-replay <trace.xtr> -o <out_dir> [--plugin path|name]\n"
                "       [--backend vulkan|any] [--label name] [--no-color] [--no-depth]\n"
                "       [--full] [--frames N] [--scratch 0xADDR] [--draws FIRST:COUNT]\n"
+               "       [--texcheck] [--race] [--race-frames N]\n"
                "       [--log-level trace|debug|info|warn|error] [--cvar name=value]...\n");
 }
 
@@ -55,6 +56,7 @@ std::filesystem::path ResolvePlugin(const std::string& spec) {
 int main(int argc, char** argv) {
   std::string trace_path, out_dir = "replay_out", plugin = "xenos", backend = "vulkan", label;
   std::string log_level = "info";
+  uint32_t race_frames = 0;
   uint32_t flags = kRexGpuTraceReplayReadbackColor | kRexGpuTraceReplayReadbackDepth;
   uint32_t frames = 0, scratch = 0, first_draw = 0, draw_count = 0;
   std::vector<std::pair<std::string, std::string>> cvars;
@@ -82,6 +84,12 @@ int main(int argc, char** argv) {
       flags &= ~kRexGpuTraceReplayReadbackDepth;
     } else if (a == "--full") {
       flags |= kRexGpuTraceReplayFullImages;
+    } else if (a == "--texcheck") {
+      flags |= kRexGpuTraceReplayTexCheck;
+    } else if (a == "--race") {
+      flags |= kRexGpuTraceReplayTexCheck | kRexGpuTraceReplayRace;
+    } else if (a == "--race-frames") {
+      race_frames = uint32_t(std::stoul(next()));
     } else if (a == "--frames") {
       frames = uint32_t(std::stoul(next()));
     } else if (a == "--scratch") {
@@ -188,6 +196,7 @@ int main(int argc, char** argv) {
   options.scratch_address = scratch;
   options.first_draw = first_draw;
   options.draw_count = draw_count;
+  options.race_frames = race_frames;
   int result = replay_fn(runtime->graphics_system(), &options);
 
   runtime->Shutdown();

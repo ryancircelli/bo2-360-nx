@@ -151,8 +151,11 @@ if(REXGLUE_BUILD_GPUTEST)
         trace/trace_writer.cpp
         trace/frame_capture.cpp
         trace/frame_replay.cpp
-        trace/replay_export.cpp)
+        trace/replay_export.cpp
+        trace/texture_check.cpp)
     target_compile_definitions(rexgpu-xenos PRIVATE REX_GPU_TRACE=1)
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(rexgpu-xenos PRIVATE ZLIB::ZLIB)
 endif()
 
 if(REXGLUE_USE_VULKAN)

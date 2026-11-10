@@ -204,8 +204,11 @@ if(REXGLUE_BUILD_GPUTEST AND EXISTS ${_sdk_private}/src/graphics/trace/frame_rep
         ${_sdk_private}/src/graphics/trace/frame_capture.cpp
         ${_sdk_private}/src/graphics/trace/frame_replay.cpp
         ${_sdk_private}/src/graphics/trace/replay_export.cpp
+        ${_sdk_private}/src/graphics/trace/texture_check.cpp
     )
     target_compile_definitions(rexgpu-metal PRIVATE REX_GPU_TRACE=1)
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(rexgpu-metal PRIVATE ZLIB::ZLIB)
 endif()
 
 target_compile_options(rexgpu-metal PRIVATE

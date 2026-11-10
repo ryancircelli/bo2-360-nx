@@ -22,8 +22,12 @@
 #include <fstream>
 #include <future>
 #include <map>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include <zlib.h>
 
 #include <fmt/format.h>
 
@@ -34,13 +38,16 @@
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
+#include <rex/graphics/trace/texture_probe.h>
 #include <rex/graphics/trace/trace_protocol.h>
+#include <rex/graphics/util/draw.h>
 #include <rex/graphics/xenos.h>
 #include <rex/hash.h>
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 #include <rex/thread/mutex.h>
 
+#include "texture_check.h"
 #include "trace_access.h"
 
 namespace rex::graphics::trace {
@@ -256,6 +263,26 @@ class Replayer {
  private:
   bool ExecuteCommands(const std::vector<uint8_t>& trace);
   void WriteMemory(uint32_t address, const void* data, uint32_t length, bool from_trace = true);
+  // Trace memory blocks (kMemoryRead), in trace order, for race mode.
+  struct WriteRecord {
+    size_t data_offset;
+    uint32_t address;
+    uint32_t length;
+    uint32_t encoded_length;
+    uint32_t frame;
+    MemoryEncodingFormat encoding;
+    bool applied_early;
+  };
+  void ScanWrites(const std::vector<uint8_t>& trace);
+  const uint8_t* DecodeRecord(const uint8_t* trace, const WriteRecord& record);
+  bool DecodeBlock(MemoryEncodingFormat encoding, const uint8_t* data, uint32_t encoded_length,
+                   uint32_t decoded_length, std::vector<uint8_t>& out);
+  // Applies a trace memory block. In race mode, bytes still owned by a block
+  // applied early (later in the trace) are left alone, and only the changed
+  // span fires the physical write callbacks.
+  void ApplyRecordedWrite(uint32_t record_index, const uint8_t* data);
+  bool RaceWrite(uint32_t address, uint32_t length, uint32_t& write_address,
+                 uint32_t& write_length, uint32_t& write_frame);
   void RestoreRegisters(uint32_t first, uint32_t count, const uint32_t* values);
   void HandleDraws();
   void RecordDraw(const DrawEvent& draw);
@@ -279,7 +306,234 @@ class Replayer {
   std::map<std::string, TargetImage> previous_;
   uint32_t readbacks_ = 0;
   uint32_t failed_readbacks_ = 0;
+  std::unique_ptr<TextureCheck> texcheck_;
+  const uint8_t* trace_data_ = nullptr;
+  std::vector<WriteRecord> records_;
+  // 64 KiB guest page -> indices of records touching it, ascending.
+  std::unordered_map<uint32_t, std::vector<uint32_t>> page_records_;
+  uint32_t next_record_ = 0;
+  std::vector<uint32_t> early_pending_;
+  std::vector<uint8_t> decode_buffer_;
+  std::vector<uint8_t> race_buffer_;
 };
+
+constexpr uint32_t kRecordPageShift = 16;
+
+bool Replayer::DecodeBlock(MemoryEncodingFormat encoding, const uint8_t* data,
+                           uint32_t encoded_length, uint32_t decoded_length,
+                           std::vector<uint8_t>& out) {
+  if (encoding != MemoryEncodingFormat::kZlib) {
+    return false;
+  }
+  if (out.size() < decoded_length) {
+    out.resize(decoded_length);
+  }
+  uLongf length = decoded_length;
+  return uncompress(out.data(), &length, data, encoded_length) == Z_OK &&
+         length == decoded_length;
+}
+
+const uint8_t* Replayer::DecodeRecord(const uint8_t* trace, const WriteRecord& record) {
+  const uint8_t* data = trace + record.data_offset;
+  if (record.encoding == MemoryEncodingFormat::kNone) {
+    return data;
+  }
+  if (!DecodeBlock(record.encoding, data, record.encoded_length, record.length, race_buffer_)) {
+    return nullptr;
+  }
+  return race_buffer_.data();
+}
+
+void Replayer::ScanWrites(const std::vector<uint8_t>& trace) {
+  const uint8_t* base = trace.data();
+  const uint8_t* ptr = base + sizeof(TraceHeader);
+  const uint8_t* end = base + trace.size();
+  uint32_t frame = 0;
+  while (size_t(end - ptr) >= sizeof(uint32_t)) {
+    TraceCommandType type;
+    std::memcpy(&type, ptr, sizeof(type));
+    size_t step = 0;
+    switch (type) {
+      case TraceCommandType::kPrimaryBufferStart:
+        step = sizeof(PrimaryBufferStartCommand);
+        break;
+      case TraceCommandType::kPrimaryBufferEnd:
+        step = sizeof(PrimaryBufferEndCommand);
+        break;
+      case TraceCommandType::kIndirectBufferStart:
+        step = sizeof(IndirectBufferStartCommand);
+        break;
+      case TraceCommandType::kIndirectBufferEnd:
+        step = sizeof(IndirectBufferEndCommand);
+        break;
+      case TraceCommandType::kPacketStart:
+        step = sizeof(PacketStartCommand) +
+               size_t(reinterpret_cast<const PacketStartCommand*>(ptr)->count) * 4;
+        break;
+      case TraceCommandType::kPacketEnd:
+        step = sizeof(PacketEndCommand);
+        break;
+      case TraceCommandType::kMemoryRead: {
+        auto cmd = reinterpret_cast<const MemoryCommand*>(ptr);
+        uint32_t index = uint32_t(records_.size());
+        records_.push_back({size_t(ptr + sizeof(*cmd) - base), cmd->base_ptr & 0x1FFFFFFF,
+                            cmd->decoded_length, cmd->encoded_length, frame,
+                            cmd->encoding_format, false});
+        if (cmd->decoded_length) {
+          uint32_t a = cmd->base_ptr & 0x1FFFFFFF;
+          for (uint32_t page = a >> kRecordPageShift;
+               page <= (a + cmd->decoded_length - 1) >> kRecordPageShift; ++page) {
+            page_records_[page].push_back(index);
+          }
+        }
+        step = sizeof(*cmd) + cmd->encoded_length;
+        break;
+      }
+      case TraceCommandType::kMemoryWrite:
+        step = sizeof(MemoryCommand) + reinterpret_cast<const MemoryCommand*>(ptr)->encoded_length;
+        break;
+      case TraceCommandType::kEdramSnapshot:
+        step = sizeof(EdramSnapshotCommand) +
+               reinterpret_cast<const EdramSnapshotCommand*>(ptr)->encoded_length;
+        break;
+      case TraceCommandType::kEvent:
+        if (reinterpret_cast<const EventCommand*>(ptr)->event_type ==
+            EventCommand::Type::kSwap) {
+          ++frame;
+        }
+        step = sizeof(EventCommand);
+        break;
+      case TraceCommandType::kRegisters:
+        step = sizeof(RegistersCommand) +
+               reinterpret_cast<const RegistersCommand*>(ptr)->encoded_length;
+        break;
+      case TraceCommandType::kGammaRamp:
+        step = sizeof(GammaRampCommand) +
+               reinterpret_cast<const GammaRampCommand*>(ptr)->encoded_length;
+        break;
+      default:
+        return;
+    }
+    if (size_t(end - ptr) < step) {
+      return;
+    }
+    ptr += step;
+  }
+}
+
+void Replayer::ApplyRecordedWrite(uint32_t record_index, const uint8_t* data) {
+  WriteRecord& record = records_[record_index];
+  if (texcheck_) {
+    texcheck_->NoteWrite(record.address, data, record.length, record.frame);
+  }
+  if (!(options_.flags & kRexGpuTraceReplayRace)) {
+    WriteMemory(record.address, data, record.length);
+    return;
+  }
+  early_pending_.erase(std::remove(early_pending_.begin(), early_pending_.end(), record_index),
+                       early_pending_.end());
+  if (record.applied_early) {
+    return;
+  }
+  // Split around bytes owned by blocks applied early (they are newer).
+  std::vector<std::pair<uint32_t, uint32_t>> spans{{record.address,
+                                                    record.address + record.length}};
+  for (uint32_t other : early_pending_) {
+    const WriteRecord& o = records_[other];
+    if (other < record_index) {
+      continue;
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> next;
+    for (auto [s0, s1] : spans) {
+      uint32_t o0 = o.address, o1 = o.address + o.length;
+      if (o1 <= s0 || o0 >= s1) {
+        next.push_back({s0, s1});
+        continue;
+      }
+      if (s0 < o0) {
+        next.push_back({s0, o0});
+      }
+      if (o1 < s1) {
+        next.push_back({o1, s1});
+      }
+    }
+    spans.swap(next);
+  }
+  for (auto [s0, s1] : spans) {
+    // Only the changed bytes are guest stores; identical bytes must not fire
+    // callbacks, or they would heal a texture the cache got wrong.
+    const uint8_t* src = data + (s0 - record.address);
+    const uint8_t* dst = memory_->TranslatePhysical(s0);
+    uint32_t n = s1 - s0;
+    uint32_t first = 0;
+    while (first < n && src[first] == dst[first]) {
+      ++first;
+    }
+    if (first == n) {
+      continue;
+    }
+    uint32_t last = n;
+    while (last > first && src[last - 1] == dst[last - 1]) {
+      --last;
+    }
+    WriteMemory(s0 + first, src + first, last - first);
+  }
+}
+
+bool Replayer::RaceWrite(uint32_t address, uint32_t length, uint32_t& write_address,
+                         uint32_t& write_length, uint32_t& write_frame) {
+  uint32_t window = options_.race_frames ? options_.race_frames : 1;
+  uint32_t best = UINT32_MAX;
+  for (uint32_t page = address >> kRecordPageShift;
+       page <= (address + length - 1) >> kRecordPageShift; ++page) {
+    auto it = page_records_.find(page);
+    if (it == page_records_.end()) {
+      continue;
+    }
+    const auto& list = it->second;
+    for (auto r = std::lower_bound(list.begin(), list.end(), next_record_); r != list.end();
+         ++r) {
+      if (*r >= best) {
+        break;
+      }
+      const WriteRecord& record = records_[*r];
+      if (record.frame > frame_index_ + window) {
+        break;
+      }
+      if (record.applied_early || record.address >= address + length ||
+          record.address + record.length <= address) {
+        continue;
+      }
+      // Must change the texture's bytes.
+      const uint8_t* data = DecodeRecord(trace_data_, record);
+      if (!data) {
+        continue;
+      }
+      uint32_t o0 = std::max(address, record.address);
+      uint32_t o1 = std::min(address + length, record.address + record.length);
+      if (std::memcmp(data + (o0 - record.address), memory_->TranslatePhysical(o0), o1 - o0)) {
+        best = *r;
+        break;
+      }
+    }
+  }
+  if (best == UINT32_MAX) {
+    return false;
+  }
+  WriteRecord& record = records_[best];
+  const uint8_t* data = DecodeRecord(trace_data_, record);
+  // Apply as if at its trace position (changed span only), then mark it so
+  // the trace position skips it.
+  uint32_t saved = next_record_;
+  ApplyRecordedWrite(best, data);
+  next_record_ = saved;
+  record.applied_early = true;
+  early_pending_.push_back(best);
+  write_address = record.address;
+  write_length = record.length;
+  write_frame = record.frame;
+  return true;
+}
 
 uint32_t Replayer::ScratchAddress() const { return scratch_; }
 
@@ -328,9 +582,25 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
     return 1;
   }
 
+  trace_data_ = trace.data();
+  if (options_.flags & (kRexGpuTraceReplayTexCheck | kRexGpuTraceReplayRace)) {
+    bool race = (options_.flags & kRexGpuTraceReplayRace) != 0;
+    texcheck_ = std::make_unique<TextureCheck>(memory_, out_dir_, race);
+    if (race) {
+      ScanWrites(trace);
+      texcheck_->set_race_writer([this](uint32_t address, uint32_t length,
+                                        uint32_t& write_address, uint32_t& write_length,
+                                        uint32_t& write_frame) {
+        return RaceWrite(address, length, write_address, write_length, write_frame);
+      });
+    }
+    TextureLoadProbeSlot() = texcheck_.get();
+  }
+
   hooks_.chain = cp_.trace_hooks();
   cp_.set_trace_hooks(&hooks_);
   bool ok = ExecuteCommands(trace);
+  TextureLoadProbeSlot() = nullptr;
   cp_.set_trace_hooks(hooks_.chain);
   std::fclose(draws_json_);
   draws_json_ = nullptr;
@@ -339,12 +609,17 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
   std::string summary = fmt::format(
       "{{\n  \"trace\": \"{}\",\n  \"backend\": \"{}\",\n  \"title_id\": \"{:08X}\",\n"
       "  \"frames\": {},\n  \"draws\": {},\n  \"readbacks\": {},\n  \"failed_readbacks\": {},\n"
-      "  \"scratch_address\": \"0x{:08X}\",\n  \"scratch_conflict\": {},\n  \"ok\": {}\n}}\n",
+      "  \"scratch_address\": \"0x{:08X}\",\n  \"scratch_conflict\": {},\n  \"ok\": {},\n"
+      "  \"texcheck\": {}\n}}\n",
       JsonEscape(options_.trace_path ? options_.trace_path : ""),
       JsonEscape(options_.backend_label ? options_.backend_label : ""), header->title_id,
       frame_index_, draw_index_, readbacks_, failed_readbacks_, scratch_,
-      scratch_conflict_ ? "true" : "false", ok ? "true" : "false");
+      scratch_conflict_ ? "true" : "false", ok ? "true" : "false",
+      texcheck_ ? texcheck_->SummaryJson() : std::string("null"));
   std::ofstream(out_dir_ / "summary.json") << summary;
+  if (texcheck_) {
+    REXGPU_INFO("replay: texcheck {}", texcheck_->SummaryJson());
+  }
   REXGPU_INFO("replay: {} frame(s), {} draw(s), {} readback(s) ({} failed) -> {}", frame_index_,
               draw_index_, readbacks_, failed_readbacks_, out_dir_.string());
   if (scratch_conflict_) {
@@ -404,6 +679,9 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
           break;
         }
         current_packet_base_ = pending_packet->base_ptr;
+        if (texcheck_) {
+          texcheck_->set_position({frame_index_, draw_index_, packet_index_});
+        }
         cp_.ExecutePacket(pending_packet->base_ptr, pending_packet->count);
         pending_packet = nullptr;
         ++packet_index_;
@@ -419,11 +697,27 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
         if (!need(cmd->encoded_length)) {
           return false;
         }
+        const uint8_t* data = ptr;
         if (cmd->encoding_format != MemoryEncodingFormat::kNone) {
-          REXGPU_ERROR("replay: snappy compressed memory blocks are not supported");
-          return false;
+          if (!DecodeBlock(cmd->encoding_format, ptr, cmd->encoded_length, cmd->decoded_length,
+                           decode_buffer_)) {
+            REXGPU_ERROR("replay: cannot decode memory block (encoding {})",
+                         uint32_t(cmd->encoding_format));
+            return false;
+          }
+          data = decode_buffer_.data();
         }
-        WriteMemory(cmd->base_ptr, ptr, cmd->decoded_length);
+        if (texcheck_) {
+          if (options_.flags & kRexGpuTraceReplayRace) {
+            ApplyRecordedWrite(next_record_, data);
+          } else {
+            texcheck_->NoteWrite(cmd->base_ptr, data, cmd->decoded_length, frame_index_);
+            WriteMemory(cmd->base_ptr, data, cmd->decoded_length);
+          }
+        } else {
+          WriteMemory(cmd->base_ptr, data, cmd->decoded_length);
+        }
+        ++next_record_;
         ptr += cmd->encoded_length;
         break;
       }
@@ -834,7 +1128,19 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
       }
     }
   }
-  json += "]}\n";
+  json += "]";
+  if (texcheck_) {
+    if (modecontrol.edram_mode == xenos::EdramMode::kCopy) {
+      draw_util::ResolveInfo info;
+      if (draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info) &&
+          info.copy_dest_extent_length) {
+        texcheck_->AddGpuWrittenRange(info.copy_dest_extent_start, info.copy_dest_extent_length);
+      }
+    } else {
+      texcheck_->CheckDraw(regs, vs, ps, json);
+    }
+  }
+  json += "}\n";
   std::fwrite(json.data(), 1, json.size(), draws_json_);
   ++draw_index_;
 }

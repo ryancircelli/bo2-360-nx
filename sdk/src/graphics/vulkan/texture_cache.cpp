@@ -106,6 +106,9 @@ namespace shaders {
 #include "../shaders/vulkan_spirv/texture_load_rgba16_snorm_float_scaled_cs.h"
 #include "../shaders/vulkan_spirv/texture_load_rgba16_unorm_float_cs.h"
 #include "../shaders/vulkan_spirv/texture_load_rgba16_unorm_float_scaled_cs.h"
+#if REX_GPU_TRACE
+#include <rex/graphics/trace/texture_probe.h>
+#endif
 }  // namespace shaders
 
 namespace {
@@ -1806,6 +1809,11 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     copy_region.imageExtent.depth = std::max(depth >> level, UINT32_C(1));
   }
 
+#if REX_GPU_TRACE
+  // GPU trace replay: the copy is recorded, the caller marks the texture up
+  // to date (and watches it) afterwards.
+  trace::NotifyTextureLoadWindow(texture, load_base, load_mips, 0);
+#endif
   return true;
 }
 

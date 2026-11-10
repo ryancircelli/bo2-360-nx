@@ -38,6 +38,7 @@ def main():
     counts = collections.Counter()
     ops = collections.Counter()
     mem_bytes = 0
+    mem_stored = 0
     printed = 0
     while off < len(data):
         t, = struct.unpack_from("<I", data, off)
@@ -73,7 +74,9 @@ def main():
             off += 20 + elen
             if t == 6:
                 mem_bytes += dlen
-            line = f"{name} {base:08X} len {dlen} enc {enc}"
+                mem_stored += elen
+            enc_name = {0: "raw", 1: "snappy", 2: "zlib"}.get(enc, str(enc))
+            line = f"{name} {base:08X} len {dlen} enc {enc_name} stored {elen}"
         elif t == 8:
             enc, elen, dlen = struct.unpack_from("<III", data, off + 4)
             off += 16 + elen
@@ -99,7 +102,7 @@ def main():
     print("commands:", dict(counts))
     print("packets:", dict(ops))
     print(f"draws {sum(v for k, v in ops.items() if k in DRAW_OPCODES.values())} "
-          f"swaps {counts['Event']} memory read bytes {mem_bytes}")
+          f"swaps {counts['Event']} memory read bytes {mem_bytes} (stored {mem_stored})")
     return 0
 
 
