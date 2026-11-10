@@ -26,6 +26,7 @@
 #include "rex/graphics/metal/metal_command_processor.h"
 #include "rex/graphics/metal/metal_frame_log.h"
 #include "rex/hash.h"
+#include "rex/system/xfile.h"
 
 DEFINE_bool(
     metal_shared_memory_direct_write, true,
@@ -309,6 +310,18 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
     std::memcpy(guest + e.start, gpu + e.start, len);
+    rex::system::RecordGuestWrite('m', e.start, len, false,
+                                  "memexport sub " + std::to_string(e.submission));
+    if (!page_last_readback_us_.empty()) {
+      const uint64_t now_us = uint64_t(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now().time_since_epoch())
+              .count());
+      for (uint32_t page = e.start >> page_size_log2();
+           page <= ((e.start + len - 1) >> page_size_log2()); ++page) {
+        page_last_readback_us_[page] = now_us;
+      }
+    }
     const uint64_t new_hash = XXH3_64bits(guest + e.start, len);
     for (size_t j : rebase_pending) {
       PendingReadback& l = pending_readbacks_[j];
@@ -456,6 +469,7 @@ bool MetalSharedMemory::Initialize() {
                                                0);
   page_standalone_gpu_access_counts_.assign(kBufferSize >> page_size_log2(), 0);
   page_last_gpu_write_submission_.assign(kBufferSize >> page_size_log2(), 0);
+  page_last_readback_us_.assign(kBufferSize >> page_size_log2(), 0);
   page_last_staged_copy_submission_.assign(kBufferSize >> page_size_log2(), 0);
   page_last_precommit_copy_submission_.assign(kBufferSize >> page_size_log2(),
                                               0);
@@ -579,6 +593,34 @@ void MetalSharedMemory::MarkGpuWrite(uint32_t start, uint32_t length,
   for (uint32_t page = page_first; page <= page_last; ++page) {
     pages[page] = std::max(pages[page], submission_index);
   }
+}
+
+uint64_t MetalSharedMemory::LastReadbackUs(uint32_t start, uint32_t length) {
+  if (!length || start >= kBufferSize || page_last_readback_us_.empty()) {
+    return 0;
+  }
+  uint64_t end = std::min(uint64_t(start) + length, uint64_t(kBufferSize));
+  uint64_t last = 0;
+  for (uint32_t page = start >> page_size_log2();
+       page <= static_cast<uint32_t>((end - 1) >> page_size_log2()); ++page) {
+    last = std::max(last, page_last_readback_us_[page]);
+  }
+  return last;
+}
+
+uint64_t MetalSharedMemory::LastGpuWriteSubmission(uint32_t start,
+                                                  uint32_t length) {
+  if (!length || start >= kBufferSize ||
+      page_last_gpu_write_submission_.empty()) {
+    return 0;
+  }
+  uint64_t end = std::min(uint64_t(start) + length, uint64_t(kBufferSize));
+  uint64_t last = 0;
+  for (uint32_t page = start >> page_size_log2();
+       page <= static_cast<uint32_t>((end - 1) >> page_size_log2()); ++page) {
+    last = std::max(last, page_last_gpu_write_submission_[page]);
+  }
+  return last;
 }
 
 void MetalSharedMemory::MarkPrecommitCopy(uint32_t start, uint32_t length,

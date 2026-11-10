@@ -679,6 +679,7 @@ class MetalTextureCache : public TextureCache {
     // submission of the load; checked against guest memory at bind time.
     uint64_t cc_hash_[2] = {};
     uint64_t cc_load_submission_[2] = {};
+    uint64_t cc_load_us_[2] = {};
     uint8_t cc_route_[2] = {};
     bool cc_have_[2] = {};
     bool cc_stale_at_load_[2] = {};
@@ -926,10 +927,18 @@ class MetalTextureCache : public TextureCache {
 
  private:
   uint64_t cc_checked_ = 0;
-  uint64_t cc_mismatch_[3] = {};
+  uint64_t cc_mismatch_[4] = {};
+  uint64_t cc_gpu_same_cb_ = 0;
+  uint64_t cc_readback_while_resident_ = 0;
+  uint64_t cc_export_after_load_ = 0;
   uint64_t cc_stale_loads_ = 0;
   uint64_t cc_last_summary_ = 0;
   uint64_t cc_repaired_ = 0;
+  // Count-only metric: stale ranges (neither + stale-load) and their bytes,
+  // and the wall time since the first check, for a per-minute rate.
+  uint64_t cc_stale_bytes_ = 0;
+  uint64_t cc_start_us_ = 0;
+  uint64_t cc_last_summary_us_ = 0;
   static void CpuSourceWatchThunk(const global_unique_lock_type& global_lock,
                                   void* context, void* data, uint64_t argument,
                                   bool invalidated_by_gpu);

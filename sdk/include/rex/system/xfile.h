@@ -25,6 +25,13 @@
 
 namespace rex::system {
 
+// Diagnostic ring of recent host writes into guest physical memory that
+// bypass page protection: kind 'f' file read, 'm' Metal memexport readback.
+void RecordGuestWrite(char kind, uint32_t phys, uint32_t length, bool triggered,
+                      const std::string& label);
+// Describes the recorded writes overlapping [phys_start, phys_start + length).
+std::string DescribeGuestWritesOverlapping(uint32_t phys_start, uint32_t length);
+
 // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_directory_information
 class X_FILE_DIRECTORY_INFORMATION {
  public:

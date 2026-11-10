@@ -20,6 +20,9 @@
 #include <rex/thread/mutex.h>
 
 #include <span>
+#include <chrono>
+#include <mutex>
+#include <cstdio>
 
 namespace rex::system {
 
@@ -102,6 +105,70 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info, size_t le
   return X_STATUS_SUCCESS;
 }
 
+namespace {
+// [file-read-ring] Recent file reads into guest physical memory, for the Metal
+// texture content check: a mismatching texture range is matched against them.
+struct FileReadRecord {
+  uint32_t phys = 0, length = 0;
+  uint64_t time_us = 0;
+  bool triggered = false;
+  char kind = 'f';
+  char path[56] = {};
+};
+constexpr size_t kFileReadRingSize = 8192;
+std::mutex file_read_ring_mutex;
+FileReadRecord file_read_ring[kFileReadRingSize];
+uint64_t file_read_ring_count = 0;
+uint64_t NowUs() {
+  return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count());
+}
+}  // namespace
+
+void RecordGuestWrite(char kind, uint32_t phys, uint32_t length, bool triggered,
+                      const std::string& path) {
+  std::lock_guard<std::mutex> lock(file_read_ring_mutex);
+  FileReadRecord& r = file_read_ring[file_read_ring_count++ % kFileReadRingSize];
+  r.kind = kind;
+  r.phys = phys;
+  r.length = length;
+  r.time_us = NowUs();
+  r.triggered = triggered;
+  size_t n = path.size(), keep = sizeof(r.path) - 1;
+  std::snprintf(r.path, sizeof(r.path), "%s", path.c_str() + (n > keep ? n - keep : 0));
+}
+
+std::string DescribeGuestWritesOverlapping(uint32_t phys_start, uint32_t length) {
+  std::lock_guard<std::mutex> lock(file_read_ring_mutex);
+  uint64_t first = file_read_ring_count > kFileReadRingSize ? file_read_ring_count - kFileReadRingSize : 0;
+  uint32_t hits[2] = {};
+  const FileReadRecord* last[2] = {};
+  for (uint64_t i = first; i < file_read_ring_count; ++i) {
+    const FileReadRecord& r = file_read_ring[i % kFileReadRingSize];
+    if (r.phys < phys_start + length && phys_start < r.phys + r.length) {
+      int k = r.kind == 'm' ? 1 : 0;
+      ++hits[k];
+      last[k] = &r;
+    }
+  }
+  std::string out = "writer " + std::string(last[0] && last[1] ? "file read + memexport"
+                                            : last[0]           ? "file read"
+                                            : last[1]           ? "memexport"
+                                                                : "neither");
+  const uint64_t now = NowUs();
+  for (int k = 0; k < 2; ++k) {
+    if (!last[k]) continue;
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), ", %u %s, last %08X+%u %.1f s ago triggered %d %s", hits[k],
+                  k ? "memexports" : "file reads", last[k]->phys, last[k]->length,
+                  double(now - last[k]->time_us) / 1e6, int(last[k]->triggered), last[k]->path);
+    out += buf;
+  }
+  out += " (ring " + std::to_string(file_read_ring_count - first) + ")";
+  return out;
+}
+
 X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length, uint64_t byte_offset,
                      uint32_t* out_bytes_read, uint32_t apc_context, bool notify_completion) {
   std::lock_guard<std::mutex> lock(file_lock_);
@@ -165,9 +232,12 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_leng
               size_t(byte_offset), &bytes_read);
           if (XSUCCEEDED(result)) {
             if (buffer_physical_heap) {
-              buffer_physical_heap->TriggerCallbacks(
+              bool triggered = buffer_physical_heap->TriggerCallbacks(
                   rex::thread::global_critical_region::AcquireDirect(), buffer_guest_address,
                   buffer_length, true, true);
+              RecordGuestWrite('f',
+                               buffer_physical_heap->GetPhysicalAddress(buffer_guest_address),
+                               buffer_length, triggered, path());
             }
 
             if (byte_offset) {

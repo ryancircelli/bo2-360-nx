@@ -20,11 +20,13 @@
 
 #include "rex/graphics/metal/metal_texture_cache.h"
 
+#include <chrono>
 #include <cstdlib>
 
 #include "rex/graphics/metal/metal_command_processor.h"
 #include "rex/graphics/metal/metal_shared_memory.h"
 #include "rex/logging.h"
+#include "rex/system/xfile.h"
 #include "xxhash.h"
 
 namespace rex {
@@ -100,6 +102,9 @@ void MetalTextureCache::TexContentRecord(MetalTexture& texture, bool base,
     texture.cc_have_[i] = true;
     texture.cc_route_[i] = route;
     texture.cc_load_submission_[i] = submission;
+    texture.cc_load_us_[i] = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
     texture.cc_stale_at_load_[i] = stale;
     if (stale) ++cc_stale_loads_;
   }
@@ -134,6 +139,9 @@ void MetalTextureCache::TexContentMarkCurrent(MetalTexture& texture,
   texture.cc_have_[i] = true;
   texture.cc_load_submission_[i] =
       command_processor_ ? command_processor_->GetCurrentSubmission() : 0;
+  texture.cc_load_us_[i] = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
 void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
@@ -176,10 +184,28 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
         //    GPU-written range, or a CPU write the buffer missed too).
         // 2: the load already read data that differed from guest memory.
         const uint64_t b = buf ? XXH3_64bits(buf + r.start, r.length) : 0;
+        // 3: a GPU write (memexport, resolve) recorded at or before the load
+        //    changed the range: the load copied the buffer after that write
+        //    in GPU order, and guest memory caught up later (memexport
+        //    readback). Not stale, as long as GPU order holds.
+        const uint64_t gpu_write = shm.LastGpuWriteSubmission(r.start, r.length);
+        const uint64_t load_sub = t->cc_load_submission_[i];
         const uint32_t cat = t->cc_stale_at_load_[i]   ? 2u
                              : (b == t->cc_hash_[i]) ? 1u
-                                                     : 0u;
+                             : (g == b && gpu_write && gpu_write <= load_sub)
+                                 ? 3u
+                                 : 0u;
         const uint64_t n = ++cc_mismatch_[cat];
+        if (cat == 0 || cat == 2) cc_stale_bytes_ += r.length;
+        if (cat == 3 && gpu_write == load_sub) ++cc_gpu_same_cb_;
+        // A persisting mismatch means no watch fired on the range since the
+        // load (a fired watch makes the texture reload before this draw).
+        const uint64_t readback_us = shm.LastReadbackUs(r.start, r.length);
+        const bool readback_after_load =
+            readback_us && readback_us > t->cc_load_us_[i];
+        const bool export_after_load = gpu_write > load_sub;
+        if (cat == 0 && readback_after_load) ++cc_readback_while_resident_;
+        if (cat == 0 && export_after_load) ++cc_export_after_load_;
         // Log each texture range once until it is reloaded.
         t->cc_have_[i] = false;
         // [tex-content-repair] A range the buffer does not hold as GPU data
@@ -194,15 +220,20 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
           repaired = true;
         }
         const uint64_t total = cc_mismatch_[0] + cc_mismatch_[1] +
-                               cc_mismatch_[2];
+                               cc_mismatch_[2] + cc_mismatch_[3];
         if (total <= 64 || (total & (total - 1)) == 0) {
           const auto& key = t->key();
           REXLOG_WARN(
               "[tex-content-check] mismatch #{} ({} #{}): {} {:08X}+{} of "
               "base {:08X} mips {:08X} fmt {} {}x{}x{} dim {} pitch {} "
-              "tiled {} packed {} levels {} route {} loaded {} submissions "
-              "ago, shmem valid {}, guest==buffer {}, rtt {} nx {}{}",
-              total, cat == 0 ? "neither" : cat == 1 ? "buffer-only" : "stale-load",
+              "tiled {} packed {} levels {} route {} loaded at submission {} "
+              "({} ago), last GPU write submission {}, resident when the "
+              "readback landed {}, export encoded after the load {}, no "
+              "watch fired since the load, shmem valid {}, guest==buffer {}, rtt {} nx {}{}; {}",
+              total, cat == 0   ? "neither"
+              : cat == 1 ? "buffer-only"
+              : cat == 2 ? "stale-load"
+                         : "gpu-written-before-load",
               n, i ? "mips" : "base", r.start, r.length,
               uint32_t(key.base_page) << 12, uint32_t(key.mip_page) << 12,
               uint32_t(key.format), key.GetWidth(), key.GetHeight(),
@@ -210,22 +241,48 @@ void MetalTextureCache::TexContentCheck(uint32_t used_texture_mask) {
               uint32_t(key.pitch), uint32_t(key.tiled),
               uint32_t(key.packed_mips), uint32_t(key.mip_max_level) + 1,
               t->cc_route_[i] == 1 ? "resident" : "cpu",
-              submission - t->cc_load_submission_[i],
+              load_sub, submission - load_sub, gpu_write,
+              readback_after_load, export_after_load,
               shared_memory().IsRangeValid(r.start, r.length), g == b,
               t->rtt_tracked_, t->nx_tracked_,
-              repaired ? ", invalidated for a reload" : "");
+              repaired ? ", invalidated for a reload" : "",
+              rex::system::DescribeGuestWritesOverlapping(r.start, r.length));
         }
       }
     }
   }
-  if (submission >= cc_last_summary_ + 600) {
+  const uint64_t now_us = uint64_t(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+  if (!cc_start_us_) {
+    cc_start_us_ = now_us;
+    cc_last_summary_us_ = now_us;
+  }
+  if (submission >= cc_last_summary_ + 600 ||
+      now_us >= cc_last_summary_us_ + 30000000) {
     cc_last_summary_ = submission;
+    cc_last_summary_us_ = now_us;
+    const uint64_t stale = cc_mismatch_[0] + cc_mismatch_[2];
+    const double minutes = double(now_us - cc_start_us_) / 60e6;
     REXLOG_INFO(
         "[tex-content-check] summary at submission {}: checked {}, mismatches "
-        "neither {} buffer-only {} stale-load {}, loads that read stale data "
+        "neither {} buffer-only {} stale-load {} gpu-written-before-load {} "
+        "(same command buffer {}), neither with readback while resident {} "
+        "and export after load {}, loads that read stale data "
         "{}, invalidated for a reload {}",
         submission, cc_checked_, cc_mismatch_[0], cc_mismatch_[1],
-        cc_mismatch_[2], cc_stale_loads_, cc_repaired_);
+        cc_mismatch_[2], cc_mismatch_[3], cc_gpu_same_cb_, cc_readback_while_resident_,
+        cc_export_after_load_, cc_stale_loads_,
+        cc_repaired_);
+    // [stale-texture] The count-only metric: textures whose GPU copy no longer
+    // matches guest memory with no write to explain it. Stock reads > 0, a
+    // build without the missed write reads 0.
+    REXLOG_INFO(
+        "[stale-texture] {} stale ranges, {} bytes, {:.1f} per minute over "
+        "{:.1f} min (checked {})",
+        stale, cc_stale_bytes_, minutes > 0 ? double(stale) / minutes : 0.0,
+        minutes, cc_checked_);
   }
 }
 
