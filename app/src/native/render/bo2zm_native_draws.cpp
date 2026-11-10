@@ -2987,18 +2987,15 @@ class VulkanDrawsImpl final : public VulkanDraws {
     reuse_textures_on_ = REXCVAR_GET(bo2zm_native_reuse_textures);  // texture words reuse (Draw)
     dedupe_keep_flush_ = REXCVAR_GET(bo2zm_native_dedupe_keep_on_flush_waits);
     g_syncs_on_flush_waits.store(!dedupe_keep_flush_, std::memory_order_relaxed);
-    const auto& properties = vulkan_device_->properties();
+    caps_ = gpu::vulkan::CapsOf(*vulkan_device_, vulkan_device_->queue_family_graphics_compute());
     const std::pair<bool, const char*> requirements[] = {
-        {properties.shaderInt64, "shaderInt64"},
-        {properties.bufferDeviceAddress, "bufferDeviceAddress"},
-        {properties.runtimeDescriptorArray, "runtimeDescriptorArray"},
-        {properties.shaderSampledImageArrayDynamicIndexing,
-         "shaderSampledImageArrayDynamicIndexing"},
-        {properties.descriptorBindingPartiallyBound, "descriptorBindingPartiallyBound"},
-        {properties.descriptorBindingSampledImageUpdateAfterBind,
-         "descriptorBindingSampledImageUpdateAfterBind"},
-        {properties.descriptorBindingUpdateUnusedWhilePending,
-         "descriptorBindingUpdateUnusedWhilePending"},
+        {caps_.int64, "shaderInt64"},
+        {caps_.buffer_address, "bufferDeviceAddress"},
+        {caps_.runtime_arrays, "runtimeDescriptorArray"},
+        {caps_.dynamic_indexing, "shaderSampledImageArrayDynamicIndexing"},
+        {caps_.partially_bound, "descriptorBindingPartiallyBound"},
+        {caps_.update_after_bind, "descriptorBindingSampledImageUpdateAfterBind"},
+        {caps_.update_unused_pending, "descriptorBindingUpdateUnusedWhilePending"},
     };
     for (const auto& [present, label] : requirements) {
       if (!present) {
@@ -10710,7 +10707,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (diag_mips_) {
       REXLOG_INFO("[native] C3: mip diagnostic (bo2zm_native_diag_mips) = YES");
     }
-    alignment_ubo_ = std::max<gpu::Size>(16, vulkan_device_->properties().minUniformBufferOffsetAlignment);
+    alignment_ubo_ = std::max<gpu::Size>(16, caps_.uniform_alignment);
     alternate_ubo_s_ = REXCVAR_GET(bo2zm_native_constants_ubo_alternate_s);
     REXLOG_INFO("[native] C6: constants by dynamic UBO (bo2zm_native_constants_ubo) = {}; alternate every {} s; "
                 "alignment {} bytes",
@@ -13222,7 +13219,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         gpu::kAddressClampToEdge,     gpu::kAddressMirrorClampToEdge,
         gpu::kAddressClampToEdge,     gpu::kAddressMirrorClampToEdge,
         gpu::kAddressClampToBorder,   gpu::kAddressMirrorClampToEdge};
-    const bool mirror = vulkan_device_->properties().samplerMirrorClampToEdge;
+    const bool mirror = caps_.mirror_clamp_to_edge;
     const auto mode = [&](uint32_t value) {
       const gpu::AddressMode m = kModes[value & 0x7];
       return m == gpu::kAddressMirrorClampToEdge && !mirror ? gpu::kAddressClampToEdge : m;
@@ -13244,32 +13241,30 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // adds it to explicit LODs too, like D3D's MipLODBias). Anisotropy: the fetch constant's aniso_filter (word 3,
     // bits 25-27: 0 off, 1 = 1:1, 2 = 2:1, 3 = 4:1 ...) gives at most 2^(n-1) samples; BO2 asks 2:1 and 4:1 on most
     // world textures. Before, both were only logged, and textures came out blurrier than on Xenos (the hands up close).
-    const auto& properties_game = vulkan_device_->properties();
     if (!point) {
       // +-15: maxSamplerLodBias of desktop NVIDIA and of NVK (the SDK's Properties do not carry the limit).
       info.lod_bias = std::clamp(float(bias_lod) / 32.0f, -15.0f, 15.0f);
       const uint32_t aniso_game = (f[3] >> 25) & 0x7;
-      if (aniso_game >= 2 && aniso_game <= 5 && properties_game.samplerAnisotropy &&
+      if (aniso_game >= 2 && aniso_game <= 5 && caps_.anisotropy &&
           info.min == gpu::kFilterLinear && info.lod_max > info.lod_min) {
         info.anisotropy = true;
-        info.anisotropy_max = std::min(float(1u << (aniso_game - 1)), properties_game.maxSamplerAnisotropy);
+        info.anisotropy_max = std::min(float(1u << (aniso_game - 1)), caps_.max_anisotropy);
       }
     }
     // bo2zm_native_anisotropic. Only linear samplers with mips (maxLod above minLod); the value is read at
     // start-up, so it does not need to be in the key: every sampler is created with the same one.
     {
       static const uint32_t aniso_requested = uint32_t(std::max(0, int32_t(REXCVAR_GET(bo2zm_native_anisotropic))));
-      const auto& properties = vulkan_device_->properties();
-      if (aniso_requested > 1 && properties.samplerAnisotropy && info.min == gpu::kFilterLinear &&
+      if (aniso_requested > 1 && caps_.anisotropy && info.min == gpu::kFilterLinear &&
           info.mip == gpu::kFilterLinear && info.lod_max > info.lod_min) {
         info.anisotropy = true;
         info.anisotropy_max = std::max(info.anisotropy_max,
-                                      std::max(1.0f, std::min(float(aniso_requested), properties.maxSamplerAnisotropy)));
+                                      std::max(1.0f, std::min(float(aniso_requested), caps_.max_anisotropy)));
         if (!aniso_annotated_) {
           aniso_annotated_ = true;
           REXLOG_INFO("[native] C4 anisotropic filtering {} on the linear samplers with mips (requested {}, device cap "
                       "{}); single-level and point ones unchanged",
-                      info.anisotropy_max, aniso_requested, properties.maxSamplerAnisotropy);
+                      info.anisotropy_max, aniso_requested, caps_.max_anisotropy);
         }
       }
     }
@@ -14747,8 +14742,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     f.depth_compare = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(request("vkCmdSetDepthCompareOp"));
     f.stencil_test = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(request("vkCmdSetStencilTestEnable"));
     f.stencil_op = reinterpret_cast<PFN_vkCmdSetStencilOp>(request("vkCmdSetStencilOp"));
-    const uint32_t api = vulkan_device_->properties().apiVersion;
-    eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && f.cull_mode && f.front_face && f.topology &&
+    const uint32_t api = caps_.api_version;
+    eds12_available_ = caps_.dynamic_state12 && f.cull_mode && f.front_face && f.topology &&
                         f.restart && f.depth_bias && f.depth_test && f.depth_write && f.depth_compare &&
                         f.stencil_test && f.stencil_op;
     REXLOG_INFO("[native] C6 dynamic state: EDS1/EDS2 {} (device API {}.{}.{})",
@@ -14760,10 +14755,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     f.blend_enable = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(request("vkCmdSetColorBlendEnableEXT"));
     f.blend_equation = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(request("vkCmdSetColorBlendEquationEXT"));
     f.color_mask = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(request("vkCmdSetColorWriteMaskEXT"));
-    const auto& p3 = vulkan_device_->properties();
-    eds3_available_ = vulkan_device_->extensions().ext_EXT_extended_dynamic_state3 &&
-                       p3.extendedDynamicState3ColorBlendEnable && p3.extendedDynamicState3ColorBlendEquation &&
-                       p3.extendedDynamicState3ColorWriteMask && f.blend_enable && f.blend_equation && f.color_mask;
+    eds3_available_ = caps_.dynamic_state3 && f.blend_enable && f.blend_equation && f.color_mask;
     REXLOG_INFO("[native] C6 dynamic state: EDS3 (blend, equation and color mask) {}",
                 eds3_available_ ? "available"
                                  : "NOT available (the device does not provide it or it is not enabled): phase 2 is not "
@@ -15847,12 +15839,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool AsyncCompiles() {
     if (async_compiles_ < 0) {
       async_compiles_ = REXCVAR_GET(bo2zm_native_async_pipelines) &&
-                                vulkan_device_->properties().pipelineCreationCacheControl
+                                caps_.pipeline_cache_control
                             ? 1
                             : 0;
       REXLOG_INFO("[native] C6 pipelines compiled on a thread (bo2zm_native_async_pipelines) = {}{}",
                   async_compiles_ ? "YES" : "no",
-                  vulkan_device_->properties().pipelineCreationCacheControl ? ""
+                  caps_.pipeline_cache_control ? ""
                                                                              : " (the driver lacks pipelineCreationCacheControl)");
       compile_first_ = uint32_t(REXCVAR_GET(bo2zm_native_compile_first));
       if (async_compiles_) {
@@ -16452,6 +16444,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     kEdsEverything,          // times everything is set (not a call)
     kEdsN
   };
+  gpu::Caps caps_;  // what the device offers, filled at the start of Init
   bool eds12_available_ = false;  // API 1.3 and the ten functions
   bool eds_off_ = false;       // the guard saw a difference: for the rest of the run, everything in the pipeline
   bool eds_mode_annotated_ = false;

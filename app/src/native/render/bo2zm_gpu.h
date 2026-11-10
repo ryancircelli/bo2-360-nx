@@ -458,4 +458,38 @@ struct GraphicsPipelineDesc {
   Pass pass = nullptr;  // the pass it draws in, or one with the same formats
 };
 
+// What the device offers, filled once by the backend (gpu::vulkan::CapsOf from the Vulkan device; the Metal device
+// from its GPU family). The renderer reads these instead of asking the driver.
+struct Caps {
+  // Required by the renderer (64-bit addresses and the bindless texture heaps); without any of them nothing is drawn.
+  bool int64 = false;
+  bool buffer_address = false;
+  bool runtime_arrays = false;
+  bool dynamic_indexing = false;  // sampled image arrays indexed in the shader
+  bool partially_bound = false;
+  bool update_after_bind = false;  // sampled image heaps written while bound
+  bool update_unused_pending = false;
+  // Samplers and buffers.
+  bool mirror_clamp_to_edge = false;
+  bool anisotropy = false;
+  float max_anisotropy = 1.0f;
+  Size uniform_alignment = 256;  // offset alignment of uniform buffers
+  // Queries.
+  bool occlusion_precise = false;  // occlusion queries count samples, not only whether there was any
+  bool pipeline_statistics = false;
+  float timestamp_period_ns = 0.0f;  // 0: the queue has no timestamps
+  // Pipelines.
+  bool pipeline_cache_control = false;  // creating a pipeline can be asked to fail instead of compiling
+  uint32_t api_version = 0;  // Vulkan's packed version (0 on Metal)
+  bool dynamic_state12 = false;  // cull, winding, topology, restart, depth and stencil state set while recording
+  bool dynamic_state3 = false;  // blend enables, equations and write masks set while recording
+  // The format of depth and stencil targets (kFormatUndefined if none can be drawn in) and what it allows besides.
+  Format depth_format = 0;
+  bool depth_sampled = false;
+  bool depth_copy_source = false;
+  bool depth_copy_target = false;
+  bool depth_scalable = false;  // blits (the shadow map drawn smaller and scaled up when resolved)
+  char device_name[256] = {};  // for logs and the perf log's meta line
+};
+
 }  // namespace bo2zm::native::gpu
