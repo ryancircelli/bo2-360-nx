@@ -669,9 +669,13 @@ class Installer:
         workers = max(1, min(8, (os.cpu_count() or 2) // 2))
         say(f"  extracting the shaders of {len(zones)} zones ({workers} at a time)")
         size = max(1, min(40, -(-len(zones) // (workers * 3))))
-        run.run_parallel([[sys.executable, "-I", os.path.join(self.src, "tools", "inspect", "ff_shaders.py"),
-                           *zones[i:i + size], "--dump", "--out", zones_dir, "--xex-image", image]
-                          for i in range(0, len(zones), size)], workers)
+        ff_shaders = [sys.executable, "-I", os.path.join(self.src, "tools", "inspect", "ff_shaders.py")]
+        commands = [[*ff_shaders, *zones[i:i + size], "--dump", "--out", zones_dir, "--xex-image", image]
+                    for i in range(0, len(zones), size)]
+        if program == "bo2zm":
+            # The shaders linked into the executable itself, in no zone: BO2 creates six of them at renderer start.
+            commands.append([*ff_shaders, "--image-shaders", "--dump", "--out", zones_dir, "--xex-image", image])
+        run.run_parallel(commands, workers)
         # The blobs are named by content, so one folder of them all is the set without duplicates.
         for d in os.listdir(zones_dir):
             path = os.path.join(zones_dir, d)
