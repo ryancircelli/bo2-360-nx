@@ -956,6 +956,17 @@ def cmd_scene(argv):
         res['diff'] = d
         if r.returncode != 0 or d.get('verdict') != 'PASS':
             verdict = 'FAIL'
+    # known_fail: [{"log": [texts, all in the game log], "note": ...}] marks a bug owned elsewhere: a FAIL that shows it
+    # becomes XFAIL (not a harness failure); a PASS while any is listed becomes XPASS (the fix landed, drop the entry)
+    kf = scene.get('known_fail') or []
+    if verdict == 'FAIL':
+        hit = next((k for k in kf if all(t in text for t in ([k['log']] if isinstance(k['log'], str) else k['log']))),
+                   None)
+        if hit:
+            verdict = 'XFAIL'
+            res['known_fail'] = hit
+    elif kf:
+        verdict = 'XPASS'
     res['verdict'] = verdict
     if seed and not seeded and rc in (0, 1) and not res['missing_pass_log'] and not os.path.isdir(seed) \
             and os.path.isdir(os.path.join(run, 'support', 'cache')):
@@ -965,7 +976,7 @@ def cmd_scene(argv):
     print(f'scene {scene.get("name")} {a.renderer}: {verdict}  boot_test exit {rc}  timeline {res["timeline"]}'
           + (f'  missing {res["missing_pass_log"]}' if res['missing_pass_log'] else '')
           + (f'  fail_log {res["fail_log_hits"]}' if res['fail_log_hits'] else ''))
-    return 0 if verdict == 'PASS' else 1
+    return 0 if verdict in ('PASS', 'XFAIL', 'XPASS') else 1
 
 
 def save_seed(support, seed):

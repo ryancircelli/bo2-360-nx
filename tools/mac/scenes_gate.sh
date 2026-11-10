@@ -45,7 +45,7 @@ print(v, sc)
 EOF
 )
   echo "$s: $v"; parts+=("$s ${v%% *}")
-  case "${v%% *}" in PASS) pass=$((pass+1));; NO_GOLDEN) skip=$((skip+1));; *) fail=$((fail+1));; esac
+  case "${v%% *}" in PASS|XPASS) pass=$((pass+1));; NO_GOLDEN|XFAIL) skip=$((skip+1));; *) fail=$((fail+1));; esac
 done
 total=${#ids[@]}
 if [ $fail -gt 0 ]; then echo "scenes: FAIL $fail/$total ($(IFS=';'; echo "${parts[*]}"))"; exit 1; fi

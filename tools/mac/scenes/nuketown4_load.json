@@ -46,5 +46,14 @@
    "REX_GPU_PLUGIN": "xenos",
    "REX_BO2ZM_RENDERER": "native"
   }
- }
+ },
+ "known_fail": [
+  {
+   "log": [
+    "PLATFORM_MISSINGMAP",
+    "getanimlength"
+   ],
+   "note": "Shipped app: the offline DLC licence check ends Nuketown 5 s into the match. Fixed by the hook on branch nuketown-hook (agent a236d82b94fd1da36); remove this entry once it ships."
+  }
+ ]
 }
