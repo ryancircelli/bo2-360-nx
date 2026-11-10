@@ -13,6 +13,8 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <cstring>
+#include <mutex>
+#include <set>
 
 #include <rex/cvar.h>
 #include <rex/kernel/xam/private.h>
@@ -29,6 +31,8 @@
 #include <rex/system/xtypes.h>
 
 REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
+REXCVAR_DEFINE_BOOL(xam_grant_local_privileges, true, "Kernel",
+                    "Grant local profiles the multiplayer and communications privileges (false denies all)");
 
 namespace rex {
 namespace kernel {
@@ -217,28 +221,15 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
   // First call asks for size (fill buffer_size_ptr).
   // Second call asks for buffer contents with that size.
 
-  // TODO(gibbed): setting validity checking without needing a user profile
-  // object.
-  bool any_missing = false;
+  // A setting this SDK does not know is not an error: like the console, answer
+  // the ones it knows and report the rest as the default (XSOURCE_DEFAULT with
+  // an empty value of the type the setting id names). Failing the whole call
+  // used to throw away the known settings too.
   for (uint32_t i = 0; i < setting_count; ++i) {
     auto setting_id = static_cast<uint32_t>(setting_ids[i]);
-    auto setting = user_profile->GetSetting(setting_id);
-    if (!setting) {
-      any_missing = true;
-      REXKRNL_ERROR(
-          "xeXamUserReadProfileSettingsEx requested unimplemented setting "
-          "{:08X}",
-          setting_id);
+    if (!user_profile->GetSetting(setting_id)) {
+      REXKRNL_WARN("XamUserReadProfileSettings: setting {:08X} unknown, read as default", setting_id);
     }
-  }
-  if (any_missing) {
-    // TODO(benvanik): don't fail? most games don't even check!
-    if (overlapped) {
-      REX_KERNEL_STATE()->CompleteOverlappedImmediate(
-          REX_KERNEL_MEMORY()->HostToGuestVirtual(overlapped), X_ERROR_INVALID_PARAMETER);
-      return X_ERROR_IO_PENDING;
-    }
-    return X_ERROR_INVALID_PARAMETER;
   }
 
   auto out_header = reinterpret_cast<X_USER_READ_PROFILE_SETTINGS*>(buffer);
@@ -253,7 +244,15 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index, ui
     auto setting = user_profile->GetSetting(setting_id);
 
     std::memset(out_setting, 0, sizeof(X_USER_PROFILE_SETTING));
-    out_setting->from = !setting || !setting->is_set ? 0 : setting->is_title_specific() ? 2 : 1;
+    if (!setting) {
+      // XSOURCE_DEFAULT, zero value of the setting id's own type.
+      UserProfile::Setting::Key setting_key;
+      setting_key.value = setting_id;
+      out_setting->from = 1;
+      out_setting->data.type = static_cast<uint8_t>(setting_key.type);
+    } else {
+      out_setting->from = !setting->is_set ? 0 : setting->is_title_specific() ? 2 : 1;
+    }
     if (xuids) {
       out_setting->xuid = user_profile->xuid();
     } else {
@@ -371,8 +370,23 @@ u32 XamUserCheckPrivilege_entry(u32 user_index, u32 mask, mapped_u32 out_value) 
     }
   }
 
-  // If we deny everything, games should hopefully not try to do stuff.
-  *out_value = 0;
+  // Offline profiles have no Live account, so Live-only privileges stay denied.
+  // The ones local and split screen play need are granted to every local
+  // profile (Black Ops II asks for 254 when a controller joins the lobby).
+  const bool granted = REXCVAR_GET(xam_grant_local_privileges) &&
+                       (mask == 254 /* XPRIVILEGE_MULTIPLAYER_SESSIONS */ ||
+                        mask == 252 /* XPRIVILEGE_COMMUNICATIONS */ ||
+                        mask == 251 /* XPRIVILEGE_COMMUNICATIONS_FRIENDS_ONLY */);
+  {
+    static std::mutex logged_mutex;
+    static std::set<uint32_t> logged;
+    std::lock_guard lock(logged_mutex);
+    if (logged.insert((user_index << 8) | (mask & 0xFF)).second) {
+      REXKRNL_INFO("XamUserCheckPrivilege: user {} privilege {} -> {}", user_index, mask,
+                   granted ? "granted" : "denied");
+    }
+  }
+  *out_value = granted ? 1 : 0;
   return X_ERROR_SUCCESS;
 }
 
@@ -434,18 +448,15 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32 
   if (user_index >= 4) {
     result = X_ERROR_INVALID_PARAMETER;
   } else {
-    if (user_index == 0) {
-      const auto& user_profile = REX_KERNEL_STATE()->user_profile();
-      if (user_profile->signin_state() == 0) {
-        result = X_ERROR_NOT_LOGGED_ON;
-      } else {
-        // No friends!
-        are_friends = 0;
-        result = X_ERROR_SUCCESS;
-      }
+    // Every local profile answers the same way: signed in, no friends list.
+    const auto user_profile = REX_KERNEL_STATE()->user_profile(user_index);
+    if (!user_profile) {
+      result = X_ERROR_NO_SUCH_USER;
+    } else if (user_profile->signin_state() == 0) {
+      result = X_ERROR_NOT_LOGGED_ON;
     } else {
-      // Only support user 0.
-      result = X_ERROR_NO_SUCH_USER;  // if user is local -> X_ERROR_NOT_LOGGED_ON
+      are_friends = 0;
+      result = X_ERROR_SUCCESS;
     }
   }
 
