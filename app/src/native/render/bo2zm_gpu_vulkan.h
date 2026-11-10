@@ -25,6 +25,8 @@ static_assert(std::is_same_v<bo2zm::native::gpu::PipelineLayout, VkPipelineLayou
 static_assert(std::is_same_v<bo2zm::native::gpu::Pipeline, VkPipeline>);
 static_assert(std::is_same_v<bo2zm::native::gpu::PipelineCache, VkPipelineCache>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Buffer, VkBuffer>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Size, VkDeviceSize>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Address, VkDeviceAddress>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Framebuffer, VkFramebuffer>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Set, VkDescriptorSet>);
 static_assert(std::is_same_v<bo2zm::native::gpu::SetPool, VkDescriptorPool>);
