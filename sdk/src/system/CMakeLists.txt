@@ -4,6 +4,7 @@ set(REXSYSTEM_SOURCES
     achievement_manager.cpp
     achievements.cpp
     kernel_state.cpp
+    graphics_swap_hook.cpp
     xmemory.cpp
     kernel_module.cpp
     user_module.cpp

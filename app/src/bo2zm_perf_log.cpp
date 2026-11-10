@@ -144,22 +144,7 @@ class Log {
     WriteReady(false);
   }
 
-  void InstallSwapHook(std::string_view renderer) {
-  if (!Enabled()) {
-    return;
-  }
-  static std::string name;
-  name = std::string(renderer);
-  g_renderer = name.c_str();
-  rex::graphics::SetSwapHook([](uint32_t width, uint32_t height) {
-    Counters c;  // frame time only: the emulated GPU plugins keep no cumulative counters in this format
-    c.width = width;
-    c.height = height;
-    OnPresent(c);
-  });
-}
-
-void NoteGpuJob(uint64_t order, uint64_t ns, bool measured) {
+  void NoteGpuJob(uint64_t order, uint64_t ns, bool measured) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!opened_ || closed_) {
       return;
@@ -393,6 +378,21 @@ void OnPresent(const Counters& counters) {
   if (Enabled()) {
     TheLog().OnPresent(counters);
   }
+}
+
+void InstallSwapHook(std::string_view renderer) {
+  if (!Enabled()) {
+    return;
+  }
+  static std::string name;
+  name = std::string(renderer);
+  g_renderer = name.c_str();
+  rex::graphics::SetSwapHook([](uint32_t width, uint32_t height) {
+    Counters c;  // frame time only: the emulated GPU plugins keep no cumulative counters in this format
+    c.width = width;
+    c.height = height;
+    OnPresent(c);
+  });
 }
 
 void NoteGpuJob(uint64_t order, uint64_t ns, bool measured) {
