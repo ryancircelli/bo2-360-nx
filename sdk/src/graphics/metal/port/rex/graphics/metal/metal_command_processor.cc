@@ -7665,35 +7665,37 @@ bool MetalCommandProcessor::TryReuseConstantPayloadFromCache(
   if (!REXCVAR_GET(metal_constant_payload_cache)) {
     return false;
   }
-  if (!payload || !size) {
+  if (!payload || !size || constant_payload_cache_.empty()) {
     return false;
   }
   const uint64_t hash = XXH3_64bits(payload, size);
-  auto it = constant_payload_cache_.find(hash);
-  if (it != constant_payload_cache_.end()) {
-    for (const ConstantPayloadCacheEntry& entry : it->second) {
-      if (entry.cbv_slot != cbv_slot || entry.stage_index != stage_index ||
-          entry.size != size || entry.binding.upload_frame != frame_current_) {
-        continue;
-      }
-      if (entry.bytes.size() != size ||
-          std::memcmp(entry.bytes.data(), payload, size) != 0) {
-        continue;
-      }
-      binding = entry.binding;
-      binding.up_to_date = true;
-      if (cbv_slot < backend_telemetry_.constant_payload_cache_hits.size()) {
-        ++backend_telemetry_.constant_payload_cache_hits[cbv_slot];
-        backend_telemetry_.constant_payload_cache_bytes_saved[cbv_slot] += size;
-        ++backend_telemetry_.cbv_reuse_hits[cbv_slot];
-      }
-      if (cbv_slot == kCbvSlotDescriptorIndices && stage_index < kStageCount) {
-        ++backend_telemetry_.descriptor_index_payload_cache_hits[stage_index];
-        backend_telemetry_
-            .descriptor_index_payload_cache_bytes_saved[stage_index] += size;
-      }
-      return true;
+  const size_t mask = constant_payload_cache_.size() - 1;
+  for (size_t probe = 0; probe < kConstantPayloadCacheProbes; ++probe) {
+    const ConstantPayloadCacheEntry& entry =
+        constant_payload_cache_[(hash + probe) & mask];
+    if (entry.generation != constant_payload_cache_generation_) {
+      break;
     }
+    if (entry.hash != hash || entry.cbv_slot != cbv_slot ||
+        entry.stage_index != stage_index || entry.size != size ||
+        entry.binding.upload_frame != frame_current_ ||
+        std::memcmp(constant_payload_cache_arena_.data() + entry.arena_offset,
+                    payload, size) != 0) {
+      continue;
+    }
+    binding = entry.binding;
+    binding.up_to_date = true;
+    if (cbv_slot < backend_telemetry_.constant_payload_cache_hits.size()) {
+      ++backend_telemetry_.constant_payload_cache_hits[cbv_slot];
+      backend_telemetry_.constant_payload_cache_bytes_saved[cbv_slot] += size;
+      ++backend_telemetry_.cbv_reuse_hits[cbv_slot];
+    }
+    if (cbv_slot == kCbvSlotDescriptorIndices && stage_index < kStageCount) {
+      ++backend_telemetry_.descriptor_index_payload_cache_hits[stage_index];
+      backend_telemetry_
+          .descriptor_index_payload_cache_bytes_saved[stage_index] += size;
+    }
+    return true;
   }
   if (cbv_slot < backend_telemetry_.constant_payload_cache_misses.size()) {
     ++backend_telemetry_.constant_payload_cache_misses[cbv_slot];
@@ -7715,23 +7717,34 @@ void MetalCommandProcessor::StoreConstantPayloadInCache(
       constant_payload_cache_bytes_ + size > kConstantPayloadCacheMaxBytes) {
     return;
   }
+  if (constant_payload_cache_.empty()) {
+    constant_payload_cache_.resize(kConstantPayloadCacheSlots);
+    constant_payload_cache_arena_.reserve(size_t(4) << 20);
+  }
   const uint64_t hash = XXH3_64bits(payload, size);
-  auto& entries = constant_payload_cache_[hash];
-  for (const ConstantPayloadCacheEntry& entry : entries) {
-    if (entry.cbv_slot == cbv_slot && entry.stage_index == stage_index &&
-        entry.size == size && entry.bytes.size() == size &&
-        std::memcmp(entry.bytes.data(), payload, size) == 0) {
-      return;
+  const size_t mask = constant_payload_cache_.size() - 1;
+  // Take the first free slot of the probe window; when it is full, replace
+  // the slot the hash lands on (the cache is only a shortcut).
+  ConstantPayloadCacheEntry* target = &constant_payload_cache_[hash & mask];
+  for (size_t probe = 0; probe < kConstantPayloadCacheProbes; ++probe) {
+    ConstantPayloadCacheEntry& entry =
+        constant_payload_cache_[(hash + probe) & mask];
+    if (entry.generation != constant_payload_cache_generation_) {
+      target = &entry;
+      break;
     }
   }
-  ConstantPayloadCacheEntry entry;
-  entry.cbv_slot = cbv_slot;
-  entry.stage_index = stage_index;
-  entry.size = size;
-  entry.binding = binding;
-  entry.bytes.assign(payload, payload + size);
-  entries.push_back(std::move(entry));
+  const size_t arena_offset = constant_payload_cache_arena_.size();
+  constant_payload_cache_arena_.insert(constant_payload_cache_arena_.end(),
+                                       payload, payload + size);
   constant_payload_cache_bytes_ += size;
+  target->hash = hash;
+  target->generation = constant_payload_cache_generation_;
+  target->arena_offset = uint32_t(arena_offset);
+  target->size = uint32_t(size);
+  target->cbv_slot = uint16_t(cbv_slot);
+  target->stage_index = uint16_t(stage_index);
+  target->binding = binding;
 }
 
 bool MetalCommandProcessor::PopulateBindlessTables(
@@ -10857,7 +10870,8 @@ void MetalCommandProcessor::InvalidateFrameTransientBindings() {
   for (auto& payload : scratch_payload_fetch_) {
     payload.clear();
   }
-  constant_payload_cache_.clear();
+  ++constant_payload_cache_generation_;
+  constant_payload_cache_arena_.clear();
   constant_payload_cache_bytes_ = 0;
 
   current_bindless_stage_root_valid_.fill(false);
