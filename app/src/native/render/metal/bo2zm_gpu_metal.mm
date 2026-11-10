@@ -21,6 +21,9 @@ namespace bo2zm::native::gpu::metal {
 
 struct Device::State {
   id<MTLDevice> device = nil;
+  // The one queue. Command buffers are made and encoded on any thread (one per viewport and worker on the
+  // recording side, each committed in submission order); Metal queues are thread safe.
+  id<MTLCommandQueue> queue = nil;
   std::filesystem::path folder;
   std::mutex lock;
   // One library per first hex digit of the hash; nil until loaded, and kept nil (with `missing` set) if its
@@ -37,6 +40,7 @@ Device::Device(std::unique_ptr<State> state) : state_(std::move(state)) {
 Device::~Device() = default;
 
 void* Device::native() const { return (__bridge void*)state_->device; }
+void* Device::queue() const { return (__bridge void*)state_->queue; }
 
 std::unique_ptr<Device> Device::Create(const std::filesystem::path& library_folder) {
   @autoreleasepool {
@@ -53,6 +57,12 @@ std::unique_ptr<Device> Device::Create(const std::filesystem::path& library_fold
     }
     auto state = std::make_unique<State>();
     state->device = device;
+    state->queue = [device newCommandQueueWithMaxCommandBufferCount:64];
+    if (!state->queue) {
+      REXLOG_ERROR("[native] Metal: could not make the command queue");
+      return nullptr;
+    }
+    state->queue.label = @"bo2zm";
     state->folder = library_folder;
     std::unique_ptr<Device> result(new Device(std::move(state)));
     REXLOG_INFO("[native] Metal: {}, shader libraries in {}", result->name_, library_folder.string());
