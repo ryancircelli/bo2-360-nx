@@ -414,6 +414,22 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
                           [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
 }
 
+// A shader from its SPIR-V (`bytes` long): true and the module in `out` if the driver created it. Metal's backend
+// looks up the same shader, translated ahead of time, in its libraries.
+inline bool CreateShader(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, const void* code,
+                         size_t bytes, VkShaderModule& out) {
+  VkShaderModuleCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  info.codeSize = bytes;
+  info.pCode = static_cast<const uint32_t*>(code);
+  return dfn.vkCreateShaderModule(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+inline void DestroyShader(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                          VkShaderModule shader) {
+  dfn.vkDestroyShaderModule(device, shader, nullptr);
+}
+
 }  // namespace vulkan
 
 }  // namespace bo2zm::native::gpu
