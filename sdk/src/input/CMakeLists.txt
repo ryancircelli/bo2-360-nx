@@ -4,6 +4,8 @@
 add_library(rexinput OBJECT
     input_system.cpp
     device_assignment.cpp
+    slot_table.cpp
+    state_log.cpp
     state_merge.cpp
     mnk/mnk_input_driver.cpp
     nop/nop_input_driver.cpp
@@ -35,6 +37,10 @@ elseif(WIN32)
     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp xinput/xinput_input_driver.cpp)
 else()
     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp)
+endif()
+# Scripted virtual pads and Steam Input detection (mac-input): desktop only.
+if(NOT REXGLUE_PLATFORM_SWITCH)
+    target_sources(rexinput PRIVATE script/script_input_driver.cpp steam_detect.cpp)
 endif()
 
 target_link_libraries(rexinput PUBLIC rexcore rexui)
