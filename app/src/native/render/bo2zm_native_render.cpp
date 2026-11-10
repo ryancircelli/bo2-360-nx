@@ -1153,6 +1153,16 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     if (active_.exchange(true)) {
       return X_STATUS_SUCCESS;
     }
+#if BO2ZM_NATIVE_METAL
+    // The guest's 512 MB of physical memory as one Metal buffer, without a copy, for the Metal backend's direct
+    // reads of guest data. Nothing uses it yet; if it cannot be made, the backend copies like the Vulkan one.
+    if (metal_ && !metal_guest_.buffer) {
+      if (metal_->WrapHostMemory(memory_->TranslatePhysical(0), gpu::Size(0x20000000), metal_guest_)) {
+        REXLOG_INFO("[native] Metal: guest physical memory is a shared buffer at GPU address {:#x}",
+                    metal_guest_.address);
+      }
+    }
+#endif
     // The SPIR-V shader library sits next to the executable. It is built from the player's own game data, so it is
     // never distributed. Without it the game still runs, but no shader can be identified.
     // The first start with a pack makes its index (about a minute on a Switch): a progress screen meanwhile, made
@@ -1249,6 +1259,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     }
 #if BO2ZM_NATIVE_METAL
     metal_presenter_ = nullptr;
+    gpu::metal::Device::Release(metal_guest_);  // before the guest memory goes away
 #endif
     provider_.reset();
   }
@@ -6257,6 +6268,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   std::unique_ptr<gpu::metal::Device> metal_;
   // presenter_, when bo2zm_native_metal_present made it a Metal presenter.
   gpu::metal::Presenter* metal_presenter_ = nullptr;
+  // The guest's physical memory as a buffer (SetupGuestGpu); empty if Metal could not wrap it.
+  gpu::metal::HostBuffer metal_guest_;
 #endif
   std::unique_ptr<rex::ui::Presenter> presenter_;
 
