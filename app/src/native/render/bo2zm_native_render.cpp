@@ -447,6 +447,9 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_deferred_reports, true, "BO2",
 #include "../../bo2zm_page_writes.h"
 #include "../../bo2zm_pc_profiler.h"
 #include "../../bo2zm_perf_log.h"
+#if BO2ZM_NATIVE_METAL
+#include "metal/bo2zm_gpu_metal.h"
+#endif
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_im_load_without_memcmp, true, "BO2",
                     "Native renderer: an IM_LOAD whose microcode nobody has written since the last "
@@ -1101,6 +1104,12 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       REXLOG_ERROR("[native] Could not create the presenter");
       return X_STATUS_UNSUCCESSFUL;
     }
+#if BO2ZM_NATIVE_METAL
+    // The Metal libraries made ahead of time (tools/metal) sit in metal/ next to the executable.
+    if (!metal_) {
+      metal_ = gpu::metal::Device::Create(rex::filesystem::GetExecutableFolder() / "metal");
+    }
+#endif
     REXLOG_INFO("[native] Native graphics system (C1): the SDK's presenter, without Xenos emulation");
     return X_STATUS_SUCCESS;
   }
@@ -6198,6 +6207,11 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
   rex::ui::WindowedAppContext* app_context_ = nullptr;
   std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider_;
+#if BO2ZM_NATIVE_METAL
+  // The Metal backend while it is built up: its device and shader libraries are opened next to the Vulkan one,
+  // which still does all the drawing.
+  std::unique_ptr<gpu::metal::Device> metal_;
+#endif
   std::unique_ptr<rex::ui::Presenter> presenter_;
 
   rex::memory::Memory* memory_ = nullptr;
