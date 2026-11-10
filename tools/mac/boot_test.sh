@@ -49,6 +49,8 @@ grep -q '^PLACEHOLDER *= *true' "$route" && echo "note: $rname is a placeholder 
 duration=60; players=1; quad=0; envs=(); allow_relaunch=0; scripted=0
 CHECK_PATTERNS='unregistered function|MISMATCH|lost wake'
 # known defects of the 23:37 build, logged on every run: counted and printed, they fail the run only with --strict
+# 'signal delivery failed (3)' is ESRCH from pthread_kill on a guest thread that already exited; seen only as the
+# last lines at shutdown, in every log checked, and the callback is still queued. Harmless, never fails a run.
 KNOWN_PATTERNS='signal delivery failed|not in the library|primitive restart'
 while IFS= read -r line; do
   line="${line%%#*}"; [[ "$line" == *=* ]] || continue
