@@ -615,13 +615,6 @@ bool Is16BitsPerChannel(VkFormat format) {
 constexpr VkImageSubresourceRange kRangeColor = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 constexpr VkImageSubresourceRange kRangeDepth = {
     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
-using FnCopyImage = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage,
-                                        VkImageLayout, uint32_t, const VkImageCopy*);
-using FnClearDepth = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout,
-                                             const VkClearDepthStencilValue*, uint32_t,
-                                             const VkImageSubresourceRange*);
-using FnBlit = void(VKAPI_PTR*)(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout,
-                                uint32_t, const VkImageBlit*, VkFilter);
 
 // Direct3D 11 16.8 fixed point with rounding, like ui::FloatToD3D11Fixed16p8.
 int32_t Fixed16p8(float value) {
@@ -941,18 +934,18 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   bool Init() {
     // vkCmdCopyImage is not in the SDK's function table: it is requested from the driver. These three and
     // vkCmdWriteTimestamp go through deferred::Wrap (queued on the job buffer, bo2zm_native_deferred.h).
-    copy_image_ = reinterpret_cast<FnCopyImage>(deferred::Wrap(
+    gpu_.loaded().copy_image = reinterpret_cast<PFN_vkCmdCopyImage>(deferred::Wrap(
         "vkCmdCopyImage",
         vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
-    if (!copy_image_) {
+    if (!gpu_.loaded().copy_image) {
       REXLOG_ERROR("[native] C2: the driver does not provide vkCmdCopyImage");
       return false;
     }
-    clear_depth_ = reinterpret_cast<FnClearDepth>(deferred::Wrap(
+    gpu_.loaded().clear_depth = reinterpret_cast<PFN_vkCmdClearDepthStencilImage>(deferred::Wrap(
         "vkCmdClearDepthStencilImage",
         vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
                                                                           "vkCmdClearDepthStencilImage")));
-    blit_ = reinterpret_cast<FnBlit>(deferred::Wrap(
+    gpu_.loaded().blit = reinterpret_cast<PFN_vkCmdBlitImage>(deferred::Wrap(
         "vkCmdBlitImage",
         vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdBlitImage")));
     // Attachment, copy and clear source and destination, and sampling of the resolved ones (shadows).
@@ -1060,11 +1053,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                                    queues.data());
       VkPhysicalDeviceProperties physical{};
       ifn.vkGetPhysicalDeviceProperties(vulkan_device_->physical_device(), &physical);
-      write_mark_ = reinterpret_cast<FnWriteMark>(
+      gpu_.loaded().write_timestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(
           deferred::Wrap("vkCmdWriteTimestamp", ifn.vkGetDeviceProcAddr(device_, "vkCmdWriteTimestamp")));
       read_queries_ = reinterpret_cast<FnReadQueries>(
           ifn.vkGetDeviceProcAddr(device_, "vkGetQueryPoolResults"));
-      if (family_ < families && queues[family_].timestampValidBits && write_mark_ &&
+      if (family_ < families && queues[family_].timestampValidBits && gpu_.loaded().write_timestamp &&
           read_queries_ && physical.limits.timestampPeriod > 0.0f) {
         VkQueryPoolCreateInfo info_queries{};
         info_queries.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -1630,7 +1623,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       // From depth: the copy goes to a resolved texture with the host depth
       // format, which the draws sample as k_24_8. With a depth source no color
       // is cleared (IsClearingColor, graphics/util/draw.h:534-538).
-      const bool would_clear = ((control >> 9) & 0x1) && clear_depth_;
+      const bool would_clear = ((control >> 9) & 0x1) && gpu_.loaded().clear_depth;
       if (do_copy) {
         CopyDepth(reg, pitch, would_clear);
       }
@@ -1764,7 +1757,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                      resolved->image.height > dy ? resolved->image.height - dy : 0u);
       const int32_t sx1 = std::min(ox1, int32_t(target_render->width));
       const int32_t sy1 = std::min(oy1, int32_t(target_render->height));
-      if (width && height && blit_ && target_render->format == kFormatColor &&
+      if (width && height && gpu_.loaded().blit && target_render->format == kFormatColor &&
           resolved->image.format == kFormatColor && ox0 >= 0 && oy0 >= 0 && ox0 < sx1 && oy0 < sy1) {
         ResolveFrontEarlier(base_resolved, dx == 0 && dy == 0 && width == resolved->image.width &&
                                                    height == resolved->image.height);
@@ -1776,8 +1769,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         scale.dstOffsets[0] = {int32_t(dx), int32_t(dy), 0};
         scale.dstOffsets[1] = {int32_t(dx + width), int32_t(dy + height), 1};
         const bool reduce = uint32_t(sx1 - ox0) > width || uint32_t(sy1 - oy0) > height;
-        blit_(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL, resolved->image.image,
-              VK_IMAGE_LAYOUT_GENERAL, 1, &scale, reduce ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+        gpu_.Blit(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL, resolved->image.image,
+                  VK_IMAGE_LAYOUT_GENERAL, 1, &scale, reduce ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
         ++copies_;
         AnnotateCopy(width, height);
         ResolvedWritten(base_resolved, uint64_t(sx1 - ox0) * uint64_t(sy1 - oy0));
@@ -1806,7 +1799,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       // It only shrinks when the scene really has to be reduced (by a factor of 1.25 or more) and both images
       // are color: vkCmdBlitImage with a linear filter on a depth target is not valid and brings the process
       // down. Mismatches of a few pixels are still cropped as always.
-      const bool shrink = blit_ != nullptr && fit_width && fit_height &&
+      const bool shrink = gpu_.loaded().blit != nullptr && fit_width && fit_height &&
                            target_render->format == kFormatColor &&
                            resolved->image.format == kFormatColor &&
                            (requested_width * 4 >= fit_width * 5 || requested_height * 4 >= fit_height * 5);
@@ -1824,8 +1817,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         reduction.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         reduction.dstOffsets[0] = {int32_t(dx), int32_t(dy), 0};
         reduction.dstOffsets[1] = {int32_t(dx + fit_width), int32_t(dy + fit_height), 1};
-        blit_(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL,
-              resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &reduction, VK_FILTER_LINEAR);
+        gpu_.Blit(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL,
+                  resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &reduction, VK_FILTER_LINEAR);
         ++copies_;
         ++reductions_;
         if (reductions_ <= 4) {
@@ -1912,7 +1905,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         if (!PostponeCopyFront(base_resolved, *target_render, *resolved, copy) &&
             !PostponeComposite(base_resolved, *target_render, *resolved, copy,
                               (info_color & 0xFFF) | (pitch_source << 12))) {
-          copy_image_(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL,
+          gpu_.CopyImage(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL,
                          resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
           ++copies_;
           AnnotateCopy(width, height);
@@ -1968,7 +1961,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         AnnotateClearDiag(*target_render, info_color & 0xFFF, format_color, pitch_source, false, false);
       }
     }
-    if (((control >> 9) & 0x1) && clear_depth_) {
+    if (((control >> 9) & 0x1) && gpu_.loaded().clear_depth) {
       ClearDepth(reg, pitch);
     }
     return true;
@@ -2015,7 +2008,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       return;
     }
-    clear_depth_(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL, &value, 1,
+    gpu_.ClearDepthStencilImage(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL, &value, 1,
                         &kRangeDepth);
   }
 
@@ -2143,7 +2136,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return;
     }
     int32_t x0, y0, x1, y1;
-    if (!copy_image_ || !Rectangle(reg, pitch, x0, y0, x1, y1)) {
+    if (!gpu_.loaded().copy_image || !Rectangle(reg, pitch, x0, y0, x1, y1)) {
       return;
     }
     const uint32_t info = reg.rb_depth_info;
@@ -2235,8 +2228,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           copy.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
           copy.dstOffset = {int32_t(dx), int32_t(dy + region.destination_y), 0};
           copy.extent = {width_copy, region.height, 1};
-          copy_image_(commands_job_, source.image, VK_IMAGE_LAYOUT_GENERAL, resolved->image.image,
-                      VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+          gpu_.CopyImage(commands_job_, source.image, VK_IMAGE_LAYOUT_GENERAL, resolved->image.image,
+                         VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
           ++copies_;
           AnnotateCopy(width_copy, region.height);
           if (warnings_depth_banks_ < 4) {
@@ -2296,7 +2289,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       copy.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
       copy.dstOffset = {aX(int32_t(dx)), aY(int32_t(dy)), 0};
       copy.extent = {width_img, height_img, 1};
-      copy_image_(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL,
+      gpu_.CopyImage(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL,
                      resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
       ++copies_;
       ++shadows_uploads_;
@@ -2349,7 +2342,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (PostponeCopyDepth(base & 0x1FFFFFFF, *depth, *resolved, copy)) {
       return;
     }
-    copy_image_(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL,
+    gpu_.CopyImage(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL,
                    resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
     ++copies_;
     AnnotateCopy(width, height);
@@ -2877,7 +2870,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const PendingComposite p = composite_;
     const auto r = resolved_.find(p.address);
     if (r == resolved_.end() || r->second.image.image != p.texture_vk || !p.target ||
-        p.target->image != p.source_vk || !copy_image_ || !Record()) {
+        p.target->image != p.source_vk || !gpu_.loaded().copy_image || !Record()) {
       composite_expired_ = p.address;
       CompositeMismatch(p.address, "the postponed copy can no longer be recorded (the source or texture image "
                                        "changed)");
@@ -2887,7 +2880,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       draws_->FinishPass();  // it can arrive from a draw: the copy goes outside the pass
     }
     MarkGpu(kGpuCopies);
-    copy_image_(commands_job_, p.source_vk, VK_IMAGE_LAYOUT_GENERAL, p.texture_vk, VK_IMAGE_LAYOUT_GENERAL, 1,
+    gpu_.CopyImage(commands_job_, p.source_vk, VK_IMAGE_LAYOUT_GENERAL, p.texture_vk, VK_IMAGE_LAYOUT_GENERAL, 1,
                    &p.copy);
     ++copies_;
     AnnotateCopy(p.copy.extent.width, p.copy.extent.height);
@@ -3889,7 +3882,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   const NativeImage* TextureResolved3D(uint32_t address, uint32_t format, uint32_t width, uint32_t height,
                                         uint32_t depth3d, uint32_t pitch, bool tiled) override {
     const NativeImage* flat = TextureResolved(address);
-    if (!flat || !copy_image_ || flat->format != kFormatColor || flat->width_guest ||
+    if (!flat || !gpu_.loaded().copy_image || flat->format != kFormatColor || flat->width_guest ||
         format != uint32_t(xenos::TextureFormat::k_8_8_8_8)) {
       return nullptr;
     }
@@ -4014,7 +4007,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       dfn_.vkCmdCopyBufferToImage(commands_job_, v.gather, v.image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &in);
       ++volumes_gathered_;
     } else {
-      copy_image_(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.image.image, VK_IMAGE_LAYOUT_GENERAL,
+      gpu_.CopyImage(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.image.image, VK_IMAGE_LAYOUT_GENERAL,
                      uint32_t(v.regions.size()), v.regions.data());
     }
     VkMemoryBarrier later{};
@@ -4556,7 +4549,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     pending_.erase(p);
     const auto r = resolved_.find(address);
     if (r == resolved_.end() || r->second.image.image != pending.target_vk || !pending.source ||
-        pending.source->image != pending.source_vk || !copy_image_ || !Record()) {
+        pending.source->image != pending.source_vk || !gpu_.loaded().copy_image || !Record()) {
       expired_.insert(address);  // should not happen: every image change goes through the hooks first
       return;
     }
@@ -4564,7 +4557,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       draws_->FinishPass();  // it can arrive from a draw (TextureResolved): the copy goes outside the pass
     }
     MarkGpu(kGpuCopies);
-    copy_image_(commands_job_, pending.source_vk, VK_IMAGE_LAYOUT_GENERAL, pending.target_vk,
+    gpu_.CopyImage(commands_job_, pending.source_vk, VK_IMAGE_LAYOUT_GENERAL, pending.target_vk,
                    VK_IMAGE_LAYOUT_GENERAL, 1, &pending.copy);
     ++copies_;
     AnnotateCopy(pending.copy.extent.width, pending.copy.extent.height);
@@ -4691,7 +4684,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     fronts_pending_.erase(p);
     const auto r = resolved_.find(address);
     OwnedImage* const source = SourceFront(pending);
-    if (r == resolved_.end() || r->second.image.image != pending.texture_vk || !source || !copy_image_ ||
+    if (r == resolved_.end() || r->second.image.image != pending.texture_vk || !source || !gpu_.loaded().copy_image ||
         !Record()) {
       FreeRetained(pending);
       fronts_expired_.insert(address);  // should not happen: every image change goes through the hooks first
@@ -4701,7 +4694,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       draws_->FinishPass();  // may come from a draw (TextureResolved): the copy goes outside the pass
     }
     MarkGpu(kGpuCopies);
-    copy_image_(commands_job_, pending.source_vk, VK_IMAGE_LAYOUT_GENERAL, pending.texture_vk,
+    gpu_.CopyImage(commands_job_, pending.source_vk, VK_IMAGE_LAYOUT_GENERAL, pending.texture_vk,
                    VK_IMAGE_LAYOUT_GENERAL, 1, &pending.copy);
     ++copies_;
     AnnotateCopy(pending.copy.extent.width, pending.copy.extent.height);
@@ -4947,7 +4940,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         (!slot.categories.empty() && slot.categories.back() == category)) {
       return;  // no room (the last one is for the end mark) or same category continues
     }
-    write_mark_(commands_job_,
+    gpu_.WriteTimestamp(commands_job_,
                     slot.marks_precise ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     queries_, slot_ * kMarksPerSlot + uint32_t(slot.categories.size()));
     slot.categories.push_back(uint8_t(category));
@@ -5245,7 +5238,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (pitch == kSideShadows && height == kSideShadows) {
       if (scale_shadows_ == 0) {
         scale_shadows_ = uint32_t(std::clamp(REXCVAR_GET(bo2zm_native_shadow_scale), 50, 100));
-        if (!blit_ || !depth_scalable_) {
+        if (!gpu_.loaded().blit || !depth_scalable_) {
           scale_shadows_ = 100;
         }
       }
@@ -5281,7 +5274,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     //
     // 1. It still needs it. The reasoning was that the map is no longer copied but swapped, so the flag
     //    would be unnecessary. Wrong: each swap is paid for with a restore, and a restore is exactly a
-    //    copy into this image (RestoreContent -> copy_image_ with target.image as dst, which
+    //    copy into this image (RestoreContent -> CopyImage with target.image as dst, which
     //    requires TRANSFER_DST). Swaps without a clear and restores rise by the same amounts: exactly
     //    one restore per swap. The full-size copy does not go away: it is paid later, in TargetDepth.
     //    Without TRANSFER_DST that is an illegal write.
@@ -5548,7 +5541,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     auto it = resolved_.find(target.resolved_base);
     if (it == resolved_.end() || it->second.image.width != target.width ||
         it->second.image.height != target.height || it->second.image.format != target.format ||
-        !copy_image_ || !Record()) {
+        !gpu_.loaded().copy_image || !Record()) {
       if (for_resolve) {
         ++resolve_no_source_;  // unknown where to bring it from; resolve whatever is there
       }
@@ -5634,7 +5627,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     copy.extent = {target.width, height, 1};
     AnnotateUseClear(target, target.width, height);  // bo2zm_native_diag_clears
     MarkGpu(kGpuCopies);
-    copy_image_(commands_job_, it->second.image.image, VK_IMAGE_LAYOUT_GENERAL,
+    gpu_.CopyImage(commands_job_, it->second.image.image, VK_IMAGE_LAYOUT_GENERAL,
                    target.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
     ++restores_;
     pixels_restored_ += uint64_t(target.width) * height;
@@ -5674,7 +5667,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     copy.extent = {target.width, target.height, 1};
     AnnotateUseClear(target, target.width, target.height);  // bo2zm_native_diag_clears, like the restore
     MarkGpu(kGpuCopies);
-    copy_image_(commands_job_, source.image, VK_IMAGE_LAYOUT_GENERAL, target.image, VK_IMAGE_LAYOUT_GENERAL,
+    gpu_.CopyImage(commands_job_, source.image, VK_IMAGE_LAYOUT_GENERAL, target.image, VK_IMAGE_LAYOUT_GENERAL,
                    1, &copy);
     // And the copied data made visible to what follows: the current resolve (copy or swap), the draws that
     // sample the texture that receives it, and the pass that draws to the render target again.
@@ -5837,13 +5830,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // Only with the learned cycle: the same render target and the same world texture as in the observing
     // phase.
     if (sm_phase_ != kSmApplying || !sm_on_ || &target != sm_target_ || sm_base_cycle_ != sm_base_ ||
-        !sm_overlay_ || !clear_depth_ || !target.accepts_copy_target) {
+        !sm_overlay_ || !gpu_.loaded().clear_depth || !target.accepts_copy_target) {
       return false;
     }
     Prepare(target);
     MarkGpu(kGpuClears);
     const VkClearDepthStencilValue value{1.0f, 0};
-    clear_depth_(commands_job_, target.image, VK_IMAGE_LAYOUT_GENERAL, &value, 1, &kRangeDepth);
+    gpu_.ClearDepthStencilImage(commands_job_, target.image, VK_IMAGE_LAYOUT_GENERAL, &value, 1, &kRangeDepth);
     AnnotateUseClear(target, target.width, target.height);  // bo2zm_native_diag_clears: like the restore
     ForgetClear(target);  // not a game clear: the game's next clear cannot be skipped
     sm_cycle_clear_ = true;
@@ -6117,9 +6110,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           REXLOG_WARN("[native] C2: could NOT prepare the {}x{} depth by opening a clear pass (error {})",
                       image.width, image.height, clears_in_pass_failed_);
         }
-      } else if (clear_depth_) {
+      } else if (gpu_.loaded().clear_depth) {
         const VkClearDepthStencilValue far_depth{1.0f, 0};
-        clear_depth_(commands, image.image, VK_IMAGE_LAYOUT_GENERAL, &far_depth, 1,
+        gpu_.ClearDepthStencilImage(commands, image.image, VK_IMAGE_LAYOUT_GENERAL, &far_depth, 1,
                             &kRangeDepth);
       }
     } else {
@@ -6492,7 +6485,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (queries_ != VK_NULL_HANDLE) {
         // Final mark: closes the last span (MarkGpu leaves room for it).
         WorkSlot& marked = slots_[slot_];
-        write_mark_(commands_job_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_,
+        gpu_.WriteTimestamp(commands_job_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_,
                         slot_ * kMarksPerSlot + uint32_t(marked.categories.size()));
         marked.categories.push_back(kGpuEnd);
       }
@@ -6558,12 +6551,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   bool ComposeTiled(uint32_t base_swap) {
     std::vector<uint32_t> bases;
     bases.swap(resolved_frame_);
-    if (bases.empty() || !blit_) {
+    if (bases.empty() || !gpu_.loaded().blit) {
       return false;
     }
     if (tiled_.image == VK_NULL_HANDLE &&
         !Create(tiled_, 1280, 720, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
-      blit_ = nullptr;
+      gpu_.loaded().blit = nullptr;
       return false;
     }
     if (draws_) {
@@ -6592,8 +6585,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
       copy.dstOffsets[0] = {x + 2, y + 2, 0};
       copy.dstOffsets[1] = {x + 318, y + 178, 1};
-      blit_(commands_job_, image.image, VK_IMAGE_LAYOUT_GENERAL, tiled_.image,
-            VK_IMAGE_LAYOUT_GENERAL, 1, &copy, VK_FILTER_LINEAR);
+      gpu_.Blit(commands_job_, image.image, VK_IMAGE_LAYOUT_GENERAL, tiled_.image,
+                VK_IMAGE_LAYOUT_GENERAL, 1, &copy, VK_FILTER_LINEAR);
       list += fmt::format(" {}{}:{:08X} {}x{}", i, bases[i] == base_swap ? "*" : "", bases[i],
                            image.width, image.height);
     }
@@ -7289,7 +7282,6 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint32_t family_;
 
   std::array<VkCommandPool, kSlotsOutput> pools_output_{};  // output slots
-  FnCopyImage copy_image_ = nullptr;
   uint32_t reductions_ = 0;  // resolves that had to shrink
   // Those of the slot being recorded (Record switches them).
   VkCommandBuffer commands_job_ = VK_NULL_HANDLE;
@@ -7315,13 +7307,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   bool invalidate_every_copy_ = false;
   bool recording_upload_ = false;
   uint64_t generation_commands_ = 0;
-  FnClearDepth clear_depth_ = nullptr;
   // GPU time of the submissions (timestamps, if the queue supports them).
-  using FnWriteMark = void(VKAPI_PTR*)(VkCommandBuffer, VkPipelineStageFlags, VkQueryPool,
-                                          uint32_t);
   using FnReadQueries = VkResult(VKAPI_PTR*)(VkDevice, VkQueryPool, uint32_t, uint32_t, size_t,
                                               void*, VkDeviceSize, VkQueryResultFlags);
-  FnWriteMark write_mark_ = nullptr;
   bool marks_categories_ = true;  // bo2zm_native_gpu_categories
   FnReadQueries read_queries_ = nullptr;
   VkQueryPool queries_ = VK_NULL_HANDLE;
@@ -7375,7 +7363,6 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   mutable double worst_swap_ms_ = 0.0;  // worst frame since the previous report
   std::chrono::steady_clock::time_point last_swap_{};
   // Resolved texture grid diagnostic (bo2zm_native_diag_resolved).
-  FnBlit blit_ = nullptr;
   // The side of the square depth target bo2zm_native_shadow_scale acts on (BO2's shadow target is 560x720, so
   // it never matches), and the scale it is being drawn at (0 = not decided yet).
   static constexpr uint32_t kSideShadows = 1600;
