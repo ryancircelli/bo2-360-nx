@@ -14090,81 +14090,49 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   /*
-   * The fixed state of a pipeline, exactly as PipelineOf sets it. It is PipelineOf's own code, kept here so
-   * it can be shared: its eight declarations are references into PipelineFixedState. Used
-   * by PipelineOf and by the guards of the canonical key (phase 0a) and of dynamic state (phases 1 and 2),
-   * which thus compare against what the pipeline really carries and not against another copy of the same
-   * computations. blend.pAttachments points to fixed.blends: the structure is not copied.
+   * The fixed state of a pipeline, exactly as PipelineOf sets it (gpu::PipelineState; the Vulkan backend
+   * turns it into the create infos with gpu::vulkan::FixedState). Used by PipelineOf and by the guards of the
+   * canonical key (phase 0a) and of dynamic state (phases 1 and 2), which thus compare against what the
+   * pipeline really carries and not against another copy of the same computations.
    */
-  struct PipelineFixedState {
-    VkPipelineInputAssemblyStateCreateInfo assembly{};
-    VkPipelineViewportStateCreateInfo view{};
-    VkPipelineRasterizationStateCreateInfo rasterization{};
-    VkPipelineMultisampleStateCreateInfo sampling{};
-    VkPipelineDepthStencilStateCreateInfo depth{};
-    std::array<VkPipelineColorBlendAttachmentState, 4> blends{};
-    uint32_t n_colors = 0;
-    VkPipelineColorBlendStateCreateInfo blend{};
-    PipelineFixedState() = default;
-    PipelineFixedState(const PipelineFixedState&) = delete;
-    PipelineFixedState& operator=(const PipelineFixedState&) = delete;
-  };
+  using PipelineFixedState = gpu::PipelineState;
 
   // warn = false from the prewarm thread (Warn belongs to the ring only).
   void FillStateFixed(const PipelineKey& key, PipelineFixedState& fixed, bool warn = true) {
-    VkPipelineInputAssemblyStateCreateInfo& assembly = fixed.assembly;
-    assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    assembly.topology = VkPrimitiveTopology(key.topology);
-    assembly.primitiveRestartEnable = (key.rasterization & 0x8) ? VK_TRUE : VK_FALSE;
+    fixed.topology = key.topology;
+    fixed.restart = (key.rasterization & 0x8) ? 1 : 0;
 #if defined(__APPLE__)
     // Metal always restarts strips and fans at the all-ones index and cannot turn that off, so MoltenVK warns and
     // restarts anyway (rexglue-sdk issue #533). Asking for it states what the GPU does; the result is the same.
     if (key.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || key.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
         key.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
-      assembly.primitiveRestartEnable = VK_TRUE;
+      fixed.restart = 1;
     }
 #endif
-
-    VkPipelineViewportStateCreateInfo& view = fixed.view;
-    view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    view.viewportCount = 1;
-    view.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo& rasterization = fixed.rasterization;
-    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = ((key.rasterization & 0x1) ? VK_CULL_MODE_FRONT_BIT : 0) |
-                           ((key.rasterization & 0x2) ? VK_CULL_MODE_BACK_BIT : 0);
+    fixed.cull = ((key.rasterization & 0x1) ? VK_CULL_MODE_FRONT_BIT : 0) |
+                 ((key.rasterization & 0x2) ? VK_CULL_MODE_BACK_BIT : 0);
     // PA_SU_SC_MODE_CNTL.face: 1 = the front face is clockwise (not confirmed on screen).
-    rasterization.frontFace =
-        (key.rasterization & 0x4) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterization.lineWidth = 1.0f;
-    rasterization.depthBiasEnable = (key.rasterization & 0x10) ? VK_TRUE : VK_FALSE;
-    rasterization.depthClampEnable = REXCVAR_GET(bo2zm_native_test_depth_clamp) ? VK_TRUE : VK_FALSE;
-
-    VkPipelineMultisampleStateCreateInfo& sampling = fixed.sampling;
-    sampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    sampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    fixed.front_face = (key.rasterization & 0x4) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    fixed.depth_bias = (key.rasterization & 0x10) ? 1 : 0;
+    fixed.depth_clamp = REXCVAR_GET(bo2zm_native_test_depth_clamp) ? 1 : 0;
 
     const uint32_t d = key.depth;
-    VkPipelineDepthStencilStateCreateInfo& depth = fixed.depth;
-    depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     if (key.formats[4]) {
-      depth.depthTestEnable = (d >> 1) & 0x1;
-      depth.depthWriteEnable = ((d >> 1) & 0x1) && ((d >> 2) & 0x1);
-      depth.depthCompareOp = VkCompareOp((d >> 4) & 0x7);
-      depth.stencilTestEnable = d & 0x1;
-      depth.front.failOp = VkStencilOp((d >> 11) & 0x7);
-      depth.front.passOp = VkStencilOp((d >> 14) & 0x7);
-      depth.front.depthFailOp = VkStencilOp((d >> 17) & 0x7);
-      depth.front.compareOp = VkCompareOp((d >> 8) & 0x7);
+      fixed.depth_test = (d >> 1) & 0x1;
+      fixed.depth_write = ((d >> 1) & 0x1) && ((d >> 2) & 0x1);
+      fixed.depth_compare = (d >> 4) & 0x7;
+      fixed.stencil_test = d & 0x1;
+      fixed.front.fail = (d >> 11) & 0x7;
+      fixed.front.pass = (d >> 14) & 0x7;
+      fixed.front.depth_fail = (d >> 17) & 0x7;
+      fixed.front.compare = (d >> 8) & 0x7;
       if ((d >> 7) & 0x1) {
-        depth.back.compareOp = VkCompareOp((d >> 20) & 0x7);
-        depth.back.failOp = VkStencilOp((d >> 23) & 0x7);
-        depth.back.passOp = VkStencilOp((d >> 26) & 0x7);
-        depth.back.depthFailOp = VkStencilOp((d >> 29) & 0x7);
+        fixed.back.compare = (d >> 20) & 0x7;
+        fixed.back.fail = (d >> 23) & 0x7;
+        fixed.back.pass = (d >> 26) & 0x7;
+        fixed.back.depth_fail = (d >> 29) & 0x7;
       } else {
-        depth.back = depth.front;
+        fixed.back = fixed.front;
       }
     }
 
@@ -14204,15 +14172,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
           return VK_BLEND_OP_ADD;
       }
     };
-    std::array<VkPipelineColorBlendAttachmentState, 4>& blends = fixed.blends;
     uint32_t& n_colors = fixed.n_colors;
     for (uint32_t i = 0; i < 4; ++i) {
       if (!key.formats[i]) {
         continue;
       }
       const uint32_t m = key.blend[i];
-      VkPipelineColorBlendAttachmentState& s = blends[n_colors++];
-      s.colorWriteMask = (key.masks >> (i * 4)) & 0xF;
+      gpu::BlendTarget& s = fixed.blends[n_colors++];
+      s.mask = (key.masks >> (i * 4)) & 0xF;
       const uint32_t source_kind = m & 0x1F, op = (m >> 5) & 0x7, target = (m >> 8) & 0x1F;
       const uint32_t source_kind_a = (m >> 16) & 0x1F, op_a = (m >> 21) & 0x7,
                      target_a = (m >> 24) & 0x1F;
@@ -14224,23 +14191,19 @@ class VulkanDrawsImpl final : public VulkanDraws {
        * blendEnable false the ROP does not have to read the destination or go through the blend unit. The
        * result is the same.
        */
-      s.blendEnable = ColorBlendEnabled(s.colorWriteMask, m);
-      s.srcColorBlendFactor = kFactors[source_kind];
-      s.dstColorBlendFactor = kFactors[target];
-      s.colorBlendOp = operation(op);
-      s.srcAlphaBlendFactor = kFactors[source_kind_a];
-      s.dstAlphaBlendFactor = kFactors[target_a];
-      s.alphaBlendOp = operation(op_a);
+      s.enable = ColorBlendEnabled(s.mask, m);
+      s.equation.src_color = kFactors[source_kind];
+      s.equation.dst_color = kFactors[target];
+      s.equation.color_op = operation(op);
+      s.equation.src_alpha = kFactors[source_kind_a];
+      s.equation.dst_alpha = kFactors[target_a];
+      s.equation.alpha_op = operation(op_a);
     }
-    VkPipelineColorBlendStateCreateInfo& blend = fixed.blend;
-    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = n_colors;
-    blend.pAttachments = blends.data();
   }
 
   // One stencil face, in what Vulkan looks at in the pipeline (masks and reference are dynamic).
-  static bool SameFaceStencil(const VkStencilOpState& a, const VkStencilOpState& b) {
-    return a.failOp == b.failOp && a.passOp == b.passOp && a.depthFailOp == b.depthFailOp && a.compareOp == b.compareOp;
+  static bool SameFaceStencil(const gpu::StencilOps& a, const gpu::StencilOps& b) {
+    return a.fail == b.fail && a.pass == b.pass && a.depth_fail == b.depth_fail && a.compare == b.compare;
   }
 
   /*
@@ -14249,77 +14212,62 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * only with stencil. Returns the first differing field, or nullptr if there is none.
    */
   static const char* MismatchEffective(const PipelineFixedState& a, const PipelineFixedState& b) {
-    if (a.assembly.topology != b.assembly.topology) {
+    if (a.topology != b.topology) {
       return "topology";
     }
-    if (a.assembly.primitiveRestartEnable != b.assembly.primitiveRestartEnable) {
+    if (a.restart != b.restart) {
       return "primitiveRestartEnable";
     }
-    if (a.view.viewportCount != b.view.viewportCount || a.view.scissorCount != b.view.scissorCount) {
-      return "viewportCount or scissorCount";
+    if (a.depth_clamp != b.depth_clamp) {
+      return "depthClampEnable";
     }
-    const VkPipelineRasterizationStateCreateInfo& ra = a.rasterization;
-    const VkPipelineRasterizationStateCreateInfo& rb = b.rasterization;
-    if (ra.polygonMode != rb.polygonMode || ra.lineWidth != rb.lineWidth ||
-        ra.rasterizerDiscardEnable != rb.rasterizerDiscardEnable || ra.depthClampEnable != rb.depthClampEnable) {
-      return "polygonMode, lineWidth, rasterizerDiscardEnable or depthClampEnable";
-    }
-    if (ra.cullMode != rb.cullMode) {
+    if (a.cull != b.cull) {
       return "cullMode";
     }
-    if (ra.frontFace != rb.frontFace) {
+    if (a.front_face != b.front_face) {
       return "frontFace";
     }
-    if (ra.depthBiasEnable != rb.depthBiasEnable) {
+    if (a.depth_bias != b.depth_bias) {
       return "depthBiasEnable";
     }
-    if (a.sampling.rasterizationSamples != b.sampling.rasterizationSamples) {
-      return "rasterizationSamples";
-    }
-    const VkPipelineDepthStencilStateCreateInfo& pa = a.depth;
-    const VkPipelineDepthStencilStateCreateInfo& pb = b.depth;
-    if (pa.depthTestEnable != pb.depthTestEnable) {
+    if (a.depth_test != b.depth_test) {
       return "depthTestEnable";
     }
-    if (pa.depthWriteEnable != pb.depthWriteEnable) {
+    if (a.depth_write != b.depth_write) {
       return "depthWriteEnable";
     }
-    if (pa.depthTestEnable && pa.depthCompareOp != pb.depthCompareOp) {
+    if (a.depth_test && a.depth_compare != b.depth_compare) {
       return "depthCompareOp";
     }
-    if (pa.depthBoundsTestEnable != pb.depthBoundsTestEnable) {
-      return "depthBoundsTestEnable";
-    }
-    if (pa.stencilTestEnable != pb.stencilTestEnable) {
+    if (a.stencil_test != b.stencil_test) {
       return "stencilTestEnable";
     }
-    if (pa.stencilTestEnable && !SameFaceStencil(pa.front, pb.front)) {
+    if (a.stencil_test && !SameFaceStencil(a.front, b.front)) {
       return "front (stencil)";
     }
-    if (pa.stencilTestEnable && !SameFaceStencil(pa.back, pb.back)) {
+    if (a.stencil_test && !SameFaceStencil(a.back, b.back)) {
       return "back (stencil)";
     }
-    if (a.n_colors != b.n_colors || a.blend.attachmentCount != b.blend.attachmentCount ||
-        a.blend.logicOpEnable != b.blend.logicOpEnable) {
-      return "attachmentCount or logicOpEnable";
+    if (a.n_colors != b.n_colors) {
+      return "attachmentCount";
     }
     for (uint32_t i = 0; i < a.n_colors && i < 4; ++i) {
-      const VkPipelineColorBlendAttachmentState& x = a.blends[i];
-      const VkPipelineColorBlendAttachmentState& y = b.blends[i];
-      if (x.colorWriteMask != y.colorWriteMask) {
+      const gpu::BlendTarget& x = a.blends[i];
+      const gpu::BlendTarget& y = b.blends[i];
+      if (x.mask != y.mask) {
         return "colorWriteMask";
       }
-      if (x.blendEnable != y.blendEnable) {
+      if (x.enable != y.enable) {
         return "blendEnable";
       }
-      if (x.blendEnable && (x.colorWriteMask & 0x7) &&
-          (x.srcColorBlendFactor != y.srcColorBlendFactor || x.dstColorBlendFactor != y.dstColorBlendFactor ||
-           x.colorBlendOp != y.colorBlendOp)) {
+      if (x.enable && (x.mask & 0x7) &&
+          (x.equation.src_color != y.equation.src_color || x.equation.dst_color != y.equation.dst_color ||
+           x.equation.color_op != y.equation.color_op)) {
         return "color equation";
       }
-      if (x.blendEnable && (x.colorWriteMask & 0x8) &&
-          (x.srcAlphaBlendFactor != y.srcAlphaBlendFactor || x.dstAlphaBlendFactor != y.dstAlphaBlendFactor ||
-           x.alphaBlendOp != y.alphaBlendOp)) {
+      if (x.enable && (x.mask & 0x8) &&
+          (x.equation.src_alpha != y.equation.src_alpha || x.equation.dst_alpha != y.equation.dst_alpha ||
+           x.equation.alpha_op != y.equation.alpha_op)) {
         return "alpha equation";
       }
     }
@@ -14748,46 +14696,44 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     };
     if (eds_mode_ & kEds12) {
-      const VkPipelineRasterizationStateCreateInfo& r = fixed.rasterization;
-      const VkPipelineDepthStencilStateCreateInfo& z = fixed.depth;
-      look("cullMode", g.face, r.cullMode);
-      look("frontFace", g.frontface, r.frontFace);
-      look("topology", g.topology, fixed.assembly.topology);
-      look("primitiveRestartEnable", g.restart, fixed.assembly.primitiveRestartEnable);
-      look("depthBiasEnable", g.bias, r.depthBiasEnable);
-      look("depthTestEnable", g.test_z, z.depthTestEnable);
-      look("depthWriteEnable", g.writes_z, z.depthWriteEnable);
-      if (z.depthTestEnable) {
-        look("depthCompareOp", g.function_z, z.depthCompareOp);
+      look("cullMode", g.face, fixed.cull);
+      look("frontFace", g.frontface, fixed.front_face);
+      look("topology", g.topology, fixed.topology);
+      look("primitiveRestartEnable", g.restart, fixed.restart);
+      look("depthBiasEnable", g.bias, fixed.depth_bias);
+      look("depthTestEnable", g.test_z, fixed.depth_test);
+      look("depthWriteEnable", g.writes_z, fixed.depth_write);
+      if (fixed.depth_test) {
+        look("depthCompareOp", g.function_z, fixed.depth_compare);
       }
-      look("stencilTestEnable", g.has_stencil, z.stencilTestEnable);
-      if (z.stencilTestEnable) {
-        look("front.failOp", g.ahead[0], z.front.failOp);
-        look("front.passOp", g.ahead[1], z.front.passOp);
-        look("front.depthFailOp", g.ahead[2], z.front.depthFailOp);
-        look("front.compareOp", g.ahead[3], z.front.compareOp);
-        look("back.failOp", g.behind[0], z.back.failOp);
-        look("back.passOp", g.behind[1], z.back.passOp);
-        look("back.depthFailOp", g.behind[2], z.back.depthFailOp);
-        look("back.compareOp", g.behind[3], z.back.compareOp);
+      look("stencilTestEnable", g.has_stencil, fixed.stencil_test);
+      if (fixed.stencil_test) {
+        look("front.failOp", g.ahead[0], fixed.front.fail);
+        look("front.passOp", g.ahead[1], fixed.front.pass);
+        look("front.depthFailOp", g.ahead[2], fixed.front.depth_fail);
+        look("front.compareOp", g.ahead[3], fixed.front.compare);
+        look("back.failOp", g.behind[0], fixed.back.fail);
+        look("back.passOp", g.behind[1], fixed.back.pass);
+        look("back.depthFailOp", g.behind[2], fixed.back.depth_fail);
+        look("back.compareOp", g.behind[3], fixed.back.compare);
       }
     }
     if ((eds_mode_ & kEds3) && fixed.n_colors) {  // phase 2 (without color targets there is nothing to check)
       look("attachmentCount", g.n_colors, fixed.n_colors);
       for (uint32_t a = 0; a < fixed.n_colors && a < 4; ++a) {
-        const VkPipelineColorBlendAttachmentState& s = fixed.blends[a];
+        const gpu::BlendTarget& s = fixed.blends[a];
         const gpu::BlendEquation& q = g.equation[a];
-        look("colorWriteMask", g.mask[a], s.colorWriteMask);
-        look("blendEnable", g.blend_active[a], s.blendEnable);
-        if (s.blendEnable && (s.colorWriteMask & 0x7)) {
-          look("srcColorBlendFactor", q.src_color, s.srcColorBlendFactor);
-          look("dstColorBlendFactor", q.dst_color, s.dstColorBlendFactor);
-          look("colorBlendOp", q.color_op, s.colorBlendOp);
+        look("colorWriteMask", g.mask[a], s.mask);
+        look("blendEnable", g.blend_active[a], s.enable);
+        if (s.enable && (s.mask & 0x7)) {
+          look("srcColorBlendFactor", q.src_color, s.equation.src_color);
+          look("dstColorBlendFactor", q.dst_color, s.equation.dst_color);
+          look("colorBlendOp", q.color_op, s.equation.color_op);
         }
-        if (s.blendEnable && (s.colorWriteMask & 0x8)) {
-          look("srcAlphaBlendFactor", q.src_alpha, s.srcAlphaBlendFactor);
-          look("dstAlphaBlendFactor", q.dst_alpha, s.dstAlphaBlendFactor);
-          look("alphaBlendOp", q.alpha_op, s.alphaBlendOp);
+        if (s.enable && (s.mask & 0x8)) {
+          look("srcAlphaBlendFactor", q.src_alpha, s.equation.src_alpha);
+          look("dstAlphaBlendFactor", q.dst_alpha, s.equation.dst_alpha);
+          look("alphaBlendOp", q.alpha_op, s.equation.alpha_op);
         }
       }
     }
@@ -15107,15 +15053,16 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // The fixed state is filled in by FillStateFixed: it is the usual code, moved there without
     // changing any computation, so the guards of the canonical key and of dynamic state compare with what
     // really goes into the VkGraphicsPipelineCreateInfo.
-    PipelineFixedState fixed;
-    FillStateFixed(key, fixed, warn);  // notify
+    PipelineFixedState state;
+    FillStateFixed(key, state, warn);  // notify
+    const gpu::vulkan::FixedState fixed(state);
     const VkPipelineInputAssemblyStateCreateInfo& assembly = fixed.assembly;
     const VkPipelineViewportStateCreateInfo& view = fixed.view;
     const VkPipelineRasterizationStateCreateInfo& rasterization = fixed.rasterization;
     const VkPipelineMultisampleStateCreateInfo& sampling = fixed.sampling;
     const VkPipelineDepthStencilStateCreateInfo& depth = fixed.depth;
     const VkPipelineColorBlendStateCreateInfo& blend = fixed.blend;
-    const uint32_t n_colors = fixed.n_colors;
+    const uint32_t n_colors = state.n_colors;
 
     // Dynamic state phases 1 and 2. Their pipelines (flagged in padding2) also declare as dynamic what is
     // set with vkCmdSet*; their lookup key already has it zeroed (LookupKey).
