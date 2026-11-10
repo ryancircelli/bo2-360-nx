@@ -1,4 +1,5 @@
 #include "rex/ui/metal/metal_test_control.h"
+#include "rex/graphics/metal/metal_frame_dump.h"
 #include "rex/graphics/metal/metal_frame_log.h"
 /**
  ******************************************************************************
@@ -199,6 +200,7 @@ void MetalGraphicsSystem::InitializeShaderStorage(
     std::rethrow_exception(error);
   }
   ui::metal::StartMetalTestControl(app_context_, presenter());
+  StartFrameDump(presenter(), title_id);
   if (ShaderPrepRequested()) {
     RunShaderPrep();  // never returns
   }
