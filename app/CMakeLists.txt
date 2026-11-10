@@ -195,6 +195,7 @@ if(BO2ZM_NATIVE_METAL)
     src/native/render/metal/bo2zm_gpu_metal_formats.mm
     src/native/render/metal/bo2zm_gpu_metal_memory.mm
     src/native/render/metal/bo2zm_gpu_metal_textures.mm
+    src/native/render/metal/bo2zm_gpu_metal_samplers.mm
     src/native/render/metal/bo2zm_metal_presenter.mm)
   # Compiled as C++ with clang in Objective-C++ mode. Enabling the OBJCXX language from here instead makes CMake 4
   # give the SDK's Objective-C files (SDL's) -std=c++23, which clang refuses.
@@ -202,6 +203,7 @@ if(BO2ZM_NATIVE_METAL)
     src/native/render/metal/bo2zm_gpu_metal_formats.mm
     src/native/render/metal/bo2zm_gpu_metal_memory.mm
     src/native/render/metal/bo2zm_gpu_metal_textures.mm
+    src/native/render/metal/bo2zm_gpu_metal_samplers.mm
     src/native/render/metal/bo2zm_metal_presenter.mm PROPERTIES
     LANGUAGE CXX COMPILE_OPTIONS "-xobjective-c++;-fobjc-arc")
   target_compile_definitions(bo2zm PRIVATE BO2ZM_NATIVE_METAL=1)
