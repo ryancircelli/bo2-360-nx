@@ -361,24 +361,28 @@ class Daemon:
         if job.get('quiet_machine'):
             self.quiet_starting = True
             self.throttle()
+            def stop_build_pid(pid):
+                if pid in quiet_pids or not alive(pid):
+                    return
+                # Persist intent first: recovery may SIGCONT a process that was not stopped yet, harmlessly.
+                quiet_pids.append(pid)
+                job['quiet_build_pids'] = quiet_pids
+                wjson(src, job)
+                try:
+                    os.kill(pid, signal.SIGSTOP)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
             for f in os.listdir(D['builds']):
                 b = rjson(os.path.join(D['builds'], f)) or {}
                 pid = b.get('pid')
                 if pid and alive(pid):
                     # Freeze the token owner first so it cannot start another compiler while its tree is inspected.
-                    try:
-                        os.kill(pid, signal.SIGSTOP)
-                        quiet_pids.append(pid)
-                    except (ProcessLookupError, PermissionError):
-                        pass
+                    stop_build_pid(pid)
                     for child in process_tree(pid):
                         if child == pid:
                             continue
-                        try:
-                            os.kill(child, signal.SIGSTOP)
-                            quiet_pids.append(child)
-                        except (ProcessLookupError, PermissionError):
-                            pass
+                        stop_build_pid(child)
             job['quiet_build_pids'] = quiet_pids
             wjson(src, job)  # recover the suspension even if the daemon exits before Popen/run.json
             cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_quiet-wait', '--'] + cmd
