@@ -1,0 +1,14 @@
+# PLACEHOLDER: 4-player split screen (Town). Player 0 uses BO2ZM_TEST_BUTTONS, players 1-3 use _P2.._P4.
+# The join/lobby sequence is not recorded yet: fill in the button timings from a real run, then drop PLACEHOLDER.
+PLACEHOLDER = true
+duration_s = 300
+players = 4
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_GOD = true
+BO2ZM_BENCHMARK = true
+BO2ZM_BENCHMARK_S = 180
+BO2ZM_TEST_BUTTONS =
+BO2ZM_TEST_BUTTONS_P2 =
+BO2ZM_TEST_BUTTONS_P3 =
+BO2ZM_TEST_BUTTONS_P4 =
+compare_quadrants = true
