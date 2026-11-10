@@ -13,6 +13,7 @@
 
 #include <fmt/format.h>
 
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/user_profile.h>
@@ -188,6 +189,8 @@ void UserProfile::LoadSetting(UserProfile::Setting* setting) {
       fclose(file);
       setting->Deserialize(serialized_data);
       setting->loaded_title_id = kernel_state_->title_id();
+      REXSYS_INFO("[save] profile setting {} of {} ({} bytes) read from {}", setting_id, name_,
+                  input_file_size, rex::path_to_utf8(file_path));
     }
   } else {
     // Unsupported for now.  Other settings aren't per-game and need to be
@@ -204,8 +207,15 @@ void UserProfile::SaveSetting(UserProfile::Setting* setting) {
     auto setting_id = fmt::format("{:08X}", setting->setting_id);
     auto file_path = content_dir / setting_id;
     auto file = rex::filesystem::OpenFile(file_path, "wb");
-    fwrite(serialized_setting.data(), 1, serialized_setting.size(), file);
+    if (!file) {
+      REXSYS_WARN("[save] profile setting {} of {} could not be written to {}", setting_id, name_,
+                  rex::path_to_utf8(file_path));
+      return;
+    }
+    const size_t written = fwrite(serialized_setting.data(), 1, serialized_setting.size(), file);
     fclose(file);
+    REXSYS_INFO("[save] profile setting {} of {} ({} of {} bytes) written to {}", setting_id, name_, written,
+                serialized_setting.size(), rex::path_to_utf8(file_path));
   } else {
     // Unsupported for now.  Other settings aren't per-game and need to be
     // stored some other way.
