@@ -1347,9 +1347,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     barrier.image = credits_.image;
     barrier.range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     gpu_.Barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, nullptr, 1, &barrier);
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {picture->width, picture->height, 1};
+    gpu::BufferImageCopy region{};
+    region.layers = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {picture->width, picture->height, 1};
     gpu_.CopyBufferToImage(commands, credits_.staging, credits_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &region);
     barrier.before = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1586,16 +1586,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           resolved->image.format == kFormatColor && ox0 >= 0 && oy0 >= 0 && ox0 < sx1 && oy0 < sy1) {
         ResolveFrontEarlier(base_resolved, dx == 0 && dy == 0 && width == resolved->image.width &&
                                                    height == resolved->image.height);
-        VkImageBlit scale{};
-        scale.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        scale.srcOffsets[0] = {ox0, oy0, 0};
-        scale.srcOffsets[1] = {sx1, sy1, 1};
-        scale.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        scale.dstOffsets[0] = {int32_t(dx), int32_t(dy), 0};
-        scale.dstOffsets[1] = {int32_t(dx + width), int32_t(dy + height), 1};
+        gpu::ImageBlit scale{};
+        scale.source = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        scale.source_offsets[0] = {ox0, oy0, 0};
+        scale.source_offsets[1] = {sx1, sy1, 1};
+        scale.target = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        scale.target_offsets[0] = {int32_t(dx), int32_t(dy), 0};
+        scale.target_offsets[1] = {int32_t(dx + width), int32_t(dy + height), 1};
         const bool reduce = uint32_t(sx1 - ox0) > width || uint32_t(sy1 - oy0) > height;
         gpu_.Blit(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL, resolved->image.image,
-                  VK_IMAGE_LAYOUT_GENERAL, 1, &scale, reduce ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+                  VK_IMAGE_LAYOUT_GENERAL, 1, &scale, reduce ? gpu::kFilterLinear : gpu::kFilterNearest);
         ++copies_;
         AnnotateCopy(width, height);
         ResolvedWritten(base_resolved, uint64_t(sx1 - ox0) * uint64_t(sy1 - oy0));
@@ -1635,15 +1635,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         // covers it entirely, and recorded first otherwise.
         ResolveFrontEarlier(base_resolved, dx == 0 && dy == 0 && fit_width == resolved->image.width &&
                                                    fit_height == resolved->image.height);
-        VkImageBlit reduction{};
-        reduction.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        reduction.srcOffsets[0] = {x0, y0, 0};
-        reduction.srcOffsets[1] = {x0 + int32_t(requested_width), y0 + int32_t(requested_height), 1};
-        reduction.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        reduction.dstOffsets[0] = {int32_t(dx), int32_t(dy), 0};
-        reduction.dstOffsets[1] = {int32_t(dx + fit_width), int32_t(dy + fit_height), 1};
+        gpu::ImageBlit reduction{};
+        reduction.source = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        reduction.source_offsets[0] = {x0, y0, 0};
+        reduction.source_offsets[1] = {x0 + int32_t(requested_width), y0 + int32_t(requested_height), 1};
+        reduction.target = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        reduction.target_offsets[0] = {int32_t(dx), int32_t(dy), 0};
+        reduction.target_offsets[1] = {int32_t(dx + fit_width), int32_t(dy + fit_height), 1};
         gpu_.Blit(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL,
-                  resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &reduction, VK_FILTER_LINEAR);
+                  resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &reduction, gpu::kFilterLinear);
         ++copies_;
         ++reductions_;
         if (reductions_ <= 4) {
@@ -1695,11 +1695,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
             return true;
           }
         }
-        VkImageCopy copy{};
-        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.srcOffset = {x0, y0, 0};
-        copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.dstOffset = {int32_t(dx), int32_t(dy), 0};
+        gpu::ImageCopy copy{};
+        copy.source = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.source_offset = {x0, y0, 0};
+        copy.target = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.target_offset = {int32_t(dx), int32_t(dy), 0};
         copy.extent = {width, height, 1};
         if (FrontTraceLine()) {
           const auto old = front_compositions_.find(target_render);
@@ -2046,11 +2046,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         for (size_t i = 0; i < plan.count; ++i) {
           const auto& region = plan.regions[i];
           auto& source = *sources[region.bank];
-          VkImageCopy copy{};
-          copy.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-          copy.srcOffset = {x0, int32_t(region.source_y), 0};
-          copy.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-          copy.dstOffset = {int32_t(dx), int32_t(dy + region.destination_y), 0};
+          gpu::ImageCopy copy{};
+          copy.source = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+          copy.source_offset = {x0, int32_t(region.source_y), 0};
+          copy.target = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+          copy.target_offset = {int32_t(dx), int32_t(dy + region.destination_y), 0};
           copy.extent = {width_copy, region.height, 1};
           gpu_.CopyImage(commands_job_, source.image, VK_IMAGE_LAYOUT_GENERAL, resolved->image.image,
                          VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
@@ -2107,11 +2107,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (!width_img || !height_img) {
         return;
       }
-      VkImageCopy copy{};
-      copy.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-      copy.srcOffset = {aX(x0), aY(y0), 0};
-      copy.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-      copy.dstOffset = {aX(int32_t(dx)), aY(int32_t(dy)), 0};
+      gpu::ImageCopy copy{};
+      copy.source = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+      copy.source_offset = {aX(x0), aY(y0), 0};
+      copy.target = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+      copy.target_offset = {aX(int32_t(dx)), aY(int32_t(dy)), 0};
       copy.extent = {width_img, height_img, 1};
       gpu_.CopyImage(commands_job_, depth->image, VK_IMAGE_LAYOUT_GENERAL,
                      resolved->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
@@ -2153,11 +2153,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
       }
     }
-    VkImageCopy copy{};
-    copy.srcSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-    copy.srcOffset = {x0, y0, 0};
-    copy.dstSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-    copy.dstOffset = {int32_t(dx), int32_t(dy), 0};
+    gpu::ImageCopy copy{};
+    copy.source = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+    copy.source_offset = {x0, y0, 0};
+    copy.target = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+    copy.target_offset = {int32_t(dx), int32_t(dy), 0};
     copy.extent = {width, height, 1};
     // If this address is only requested by the composition without blur, the copy is deferred
     // (bo2zm_native_lazy_depth): it is done as soon as a draw really samples it; if nobody does,
@@ -2577,7 +2577,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       dfn_.vkBeginCommandBuffer(commands, &begin);
-      VkBufferCopy region{0, 0, kProbeBytes};
+      gpu::BufferCopy region{0, 0, kProbeBytes};
       gpu_.CopyBuffer(commands, source, target, 1, &region);
       dfn_.vkEndCommandBuffer(commands);
       VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2651,12 +2651,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   // From Copy's 1 to 1 path: true if the copy is deferred (not recorded now).
-  bool PostponeComposite(uint32_t address, OwnedImage& target, const Resolved& resolved, const VkImageCopy& copy,
+  bool PostponeComposite(uint32_t address, OwnedImage& target, const Resolved& resolved, const gpu::ImageCopy& copy,
                         uint32_t source) {
     if (composite_has_ || REXCVAR_GET(bo2zm_native_diag_resolved) || REXCVAR_GET(bo2zm_native_swap_color)) {
       return false;
     }
-    if (copy.srcOffset.x != 0 || copy.srcOffset.y != 0 || copy.dstOffset.x != 0 || copy.dstOffset.y != 0 ||
+    if (copy.source_offset.x != 0 || copy.source_offset.y != 0 || copy.target_offset.x != 0 ||
+        copy.target_offset.y != 0 ||
         copy.extent.width != resolved.image.width || copy.extent.height != resolved.image.height ||
         target.format != kFormatColor || resolved.image.format != kFormatColor) {
       return false;
@@ -3829,12 +3830,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const uint32_t texels = v.image.width * v.image.height * v.depth3d;
     const uint32_t texels_flat = flat.width * flat.height;
     std::vector<uint32_t> table(texels, UINT32_MAX);
-    for (const VkImageCopy& r : v.regions) {
+    for (const gpu::ImageCopy& r : v.regions) {
       for (uint32_t y = 0; y < r.extent.height; ++y) {
         for (uint32_t x = 0; x < r.extent.width; ++x) {
-          const uint32_t d = (uint32_t(r.dstOffset.z) * v.image.height + uint32_t(r.dstOffset.y) + y) * v.image.width +
-                             uint32_t(r.dstOffset.x) + x;
-          const uint32_t from = (uint32_t(r.srcOffset.y) + y) * flat.width + uint32_t(r.srcOffset.x) + x;
+          const uint32_t d =
+              (uint32_t(r.target_offset.z) * v.image.height + uint32_t(r.target_offset.y) + y) * v.image.width +
+              uint32_t(r.target_offset.x) + x;
+          const uint32_t from = (uint32_t(r.source_offset.y) + y) * flat.width + uint32_t(r.source_offset.x) + x;
           if (d >= texels || from >= texels_flat) {
             return;
           }
@@ -3895,7 +3897,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // the same memory: the largest block size whose texels all keep their relative positions, down to 1x1.
   // `block` returns its width | height << 16. false if a 3D texel falls outside the resolve.
   static bool RegionsVolume(const OwnedImage& flat, uint32_t width, uint32_t height, uint32_t depth3d, uint32_t pitch,
-                              std::vector<VkImageCopy>& regions, uint32_t& block) {
+                              std::vector<gpu::ImageCopy>& regions, uint32_t& block) {
     std::unordered_map<int32_t, uint32_t> inverse;
     inverse.reserve(size_t(flat.width) * flat.height);
     for (uint32_t v = 0; v < flat.height; ++v) {
@@ -3938,11 +3940,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                 }
               }
             }
-            VkImageCopy r{};
-            r.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            r.srcOffset = {int32_t(uv0 & 0xFFFF), int32_t(uv0 >> 16), 0};
-            r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            r.dstOffset = {int32_t(bx), int32_t(by), int32_t(z)};
+            gpu::ImageCopy r{};
+            r.source = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.source_offset = {int32_t(uv0 & 0xFFFF), int32_t(uv0 >> 16), 0};
+            r.target = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.target_offset = {int32_t(bx), int32_t(by), int32_t(z)};
             r.extent = {bw, bh, 1};
             regions.push_back(r);
           }
@@ -4352,7 +4354,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   // Defers the copy if, lately, the only reader of that address is the composite without blur.
   bool PostponeCopyDepth(uint32_t address, const OwnedImage& source, const Resolved& resolved,
-                               const VkImageCopy& copy) {
+                               const gpu::ImageCopy& copy) {
     if (lazy_off_ || !REXCVAR_GET(bo2zm_native_lazy_depth)) {
       return false;
     }
@@ -4382,7 +4384,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu::Image source_vk = nullptr;  // image holding the content: the target's own or a retained one
     int32_t retained = -1;               // index in fronts_images_ if it is no longer in the target
     gpu::Image texture_vk = nullptr;
-    VkImageCopy copy{};
+    gpu::ImageCopy copy{};
   };
   struct FrontImage {
     OwnedImage image;              // same size, format and usage as the target: swapped with it
@@ -4487,11 +4489,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   // Defers the copy if it is 1:1, covers the whole texture from the target's corner, and that address is
   // read only by the Swap.
-  bool PostponeCopyFront(uint32_t address, OwnedImage& target, const Resolved& resolved, const VkImageCopy& copy) {
+  bool PostponeCopyFront(uint32_t address, OwnedImage& target, const Resolved& resolved, const gpu::ImageCopy& copy) {
     if (front_off_ || !REXCVAR_GET(bo2zm_native_lazy_front) || REXCVAR_GET(bo2zm_native_diag_resolved)) {
       return false;
     }
-    if (copy.srcOffset.x != 0 || copy.srcOffset.y != 0 || copy.dstOffset.x != 0 || copy.dstOffset.y != 0 ||
+    if (copy.source_offset.x != 0 || copy.source_offset.y != 0 || copy.target_offset.x != 0 ||
+        copy.target_offset.y != 0 ||
         copy.extent.width != resolved.image.width || copy.extent.height != resolved.image.height ||
         target.format != kFormatColor || resolved.image.format != kFormatColor) {
       return false;
@@ -5379,9 +5382,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         pixels_restore_saved_ += uint64_t(target.width) * (target.height - height);
       }
     }
-    VkImageCopy copy{};
-    copy.srcSubresource = {aspect, 0, 0, 1};
-    copy.dstSubresource = {aspect, 0, 0, 1};
+    gpu::ImageCopy copy{};
+    copy.source = {aspect, 0, 0, 1};
+    copy.target = {aspect, 0, 0, 1};
     copy.extent = {target.width, height, 1};
     AnnotateUseClear(target, target.width, height);  // bo2zm_native_diag_clears
     MarkGpu(kGpuCopies);
@@ -5417,9 +5420,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
     gpu_.Barrier(commands_job_, kWrites, VK_PIPELINE_STAGE_TRANSFER_BIT, &barrier);
-    VkImageCopy copy{};
-    copy.srcSubresource = {aspect, 0, 0, 1};
-    copy.dstSubresource = {aspect, 0, 0, 1};
+    gpu::ImageCopy copy{};
+    copy.source = {aspect, 0, 0, 1};
+    copy.target = {aspect, 0, 0, 1};
     copy.extent = {target.width, target.height, 1};
     AnnotateUseClear(target, target.width, target.height);  // bo2zm_native_diag_clears, like the restore
     MarkGpu(kGpuCopies);
@@ -6309,14 +6312,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       const OwnedImage& image = it->second.image;
       const int32_t x = int32_t(i % 4) * 320;
       const int32_t y = int32_t(i / 4) * 180;
-      VkImageBlit copy{};
-      copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      copy.srcOffsets[1] = {int32_t(image.width), int32_t(image.height), 1};
-      copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      copy.dstOffsets[0] = {x + 2, y + 2, 0};
-      copy.dstOffsets[1] = {x + 318, y + 178, 1};
+      gpu::ImageBlit copy{};
+      copy.source = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      copy.source_offsets[1] = {int32_t(image.width), int32_t(image.height), 1};
+      copy.target = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      copy.target_offsets[0] = {x + 2, y + 2, 0};
+      copy.target_offsets[1] = {x + 318, y + 178, 1};
       gpu_.Blit(commands_job_, image.image, VK_IMAGE_LAYOUT_GENERAL, tiled_.image,
-                VK_IMAGE_LAYOUT_GENERAL, 1, &copy, VK_FILTER_LINEAR);
+                VK_IMAGE_LAYOUT_GENERAL, 1, &copy, gpu::kFilterLinear);
       list += fmt::format(" {}{}:{:08X} {}x{}", i, bases[i] == base_swap ? "*" : "", bases[i],
                            image.width, image.height);
     }
@@ -6552,10 +6555,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       read.bytes = bytes;
       read.coherent = (vulkan_device_->memory_types().host_coherent >> type) & 0x1;
     }
-    VkBufferImageCopy copy{};
-    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.imageOffset = {int32_t(dx), int32_t(dy), 0};
-    copy.imageExtent = {width, height, 1};
+    gpu::BufferImageCopy copy{};
+    copy.layers = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.offset = {int32_t(dx), int32_t(dy), 0};
+    copy.extent = {width, height, 1};
     gpu_.CopyImageToBuffer(commands_job_, resolved.image.image, VK_IMAGE_LAYOUT_GENERAL,
                            read.buffer, 1, &copy);
     reads_pending_.push_back({&read, reg.rb_copy_dest_base, x0, y0, width, height,
@@ -7151,7 +7154,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     OwnedImage* target = nullptr;           // that target (targets_ never erases: the pointer stays valid)
     gpu::Image source_vk = nullptr;  // its image when deferred: if it changes, it can no longer be recorded
     gpu::Image texture_vk = nullptr;
-    VkImageCopy copy{};
+    gpu::ImageCopy copy{};
   };
   static constexpr uint64_t kCompositeALook = 900;  // watched writes without late reads (~30 s of play)
   PendingComposite composite_;
@@ -7272,7 +7275,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     uint32_t block = 0;       // block size of the regions: width | height << 16
     uint64_t write = 0;    // writes_resolved_ value it was built from
     gpu::Image source = nullptr;
-    std::vector<VkImageCopy> regions;
+    std::vector<gpu::ImageCopy> regions;
     // bo2zm_native_volume_gather: one host-visible buffer, by its device address: the table (texels words: the
     // index in the resolve of each 3D texel), the resolve's texels (texels_flat words), the 3D texels (texels words).
     VkBuffer gather = VK_NULL_HANDLE;
@@ -7354,7 +7357,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const OwnedImage* source = nullptr;  // depth target (depths_ never erases: the pointer stays valid)
     gpu::Image source_vk = nullptr;
     gpu::Image target_vk = nullptr;
-    VkImageCopy copy{};
+    gpu::ImageCopy copy{};
     uint64_t frame = 0;     // presented_ when postponing it
     bool read_dead = false;  // the composite without blur already requested it
   };
