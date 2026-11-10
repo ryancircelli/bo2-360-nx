@@ -15,6 +15,8 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
+#include <mach/thread_switch.h>
+#include <mach/mach_traps.h>
 #endif
 
 static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only");
@@ -285,8 +287,36 @@ uint32_t current_thread_system_id() {
 #endif
 }
 
+REXCVAR_DEFINE_STRING(thread_yield, "switch", "Kernel",
+                      "How a spinning thread gives way (NtYieldExecution, spin locks, zero-timeout polls, the GPU "
+                      "ring's register waits). switch = macOS thread_switch with no priority change: lets another "
+                      "thread run if one is waiting for this core, about 2 us when none is. sched_yield = as before: on "
+                      "macOS that also drops the thread's priority for a whole quantum, so with the machine busy a "
+                      "game thread polling for work came back 10 to 130 ms later. Elsewhere both are sched_yield")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+namespace {
+#if defined(__APPLE__)
+bool YieldBySwitch() {
+  static const bool on = REXCVAR_GET(thread_yield) != "sched_yield";
+  return on;
+}
+#endif
+}  // namespace
+
 void MaybeYield() {
+#if defined(__APPLE__)
+  // sched_yield on macOS is swtch_pri(0): it depresses the thread to priority 0 for a quantum (10 ms), so
+  // every niced build and every other process runs first. thread_switch with SWITCH_OPTION_NONE hands the
+  // core to a waiting thread of the same or higher priority, if there is one, and keeps the priority.
+  if (YieldBySwitch()) {
+    thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0);
+  } else {
+    sched_yield();
+  }
+#else
   sched_yield();
+#endif
   __sync_synchronize();
 }
 
