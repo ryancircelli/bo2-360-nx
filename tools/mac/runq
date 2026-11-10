@@ -6,6 +6,8 @@
   runq submit [options] [--app APP] -- CMD ARGS...                                any command ({APP} {OUT} {PORT})
       options: --name N  --out DIR  --class C  --owner O  --timeout S  --env K=V (repeatable)
                --priority (= --class ship)  --wait (block until done, exit with the job's exit code)
+               --solo (wait until no other game runs, then hold the machine alone; the default for class perf,
+               --no-solo turns it off). Use --solo for FPS numbers and for proofs of timing-dependent bugs.
       classes, first to run first: ship (0, ship-gate smokes), harness (1, harness/golden captures),
                proof (2, bug proof runs), sweep (3, scene sweeps; the default), perf (4, perf A/B), or a number.
       Within a class, jobs take turns by owner (--owner, else $RUNQ_OWNER, else the --name up to its first '-'):
@@ -16,6 +18,7 @@
   runq cancel ID            dequeue, or stop a running job (its own process group only)
   runq priority ID CLASS    move a queued job to another class (name or number)
   runq bump ID              run a queued job next within its class (ahead of the owner turns)
+  runq solo ID on|off       make a queued job solo or not
   runq result ID            print result.txt
   runq install              copy runq, buildq and the boot_test tools to the spool's bin/ (a path that outlives worktrees)
 
@@ -26,10 +29,12 @@
       for the integrator's ship build only). Pool size: idle_cap (16) when no game runs, game_cap (4) while runq
       runs a game. Each build also holds one token for its own first job, so the floor is one job per running build.
 
-Spool: ~/Games/Xbox360/bo2-build/runq/{queue,running,done,jobs,builds,bin}; config.json there overrides slots (2),
+Spool: ~/Games/Xbox360/bo2-build/runq/{queue,running,done,jobs,builds,bin}; config.json there overrides slots (3),
 idle_cap (16), game_cap (4). A single detached daemon (lock file daemon.lock) runs at most `slots` jobs at normal
 priority, in class order with owner turns (see submit), enforces timeouts, kills only its own children (each job's own process group),
 and holds back build tokens while a game runs. Any runq/buildq command starts it when it is not running.
+result.json records the slot count, solo, and the games running during the job (conditions.games_start / games_mean /
+games_max, full_speed = no other game at any sample), so a 3-game run is never read as a full-speed one.
 """
 import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, time
 
@@ -41,7 +46,7 @@ DAEMON_LOCK = os.path.join(SPOOL, 'daemon.lock')
 STATE = os.path.join(SPOOL, 'state.json')
 DLOG = os.path.join(SPOOL, 'daemon.log')
 HERE = os.path.dirname(os.path.realpath(__file__))
-DEFAULTS = {'slots': 2, 'idle_cap': 16, 'game_cap': 4, 'port_base': 60000, 'kill_grace_s': 15}
+DEFAULTS = {'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'port_base': 60000, 'kill_grace_s': 15}
 COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift-frontend|metal|metallib|'
                        r'dxc|rustc|cc|c\+\+)$')
 
@@ -159,9 +164,9 @@ def daemon_running():
     return False
 
 
-def ensure_daemon():
+def ensure_daemon(fatal=True):
     if daemon_running():
-        return
+        return True
     if os.getpriority(os.PRIO_PROCESS, 0) > 0:
         print('runq: starting the daemon from a niced shell; games would inherit the nice value. Run any runq '
               'command once without nice first.', file=sys.stderr)
@@ -172,9 +177,34 @@ def ensure_daemon():
     for _ in range(100):
         st = rjson(STATE) or {}
         if st.get('pid') and alive(st['pid']) and daemon_running():
-            return
+            return True
         time.sleep(0.1)
-    sys.exit('runq: the daemon did not start; see ' + DLOG)
+    if daemon_running():   # the lock is held: a daemon is up but has not written its state yet
+        return True
+    if fatal:
+        sys.exit('runq: the daemon did not start; see ' + DLOG)
+    print('runq: the daemon did not start (see ' + DLOG + '); still waiting', file=sys.stderr, flush=True)
+    return False
+
+
+class Adopted:
+    """A job started by an earlier daemon: not our child, so poll by pid and read the wrapper's exit file."""
+    def __init__(self, pid, out):
+        self.pid, self.out = pid, out
+
+    def poll(self):
+        if alive(self.pid):
+            return None
+        try:
+            return int(open(os.path.join(self.out, EXIT_FILE)).read().strip())
+        except (OSError, ValueError):
+            return UNKNOWN_EXIT
+
+
+EXIT_FILE = '.runq_exit'
+UNKNOWN_EXIT = 125   # an adopted job that left no exit file (started before the job wrapper existed, or killed)
+# every job runs under this wrapper so a restarted daemon can still learn the exit code
+WRAP = ['/bin/sh', '-c', '"$@"; c=$?; echo $c > "$RUNQ_OUT/' + EXIT_FILE + '"; exit $c', 'runq-job']
 
 
 class Daemon:
@@ -291,10 +321,14 @@ class Daemon:
         start = time.time()
         la = loadavg()
         rec = {'id': job['id'], 'pid': None, 'slot': slot, 'started': now_s(), 'load_start': la,
-               'cmd': cmd}
+               'cmd': cmd, 'games_start': len(self.jobs) + 1 + len(self.outside)}
         log = open(os.path.join(out, 'runq.log'), 'ab')
         try:
-            proc = subprocess.Popen(cmd, cwd=job.get('cwd') or out, env=env, stdin=subprocess.DEVNULL, stdout=log,
+            try:
+                os.unlink(os.path.join(out, EXIT_FILE))
+            except OSError:
+                pass
+            proc = subprocess.Popen(WRAP + cmd, cwd=job.get('cwd') or out, env=env, stdin=subprocess.DEVNULL, stdout=log,
                                     stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as e:
             log.close()
@@ -306,10 +340,11 @@ class Daemon:
         os.replace(src, os.path.join(D['running'], job['id'] + '.json'))
         wjson(os.path.join(D['running'], job['id'] + '.run.json'), rec)
         with open(os.path.join(out, 'conditions.tsv'), 'w') as f:
-            f.write('t_s\tload1\tload5\tactive_builds\tcompile_procs\tbuild_cap\n')
+            f.write('t_s\tload1\tload5\tactive_builds\tcompile_procs\tbuild_cap\tgames\n')
         self.last_start[job_owner(job)] = time.time()
         self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
-                                'next_sample': 0.0, 'load_start': la, 'killing': 0.0}
+                                'next_sample': 0.0, 'load_start': la, 'killing': 0.0,
+                                'games_start': len(self.jobs) + 1 + len(self.outside)}
         self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
 
     def sample(self, j, t):
@@ -317,9 +352,10 @@ class Daemon:
         ab = active_builds()
         cp = compile_procs()
         cap = self.c['game_cap'] if self.jobs else self.c['idle_cap']
-        j['samples'].append((la[0], ab, cp))
+        games = len(self.jobs) + len(self.outside)
+        j['samples'].append((la[0], ab, cp, games))
         with open(os.path.join(j['job']['out'], 'conditions.tsv'), 'a') as f:
-            f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\n')
+            f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\t{games}\n')
 
     def kill_job(self, j, why):
         pid = j['proc'].pid
@@ -337,13 +373,13 @@ class Daemon:
             except ProcessLookupError:
                 pass
 
-    def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None):
+    def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None, games_start=None):
         out = job['out']
         res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code,
                'submitted': job.get('submitted'), 'started': time.strftime('%Y-%m-%d %H:%M:%S',
                                                                            time.localtime(start)),
                'ended': now_s(), 'wall_s': round(time.time() - start, 1),
-               'queued_s': round(start - job.get('submitted_t', start), 1), 'slot': slot,
+               'queued_s': max(0.0, round(start - job.get('submitted_t', start), 1)), 'slot': slot,
                'priority': job.get('priority', False), 'out': out, 'note': note,
                'conditions': {'load_start': load_start or loadavg()}}
         if samples:
@@ -354,6 +390,16 @@ class Daemon:
                                      compile_procs_mean=round(sum(s[2] for s in samples) / len(samples), 1),
                                      compile_procs_max=max(s[2] for s in samples),
                                      build_cap=self.c['game_cap'])
+            gs = [s[3] for s in samples if len(s) > 3]
+            if gs:
+                res['conditions'].update(games_mean=round(sum(gs) / len(gs), 2), games_max=max(gs))
+        res['slots'] = self.c['slots']
+        res['solo'] = is_solo(job)
+        if games_start is not None:
+            res['conditions']['games_start'] = games_start
+        g = max([x for x in (res['conditions'].get('games_max'), games_start) if x is not None], default=None)
+        if g is not None:
+            res['conditions']['full_speed'] = g <= 1
         run = job.get('run_dir') or out
         sj = rjson(os.path.join(run, 'summary.json'))
         if sj and sj.get('summary'):
@@ -373,6 +419,8 @@ class Daemon:
         line = (f'{job["id"]} {job.get("name") or ""} {status} exit {code} wall {res["wall_s"]} s '
                 f'queued {res["queued_s"]} s load {res["conditions"]["load_start"][0]}'
                 f'->{res["conditions"].get("load_mean", "?")} builds {res["conditions"].get("builds_mean", "?")}'
+                f' games max {max(res["conditions"].get("games_max") or 0, games_start or 0)}/{res["slots"]}'
+                + (' solo' if res['solo'] else '')
                 + (f' fps {res["fps"].get("fps_avg")}/{res["fps"].get("fps_1pct_low")}' if res.get('fps') else '')
                 + (f' scene {extra.get("verdict")}' if extra else '') + (f' ({note})' if note else ''))
         with open(os.path.join(out, 'result.txt'), 'w') as f:
@@ -398,13 +446,15 @@ class Daemon:
             status = {'cancelled': 'cancelled'}.get(j.get('why', ''), 'timeout' if j.get('why') else 'done')
             if code < 0:
                 code = 128 - code
+            if code == UNKNOWN_EXIT and j.get('adopted'):
+                j['why'] = j.get('why') or 'adopted after a daemon restart; exit code unknown (see runq.log)'
             # stragglers in the job's own group (a game the job left running)
             try:
                 os.killpg(j['proc'].pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
             self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
-                               j['load_start'])
+                               j['load_start'], j.get('games_start'))
             if j['job'].get('clone_app', True) and j['job'].get('app'):
                 shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
             for suf in ('.json', '.run.json', '.cancel'):
@@ -434,10 +484,20 @@ class Daemon:
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         if os.getpriority(os.PRIO_PROCESS, 0) > 0:
             self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
-        # jobs left in running/ by a dead daemon: their processes are not ours any more; record them as lost
+        # jobs left in running/ by an earlier daemon: adopt the ones still alive (same pid, same process group; the
+        # exit code comes from the job wrapper's exit file), record the dead ones as lost
         for f in os.listdir(D['running']):
             if f.endswith('.json') and not f.endswith('.run.json'):
                 job = rjson(os.path.join(D['running'], f))
+                rec = rjson(os.path.join(D['running'], f[:-5] + '.run.json')) or {}
+                if job and rec.get('pid') and alive(rec['pid']):
+                    st = time.mktime(time.strptime(rec['started'], '%Y-%m-%d %H:%M:%S'))
+                    self.jobs[job['id']] = {'proc': Adopted(rec['pid'], job['out']), 'job': job, 'slot': rec['slot'],
+                                            'start': st, 'samples': [], 'next_sample': 0.0,
+                                            'load_start': rec.get('load_start'), 'killing': 0.0,
+                                            'games_start': rec.get('games_start'), 'adopted': True}
+                    self.log(f'adopted {job["id"]} slot {rec["slot"]} pid {rec["pid"]}')
+                    continue
                 if job:
                     self.finish_record(job, -1, 2, 'lost', time.time(), [], 'the daemon restarted during the job')
                 for suf in ('.json', '.run.json', '.cancel'):
@@ -453,10 +513,17 @@ class Daemon:
                 self.c = cfg()
                 self.reap()
                 q = self.queued()
-                self.outside = games_outside({j['proc'].pid for j in self.jobs.values()})
+                self.outside = (games_outside({j['proc'].pid for j in self.jobs.values()})
+                                if self.c.get('count_outside_games', True) else [])
                 free = self.c['slots'] - len(self.outside)
-                while q and not paused(self.c) and len(self.jobs) < free:
+                solo_running = any(is_solo(j['job']) for j in self.jobs.values())
+                while q and not paused(self.c) and not solo_running and len(self.jobs) < free:
                     qf = self.pick(q)
+                    if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
+                        # a solo job holds the machine alone: start nothing else until the running games end
+                        if self.jobs or self.outside:
+                            break
+                        solo_running = True
                     q.remove(qf)
                     self.launch(qf)
                 self.throttle()
@@ -549,6 +616,13 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
         pending.sort(key=lambda qj: sched_key(qj[1], rbo, ls))
         qf, j = pending.pop(0)
         est = estimate_s(j, hist)
+        if is_solo(j):   # waits for every slot, then holds them all
+            t = max(free_at)
+            out.append((qf, j, t, est))
+            free_at = [t + est] * len(free_at)
+            busy = [(t + est, job_owner(j))]
+            ls[job_owner(j)] = t
+            continue
         out.append((qf, j, t, est))
         free_at.remove(t)
         free_at.append(t + est)
@@ -560,6 +634,24 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
 def load_queue():
     return [(f, rjson(os.path.join(D['queue'], f)) or {}) for f in
             sorted(f for f in os.listdir(D['queue']) if f.endswith('.json'))]
+
+
+def is_solo(j):
+    """Solo jobs run with no other game on the machine; class perf is solo unless submitted with --no-solo."""
+    return bool(j.get('solo', job_class(j) == CLASSES['perf']))
+
+
+def cmd_solo(argv):
+    if len(argv) != 2 or argv[1] not in ('on', 'off'):
+        sys.exit('runq: solo ID on|off')
+    for f, j in load_queue():
+        if f.endswith(argv[0] + '.json'):
+            j['solo'] = argv[1] == 'on'
+            wjson(os.path.join(D['queue'], f), j)
+            print(f'{argv[0]}: solo {argv[1]}')
+            return 0
+    print(f'{argv[0]}: not queued')
+    return 1
 
 
 def cmd_priority(argv, bump=False):
@@ -608,6 +700,10 @@ def cmd_submit(argv):
     ap.add_argument('--priority', action='store_true', help='= --class ship')
     ap.add_argument('--class', dest='klass', help='ship, harness, proof, sweep (default), perf, or a number')
     ap.add_argument('--owner', help='fair-share owner (default $RUNQ_OWNER, else the name up to its first -)')
+    ap.add_argument('--solo', action='store_true', default=None,
+                    help='run with no other game on the machine (default for class perf); for FPS numbers and '
+                         'timing-dependent bug proofs')
+    ap.add_argument('--no-solo', dest='solo', action='store_false')
     ap.add_argument('--timeout', type=int)
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
@@ -628,8 +724,9 @@ def cmd_submit(argv):
             sys.exit(f'runq: no app at {a.app}')
     bt = os.path.join(HERE, 'boot_test.sh')
     klass = 0 if a.priority else parse_class(a.klass) if a.klass else 3
+    solo = a.solo if a.solo is not None else klass == CLASSES['perf']
     job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
-           'app': a.app, 'clone_app': not a.no_clone, 'env': env}
+           'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'env': env}
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
         scene = rjson(sp)
@@ -684,7 +781,7 @@ def find_done(jid):
 
 
 def cmd_wait(ids):
-    ensure_daemon()
+    ensure_daemon(fatal=False)
     ids = [i for i in ids if i]
     pending = set(ids)
     kq = select.kqueue()
@@ -702,13 +799,14 @@ def cmd_wait(ids):
                 except OSError:
                     print(json.dumps(res), flush=True)
                 worst = max(worst, res.get('exit', 2) if res.get('status') == 'done' else max(res.get('exit', 2), 2))
-            elif not any(f.endswith(jid + '.json') for f in os.listdir(D['queue']) + os.listdir(D['running'])):
+            elif not any(f.endswith(jid + '.json') for f in os.listdir(D['queue']) + os.listdir(D['running'])) \
+                    and not find_done(jid):   # (it may have moved to done/ while we listed)
                 print(f'{jid}: unknown job', flush=True)
                 pending.discard(jid)
                 worst = max(worst, 2)
         if pending:
             kq.control([ev], 1, 60)   # wakes when done/ changes; 60 s as a safety net
-            ensure_daemon()
+            ensure_daemon(fatal=False)
     os.close(dfd)
     return worst
 
@@ -743,7 +841,7 @@ def cmd_status(_argv):
     for qf, j, t, est in plan(load_queue(), running, max(1, slots), st.get('last_start_by_owner') or {}, now=start):
         k = job_class(j)
         print(f'queued  {j.get("id")} {j.get("name")}  class {CLASS_NAMES.get(k, k)}{" bumped" if j.get("bump") else ""}'
-              f'  owner {job_owner(j)}  est start {time.strftime("%H:%M", time.localtime(t))} (~{int(est // 60)} min)')
+              f'{" solo" if is_solo(j) else ""}  owner {job_owner(j)}  est start {time.strftime("%H:%M", time.localtime(t))} (~{int(est // 60)} min)')
     done = sorted(os.listdir(D['done']), key=lambda f: os.path.getmtime(os.path.join(D['done'], f)))[-5:]
     for f in done:
         r = rjson(os.path.join(D['done'], f)) or {}
@@ -1037,6 +1135,8 @@ def main():
         sys.exit(cmd_priority(argv))
     elif sub == 'bump':
         sys.exit(cmd_priority(argv, bump=True))
+    elif sub == 'solo':
+        sys.exit(cmd_solo(argv))
     elif sub == 'result':
         for jid in argv:
             r = rjson(find_done(jid))
