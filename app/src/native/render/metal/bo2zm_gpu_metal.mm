@@ -5,6 +5,8 @@
 #include <rex/logging.h>
 
 #import <Foundation/Foundation.h>
+#include <vulkan/vulkan_core.h>
+
 #import <Metal/Metal.h>
 
 #include <array>
@@ -65,6 +67,40 @@ std::unique_ptr<Device> Device::Create(const std::filesystem::path& library_fold
     state->queue.label = @"bo2zm";
     state->folder = library_folder;
     std::unique_ptr<Device> result(new Device(std::move(state)));
+    Caps& caps = result->caps_;
+    std::snprintf(caps.device_name, sizeof(caps.device_name), "%s", [[device name] UTF8String]);
+    // Tier 2 argument buffers (checked above) give 64-bit integers, GPU addresses and the bindless heaps:
+    // unbounded, partially filled arrays indexed per draw and updated while earlier frames still use them.
+    caps.int64 = true;
+    caps.buffer_address = true;
+    caps.runtime_arrays = true;
+    caps.dynamic_indexing = true;
+    caps.partially_bound = true;
+    caps.update_after_bind = true;
+    caps.update_unused_pending = true;
+    caps.mirror_clamp_to_edge = true;
+    caps.anisotropy = true;
+    caps.max_anisotropy = 16.0f;
+    // setVertexBuffer:offset: wants 4-byte offsets on Apple GPUs; Mac-family (Intel, AMD) GPUs want 256.
+    caps.uniform_alignment = [device supportsFamily:MTLGPUFamilyApple7] ? 4 : 256;
+    // MTLVisibilityResultModeCounting counts samples, like a precise occlusion query.
+    caps.occlusion_precise = true;
+    caps.pipeline_statistics = false;
+    // Timestamps come from counter sample buffers, decided with the command recording (phase 5); none until then.
+    caps.timestamp_period_ns = 0.0f;
+    // Pipelines can be asked to come only from the binary archive (MTLPipelineOptionFailOnBinaryArchiveMiss).
+    caps.pipeline_cache_control = true;
+    caps.api_version = 0;
+    // Viewport, scissor, cull, winding, depth bias and depth/stencil state are encoder state, set per draw;
+    // topology class and blending live in the pipeline, so there is no third set.
+    caps.dynamic_state12 = true;
+    caps.dynamic_state3 = false;
+    // No 24-bit depth on Apple GPUs; the renderer's D32S8 fallback. Blits cannot scale, so depth is never scaled.
+    caps.depth_format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    caps.depth_sampled = true;
+    caps.depth_copy_source = true;
+    caps.depth_copy_target = true;
+    caps.depth_scalable = false;
     REXLOG_INFO("[native] Metal: {}, shader libraries in {}", result->name_, library_folder.string());
     return result;
   }

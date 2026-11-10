@@ -33,6 +33,8 @@ class Device {
   Device& operator=(const Device&) = delete;
 
   const std::string& name() const { return name_; }
+  // What the device offers the renderer, in the same terms as the Vulkan backend's CapsOf.
+  const Caps& caps() const { return caps_; }
   // The id<MTLDevice>, for the Objective-C++ parts of the backend.
   void* native() const;
   // The id<MTLCommandQueue> every command buffer goes to (rendering and presentation).
@@ -50,6 +52,7 @@ class Device {
   explicit Device(std::unique_ptr<State> state);
   std::unique_ptr<State> state_;
   std::string name_;
+  Caps caps_;
 };
 
 }  // namespace bo2zm::native::gpu::metal

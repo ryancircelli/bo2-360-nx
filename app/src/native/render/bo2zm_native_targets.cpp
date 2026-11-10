@@ -947,40 +947,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu_.loaded().blit = reinterpret_cast<PFN_vkCmdBlitImage>(deferred::Wrap(
         "vkCmdBlitImage",
         vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdBlitImage")));
-    // Attachment, copy and clear source and destination, and sampling of the resolved ones (shadows).
-    const VkFormatFeatureFlags kUsesDepth =
-        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
-    // To draw the shadow map smaller it has to be scaled up when resolving it, and that is a vkCmdBlitImage on
-    // depth. If the driver does not provide it, nothing is scaled.
-    const VkFormatFeatureFlags kUsesScaled =
-        VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
-    VkFormatFeatureFlags uses_chosen = 0;
-    for (const gpu::Format candidate : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT}) {
-      VkFormatProperties properties{};
-      vulkan_device_->vulkan_instance()->functions().vkGetPhysicalDeviceFormatProperties(
-          vulkan_device_->physical_device(), gpu::ToVkFormat(candidate), &properties);
-      const VkFormatFeatureFlags uses = properties.optimalTilingFeatures & kUsesDepth;
-      if (!(uses & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
-        continue;
-      }
-      if (format_depth_ == VK_FORMAT_UNDEFINED || uses == kUsesDepth) {
-        format_depth_ = candidate;
-        uses_chosen = uses;
-        depth_scalable_ =
-            (properties.optimalTilingFeatures & kUsesScaled) == kUsesScaled;
-      }
-      if (uses == kUsesDepth) {
-        break;
-      }
-    }
+    // The depth format (D24S8 or D32S8, with what it allows) and the rest of what the device offers.
+    caps_ = gpu::vulkan::CapsOf(*vulkan_device_, family_);
+    format_depth_ = caps_.depth_format;
+    depth_scalable_ = caps_.depth_scalable;
     if (format_depth_ != VK_FORMAT_UNDEFINED) {
-      const VkFormatFeatureFlags missing = kUsesDepth & ~uses_chosen;
       REXLOG_INFO("[native] C2: depth format {}{}{}{}",
                   format_depth_ == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
-                  (missing & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ? ", without sampling" : "",
-                  (missing & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) ? ", without copy source" : "",
-                  (missing & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) ? ", without copy target" : "");
+                  !caps_.depth_sampled ? ", without sampling" : "",
+                  !caps_.depth_copy_source ? ", without copy source" : "",
+                  !caps_.depth_copy_target ? ", without copy target" : "");
       if (!depth_scalable_) {
         REXLOG_INFO("[native] C2: the driver does not scale depth: the shadow map stays at its size");
       }
@@ -1029,24 +1005,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // GPU time per work unit: two timestamps per slot. Without timestamp bits on the queue, it is not measured.
     {
       const auto& ifn = vulkan_device_->vulkan_instance()->functions();
-      uint32_t families = 0;
-      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->physical_device(), &families,
-                                                   nullptr);
-      std::vector<VkQueueFamilyProperties> queues(families);
-      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->physical_device(), &families,
-                                                   queues.data());
-      VkPhysicalDeviceProperties physical{};
-      ifn.vkGetPhysicalDeviceProperties(vulkan_device_->physical_device(), &physical);
       gpu_.loaded().write_timestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(
           deferred::Wrap("vkCmdWriteTimestamp", ifn.vkGetDeviceProcAddr(device_, "vkCmdWriteTimestamp")));
       read_queries_ = reinterpret_cast<FnReadQueries>(
           ifn.vkGetDeviceProcAddr(device_, "vkGetQueryPoolResults"));
-      if (family_ < families && queues[family_].timestampValidBits && gpu_.loaded().write_timestamp &&
-          read_queries_ && physical.limits.timestampPeriod > 0.0f) {
+      if (caps_.timestamp_period_ns > 0.0f && gpu_.loaded().write_timestamp && read_queries_) {
         queries_ = work_.CreateQueries(gpu::QueryKind::kTimestamp, uint32_t(slots_.size() * kMarksPerSlot));
-        period_mark_ns_ = physical.limits.timestampPeriod;
+        period_mark_ns_ = caps_.timestamp_period_ns;
       }
-      bo2zm::perf_log::SetMeta("gpu", physical.deviceName);
+      bo2zm::perf_log::SetMeta("gpu", caps_.device_name);
       REXLOG_INFO("[native] C2: GPU time per Swap {}",
                   queries_ != nullptr ? "measured with timestamps"
                                                : "not available (the queue has no timestamps)");
@@ -1055,7 +1022,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         occlusions_ =
             work_.CreateQueries(gpu::QueryKind::kOcclusion, uint32_t(slots_.size() * kOcclusionsPerSlot));
       }
-      occlusion_precise_ = vulkan_device_->properties().occlusionQueryPrecise;
+      occlusion_precise_ = caps_.occlusion_precise;
       REXLOG_INFO("[native] C2: host occlusion queries {} ({})",
                   occlusions_ != nullptr ? "available" : "not available: fake count",
                   occlusion_precise_ ? "precise" : "not precise: they count whether there was any sample");
@@ -1069,7 +1036,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       // Pipeline statistics per pass. The order of the counters is the order of the bits,
       // not the order of this list: vertices, clipped primitives and fragments.
-      if (vulkan_device_->properties().pipelineStatisticsQuery && read_queries_) {
+      if (caps_.pipeline_statistics && read_queries_) {
         stats_ =
             work_.CreateQueries(gpu::QueryKind::kPipelineStatistics, uint32_t(slots_.size() * kStatsPerSlot));
       }
@@ -7072,6 +7039,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint64_t drawn_last_copy_ = 0;
   std::unordered_map<uint32_t, TargetCopy> copies_per_target_;
   std::chrono::steady_clock::time_point report_copies_{};
+  gpu::Caps caps_;  // filled at the start of Init
   gpu::Format format_depth_ = VK_FORMAT_UNDEFINED;
   // The draws with the library shaders (nullptr without the required capabilities).
   std::unique_ptr<VulkanDraws> draws_;
