@@ -74,7 +74,7 @@ fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL
 # Another copy of the game on the default ports makes the socket bind fail, and the game then reboots itself over and
 # over (an empty perf log). Unless the caller or the route chose one, pick an offset whose UDP ports (offset + 1000 and
 # + 1001) are free.
-if [ -z "${REX_NET_SYSTEM_PORT_OFFSET:-}" ] && [[ " ${envs[*]} " != *" NET_SYSTEM_PORT_OFFSET="* ]]; then
+if [ -z "$portoff" ] && [ -z "${REX_NET_SYSTEM_PORT_OFFSET:-}" ] && [[ " ${envs[*]} " != *" NET_SYSTEM_PORT_OFFSET="* ]]; then
   port_offset=50000
   while lsof -nP -iUDP:$((port_offset + 1000)) >/dev/null 2>&1 || lsof -nP -iUDP:$((port_offset + 1001)) >/dev/null 2>&1; do
     port_offset=$((port_offset + 1000))
@@ -85,7 +85,7 @@ if [ -z "${REX_NET_SYSTEM_PORT_OFFSET:-}" ] && [[ " ${envs[*]} " != *" NET_SYSTE
 fi
 
 # ---- stop leftovers ----
-pat="${app:-$exe}"; pat="$(cd "$(dirname "$pat")" && pwd)/$(basename "$pat")"
+pat="${app:-$exe}"; pat="$(cd "$(dirname "$pat")" && pwd)/$(basename "$pat")"; [ -n "$app" ] && pat="$pat/Contents/MacOS/bo2zm"
 if pgrep -f "$pat" >/dev/null 2>&1; then echo "stopping a leftover instance"; pkill -f "$pat"; sleep 2; pkill -9 -f "$pat" 2>/dev/null; fi
 
 # the game writes captures/ next to the executable (bo2zm_capture_every_s); start clean, collect afterwards
