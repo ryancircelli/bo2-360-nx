@@ -4950,7 +4950,7 @@ index 4d85a2b..0d8cf9a 100644
  
    uint32_t page_size_log2() const { return page_size_log2_; }
  
-@@ -138,10 +176,27 @@ class SharedMemory {
+@@ -138,16 +176,33 @@ class SharedMemory {
    // ascending address order, so front and back can be used to determine the
    // overall bounds of pages to be uploaded.
    virtual bool UploadRanges(
@@ -4973,6 +4973,12 @@ index 4d85a2b..0d8cf9a 100644
 +  // Release memory used for trace download ranges, to be called after
 +  // downloading or in cases when download is dropped.
 +  void ReleaseTraceDownloadRanges();
+ 
+   // Called at the end of every successful RequestRanges with the merged (start, length) byte
+   // ranges, after any uploads for them were recorded.
+   virtual void OnRangesRequested(const std::vector<std::pair<uint32_t, uint32_t>>& ranges) {
+     (void)ranges;
+   }
  
   private:
 -  memory::Memory& memory_;
@@ -23565,12 +23571,15 @@ index ec0df7c..7ac9cdd 100644
 -  COUNT_profile_set("gpu/shared_memory/request_ranges_upload_count",
 -                    uint32_t(upload_ranges_.size()));
 -
--  if (upload_ranges_.empty()) {
+-  if (!upload_ranges_.empty() && !UploadRanges(upload_ranges_)) {
+-    return false;
+-  }
+-  OnRangesRequested(merged_ranges);
+-  return true;
 +  if (!current_upload_range) {
-     return true;
-   }
- 
--  return UploadRanges(upload_ranges_);
++    return true;
++  }
++
 +  request_stats.upload_page_ranges_before_coalesce = current_upload_range;
 +
 +  std::sort(
