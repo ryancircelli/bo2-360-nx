@@ -422,8 +422,11 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
           frame_log::CurrentFrame(), new_hash != guest_hash_now ? 1 : 0);
     }
   }
-    pending_readbacks_.erase(pending_readbacks_.begin(),
-                             pending_readbacks_.begin() + done);
+  pending_readbacks_.erase(pending_readbacks_.begin(),
+                           pending_readbacks_.begin() + done);
+  if (global_lock.owns_lock()) {
+    global_lock.unlock();
+  }
   for (const auto& r : fire_ranges) {
     FireWatchesForHostWrite(r.first, r.second);
   }
