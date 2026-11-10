@@ -8,6 +8,12 @@
 
 #include <cstddef>
 #include <cstring>
+#include <type_traits>
+
+static_assert(std::is_same_v<bo2zm::native::gpu::CommandList, VkCommandBuffer>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Image, VkImage>);
+static_assert(std::is_same_v<bo2zm::native::gpu::ImageView, VkImageView>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Memory, VkDeviceMemory>);
 
 namespace bo2zm::native::gpu {
 
