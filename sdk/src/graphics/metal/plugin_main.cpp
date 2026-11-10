@@ -11,5 +11,6 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
   std::string_view backend = info->backend ? info->backend : "any";
   if (backend != "any" && backend != "metal") return nullptr;
   REXLOG_INFO("XeniOS Metal renderer, ReXGlue plugin");
+  ApplyLegacyMetalEnv();
   return new rex::graphics::metal::MetalGraphicsSystem();
 }

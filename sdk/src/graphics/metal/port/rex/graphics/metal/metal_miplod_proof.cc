@@ -16,7 +16,7 @@ namespace miplod {
 
 bool Enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_MIPLOD_PROOF");  // getenv-ok: once
+    const char* v = MetalDebugEnv("MIPLOD_PROOF");  // getenv-ok: once
     return !(v && v[0] == '0');
   }();
   return on;
@@ -24,7 +24,7 @@ bool Enabled() {
 
 bool TraceEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_MIPLOD_TRACE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("MIPLOD_TRACE");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   return on;

@@ -198,8 +198,8 @@ bool MetalShader::MetalTranslation::InstallMetal(
   //   <dir>/<vs|ps>_<hash>_<modification>.metallib when that file exists (same
   //   MSC ABI and entry point; used to A/B hand-optimized AIR in game).
   {
-    static const char* dump_dir = std::getenv("FABLE2_NS_DUMP_DIR");
-    static const char* override_dir = std::getenv("FABLE2_NS_OVERRIDE_DIR");
+    static const char* dump_dir = MetalDebugEnv("NS_DUMP_DIR");
+    static const char* override_dir = MetalDebugEnv("NS_OVERRIDE_DIR");
     if ((dump_dir && dump_dir[0]) || (override_dir && override_dir[0])) {
       char name[96];
       std::snprintf(name, sizeof(name), "%s_%016llX_%llX.metallib",
@@ -316,7 +316,7 @@ bool MetalShader::MetalTranslation::InstallMetal(
   // Trace-only (FABLE2_SHADER_LABELS=1): label the library with the guest
   // shader hash so GPU captures can attribute shader cost.
   static const bool shader_labels = [] {
-    const char* v = std::getenv("FABLE2_SHADER_LABELS");
+    const char* v = MetalDebugEnv("SHADER_LABELS");
     return v && v[0] == '1';
   }();
   if (shader_labels) {
@@ -365,7 +365,7 @@ bool MetalShader::MetalTranslation::InstallOptimizedMetal(
     return false;
   }
   static const bool shader_labels = [] {
-    const char* v = std::getenv("FABLE2_SHADER_LABELS");
+    const char* v = MetalDebugEnv("SHADER_LABELS");
     return v && v[0] == '1';
   }();
   if (shader_labels) {
@@ -397,7 +397,7 @@ bool MetalShader::MetalTranslation::InstallNativeMetal(
     return false;
   }
   static const bool shader_labels = [] {
-    const char* v = std::getenv("FABLE2_SHADER_LABELS");
+    const char* v = MetalDebugEnv("SHADER_LABELS");
     return v && v[0] == '1';
   }();
   if (shader_labels) {
@@ -423,7 +423,7 @@ bool MetalShader::MetalTranslation::InstallNativePrimary(
     return false;
   }
   static const bool shader_labels = [] {
-    const char* v = std::getenv("FABLE2_SHADER_LABELS");
+    const char* v = MetalDebugEnv("SHADER_LABELS");
     return v && v[0] == '1';
   }();
   if (shader_labels) {

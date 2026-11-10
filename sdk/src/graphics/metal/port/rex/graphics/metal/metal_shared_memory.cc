@@ -49,7 +49,7 @@ uint64_t PreserveNowUs() {
 }
 bool PreserveTraceEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_DRAW_SKIP_TRACE");
+    const char* v = MetalDebugEnv("DRAW_SKIP_TRACE");
     return v && v[0] == '1';
   }();
   return enabled;
@@ -63,7 +63,7 @@ UploadTraceCounters& UploadTrace() {
 
 bool MetalSharedMemory::UploadPrecommitEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_UPLOAD_PRECOMMIT");
+    const char* v = MetalDebugEnv("UPLOAD_PRECOMMIT");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO(
         "[upload-precommit] {} (FABLE2_UPLOAD_PRECOMMIT={})",
@@ -103,7 +103,7 @@ MetalSharedMemory::PageAccess MetalSharedMemory::ClassifyPageAccessLocked(
 bool MetalSharedMemory::MemexportPreserveEnabled() {
   static const bool enabled = [] {
     // Default on (2026-10-09); FABLE2_MEMEXPORT_PRESERVE=0 disables.
-    const char* v = std::getenv("FABLE2_MEMEXPORT_PRESERVE");
+    const char* v = MetalDebugEnv("MEMEXPORT_PRESERVE");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO(
         "[memexport-preserve] {} (FABLE2_MEMEXPORT_PRESERVE={})",
@@ -175,7 +175,7 @@ bool MetalSharedMemory::ShmemValidFirstEnabled() {
   // CR-02 (docs/cr-fixes-20261007.md). On unless FABLE2_SHMEM_VALID_FIRST=0;
   // the Dev Launcher always passes an explicit value.
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_SHMEM_VALID_FIRST");
+    const char* v = MetalDebugEnv("SHMEM_VALID_FIRST");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO("[shmem-valid-first] {} (FABLE2_SHMEM_VALID_FIRST={})",
                 on ? "on: direct writes mark pages valid before copying"
@@ -189,7 +189,7 @@ bool MetalSharedMemory::ShmemValidFirstEnabled() {
 bool MetalSharedMemory::MemexportReadbackEnabled() {
   static const bool enabled = [] {
     // Default on (2026-10-09); FABLE2_MEMEXPORT_READBACK=0 disables.
-    const char* v = std::getenv("FABLE2_MEMEXPORT_READBACK");
+    const char* v = MetalDebugEnv("MEMEXPORT_READBACK");
     const bool on = !(v && v[0] == '0');
     REXLOG_INFO(
         "[memexport-readback] {} (FABLE2_MEMEXPORT_READBACK={})",
@@ -353,7 +353,7 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
 
 bool MetalSharedMemory::UploadVerifyEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FABLE2_UPLOAD_VERIFY");
+    const char* v = MetalDebugEnv("UPLOAD_VERIFY");
     const bool on = v && v[0] == '1';
     if (on) {
       REXLOG_INFO("[upload-verify] on (trace-only): staged copies are checked "

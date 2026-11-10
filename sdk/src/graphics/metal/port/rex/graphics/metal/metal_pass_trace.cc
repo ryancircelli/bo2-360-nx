@@ -77,8 +77,8 @@ double MachToNs(double ticks) {
 
 bool EnvEnabled() {
   static const bool on = [] {
-    const char* t = std::getenv("FABLE2_GPU_TIME_TRACE");
-    const char* p = std::getenv("FABLE2_PASS_TRACE");
+    const char* t = MetalDebugEnv("GPU_TIME_TRACE");
+    const char* p = MetalDebugEnv("PASS_TRACE");
     return t && t[0] == '1' && !(p && p[0] == '0');
   }();
   return on;
@@ -384,7 +384,7 @@ void NoteDraw(PassRef pass) {
 }
 bool ShaderKeysEnabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_PASS_TRACE_PS");
+    const char* v = MetalDebugEnv("PASS_TRACE_PS");
     return Enabled() && v && v[0] == '1';
   }();
   return on;

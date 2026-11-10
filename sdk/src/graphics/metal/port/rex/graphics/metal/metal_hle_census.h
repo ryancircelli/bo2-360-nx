@@ -31,7 +31,7 @@ namespace rex::graphics::metal::hle_census {
 
 inline bool Enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("FABLE2_HLE_CENSUS");  // getenv-ok: once
+    const char* v = MetalDebugEnv("HLE_CENSUS");  // getenv-ok: once
     return v && v[0] == '1';
   }();
   return on;
@@ -129,7 +129,7 @@ inline int CurrentSite() { return S().current_site; }
 enum class CollapseMode { kOff, kSkipSecondTile };
 inline CollapseMode Collapse() {
   static const CollapseMode m = [] {
-    const char* v = std::getenv("FABLE2_TILING_COLLAPSE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILING_COLLAPSE");  // getenv-ok: once
     if (v && std::string(v) == "skip2") return CollapseMode::kSkipSecondTile;
     return CollapseMode::kOff;
   }();
@@ -142,14 +142,14 @@ inline CollapseMode Collapse() {
 // draw / resolve with the tiling-relevant registers. Diagnostic for the tiling collapse.
 inline uint64_t TilingTraceFirst() {
   static const uint64_t f = [] {
-    const char* v = std::getenv("FABLE2_TILING_TRACE");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILING_TRACE");  // getenv-ok: once
     return v ? std::strtoull(v, nullptr, 10) : 0ull;
   }();
   return f;
 }
 inline bool TilingTraceActive(uint64_t frame) {
   static const uint64_t n = [] {
-    const char* v = std::getenv("FABLE2_TILING_TRACE_FRAMES");  // getenv-ok: once
+    const char* v = MetalDebugEnv("TILING_TRACE_FRAMES");  // getenv-ok: once
     const uint64_t k = v ? std::strtoull(v, nullptr, 10) : 0ull;
     return k ? k : 2ull;
   }();
