@@ -52,6 +52,7 @@
 #include <rex/ui/vulkan/util.h>
 
 #include "bo2zm_native_draws.h"  // g_probe_vertex_address
+#include "bo2zm_gpu_vulkan.h"
 #include "bo2zm_native_depth_resolve.h"
 #if defined(__SWITCH__)
 extern "C" void armDCacheFlush(void* address, size_t size);  // libnx
@@ -2057,7 +2058,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                               (b.stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
           MarkGpu(kGpuClears);
           barrier();
-          if (draws_->ClearAttachmentInPass(commands_job_, *image, aspects, value, area)) {
+          if (draws_->ClearAttachmentInPass(commands_job_, *image, aspects, gpu::FromVk(value), gpu::FromVk(area))) {
             barrier();
             ForgetClear(*image);
             ++clears_depth_;
@@ -2081,7 +2082,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           }
           MarkGpu(kGpuClears);
           barrier();
-          if (draws_->ClearAttachmentInPass(commands_job_, *image, VK_IMAGE_ASPECT_COLOR_BIT, value, area)) {
+          if (draws_->ClearAttachmentInPass(commands_job_, *image, gpu::kAspectColor, gpu::FromVk(value),
+                                            gpu::FromVk(area))) {
             barrier();
             ForgetClear(*image);
             if (auto front = front_compositions_.find(image); front != front_compositions_.end()) {
@@ -3624,9 +3626,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     };
     order();
     MarkGpu(kGpuClears);
-    const VkClearValue black{};
-    const VkRect2D area{{0, 0}, {front.width, front.height}};
-    if (draws_ && draws_->ClearAttachmentInPass(commands_job_, image, VK_IMAGE_ASPECT_COLOR_BIT, black, area)) {
+    const gpu::ClearValue black{};
+    const gpu::Rect area{0, 0, front.width, front.height};
+    if (draws_ && draws_->ClearAttachmentInPass(commands_job_, image, gpu::kAspectColor, black, area)) {
       order();
       ForgetClear(image);
       ++clears_;
@@ -4218,7 +4220,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (height >= target.height) {
       return false;
     }
-    if (!draws_->ClearColorInPass(commands_job_, target, color, VkRect2D{{0, 0}, {target.width, height}})) {
+    if (!draws_->ClearColorInPass(commands_job_, target, gpu::FromVk(color), gpu::Rect{0, 0, target.width, height})) {
       return false;
     }
     if (!u.band) {
@@ -4263,8 +4265,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const uint32_t height_band = image.height > u.band_since ? image.height - u.band_since : 0;
     if (same_image && (!height_band || (draws_ && Record() &&
                                          draws_->ClearColorInPass(
-                                             commands_job_, image, u.band_color,
-                                             VkRect2D{{0, int32_t(u.band_since)}, {image.width, height_band}})))) {
+                                             commands_job_, image, gpu::FromVk(u.band_color),
+                                             gpu::Rect{0, int32_t(u.band_since), image.width, height_band})))) {
       return;
     }
     // The image changed without going through a clear (should not happen) or the band could not be cleared.
