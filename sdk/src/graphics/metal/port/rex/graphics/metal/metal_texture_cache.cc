@@ -1243,6 +1243,27 @@ bool MetalTextureCache::PrepareTextureMaterialization(
   auto append_texture = [&](TextureKey key) {
     ++plan.request_count;
     Texture* texture = FindOrCreateTexture(key);
+    if (texture && REXCVAR_GET(metal_3d_as_2d_refresh)) {
+      // A 3D texture sampled as 2D: its 2D wrapper is not in the texture map,
+      // so reload it here, with the draw's other loads, when a write to its
+      // guest range (the first slice) marked it outdated.
+      MetalTexture* wrapper =
+          static_cast<MetalTexture*>(texture)->texture_3d_as_2d();
+      if (wrapper && wrapper->base_outdated_lockless()) {
+        bool planned = false;
+        for (const TextureMaterializationPlan::TextureLoad& planned_load :
+             plan.texture_loads_) {
+          planned |= planned_load.texture == wrapper;
+        }
+        if (!planned) {
+          plan.source_ranges.push_back(
+              {uint32_t(wrapper->key().base_page) << 12,
+               rex::align(wrapper->GetGuestBaseSize(), UINT32_C(16))});
+          plan.texture_loads_.push_back({wrapper, true, false, false, false});
+          ++plan.planned_load_count;
+        }
+      }
+    }
     bool base_outdated = texture ? texture->base_outdated_lockless() : false;
     bool mips_outdated = texture ? texture->mips_outdated_lockless() : false;
     if (!texture || (!base_outdated && !mips_outdated)) {
@@ -6634,6 +6655,16 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreate3DAs2DView(
     if (!texture_cache_.LoadTextureData(*texture_3d_as_2d_)) {
       REXLOG_ERROR("MetalTexture: Failed to load 3D-as-2D texture data");
       texture_3d_as_2d_.reset();
+      return nullptr;
+    }
+  } else if (REXCVAR_GET(metal_3d_as_2d_refresh)) {
+    // The wrapper is not in the texture map or the usage list. It watches its
+    // own guest range (the first slice), and PrepareTextureMaterialization
+    // reloads it with the draw's loads once a write marked it outdated; this
+    // catches a request outside materialization. LoadTextureData returns at
+    // once when nothing is outdated.
+    if (!texture_cache_.LoadTextureData(*texture_3d_as_2d_)) {
+      REXLOG_ERROR("MetalTexture: Failed to reload 3D-as-2D texture data");
       return nullptr;
     }
   }

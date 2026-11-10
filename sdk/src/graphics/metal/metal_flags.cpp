@@ -28,6 +28,11 @@ DEFINE_bool(metal_fetch_constants_shared, true,
             "of packing and comparing a per-stage copy. Disable for the old "
             "per-stage path.",
             "Metal");
+DEFINE_bool(metal_3d_as_2d_refresh, true,
+            "Reload the 2D copy of a 3D texture sampled as 2D "
+            "(gpu_3d_to_2d_texture) when its guest data was written. Off "
+            "keeps the copy's first contents (the old behaviour).",
+            "Metal");
 DEFINE_bool(metal_tile_resolve_half_bits, true,
             "Let integer 64bpp resolves of RGBA16Float render targets run "
             "inside the open draw pass (tile resolve) instead of ending it.",
