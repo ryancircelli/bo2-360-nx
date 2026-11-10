@@ -178,6 +178,36 @@ struct PushRange {
   uint32_t size = 0;
 };
 
+// Render passes. Load and store actions and image layouts in Vulkan's numbering; Metal's render pass
+// descriptor takes the same load and store actions and ignores the layouts.
+enum LoadOp : uint32_t { kLoadLoad = 0, kLoadClear = 1, kLoadDontCare = 2 };
+enum StoreOp : uint32_t { kStoreStore = 0, kStoreDontCare = 1 };
+using ImageLayout = uint32_t;
+inline constexpr ImageLayout kLayoutUndefined = 0;
+inline constexpr ImageLayout kLayoutGeneral = 1;
+inline constexpr ImageLayout kLayoutColorAttachment = 2;
+
+// One attachment of a pass: its format, what happens to it at the start and the end of the pass, and its
+// layouts (before, during and after).
+struct PassAttachment {
+  Format format = 0;
+  LoadOp load = kLoadDontCare;
+  StoreOp store = kStoreStore;
+  LoadOp stencil_load = kLoadDontCare;
+  StoreOp stencil_store = kStoreDontCare;
+  ImageLayout initial = kLayoutGeneral;
+  ImageLayout used = kLayoutGeneral;
+  ImageLayout final = kLayoutGeneral;
+};
+
+// A single-subpass pass: up to 4 colour attachments and optionally a depth/stencil one.
+struct PassDesc {
+  uint32_t color_count = 0;
+  PassAttachment colors[4];
+  bool has_depth = false;
+  PassAttachment depth;
+};
+
 // What a descriptor pool holds: `max_sets` sets and the descriptors of each kind across them.
 // `update_after_bind` for the bindless heaps (written while bound). Metal sizes argument buffers from it.
 struct PoolCounts {
