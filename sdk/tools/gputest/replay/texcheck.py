@@ -96,6 +96,7 @@ def main():
         print(f"texcheck {label}: {tc.get('checked', '?')} bound textures checked over "
               f"{summary.get('draws', '?')} draws, {tc.get('loads', '?')} loads, "
               f"{len(races)} race writes, {len(findings)} stale texture(s)"
+              + (f", {tc['mixed']} mixed-memory draw(s) ignored" if tc.get("mixed") else "")
               + (f" ({len(stale) - len(findings)} also stale in baseline)" if args.baseline else ""))
         shown = findings if not args.limit else findings[:args.limit]
         for _, v in shown:
