@@ -563,7 +563,7 @@ namespace xenos = rex::graphics::xenos;
 using rex::ui::vulkan::VulkanDevice;
 using rex::ui::vulkan::VulkanPresenter;
 
-constexpr VkFormat kFormatColor = VK_FORMAT_R8G8B8A8_UNORM;
+constexpr gpu::Format kFormatColor = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr uint32_t kHeightMaxTarget = 2048;
 
 // A render target image's height, from its pitch (at least 720 rows). BO2 also draws narrow, tall strips: its 32x1024 color-grading table (pitch 80) lost rows 720-1023,
@@ -579,7 +579,7 @@ uint32_t HeightTarget(uint32_t pitch) {
 // their range in a half-float image (Xenos 16_16_16_16 is fixed point in [-32, 32]; FLOAT is half float): BO2's
 // luminance chain writes values around 0.001 that RGBA8 rounded to 0, so the auto exposure saw a black scene.
 // The rest stay RGBA8 (stage 1, bo2zm_render_formats.h).
-VkFormat FormatHostTarget(uint32_t format_storage) {
+gpu::Format FormatHostTarget(uint32_t format_storage) {
   // On by default since the fetch scales (exp_adjust, integer reads) are honored: the chain matches and the image has
   // Xenos's brightness without blowouts. bo2zm_native_float_targets=false keeps them RGBA8.
   static const bool floats = REXCVAR_GET(bo2zm_native_float_targets);
@@ -596,7 +596,7 @@ VkFormat FormatHostTarget(uint32_t format_storage) {
 
 // The host format of a resolved texture, by RB_COPY_DEST_INFO: the destination's own format,
 // so the draws sample what the console would and a read-back gets the guest's bits.
-VkFormat FormatHostResolved(uint32_t info_target) {
+gpu::Format FormatHostResolved(uint32_t info_target) {
   const uint32_t format = (info_target >> 7) & 0x3F;
   const uint32_t number = (info_target >> 13) & 0x7;
   if (format == uint32_t(xenos::ColorFormat::k_16_16_16_16)) {
@@ -956,10 +956,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const VkFormatFeatureFlags kUsesScaled =
         VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
     VkFormatFeatureFlags uses_chosen = 0;
-    for (const VkFormat candidate : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT}) {
+    for (const gpu::Format candidate : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT}) {
       VkFormatProperties properties{};
       vulkan_device_->vulkan_instance()->functions().vkGetPhysicalDeviceFormatProperties(
-          vulkan_device_->physical_device(), candidate, &properties);
+          vulkan_device_->physical_device(), gpu::ToVkFormat(candidate), &properties);
       const VkFormatFeatureFlags uses = properties.optimalTilingFeatures & kUsesDepth;
       if (!(uses & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
         continue;
@@ -5093,7 +5093,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   Resolved* GetResolved(uint32_t base, uint32_t width, uint32_t height, uint32_t format,
-                            bool swap_rb, VkFormat format_host = kFormatColor) {
+                            bool swap_rb, gpu::Format format_host = kFormatColor) {
     if (!width || !height) {
       Reject(9, "copy to a texture of size 0");
       return nullptr;
@@ -5745,7 +5745,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   bool Create(OwnedImage& image, uint32_t width, uint32_t height, VkImageUsageFlags use,
-             VkFormat format = kFormatColor) {
+             gpu::Format format = kFormatColor) {
     gpu::ImageDesc info;
     info.format = format;
     info.width = width;
@@ -7109,7 +7109,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint64_t drawn_last_copy_ = 0;
   std::unordered_map<uint32_t, TargetCopy> copies_per_target_;
   std::chrono::steady_clock::time_point report_copies_{};
-  VkFormat format_depth_ = VK_FORMAT_UNDEFINED;
+  gpu::Format format_depth_ = VK_FORMAT_UNDEFINED;
   // The draws with the library shaders (nullptr without the required capabilities).
   std::unique_ptr<VulkanDraws> draws_;
 
@@ -7281,8 +7281,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   std::array<gpu::Set, kConvSets> conv_sets_{};
   uint64_t conv_next_ = 0;
   bool conv_failed_ = false;
-  std::unordered_map<VkFormat, gpu::Pass> conv_passes_;
-  std::unordered_map<VkFormat, gpu::Pipeline> conv_pipelines_;
+  std::unordered_map<gpu::Format, gpu::Pass> conv_passes_;
+  std::unordered_map<gpu::Format, gpu::Pipeline> conv_pipelines_;
   std::unordered_map<gpu::ImageView, gpu::Framebuffer> conv_framebuffers_;
   uint64_t copies_converted_ = 0;
   std::unordered_set<uint64_t> conv_views_;
