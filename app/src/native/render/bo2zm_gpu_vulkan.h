@@ -247,23 +247,27 @@ struct HostBuffer {
   uint8_t* data = nullptr;
   VkDeviceSize size_real = 0;  // of the allocation (the memory requirements' size)
   VkDeviceAddress address = 0;  // with kBufferAddress
+  uint32_t type = UINT32_MAX;   // the memory type
 };
 
 // The step at which CreateHostBuffer stopped.
 enum class HostBufferResult : uint8_t {
   kDone,
-  kNoBuffer,      // vkCreateBuffer failed
-  kWrongMemory,   // the memory type cannot hold this buffer
-  kNoMemory,      // vkAllocateMemory, vkBindBufferMemory or vkMapMemory failed
-  kNoAddress,     // the device address is 0
+  kNoBuffer,     // vkCreateBuffer failed
+  kWrongMemory,  // no memory type for this buffer
+  kNoMemory,     // vkAllocateMemory or vkBindBufferMemory failed
+  kNoMap,        // vkMapMemory failed
+  kNoAddress,    // the device address is 0
 };
 
-// vkCreateBuffer of `size` bytes for `usage`, then its memory from type `type` (with
-// VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT if usage has kBufferAddress), bound, mapped whole, and with kBufferAddress
-// its device address through `address_of`. What was made before a failure stays in `out`, for the caller to destroy.
-inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
-                                         PFN_vkGetBufferDeviceAddress address_of, VkDeviceSize size,
-                                         BufferUsage usage, uint32_t type, HostBuffer& out) {
+// vkCreateBuffer of `size` bytes for `usage`, then its memory from the type `choose(memoryTypeBits)` returns
+// (UINT32_MAX: none fits), with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT if usage has kBufferAddress, bound, mapped whole,
+// and with kBufferAddress its device address through `address_of`. `out.type` is the memory type. What was made
+// before a failure stays in `out`, for the caller to destroy.
+template <typename Choose>
+HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                  PFN_vkGetBufferDeviceAddress address_of, VkDeviceSize size, BufferUsage usage,
+                                  Choose&& choose, HostBuffer& out) {
   VkBufferCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   info.size = size;
@@ -274,7 +278,8 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
   }
   VkMemoryRequirements requirements;
   dfn.vkGetBufferMemoryRequirements(device, out.buffer, &requirements);
-  if (!((requirements.memoryTypeBits >> type) & 1)) {
+  out.type = choose(requirements.memoryTypeBits);
+  if (out.type == UINT32_MAX) {
     return HostBufferResult::kWrongMemory;
   }
   const bool addressed = (usage & kBufferAddress) != 0;
@@ -285,15 +290,19 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
   reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   reserve.pNext = addressed ? &flags : nullptr;
   reserve.allocationSize = requirements.size;
-  reserve.memoryTypeIndex = type;
-  void* mapped = nullptr;
-  if (dfn.vkAllocateMemory(device, &reserve, nullptr, &out.memory) != VK_SUCCESS ||
-      dfn.vkBindBufferMemory(device, out.buffer, out.memory, 0) != VK_SUCCESS ||
-      dfn.vkMapMemory(device, out.memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+  reserve.memoryTypeIndex = out.type;
+  if (dfn.vkAllocateMemory(device, &reserve, nullptr, &out.memory) != VK_SUCCESS) {
     return HostBufferResult::kNoMemory;
   }
-  out.data = static_cast<uint8_t*>(mapped);
   out.size_real = requirements.size;
+  if (dfn.vkBindBufferMemory(device, out.buffer, out.memory, 0) != VK_SUCCESS) {
+    return HostBufferResult::kNoMemory;
+  }
+  void* mapped = nullptr;
+  if (dfn.vkMapMemory(device, out.memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
+    return HostBufferResult::kNoMap;
+  }
+  out.data = static_cast<uint8_t*>(mapped);
   if (addressed) {
     VkBufferDeviceAddressInfo where{};
     where.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
@@ -304,6 +313,14 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
     }
   }
   return HostBufferResult::kDone;
+}
+
+// The same in the one memory type `type`.
+inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                         PFN_vkGetBufferDeviceAddress address_of, VkDeviceSize size,
+                                         BufferUsage usage, uint32_t type, HostBuffer& out) {
+  return CreateHostBuffer(dfn, device, address_of, size, usage,
+                          [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
 }
 
 }  // namespace vulkan
