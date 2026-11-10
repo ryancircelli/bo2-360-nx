@@ -7,7 +7,7 @@ Files in this branch (all new, nothing existing is edited):
 | `tools/mac/pack_app.py` | Builds `Black Ops II.app` from the build output, shaders and data folder. |
 | `tools/mac/app/launcher.c` | The app's `CFBundleExecutable`: finds the data, sets paths, starts `bo2zm`. |
 | `tools/mac/boot_test.sh` | Launches the app muted and in the background, plays a route, collects stats and video. |
-| `tools/mac/routes/*.route` | smoke, town_benchmark, splitscreen4 (placeholder). |
+| `tools/mac/routes/*.route` | smoke, town_benchmark, town4, splitscreen4, teardown, signin_four, signin_gap, signin_rejoin. |
 | `tools/mac/perf_summary.py` | Frame-time statistics and regression check from a perf log. |
 | `tools/mac/make_video.sh`, `compare_video.py` | Raw capture to mp4, and frame comparison against a reference. |
 | `tools/mac/pso_list.py` | Merge and check pipeline lists. |
@@ -36,7 +36,19 @@ Every route gets `BO2ZM_TEST_EXIT_ON_ERROR=true`; an in-game error, a `[relaunch
 says `allow_relaunch = true`) or an error pattern in the log (unregistered function, MISMATCH, lost wake, ...) fails the
 run. Pads: by default the SDK's scripted pads run the route (`REX_HID_VIRTUAL_PAD_SCRIPT`, SDK branch mac-input) and
 `BO2ZM_TEST_BUTTONS*` are not exported; `--pads game` uses the game's own test pads. Missing perf log or video is
-printed as NOT MEASURED. Routes: smoke, town_benchmark, town4, splitscreen4, teardown (menu sequence is a guess).
+printed as NOT MEASURED. Routes: smoke, town_benchmark, town4, splitscreen4, teardown (pause menu recorded on the real game), signin_four,
+signin_gap, signin_rejoin (join tests from research/splitscreen-signin.md; a STUB line for XamUserGetAgeGroup or
+XamUserGetMembershipTier fails them).
+
+Timing notes recorded on the real game: players 2 to 4 join the Local lobby with A (Start does not); the script clock
+starts with the process, and the lobby opens at about 15 s unloaded and 17 to 40 s on a busy Mac, so joins are set
+at 44 to 48 s and `BO2ZM_TEST_START_WAIT_S` to 55 s. The pause menu is RESUME GAME, RESTART LEVEL, OPTIONS, EXTRAS,
+END GAME (4 downs); the END GAME confirm defaults to No (press up, then A); the game then returns to the Local lobby.
+Every run uses `--net_system_port_offset` (`--port-offset N`, default 42000) so parallel instances do not collide on
+UDP 31000/31001. Known defects of the current build (signal delivery failed, shaders not in the library, primitive
+restart) are counted and printed but fail a run only with `--strict`. Game captures (`captures/`, every
+`CAPTURE_EVERY_S`, default 15 s) are copied into the run directory: macOS blocks `screencapture` of the game window.
+Under load, run through `tools/mac/bench_quiet.sh` (mac-port) and quote the load average with any FPS.
 `tools/mac/test_harness.sh` self-tests the harness with fake games (pass, crash, error exit, relaunch, pad env). Output in `/tmp/bo2-boot-test/<route>-<time>/`.
 
 ## What the build agent must hook in

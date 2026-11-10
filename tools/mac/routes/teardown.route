@@ -1,11 +1,14 @@
-# PLACEHOLDER (menu sequence): play Town Survival, then quit to the menu and load Farm. Checks the allocator slot at
-# guest 0x8249A9C0 on teardown: the run fails on any "unregistered function" line (boot_test.sh CHECK_PATTERNS).
-# Pause-menu navigation is not recorded: the button steps below are a first guess (pause with start at 60 s, move
-# down to Quit, confirm, then pick Farm from the home menu). Verify once in the game and correct the timings.
-PLACEHOLDER = true
-duration_s = 240
+# Plays Town Survival, ends the game from the pause menu, and starts a second match from the Local lobby, so the
+# first match is torn down and a new one built. The run fails on any "unregistered function" line (boot_test.sh
+# CHECK_PATTERNS). Pause menu, as recorded on the 23:37 build: RESUME GAME, RESTART LEVEL, OPTIONS, EXTRAS,
+# END GAME; it opens on RESUME GAME, so END GAME is 4 downs. The confirm prompt defaults to No: press up, then a.
+# The game then returns to the Local lobby with the players still in it, START MATCH selected.
+# Times are on the script clock (starts with the process); the match starts about 20 s after the lobby opens
+# (45 to 60 s under load). Check the captures: pause menu, confirm prompt, lobby, second match.
+duration_s = 300
 players = 1
 BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_START_WAIT_S = 30
 BO2ZM_TEST_ALL_GOD = true
 BO2ZM_BENCHMARK = false
-BO2ZM_TEST_BUTTONS = 60:start,62:down,63:down,64:down,65:a,67:a,90:a,100:down,101:a,102:a
+BO2ZM_TEST_BUTTONS = 100:start,103:down,104:down,105:down,106:down,108:a,112:up,114:a,150:a
