@@ -9,6 +9,9 @@ It is built next to `rexgpu-xenos` and loaded the same way.
   (MIT, commit `6f5459e`), which adapts the [XeniOS](https://github.com/xenios-jp/XeniOS) Metal backend
   (BSD-3-Clause, commit `87b176a`) to the ReXGlue GPU plugin ABI. Its Xenos to MSL translator
   (`port/rex/graphics/metal/metal_msl_translator.cc`) is Fable II's own work.
+- `port/rex/graphics/metal/metal_deferred_render_encoder.*` follows the threading design of
+  [mtld3d](https://github.com/athei/mtld3d) (zlib, Alexander Theissen); no mtld3d code is used, its notice is in
+  `licenses/mtld3d-LICENSE`.
 - `licenses/` holds every upstream notice; `provenance.json` records what came from where.
 - This copy is the `metal-renderer` branch of ryancircelli/rexglue-sdk, rebuilt for this repository's SDK fork.
   `patches/` is regenerated against this fork's graphics sources: four hunks of `sdk-metal.patch` were fixed by hand
@@ -57,6 +60,7 @@ config, on the command line (`--metal_retina=false`) or through the environment 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `metal_title_quirks` | empty | Per-title workarounds, comma separated. Only `fable2` exists (see below). |
+| `metal_encode_thread` | false | Record render encoder calls and replay them into Metal on a second thread. |
 | `metal_native_shaders` | true | Optimize guest pixel shaders with metal-opt. Off also turns off everything below it. |
 | `metal_native_xlate` | true | Translate guest shaders to MSL directly (native translator). |
 | `metal_native_first` | true | Compile the native translation first instead of swapping it in later. |

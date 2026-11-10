@@ -7667,35 +7667,37 @@ bool MetalCommandProcessor::TryReuseConstantPayloadFromCache(
   if (!REXCVAR_GET(metal_constant_payload_cache)) {
     return false;
   }
-  if (!payload || !size) {
+  if (!payload || !size || constant_payload_cache_.empty()) {
     return false;
   }
   const uint64_t hash = XXH3_64bits(payload, size);
-  auto it = constant_payload_cache_.find(hash);
-  if (it != constant_payload_cache_.end()) {
-    for (const ConstantPayloadCacheEntry& entry : it->second) {
-      if (entry.cbv_slot != cbv_slot || entry.stage_index != stage_index ||
-          entry.size != size || entry.binding.upload_frame != frame_current_) {
-        continue;
-      }
-      if (entry.bytes.size() != size ||
-          std::memcmp(entry.bytes.data(), payload, size) != 0) {
-        continue;
-      }
-      binding = entry.binding;
-      binding.up_to_date = true;
-      if (cbv_slot < backend_telemetry_.constant_payload_cache_hits.size()) {
-        ++backend_telemetry_.constant_payload_cache_hits[cbv_slot];
-        backend_telemetry_.constant_payload_cache_bytes_saved[cbv_slot] += size;
-        ++backend_telemetry_.cbv_reuse_hits[cbv_slot];
-      }
-      if (cbv_slot == kCbvSlotDescriptorIndices && stage_index < kStageCount) {
-        ++backend_telemetry_.descriptor_index_payload_cache_hits[stage_index];
-        backend_telemetry_
-            .descriptor_index_payload_cache_bytes_saved[stage_index] += size;
-      }
-      return true;
+  const size_t mask = constant_payload_cache_.size() - 1;
+  for (size_t probe = 0; probe < kConstantPayloadCacheProbes; ++probe) {
+    const ConstantPayloadCacheEntry& entry =
+        constant_payload_cache_[(hash + probe) & mask];
+    if (entry.generation != constant_payload_cache_generation_) {
+      break;
     }
+    if (entry.hash != hash || entry.cbv_slot != cbv_slot ||
+        entry.stage_index != stage_index || entry.size != size ||
+        entry.binding.upload_frame != frame_current_ ||
+        std::memcmp(constant_payload_cache_arena_.data() + entry.arena_offset,
+                    payload, size) != 0) {
+      continue;
+    }
+    binding = entry.binding;
+    binding.up_to_date = true;
+    if (cbv_slot < backend_telemetry_.constant_payload_cache_hits.size()) {
+      ++backend_telemetry_.constant_payload_cache_hits[cbv_slot];
+      backend_telemetry_.constant_payload_cache_bytes_saved[cbv_slot] += size;
+      ++backend_telemetry_.cbv_reuse_hits[cbv_slot];
+    }
+    if (cbv_slot == kCbvSlotDescriptorIndices && stage_index < kStageCount) {
+      ++backend_telemetry_.descriptor_index_payload_cache_hits[stage_index];
+      backend_telemetry_
+          .descriptor_index_payload_cache_bytes_saved[stage_index] += size;
+    }
+    return true;
   }
   if (cbv_slot < backend_telemetry_.constant_payload_cache_misses.size()) {
     ++backend_telemetry_.constant_payload_cache_misses[cbv_slot];
@@ -7717,23 +7719,34 @@ void MetalCommandProcessor::StoreConstantPayloadInCache(
       constant_payload_cache_bytes_ + size > kConstantPayloadCacheMaxBytes) {
     return;
   }
+  if (constant_payload_cache_.empty()) {
+    constant_payload_cache_.resize(kConstantPayloadCacheSlots);
+    constant_payload_cache_arena_.reserve(size_t(4) << 20);
+  }
   const uint64_t hash = XXH3_64bits(payload, size);
-  auto& entries = constant_payload_cache_[hash];
-  for (const ConstantPayloadCacheEntry& entry : entries) {
-    if (entry.cbv_slot == cbv_slot && entry.stage_index == stage_index &&
-        entry.size == size && entry.bytes.size() == size &&
-        std::memcmp(entry.bytes.data(), payload, size) == 0) {
-      return;
+  const size_t mask = constant_payload_cache_.size() - 1;
+  // Take the first free slot of the probe window; when it is full, replace
+  // the slot the hash lands on (the cache is only a shortcut).
+  ConstantPayloadCacheEntry* target = &constant_payload_cache_[hash & mask];
+  for (size_t probe = 0; probe < kConstantPayloadCacheProbes; ++probe) {
+    ConstantPayloadCacheEntry& entry =
+        constant_payload_cache_[(hash + probe) & mask];
+    if (entry.generation != constant_payload_cache_generation_) {
+      target = &entry;
+      break;
     }
   }
-  ConstantPayloadCacheEntry entry;
-  entry.cbv_slot = cbv_slot;
-  entry.stage_index = stage_index;
-  entry.size = size;
-  entry.binding = binding;
-  entry.bytes.assign(payload, payload + size);
-  entries.push_back(std::move(entry));
+  const size_t arena_offset = constant_payload_cache_arena_.size();
+  constant_payload_cache_arena_.insert(constant_payload_cache_arena_.end(),
+                                       payload, payload + size);
   constant_payload_cache_bytes_ += size;
+  target->hash = hash;
+  target->generation = constant_payload_cache_generation_;
+  target->arena_offset = uint32_t(arena_offset);
+  target->size = uint32_t(size);
+  target->cbv_slot = uint16_t(cbv_slot);
+  target->stage_index = uint16_t(stage_index);
+  target->binding = binding;
 }
 
 bool MetalCommandProcessor::PopulateBindlessTables(
@@ -8412,7 +8425,7 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
         transfer_mutations =
             MetalRenderTargetCache::kDrawPassTransferEncoderMutationNone;
     if (!render_target_cache_->EncodePendingDrawPassTransfers(
-            current_render_encoder_, current_render_pass_descriptor_,
+            current_render_encoder_->Sync(), current_render_pass_descriptor_,
             &transfer_mutations)) {
       if (!render_target_cache_->FlushPendingDrawPassTransfers()) {
         return false;
@@ -9747,7 +9760,7 @@ bool MetalCommandProcessor::DispatchDraw(
     if (primitive_processing_result.index_buffer_type ==
         PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
       IRRuntimeDrawPatchesTessellationEmulation(
-          current_render_encoder_, tess_primitive, tess_config, 1,
+          current_render_encoder_->Sync(), tess_primitive, tess_config, 1,
           primitive_processing_result.host_draw_vertex_count, 0, 0);
     } else {
       MTL::IndexType index_type =
@@ -9766,7 +9779,7 @@ bool MetalCommandProcessor::DispatchDraw(
       uint32_t start_index =
           index_stride ? uint32_t(index_offset / index_stride) : 0;
       IRRuntimeDrawIndexedPatchesTessellationEmulation(
-          current_render_encoder_, tess_primitive, index_type, index_buffer,
+          current_render_encoder_->Sync(), tess_primitive, index_type, index_buffer,
           tess_config, 1, primitive_processing_result.host_draw_vertex_count, 0,
           0, start_index);
     }
@@ -9799,7 +9812,7 @@ bool MetalCommandProcessor::DispatchDraw(
     if (primitive_processing_result.index_buffer_type ==
         PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
       IRRuntimeDrawPrimitivesGeometryEmulation(
-          current_render_encoder_, geometry_primitive, geometry_config, 1,
+          current_render_encoder_->Sync(), geometry_primitive, geometry_config, 1,
           primitive_processing_result.host_draw_vertex_count, 0, 0);
     } else {
       MTL::IndexType index_type =
@@ -9818,7 +9831,7 @@ bool MetalCommandProcessor::DispatchDraw(
       uint32_t start_index =
           index_stride ? uint32_t(index_offset / index_stride) : 0;
       IRRuntimeDrawIndexedPrimitivesGeometryEmulation(
-          current_render_encoder_, geometry_primitive, index_type, index_buffer,
+          current_render_encoder_->Sync(), geometry_primitive, index_type, index_buffer,
           geometry_config, 1,
           primitive_processing_result.host_draw_vertex_count, start_index, 0,
           0);
@@ -9854,8 +9867,8 @@ bool MetalCommandProcessor::DispatchDraw(
     // Draw using primitive processor output.
     if (primitive_processing_result.index_buffer_type ==
         PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
-      IRRuntimeDrawPrimitives(
-          current_render_encoder_, mtl_primitive, NS::UInteger(0),
+      current_render_encoder_->IRDrawPrimitives(
+          mtl_primitive, NS::UInteger(0),
           NS::UInteger(primitive_processing_result.host_draw_vertex_count));
     } else {
       MTL::IndexType index_type =
@@ -9868,8 +9881,8 @@ bool MetalCommandProcessor::DispatchDraw(
       if (!resolve_index_buffer(index_type, index_buffer, index_offset)) {
         return false;
       }
-      IRRuntimeDrawIndexedPrimitives(
-          current_render_encoder_, mtl_primitive,
+      current_render_encoder_->IRDrawIndexedPrimitives(
+          mtl_primitive,
           NS::UInteger(primitive_processing_result.host_draw_vertex_count),
           index_type, index_buffer, index_offset, NS::UInteger(1), 0, 0);
     }
@@ -10859,7 +10872,8 @@ void MetalCommandProcessor::InvalidateFrameTransientBindings() {
   for (auto& payload : scratch_payload_fetch_) {
     payload.clear();
   }
-  constant_payload_cache_.clear();
+  ++constant_payload_cache_generation_;
+  constant_payload_cache_arena_.clear();
   constant_payload_cache_bytes_ = 0;
 
   current_bindless_stage_root_valid_.fill(false);
@@ -13020,8 +13034,14 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
       }
       current_render_pass_trace_ =
           pass_trace::BeginRender(current_command_buffer_, pass_descriptor, "draw");
-      current_render_encoder_ =
-          current_command_buffer_->renderCommandEncoder(pass_descriptor);
+      if (MTL::RenderCommandEncoder* real_encoder =
+              current_command_buffer_->renderCommandEncoder(pass_descriptor)) {
+        real_encoder->retain();
+        current_render_encoder_ = render_encoder_recorder_.Open(
+            real_encoder, REXCVAR_GET(metal_encode_thread));
+      } else {
+        current_render_encoder_ = nullptr;
+      }
       if (extent_h) {
         // The descriptor is the cache's; everything else sizes from the
         // attachments as before.
@@ -13034,7 +13054,6 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
         pass_trace::ClearRender(pass_descriptor);
       }
       if (current_render_encoder_) {
-        current_render_encoder_->retain();
         if (EncoderDebugLabelsEnabled()) {
           current_render_encoder_->setLabel(NS::String::string(
               "XeniaRenderEncoder", NS::UTF8StringEncoding));

@@ -33,6 +33,7 @@
 #include "rex/graphics/util/draw.h"
 #include "rex/graphics/pipeline/shader/dxbc_translator.h"
 #include "rex/graphics/metal/dxbc_to_dxil_converter.h"
+#include "rex/graphics/metal/metal_deferred_render_encoder.h"
 #include "rex/graphics/metal/metal_geometry_shader.h"
 #include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_pipeline_cache.h"
@@ -323,8 +324,12 @@ class MetalCommandProcessor final : public CommandProcessor {
   void EndRenderEncoder();
   // [tile-resolve] The open render pass a resolve may run its tile function
   // in (docs/tile-resolve-20261013.md), and ending it for a resolve.
+  // Presence check that does not drain the encode thread.
+  bool HasTileResolveRenderEncoder() const {
+    return current_render_encoder_ != nullptr;
+  }
   MTL::RenderCommandEncoder* TileResolveRenderEncoder() const {
-    return current_render_encoder_;
+    return current_render_encoder_ ? current_render_encoder_->Sync() : nullptr;
   }
   MTL::RenderPassDescriptor* TileResolvePassDescriptor() const {
     return current_render_pass_descriptor_;
@@ -1265,7 +1270,10 @@ class MetalCommandProcessor final : public CommandProcessor {
       SharedMemoryRequestReason::kUnknown;
   // Current command buffer and encoder
   MTL::CommandBuffer* current_command_buffer_ = nullptr;
-  MTL::RenderCommandEncoder* current_render_encoder_ = nullptr;
+  // Wraps the real render encoder; with metal_encode_thread its calls are
+  // replayed on a second thread (see metal_deferred_render_encoder.h).
+  DeferredRenderEncoder* current_render_encoder_ = nullptr;
+  mutable DeferredRenderEncoder render_encoder_recorder_;
   pass_trace::PassRef current_render_pass_trace_;  // [pass-trace] trace-only
   // [upload-precommit] pass-trace end-reason detail for the next
   // EndRenderEncoder (a static string), and the pending upload break cause.
@@ -1577,13 +1585,22 @@ class MetalCommandProcessor final : public CommandProcessor {
   };
   static constexpr size_t kConstantPayloadSharedStage = kStageCount;
   static constexpr size_t kConstantPayloadCacheMaxBytes = 64 * 1024 * 1024;
+  // Frame-local cache of uploaded constant payloads, keyed by content. Split
+  // screen draws the same materials once per view, so most fetch constant and
+  // descriptor index payloads repeat within a frame. Entries live in a fixed
+  // open-addressed table invalidated by bumping a generation at frame open,
+  // and their bytes in one arena, so neither a hit nor a store allocates.
   struct ConstantPayloadCacheEntry {
-    size_t cbv_slot = 0;
-    size_t stage_index = kConstantPayloadSharedStage;
-    size_t size = 0;
+    uint64_t hash = 0;
+    uint64_t generation = 0;
+    uint32_t arena_offset = 0;
+    uint32_t size = 0;
+    uint16_t cbv_slot = 0;
+    uint16_t stage_index = 0;
     ConstantBufferBinding binding;
-    std::vector<uint8_t> bytes;
   };
+  static constexpr size_t kConstantPayloadCacheSlots = 16384;
+  static constexpr size_t kConstantPayloadCacheProbes = 8;
   using StageRootArgumentEntries =
       std::array<uint64_t, kTopLevelABSlotsPerTable>;
   struct StageRootArgumentAllocation {
@@ -1636,8 +1653,9 @@ class MetalCommandProcessor final : public CommandProcessor {
   std::vector<uint8_t> scratch_payload_float_pixel_;
   std::vector<uint8_t> scratch_payload_bool_loop_;
   std::array<std::vector<uint8_t>, kStageCount> scratch_payload_fetch_;
-  std::unordered_map<uint64_t, std::vector<ConstantPayloadCacheEntry>>
-      constant_payload_cache_;
+  std::vector<ConstantPayloadCacheEntry> constant_payload_cache_;
+  std::vector<uint8_t> constant_payload_cache_arena_;
+  uint64_t constant_payload_cache_generation_ = 1;
   size_t constant_payload_cache_bytes_ = 0;
   std::array<DxbcShader::FetchConstantDwordMask, kStageCount>
       fetch_constant_dirty_masks_ = {};

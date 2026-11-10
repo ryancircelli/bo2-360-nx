@@ -654,7 +654,7 @@ void MetalRenderTargetCache::TileResolveEnd(const char* detail) {
   tile_resolve_open_ = false;
   // Only the pass that was offered; if it already ended, anything open now
   // belongs to the resolve's own work and ends as it does today.
-  if (command_processor_.TileResolveRenderEncoder() &&
+  if (command_processor_.HasTileResolveRenderEncoder() &&
       command_processor_.TileResolveRenderEncoderGen() == tile_resolve_gen_) {
     command_processor_.EndRenderEncoderForResolve(detail);
   }
@@ -718,7 +718,7 @@ bool MetalRenderTargetCache::TryTileResolveEncode(
   UploadTraceCounters& u = UploadTrace();
   if (!tile_resolve_open_ ||
       command_processor_.TileResolveRenderEncoderGen() != tile_resolve_gen_ ||
-      !command_processor_.TileResolveRenderEncoder()) {
+      !command_processor_.HasTileResolveRenderEncoder()) {
     return fallback(u.tres_fb_pass, "pass-ended");
   }
   MTL::RenderCommandEncoder* encoder =
