@@ -38,6 +38,16 @@ bo2zm_zombies_only = true
 # A controller that drops out (battery, sleep, out of range) gets its player back when it comes back on.
 input_remember_slots = true
 
+# ---- Sound -------------------------------------------------------------------------------------------------------
+
+# Sound blocks (5.3 ms each) queued ahead of the speakers. 4 keeps the sound about 21 ms behind the picture; raise it
+# (up to 64) only if the sound crackles.
+audio_maxqframes = 4
+
+# The threads that make the sound run as real-time threads, so a busy Mac (a build, other games) cannot starve them
+# and leave gaps. "fifo" is a milder fixed priority, "off" leaves them like the other game threads.
+# audio_thread_policy = "realtime"
+
 # ---- Logs --------------------------------------------------------------------------------------------------------
 
 # The game writes a log to logs/ next to it. By default it follows DEBUG in Extras: with DEBUG off only warnings and

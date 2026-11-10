@@ -36,6 +36,7 @@
 #include <rex/system/xmutant.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
+#include <rex/thread_audio.h>
 #include <rex/vec128.h>
 
 #if REX_PLATFORM_SWITCH
@@ -60,6 +61,13 @@ REXCVAR_DEFINE_INT32(switch_audio_core_mask, 0, "Kernel",
                      "Switch: cores the threads at the audio priority (0x2B) may run on, as a bit mask (bit 0 = core "
                      "0). 0 = their mask is not touched. Audio preempts every other thread, so this keeps it off a "
                      "core that another critical thread needs (the game's GPU command thread, for one)");
+#endif
+#if !REX_PLATFORM_SWITCH
+REXCVAR_DEFINE_STRING(audio_guest_threads, "", "Kernel",
+                      "Guest threads that are scheduled as audio threads (audio_thread_policy) along with the Audio "
+                      "Worker and the XMA Decoder: comma-separated prefixes of the names the game gives them. For a "
+                      "game that mixes its sound on a guest thread the audio callback waits for. The Switch has "
+                      "switch_audio_guest_threads instead");
 #endif
 REXCVAR_DEFINE_INT32(guest_thread_host_stack_mb, 16, "Kernel",
                      "MB of host stack for each guest thread (the recompiled code runs on it). On the Switch it is "
@@ -197,6 +205,43 @@ void XThread::set_last_error(uint32_t error_code) {
   guest_object<X_KTHREAD>()->last_error = error_code;
 }
 
+namespace {
+// A guest thread whose name starts with one of the prefixes in switch_audio_guest_threads (Switch) or
+// audio_guest_threads.
+bool GuestAudioThread(std::string_view name) {
+#if REX_PLATFORM_SWITCH
+  const std::string prefixes = REXCVAR_GET(switch_audio_guest_threads);
+#else
+  const std::string prefixes = REXCVAR_GET(audio_guest_threads);
+#endif
+  size_t i = 0;
+  while (i < prefixes.size()) {
+    size_t end = prefixes.find(',', i);
+    if (end == std::string::npos) {
+      end = prefixes.size();
+    }
+    std::string_view prefix(prefixes.data() + i, end - i);
+    i = end + 1;
+    while (!prefix.empty() && prefix.front() == ' ') {
+      prefix.remove_prefix(1);
+    }
+    while (!prefix.empty() && prefix.back() == ' ') {
+      prefix.remove_suffix(1);
+    }
+    if (!prefix.empty() && name.starts_with(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Host threads that produce sound. set_name() stores the name with the handle appended ("Audio Worker (F8000014)"),
+// so the prefix is compared.
+bool HostAudioThread(std::string_view name) {
+  return name.starts_with("Audio Worker") || name.starts_with("XMA Decoder");
+}
+}  // namespace
+
 #if REX_PLATFORM_SWITCH
 namespace {
 int SwitchPriorityFor(bool guest_thread, std::string_view name);
@@ -211,6 +256,13 @@ void XThread::set_name(const std::string_view name) {
     // May be getting set before the thread is created.
     // One the thread is ready it will handle it.
     thread_->set_name(thread_name_);
+#if !REX_PLATFORM_SWITCH
+    // Games name their threads after creating them (SetThreadName); a guest thread on the audio list is moved to the
+    // audio scheduling class here, one named before it starts in Create().
+    if (guest_thread_ && GuestAudioThread(thread_name_)) {
+      REXSYS_INFO("{}: {} (audio_guest_threads)", thread_name_, rex::thread::SetThreadAudioPriority(thread_.get()));
+    }
+#endif
 #if REX_PLATFORM_SWITCH
     // Games name their threads after creating them (SetThreadName), so a guest thread on the audio list gets its
     // priority here; one named before it starts gets it in Create().
@@ -382,30 +434,6 @@ namespace {
 // above it (a lower number), able to preempt the spinners: audio first, then
 // the GPU and the kernel's own workers. Host threads are told apart by the
 // name their owner gives them before Create().
-// A guest thread whose name starts with one of switch_audio_guest_threads' prefixes.
-bool GuestAudioThread(std::string_view name) {
-  const std::string prefixes = REXCVAR_GET(switch_audio_guest_threads);
-  size_t i = 0;
-  while (i < prefixes.size()) {
-    size_t end = prefixes.find(',', i);
-    if (end == std::string::npos) {
-      end = prefixes.size();
-    }
-    std::string_view prefix(prefixes.data() + i, end - i);
-    i = end + 1;
-    while (!prefix.empty() && prefix.front() == ' ') {
-      prefix.remove_prefix(1);
-    }
-    while (!prefix.empty() && prefix.back() == ' ') {
-      prefix.remove_suffix(1);
-    }
-    if (!prefix.empty() && name.starts_with(prefix)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 int SwitchPriorityFor(bool guest_thread, std::string_view name) {
   if (guest_thread) {
     return GuestAudioThread(name) ? REX_SWITCH_PRIO_AUDIO : REX_SWITCH_PRIO_GUEST;
@@ -414,7 +442,7 @@ int SwitchPriorityFor(bool guest_thread, std::string_view name) {
   // so the prefix is compared. With an exact comparison the Audio Worker and the
   // XMA Decoder stayed at the presentation priority (0x2C) instead of the audio one
   // (0x2B), as the console's profiler showed.
-  if (name.starts_with("Audio Worker") || name.starts_with("XMA Decoder")) {
+  if (HostAudioThread(name)) {
     return REX_SWITCH_PRIO_AUDIO;
   }
   return REX_SWITCH_PRIO_PRESENT;  // GPU Commands, GPU VSync, Kernel Dispatch
@@ -531,6 +559,11 @@ X_STATUS XThread::Create() {
   params.create_suspended = true;
   thread_ = rex::thread::Thread::Create(params, [this]() {
     rex::initialize_seh_thread();
+#if !REX_PLATFORM_SWITCH
+    if (guest_thread_ ? GuestAudioThread(thread_name_) : HostAudioThread(thread_name_)) {
+      REXSYS_INFO("{}: {}", thread_name_, rex::thread::SetThreadAudioPriority());
+    }
+#endif
 #if REX_PLATFORM_SWITCH
     {
       const int priority = SwitchPriorityFor(guest_thread_, thread_name_);
@@ -582,7 +615,8 @@ X_STATUS XThread::Create() {
 #if !REX_PLATFORM_SWITCH
   // On Switch the scheme in SwitchPriorityFor decides instead: this value would
   // reach svcSetThreadPriority as 0 or 1, outside an application's range.
-  if (creation_params_.creation_flags & 0x60) {
+  // Not for an audio thread: pthread_setschedparam would take it out of the audio class Create() put it in.
+  if ((creation_params_.creation_flags & 0x60) && !(guest_thread_ && GuestAudioThread(thread_name_))) {
     thread_->set_priority(creation_params_.creation_flags & 0x20 ? 1 : 0);
   }
 #endif
