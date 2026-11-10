@@ -7400,7 +7400,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       const VkDeviceSize offset = request.offset;
       lock.unlock();
       const auto before = std::chrono::steady_clock::now();
-      const VkResult result = dfn_.vkBindImageMemory(device_, image, guest_memory, offset);
+      const VkResult result = gpu::vulkan::BindImage(dfn_, device_, image, guest_memory, offset);
       const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                        std::chrono::steady_clock::now() - before)
                                        .count());
@@ -7479,13 +7479,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (bindings_phase_ == kBindingsOff || !pool_textures_.IsActive() || test_no_memory_every_ > 0) {
       return false;
     }
-    const VkImageCreateInfo info = InfoImageTexture(format, width, height, layers, depth3d, levels);
+    const gpu::ImageDesc info = InfoImageTexture(format, width, height, layers, depth3d, levels);
     VkImage image = VK_NULL_HANDLE;
-    if (dfn_.vkCreateImage(device_, &info, nullptr, &image) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateImage(dfn_, device_, info, image)) {
       return false;
     }
-    VkMemoryRequirements req{};
-    dfn_.vkGetImageMemoryRequirements(device_, image, &req);
+    const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image);
     VkDeviceMemory block = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
     uint32_t id_block = 0xFFFFFFFFu;
@@ -10804,22 +10803,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     const std::array<std::pair<gpu::ViewType, uint32_t>, 3> types = {
         {{gpu::kView2D, 1}, {gpu::kView3D, 1}, {gpu::kViewCube, 6}}};
     for (uint32_t i = 0; i < 3; ++i) {
-      VkImageCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-      info.imageType = i == 1 ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
-      info.flags = i == 2 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+      gpu::ImageDesc info;
+      info.volume = i == 1;
+      info.cube = i == 2;
       info.format = VK_FORMAT_R8G8B8A8_UNORM;
-      info.extent = {1, 1, 1};
-      info.mipLevels = 1;
-      info.arrayLayers = types[i].second;
-      info.samples = VK_SAMPLE_COUNT_1_BIT;
-      info.tiling = VK_IMAGE_TILING_OPTIMAL;
-      info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-      info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-      info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-              vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
-              empty_[i].image, empty_[i].guest_memory)) {
+      info.layers = types[i].second;
+      if (!gpu::vulkan::CreateDedicatedImage(vulkan_device_, info, empty_[i].image, empty_[i].guest_memory)) {
         return false;
       }
       gpu::ViewDesc view;
@@ -12990,39 +12979,34 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return true;
   }
 
-  // A texture's VkImageCreateInfo, factored out so CreateTexture and CreateTextureInThread create exactly the
+  // A texture's description, factored out so CreateTexture and CreateTextureInThread create exactly the
   // same image.
-  static VkImageCreateInfo InfoImageTexture(VkFormat format, uint32_t width, uint32_t height, uint32_t layers,
-                                             uint32_t depth3d, uint32_t levels) {
-    VkImageCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = depth3d ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
-    info.flags = layers == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+  static gpu::ImageDesc InfoImageTexture(VkFormat format, uint32_t width, uint32_t height, uint32_t layers,
+                                         uint32_t depth3d, uint32_t levels) {
+    gpu::ImageDesc info;
+    info.volume = depth3d != 0;
+    info.cube = layers == 6;
     info.format = format;
-    info.extent = {width, height, depth3d ? depth3d : 1};
-    info.mipLevels = std::max(levels, 1u);
-    info.arrayLayers = layers;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    info.width = width;
+    info.height = height;
+    info.depth = depth3d ? depth3d : 1;
+    info.levels = std::max(levels, 1u);
+    info.layers = layers;
     return info;
   }
 
   // One allocation attempt. Recovery uses the same pool-first order as initial creation.
-  bool TryAllocateTexture(NativeImage& image, const VkImageCreateInfo& info) {
+  bool TryAllocateTexture(NativeImage& image, const gpu::ImageDesc& info) {
     bool reserved = false;
     if (pool_textures_.IsActive()) {
       VkImage image_pool = VK_NULL_HANDLE;
-      if (dfn_.vkCreateImage(device_, &info, nullptr, &image_pool) == VK_SUCCESS) {
-        VkMemoryRequirements req{};
-        dfn_.vkGetImageMemoryRequirements(device_, image_pool, &req);
+      if (gpu::vulkan::CreateImage(dfn_, device_, info, image_pool)) {
+        const VkMemoryRequirements req = gpu::vulkan::Requirements(dfn_, device_, image_pool);
         VkDeviceMemory block = VK_NULL_HANDLE;
         VkDeviceSize offset = 0;
         uint32_t id_block = 0xFFFFFFFFu;
         if (pool_textures_.Reserve(req, block, offset, id_block) &&
-            dfn_.vkBindImageMemory(device_, image_pool, block, offset) == VK_SUCCESS) {
+            gpu::vulkan::BindImage(dfn_, device_, image_pool, block, offset) == VK_SUCCESS) {
           image.image = image_pool;
           image.guest_memory = VK_NULL_HANDLE;  // from the pool: not freed on its own
           image.pool_block = id_block;
@@ -13038,9 +13022,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     if (!reserved) {
       image.pool_block = 0xFFFFFFFFu;
-      reserved = rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-          vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image,
-          image.guest_memory);
+      reserved = gpu::vulkan::CreateDedicatedImage(vulkan_device_, info, image.image, image.guest_memory);
     }
     return reserved;
   }
@@ -13050,7 +13032,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // texture is recreated later.
   bool CreateTexture(NativeImage& image, VkFormat format, uint32_t width, uint32_t height,
                     uint32_t layers = 1, uint32_t depth3d = 0, uint32_t levels = 1, bool emergency = true) {
-    const VkImageCreateInfo info = InfoImageTexture(format, width, height, layers, depth3d, levels);
+    const gpu::ImageDesc info = InfoImageTexture(format, width, height, layers, depth3d, levels);
     /*
      * The pool first, and the usual path only if it does not fit.
      *
