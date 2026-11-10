@@ -28,6 +28,11 @@ DEFINE_bool(metal_fetch_constants_shared, true,
             "of packing and comparing a per-stage copy. Disable for the old "
             "per-stage path.",
             "Metal");
+DEFINE_bool(metal_3d_as_2d_refresh, true,
+            "Reload the 2D copy of a 3D texture sampled as 2D "
+            "(gpu_3d_to_2d_texture) when its guest data was written. Off "
+            "keeps the copy's first contents (the old behaviour).",
+            "Metal");
 DEFINE_bool(metal_register_write_fast_path, true,
             "Single register writes outside the scratch, coherency and gamma "
             "ramp registers store the value directly instead of going "

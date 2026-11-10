@@ -66,6 +66,7 @@ config, on the command line (`--metal_retina=false`) or through the environment 
 | `metal_fetch_constants_shared` | true | Upload fetch constants only after a fetch register actually changes, and share that one upload across shader stages and draws until the next change. Set false for the old per-draw upload. |
 | `metal_register_write_fast_path` | true | Store single register writes directly, except the scratch, coherency and gamma ramp registers, instead of going through the generic register write handler. |
 | `metal_bindless_index_memo` | false | Reuse bindless texture and sampler index tables while no fetch constant, texture or binding changed (needs `metal_fetch_constants_shared`). Reuses about 60% of tables in 4p Town but costs as much command processor time as it saves. `REX_METAL_BINDLESS_MEMO_VERIFY=1` rebuilds on every reuse and counts mismatches. |
+| `metal_3d_as_2d_refresh` | true | Reload the 2D copy of a 3D texture that a shader samples as 2D (`gpu_3d_to_2d_texture`) when its guest data was written. The copy lives outside the texture map, so without this it keeps its first contents for as long as the 3D texture lives. |
 | `metal_native_shaders` | true | Optimize guest pixel shaders with metal-opt. Off also turns off everything below it. |
 | `metal_native_xlate` | true | Translate guest shaders to MSL directly (native translator). |
 | `metal_native_first` | true | Compile the native translation first instead of swapping it in later. |
