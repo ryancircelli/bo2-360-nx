@@ -421,6 +421,56 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
                           [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
 }
 
+// Descriptor writes, one vkUpdateDescriptorSets each. Metal writes the same slots into the heaps' argument buffers.
+// A sampled image at `element` of `binding` (the bindless heaps use binding 0 and the slot as the element).
+inline void WriteSampledImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorSet set,
+                              uint32_t binding, uint32_t element, VkImageView view,
+                              VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL) {
+  VkDescriptorImageInfo image{};
+  image.imageView = view;
+  image.imageLayout = layout;
+  VkWriteDescriptorSet write{};
+  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  write.dstSet = set;
+  write.dstBinding = binding;
+  write.dstArrayElement = element;
+  write.descriptorCount = 1;
+  write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+  write.pImageInfo = &image;
+  dfn.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
+inline void WriteSampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorSet set,
+                         uint32_t binding, uint32_t element, VkSampler sampler) {
+  VkDescriptorImageInfo image{};
+  image.sampler = sampler;
+  VkWriteDescriptorSet write{};
+  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  write.dstSet = set;
+  write.dstBinding = binding;
+  write.dstArrayElement = element;
+  write.descriptorCount = 1;
+  write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+  write.pImageInfo = &image;
+  dfn.vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
+// Uniform buffers at bindings 0 to count - 1 of `set`, in one update. `dynamic`: offsets given when the set is bound
+// (set 4 of the pack shaders).
+inline void WriteUniforms(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDescriptorSet set,
+                          uint32_t first_binding, uint32_t count, const VkDescriptorBufferInfo* buffers, bool dynamic) {
+  VkWriteDescriptorSet writes[4]{};
+  for (uint32_t b = 0; b < count; ++b) {
+    writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[b].dstSet = set;
+    writes[b].dstBinding = first_binding + b;
+    writes[b].descriptorCount = 1;
+    writes[b].descriptorType = dynamic ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[b].pBufferInfo = &buffers[b];
+  }
+  dfn.vkUpdateDescriptorSets(device, count, writes, 0, nullptr);
+}
+
 // A sampler: true and the sampler in `out` if the driver created it. Every field the description does not have is
 // zero, as in the create info the renderer filled itself.
 inline bool CreateSampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
