@@ -1095,45 +1095,30 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
     // Same layout as the presenter: image at 0 and sampler at 1, and the gamma ramp at 2 (the pipeline without
     // the ramp does not use it).
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    gpu::SetBinding bindings[3]{};
     bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].kind = gpu::kDescriptorSampledImage;
+    bindings[0].stages = gpu::kStageFragment;
     bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[1].pImmutableSamplers = &sampler_;
+    bindings[1].kind = gpu::kDescriptorSampler;
+    bindings[1].stages = gpu::kStageFragment;
+    bindings[1].immutable_samplers = &sampler_;
     bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    VkDescriptorSetLayoutCreateInfo info_layout{};
-    info_layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    info_layout.bindingCount = 3;
-    info_layout.pBindings = bindings;
-    if (dfn_.vkCreateDescriptorSetLayout(device_, &info_layout, nullptr, &layout_descriptors_) !=
-        VK_SUCCESS) {
+    bindings[2].kind = gpu::kDescriptorUniformBuffer;
+    bindings[2].stages = gpu::kStageFragment;
+    if (!gpu::vulkan::CreateSetLayout(dfn_, device_, bindings, 3, false, layout_descriptors_)) {
       return false;
     }
-    VkPushConstantRange ranges[2]{};
-    ranges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    gpu::PushRange ranges[2]{};
+    ranges[0].stages = gpu::kStageVertex;
     ranges[0].offset = 0;
     ranges[0].size = 16;  // GuestOutputPaintRectangleConstants
-    ranges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    ranges[1].stages = gpu::kStageFragment;
     ranges[1].offset = 16;
     ranges[1].size = 96;  // Presenter::BilinearConstants, plus the FPS counter (bo2zm_show_fps), the
                           // preset note and the top banner (bo2zm_preset); 16 + 96 bytes, within the 128 every
                           // Vulkan device guarantees
-    VkPipelineLayoutCreateInfo info_pipeline_layout{};
-    info_pipeline_layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    info_pipeline_layout.setLayoutCount = 1;
-    info_pipeline_layout.pSetLayouts = &layout_descriptors_;
-    info_pipeline_layout.pushConstantRangeCount = 2;
-    info_pipeline_layout.pPushConstantRanges = ranges;
-    if (dfn_.vkCreatePipelineLayout(device_, &info_pipeline_layout, nullptr, &layout_pipeline_) !=
-        VK_SUCCESS) {
+    if (!gpu::vulkan::CreatePipelineLayout(dfn_, device_, 1, &layout_descriptors_, 2, ranges, layout_pipeline_)) {
       return false;
     }
     gpu::PoolCounts counts_output{};
