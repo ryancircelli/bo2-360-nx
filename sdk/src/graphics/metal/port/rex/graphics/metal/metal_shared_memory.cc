@@ -206,6 +206,22 @@ bool MetalSharedMemory::MemexportReadbackEnabled() {
 namespace {
 constexpr uint32_t kReadbackMaxRangeBytes = 8u << 20;
 constexpr size_t kReadbackMaxPending = 4096;
+constexpr uint32_t kReadbackSnapshotMaxBytes = 1u << 20;
+// [readback-merge] When the CPU wrote into part of an export range before
+// its readback landed (the guest waited on the GPU fence, which the command
+// processor signals before the Metal command buffer completes), the old code
+// dropped the whole readback, and the re-upload of the invalidated page then
+// overwrote the export in the GPU buffer too: the export was lost everywhere
+// outside the CPU-written bytes. With a snapshot of the guest bytes taken at
+// export time, the readback now writes every byte the CPU left unchanged.
+// REX_METAL_MEMEXPORT_READBACK_MERGE=0 restores the old whole-range skip.
+bool MemexportReadbackMergeEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_READBACK_MERGE");
+    return !(v && v[0] == '0');
+  }();
+  return enabled;
+}
 }  // namespace
 
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
@@ -235,9 +251,15 @@ void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
     // drop the oldest so bookkeeping stays bounded.
     pending_readbacks_.pop_front();
   }
-  pending_readbacks_.push_back({start, end, submission,
-                                XXH3_64bits(guest + start, end - start),
-                                frame_log::CurrentFrame()});
+  PendingReadback entry{start, end, submission,
+                        XXH3_64bits(guest + start, end - start),
+                        frame_log::CurrentFrame(),
+                        {}};
+  if (MemexportReadbackMergeEnabled() &&
+      end - start <= kReadbackSnapshotMaxBytes) {
+    entry.snapshot.assign(guest + start, guest + end);
+  }
+  pending_readbacks_.push_back(std::move(entry));
 }
 
 namespace {
@@ -279,6 +301,7 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
   uint64_t bytes = 0;
   uint64_t ranges = 0;
   uint64_t cpu_skip_bytes = 0;
+  uint64_t merged_ranges = 0;
   std::vector<size_t> rebase_pending;
   std::vector<size_t> rebase_preserved;
   std::vector<std::pair<uint32_t, uint32_t>> fire_ranges;
@@ -298,7 +321,8 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       continue;
     }
     const uint64_t guest_hash_now = XXH3_64bits(guest + e.start, len);
-    if (guest_hash_now != e.guest_hash) {
+    const bool merge = guest_hash_now != e.guest_hash;
+    if (merge && e.snapshot.size() != len) {
       // The CPU wrote into the export range after the export: its data wins
       // (that write also invalidated the page, so it gets re-uploaded).
       cpu_skip_bytes += len;
@@ -325,8 +349,25 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
                              : XXH3_64bits(guest + p.start, p.end - p.start);
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
-    const bool guest_changed = std::memcmp(guest + e.start, gpu + e.start, len) != 0;
-    std::memcpy(guest + e.start, gpu + e.start, len);
+    bool guest_changed;
+    if (merge) {
+      // [readback-merge] bytes the CPU changed since the export keep the CPU
+      // data; every other byte takes the exported value.
+      guest_changed = false;
+      uint8_t* g = guest + e.start;
+      const uint8_t* x = gpu + e.start;
+      const uint8_t* snap = e.snapshot.data();
+      for (uint32_t k = 0; k < len; ++k) {
+        if (g[k] == snap[k] && g[k] != x[k]) {
+          g[k] = x[k];
+          guest_changed = true;
+        }
+      }
+      ++merged_ranges;
+    } else {
+      guest_changed = std::memcmp(guest + e.start, gpu + e.start, len) != 0;
+      std::memcpy(guest + e.start, gpu + e.start, len);
+    }
     if (guest_changed && MemexportReadbackWatchEnabled()) {
       fire_ranges.emplace_back(e.start, len);
     }
@@ -383,6 +424,10 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
     if (cpu_skip_bytes) {
       frame_log::Record("tr_memexport_readback_cpu_skip_bytes", frame,
                         cpu_skip_bytes);
+    }
+    if (merged_ranges) {
+      frame_log::Record("tr_memexport_readback_merged_ranges", frame,
+                        merged_ranges);
     }
   }
 }

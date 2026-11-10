@@ -368,6 +368,10 @@ class MetalSharedMemory : public SharedMemory {
     uint64_t submission;
     uint64_t guest_hash;
     uint64_t export_frame;
+    // [readback-merge] guest bytes at export time (empty when the range is
+    // too large), so a CPU write into part of the range only keeps its own
+    // bytes instead of discarding the whole export.
+    std::vector<uint8_t> snapshot;
   };
   std::deque<PendingReadback> pending_readbacks_;
   struct PendingVerify {
