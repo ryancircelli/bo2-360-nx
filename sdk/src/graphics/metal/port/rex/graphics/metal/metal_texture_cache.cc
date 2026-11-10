@@ -5905,6 +5905,7 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   } else if (metal_texture->nx_tracked_) {
     ++UploadTrace().nx_changed;
   }
+  REX_METAL_TEST_HOOK(kResidentBeforeCopy, texture);
   const bool rtt_ok = TryGpuLoadTexture(texture, load_base, load_mips);
   if (!rtt_ok && metal_texture->nx_tracked_) {
     auto global_lock = AcquireGlobalLock();
@@ -5945,6 +5946,7 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
                   kResidentSharedMemory,
         upload_bytes);
   }
+  REX_METAL_TEST_HOOK(kResidentAfterCopy, texture);
   return true;
 }
 
@@ -6050,6 +6052,7 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
       }
     }
 
+    REX_METAL_TEST_HOOK(kCpuSourceBeforeCopy, texture);
     if (!TryGpuLoadTexture(texture, base_outdated, mips_outdated,
                            TextureLoadSourceMode::kCpuGuestMemory)) {
       if (watch_first) {
@@ -6060,6 +6063,7 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
     }
     TexRenameClearPending(*metal_texture, base_outdated, mips_outdated);
     metal_texture->set_loaded_once();
+    REX_METAL_TEST_HOOK(kCpuSourceAfterCopy, texture);
 
     auto global_lock = AcquireGlobalLock();
     if (watch_first) {
