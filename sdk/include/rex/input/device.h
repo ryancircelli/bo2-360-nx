@@ -54,6 +54,10 @@ struct DeviceInfo {
   // unknown; location_note then says why.
   std::string location;
   std::string location_note;
+  // For Bluetooth pads with no serial: the device's Bluetooth address as
+  // "aa:bb:cc:dd:ee:ff" (macOS IOKit DeviceAddress). Stays the same across
+  // reconnects and relaunches. Empty when unknown or not Bluetooth.
+  std::string bt_address;
   // The backend's device path (SDL_GetGamepadPath). Used as identity only when
   // it names a port rather than one attachment (see IsStablePadPath).
   std::string path;
@@ -63,6 +67,7 @@ struct DeviceInfo {
 enum class IdentitySource {
   kSerial,    // the pad's own serial number
   kLocation,  // the USB port it is plugged into (macOS IOKit LocationID)
+  kBluetooth, // its Bluetooth device address
   kPath,      // the backend's device path, when it names a port
   kGuid,      // model only: identical pads share it; connection order decides
   kName,      // nothing better known
@@ -76,8 +81,8 @@ struct DeviceIdentity {
   bool unique = false;
 };
 
-/// Picks the strongest identity the pad has: serial, then port location, then
-/// a port-naming path, then GUID, then name.
+/// Picks the strongest identity the pad has: serial, then USB port location,
+/// then Bluetooth address, then a port-naming path, then GUID, then name.
 DeviceIdentity ResolveDeviceIdentity(const DeviceInfo& info);
 
 /// The model-level key (GUID, else name) that identical pads share. Used when a
@@ -89,6 +94,10 @@ std::string DeviceModelKey(const DeviceInfo& info);
 /// macOS "DevSrvsID:<registry id>", Linux /dev/input/eventN and /dev/hidrawN,
 /// and XInput's "XInput#N" user slots.
 bool IsStablePadPath(std::string_view path);
+
+/// "F0-B1-7A-21-4C-39", "f0:b1:7a:21:4c:39" or "f0b17a214c39" to
+/// "f0:b1:7a:21:4c:39"; empty when the text is not a 6-byte address.
+std::string NormalizeBluetoothAddress(std::string_view text);
 
 /// ResolveDeviceIdentity(info).key.
 std::string DeviceIdentityKey(const DeviceInfo& info);
