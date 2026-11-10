@@ -80,16 +80,24 @@ DeviceIdentity ResolveDeviceIdentity(const DeviceInfo& info) {
                             info.location_note);
     return id;
   }
+  if (!info.bt_address.empty()) {
+    id.key = "bt:" + Lower(info.bt_address);
+    id.source = IdentitySource::kBluetooth;
+    id.unique = true;
+    id.reason = fmt::format("no serial; Bluetooth address {}{}{}", Lower(info.bt_address),
+                            info.location_note.empty() ? "" : ", ", info.location_note);
+    return id;
+  }
   if (IsStablePadPath(info.path)) {
     id.key = "path:" + Lower(info.path);
     id.source = IdentitySource::kPath;
     id.unique = true;
-    id.reason = "no serial or port location; the device path names the port";
+    id.reason = "no serial, port or Bluetooth address; the device path names the port";
     return id;
   }
   std::string why = "no serial";
   if (!info.location_note.empty()) {
-    why += "; no port location (" + info.location_note + ")";
+    why += "; no port or Bluetooth address (" + info.location_note + ")";
   }
   if (!info.path.empty()) {
     why += "; path \"" + info.path + "\" changes on every replug";
@@ -104,12 +112,38 @@ std::string DeviceIdentityKey(const DeviceInfo& info) {
   return ResolveDeviceIdentity(info).key;
 }
 
+std::string NormalizeBluetoothAddress(std::string_view text) {
+  std::string hex;
+  for (char ch : text) {
+    if (ch == ':' || ch == '-' || ch == ' ') {
+      continue;
+    }
+    if (!std::isxdigit(static_cast<unsigned char>(ch))) {
+      return {};
+    }
+    hex += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  if (hex.size() != 12 || hex == "000000000000") {
+    return {};
+  }
+  std::string out;
+  for (size_t i = 0; i < 12; i += 2) {
+    if (i) {
+      out += ':';
+    }
+    out += hex.substr(i, 2);
+  }
+  return out;
+}
+
 const char* IdentitySourceName(IdentitySource source) {
   switch (source) {
     case IdentitySource::kSerial:
       return "serial";
     case IdentitySource::kLocation:
       return "port";
+    case IdentitySource::kBluetooth:
+      return "bluetooth";
     case IdentitySource::kPath:
       return "path";
     case IdentitySource::kGuid:
@@ -125,12 +159,15 @@ std::vector<size_t> PlacementOrder(const std::vector<DeviceInfo>& pads) {
   std::vector<size_t> located;
   for (size_t i = 0; i < pads.size(); i++) {
     order[i] = i;
-    if (!pads[i].synthetic && ResolveDeviceIdentity(pads[i]).source == IdentitySource::kLocation) {
+    const IdentitySource source = ResolveDeviceIdentity(pads[i]).source;
+    if (!pads[i].synthetic &&
+        (source == IdentitySource::kLocation || source == IdentitySource::kBluetooth)) {
       located.push_back(i);
     }
   }
-  // Only pads placed by port trade places, and only among the positions they
-  // already hold; every other pad keeps its connection-order position.
+  // Only pads placed by port or Bluetooth address trade places, and only among
+  // the positions they already hold; every other pad keeps its connection-order
+  // position. USB pads go by port, then Bluetooth pads by address.
   std::vector<size_t> sorted = located;
   auto location_value = [&](size_t i) {
     uint64_t value = 0;
@@ -141,6 +178,14 @@ std::vector<size_t> PlacementOrder(const std::vector<DeviceInfo>& pads) {
   std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) {
     const auto& pa = pads[a];
     const auto& pb = pads[b];
+    const bool bt_a = pa.location.empty();
+    const bool bt_b = pb.location.empty();
+    if (bt_a != bt_b) {
+      return bt_b;
+    }
+    if (bt_a) {
+      return Lower(pa.bt_address) < Lower(pb.bt_address);
+    }
     if (pa.vendor_id != pb.vendor_id) {
       return pa.vendor_id < pb.vendor_id;
     }
@@ -223,6 +268,10 @@ bool PinMatches(std::string_view match, const DeviceInfo& info) {
   if (!info.location.empty() &&
       (needle == Lower(info.location) || needle == "port:" + Lower(info.location) ||
        needle == ResolveDeviceIdentity(info).key)) {
+    return true;
+  }
+  if (!info.bt_address.empty() &&
+      (needle == Lower(info.bt_address) || needle == "bt:" + Lower(info.bt_address))) {
     return true;
   }
   if (IsStablePadPath(info.path) &&

@@ -1,6 +1,6 @@
 /**
  * @file        input/sdl/pad_location_stub.cpp
- * @brief       Port lookup for platforms whose SDL path already names the port.
+ * @brief       Port and Bluetooth lookup for platforms whose SDL path already names the port.
  *
  * @copyright   Copyright (c) 2026 Tom Clay <tomc@tctechstuff.com>
  *              All rights reserved.
@@ -9,11 +9,15 @@
  *              See LICENSE file in the project root for full license text.
  */
 
-#include "pad_location.h"
+#include <rex/input/sdl/pad_location.h>
 
 namespace rex::input {
 
 PadLocation FindPadLocation(SDL_Gamepad*) {
+  return {};
+}
+
+std::vector<HidIdentity> ListHidIdentities() {
   return {};
 }
 

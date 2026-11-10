@@ -42,7 +42,8 @@ std::vector<SlotPin> ParseSlotPins(std::string_view text, std::string* error = n
 
 /// Case-insensitive: equal to the serial, the GUID, "vvvv:pppp", the port
 /// location ("14200000", "port:14200000" or the full "port:vvvv:pppp@14200000"
-/// key) or a port-naming path, or contained in the name.
+/// key), the Bluetooth address ("aa:bb:cc:dd:ee:ff" or "bt:aa:bb:cc:dd:ee:ff")
+/// or a port-naming path, or contained in the name.
 bool PinMatches(std::string_view match, const DeviceInfo& info);
 
 /// Gives each newly connected pad a player and remembers the player of each pad

@@ -6,7 +6,7 @@
 // no prompt. The same approach is used by switch2mac's dm/mac/launcher.c (MIT, Copyright (c) 2026 seedds), which
 // this file borrows the idea and the signal forwarding from; the code is written for this project.
 //
-// Game data folder (game/, update/, optional content/), first match wins:
+// Game data folder (game/, update/, optional content/ with the DLC, linked into the support folder), first match wins:
 //   1. $BO2_DATA
 //   2. the first line of ~/Library/Application Support/bo2-360-nx/data_path.txt
 //   3. Info.plist key BO2DataPath (pack_app.py --data-mode external --data-path)
@@ -94,6 +94,59 @@ static int udp_free(int port) {   // can this process bind UDP 0.0.0.0:port (as 
     close(fd); return ok;
 }
 
+// The DLC packs (tools/install_dlc.py) sit in <data>/content/0000000000000000/<title>/{<type>,Headers/<type>}, but the
+// game lists them under the user data root (sdk/src/system/xam/content_manager.cpp). Link each type folder of the data
+// folder's content into the support folder, leaving anything already there alone (a real folder or an older link to
+// another data folder is replaced only when it is a link). Saves are per profile XUID and never under this XUID.
+static void link_entry(const char *src, const char *dst) {
+    struct stat st;
+    if (!lstat(dst, &st)) {
+        if (!S_ISLNK(st.st_mode)) return;
+        char cur[PATH_MAX]; ssize_t n = readlink(dst, cur, sizeof cur - 1);
+        if (n > 0) { cur[n] = 0; if (!strcmp(cur, src)) return; }
+        unlink(dst);
+    }
+    symlink(src, dst);
+}
+static void link_content(const char *data, const char *support) {
+    char src_root[PATH_MAX], dst_root[PATH_MAX];
+    snprintf(src_root, sizeof src_root, "%s/content/0000000000000000", data);
+    snprintf(dst_root, sizeof dst_root, "%s/0000000000000000", support);
+    DIR *titles = opendir(src_root); if (!titles) return;
+    struct dirent *t;
+    while ((t = readdir(titles))) {
+        if (t->d_name[0] == '.') continue;
+        char st_dir[PATH_MAX], dt_dir[PATH_MAX];
+        snprintf(st_dir, sizeof st_dir, "%s/%s", src_root, t->d_name);
+        snprintf(dt_dir, sizeof dt_dir, "%s/%s", dst_root, t->d_name);
+        if (!is_dir(st_dir)) continue;
+        DIR *types = opendir(st_dir); if (!types) continue;
+        struct dirent *e;
+        while ((e = readdir(types))) {
+            if (e->d_name[0] == '.') continue;
+            char s1[PATH_MAX], d1[PATH_MAX];
+            snprintf(s1, sizeof s1, "%s/%s", st_dir, e->d_name);
+            snprintf(d1, sizeof d1, "%s/%s", dt_dir, e->d_name);
+            if (!strcmp(e->d_name, "Headers")) {   // Headers/<type>: link each type, the folder itself stays real
+                DIR *h = opendir(s1); if (!h) continue;
+                struct dirent *x;
+                while ((x = readdir(h))) {
+                    if (x->d_name[0] == '.') continue;
+                    char s2[PATH_MAX], d2[PATH_MAX];
+                    snprintf(s2, sizeof s2, "%s/%s", s1, x->d_name);
+                    snprintf(d2, sizeof d2, "%s/%s", d1, x->d_name);
+                    mkdirs(d1); link_entry(s2, d2);
+                }
+                closedir(h);
+            } else if (is_dir(s1)) {
+                mkdirs(dt_dir); link_entry(s1, d1);
+            }
+        }
+        closedir(types);
+    }
+    closedir(titles);
+}
+
 static void log_line(const char *logs, const char *msg) {
     char p[PATH_MAX]; snprintf(p, sizeof p, "%s/launcher.log", logs);
     struct stat s; FILE *f = fopen(p, (!stat(p, &s) && s.st_size > 65536) ? "w" : "a");
@@ -162,6 +215,8 @@ int main(int argc, char **argv) {
         char m[PATH_MAX + 200]; snprintf(m, sizeof m, "%s has no game/ folder. Point data_path.txt (in %s) at the folder that holds game/ and update/.", data, support);
         alert("Black Ops II: game data not found", m); return 1;
     }
+
+    link_content(data, support);
 
     char opt[PATH_MAX + 64], ex[PATH_MAX];
     snprintf(ex, sizeof ex, "%s/bo2zm", macos);

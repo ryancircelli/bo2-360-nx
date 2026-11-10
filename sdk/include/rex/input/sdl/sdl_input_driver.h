@@ -81,6 +81,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     bool can_rumble;
     // Port identity for pads without a serial (pad_location.h).
     std::string location;
+    std::string bt_address;
     std::string location_note;
     std::string path;
     // Per pad rather than per guest user, so it survives reassignment.

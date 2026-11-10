@@ -50,8 +50,9 @@ REXCVAR_DEFINE_BOOL(input_vibration, false, "Input",
 REXCVAR_DEFINE_STRING(input_player_slots, "", "Input",
                       "Pin controllers to players, e.g. "
                       "\"1=<serial>;2=054c:0ce6;3=Xbox;4=port:14200000\": each player 1-4 "
-                      "takes the pad whose serial, GUID, vid:pid or USB port (port:<location>) "
-                      "equals the text, or whose name contains it. rex-padtest prints these for "
+                      "takes the pad whose serial, GUID, vid:pid, USB port (port:<location>) or "
+                      "Bluetooth address (bt:<address>) equals the text, or whose name contains "
+                      "it. rex-padtest prints these for "
                       "each pad. Pads not "
                       "pinned take players in connection order");
 REXCVAR_DEFINE_STRING(input_virtual_pads, "after", "Input",

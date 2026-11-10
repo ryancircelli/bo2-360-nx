@@ -30,6 +30,7 @@
 #include <rex/input/device.h>
 #include <rex/input/device_assignment.h>
 #include <rex/input/input_system.h>
+#include <rex/input/sdl/pad_location.h>
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/input/state_log.h>
 #include <rex/input/steam_detect.h>
@@ -55,6 +56,7 @@ void Usage() {
       "  --seconds=N    run for N seconds (default: until Ctrl+C)\n"
       "  --plain        print changes as lines instead of redrawing a table\n"
       "  --no-sdl       script pads only (no real controllers)\n"
+      "  --hid          list every HID device's USB port or Bluetooth address (macOS) and exit\n"
       "\n"
       "While running, each controller rumbles once when it connects (the left motor for\n"
       "player 1 and 3, the right one for 2 and 4), and the triggers drive its motors.\n"
@@ -100,6 +102,8 @@ std::string IdentityLine(const DeviceInfo& info,
   }
   if (id.source == IdentitySource::kLocation) {
     text += fmt::format("\n      pin: input_player_slots=\"<player>=port:{}\"", info.location);
+  } else if (id.source == IdentitySource::kBluetooth) {
+    text += fmt::format("\n      pin: input_player_slots=\"<player>=bt:{}\"", info.bt_address);
   }
   return text;
 }
@@ -119,11 +123,13 @@ std::string Row(const InputSystem::DeviceSnapshot& snap,
   if (!info.synthetic && info.transport != "script") {
     flags += info.can_rumble ? " rumble" : " no-rumble";
   }
-  return fmt::format("{} {} {} {}{}\n      serial={} guid={} port={} path={}\n      {}\n      {}",
+  return fmt::format(
+      "{} {} {} {}{}\n      serial={} guid={} port={} bt={} path={}\n      {}\n      {}",
                      Pad(player, 3), Pad(info.name.empty() ? "?" : info.name, 28), Pad(ids, 9),
                      Pad(link, 9), flags, info.serial.empty() ? "(none)" : info.serial,
                      info.guid.empty() ? "(none)" : info.guid,
                      info.location.empty() ? "(none)" : info.location,
+                     info.bt_address.empty() ? "(none)" : info.bt_address,
                      info.path.empty() ? "(none)" : info.path, IdentityLine(info, all),
                      snap.has_state ? FormatGamepad(snap.state.gamepad) : "no state");
 }
@@ -149,6 +155,18 @@ int main(int argc, char** argv) {
       list_only = true;
     } else if (arg == "--plain") {
       plain = true;
+    } else if (arg == "--hid") {
+      const auto devices = ListHidIdentities();
+      std::printf("%zu HID device(s)\n", devices.size());
+      for (const auto& d : devices) {
+        std::printf("  %-32s %04x:%04x  %-22s port=%s bt=%s\n      %s\n",
+                    d.product.empty() ? "?" : d.product.c_str(), d.vendor_id, d.product_id,
+                    d.location.transport.empty() ? "?" : d.location.transport.c_str(),
+                    d.location.location.empty() ? "(none)" : d.location.location.c_str(),
+                    d.location.bt_address.empty() ? "(none)" : d.location.bt_address.c_str(),
+                    d.location.note.c_str());
+      }
+      return 0;
     } else if (arg == "--no-sdl") {
       use_sdl = false;
     } else if (arg.rfind("--seconds=", 0) == 0) {
