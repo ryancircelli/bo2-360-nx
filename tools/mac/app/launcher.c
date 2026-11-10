@@ -16,16 +16,22 @@
 // Extra options: ~/Library/Application Support/bo2-360-nx/args.txt, one "name = value" or "--name=value" per line
 // (# starts a comment), added before the command line; the command line (open APP --args --name=value) comes last
 // and an option given there replaces the same name from args.txt or the launcher.
+// Ports: the game binds guest ports 1000 and 1001 at host UDP offset+1000/+1001 (net_system_port_offset, default
+// 30000). When no offset is given (args.txt, command line or REX_NET_SYSTEM_PORT_OFFSET) and either port is taken,
+// e.g. by a second copy of the game, the launcher steps the offset by 1000 until both are free (20 tries) and logs
+// the choice to launcher.log. A moved offset only matters for System Link, where every machine needs the same one.
 #include <CoreFoundation/CoreFoundation.h>
 #include <dirent.h>
 #include <errno.h>
 #include <mach-o/dyld.h>
 #include <limits.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -80,6 +86,23 @@ static void prune_logs(const char *dir, int keep) {   // keep the newest `keep` 
 }
 
 #define MAXARGS 256
+static int udp_free(int port) {   // can this process bind UDP 0.0.0.0:port (as the game's XSocket::Bind does)?
+    int fd = socket(AF_INET, SOCK_DGRAM, 0); if (fd < 0) return 1;
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((unsigned short)port); a.sin_addr.s_addr = htonl(INADDR_ANY);
+    int ok = !bind(fd, (struct sockaddr *)&a, sizeof a);
+    close(fd); return ok;
+}
+
+static void log_line(const char *logs, const char *msg) {
+    char p[PATH_MAX]; snprintf(p, sizeof p, "%s/launcher.log", logs);
+    struct stat s; FILE *f = fopen(p, (!stat(p, &s) && s.st_size > 65536) ? "w" : "a");
+    char stamp[32]; time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
+    strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tm);
+    if (f) { fprintf(f, "[%s] %s\n", stamp, msg); fclose(f); }
+    fprintf(stderr, "bo2: %s\n", msg);
+}
+
 static char *g_argv[MAXARGS]; static int g_argc;
 static void push(const char *s) { if (g_argc < MAXARGS - 1) g_argv[g_argc++] = strdup(s); }
 
@@ -172,6 +195,26 @@ int main(int argc, char **argv) {
             char *eq2 = strchr(g_argv[j], '=');
             if (eq2 && (size_t)(eq2 - g_argv[j]) == nl && !strncmp(g_argv[i], g_argv[j], nl)) { free(g_argv[i]); memmove(&g_argv[i], &g_argv[i + 1], (g_argc - i - 1) * sizeof *g_argv); g_argc--; i--; break; }
         }
+    }
+    // Free-port fallback, only when nobody chose an offset.
+    int has_offset = getenv("REX_NET_SYSTEM_PORT_OFFSET") != NULL;
+    for (int i = base; i < g_argc && !has_offset; i++)
+        if (!strncmp(g_argv[i], "--net_system_port_offset", 24) && (g_argv[i][24] == '=' || !g_argv[i][24])) has_offset = 1;
+    if (!has_offset && !(udp_free(31000) && udp_free(31001))) {
+        int chosen = 0;
+        for (int k = 1; k <= 20 && !chosen; k++) {
+            int off = 30000 + 1000 * k;
+            if (off + 1001 > 65535) break;
+            if (udp_free(off + 1000) && udp_free(off + 1001)) chosen = off;
+        }
+        char m[200];
+        if (chosen) {
+            snprintf(opt, sizeof opt, "--net_system_port_offset=%d", chosen); push(opt);
+            snprintf(m, sizeof m, "UDP 31000/31001 in use (another copy of the game?); using net_system_port_offset=%d (UDP %d/%d)", chosen, chosen + 1000, chosen + 1001);
+        } else {
+            snprintf(m, sizeof m, "UDP 31000/31001 in use and no free offset found in 20 tries; starting with the default 30000");
+        }
+        log_line(logs, m);
     }
     g_argv[g_argc] = NULL;
 
