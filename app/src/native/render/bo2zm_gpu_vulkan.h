@@ -5,6 +5,7 @@
 #include "bo2zm_gpu.h"
 
 #include <rex/ui/vulkan/device.h>
+#include <rex/ui/vulkan/util.h>
 
 #include <cstddef>
 #include <cstring>
@@ -749,6 +750,49 @@ inline VkResult CreateView(const rex::ui::vulkan::VulkanDevice::Functions& dfn, 
                      VkComponentSwizzle(desc.swizzle[2]), VkComponentSwizzle(desc.swizzle[3])};
   info.subresourceRange = {desc.aspects, 0, desc.levels, 0, desc.layers};
   return dfn.vkCreateImageView(device, &info, nullptr, &out);
+}
+
+inline VkImageCreateInfo ImageInfo(const ImageDesc& desc) {
+  VkImageCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  info.imageType = desc.volume ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+  info.flags = desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+  info.format = VkFormat(desc.format);
+  info.extent = {desc.width, desc.height, desc.depth};
+  info.mipLevels = desc.levels;
+  info.arrayLayers = desc.layers;
+  info.samples = VK_SAMPLE_COUNT_1_BIT;
+  info.tiling = VK_IMAGE_TILING_OPTIMAL;
+  info.usage = desc.usage;
+  info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  return info;
+}
+
+// An image without memory (bound later, from a pool).
+inline bool CreateImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, const ImageDesc& desc,
+                        VkImage& out) {
+  const VkImageCreateInfo info = ImageInfo(desc);
+  return dfn.vkCreateImage(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+// An image with its own device-local allocation.
+inline bool CreateDedicatedImage(const rex::ui::vulkan::VulkanDevice* device, const ImageDesc& desc, VkImage& out,
+                                 VkDeviceMemory& memory) {
+  return rex::ui::vulkan::util::CreateDedicatedAllocationImage(
+      device, ImageInfo(desc), rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, out, memory);
+}
+
+inline VkMemoryRequirements Requirements(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                                         VkImage image) {
+  VkMemoryRequirements req{};
+  dfn.vkGetImageMemoryRequirements(device, image, &req);
+  return req;
+}
+
+inline VkResult BindImage(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkImage image,
+                          VkDeviceMemory memory, VkDeviceSize offset) {
+  return dfn.vkBindImageMemory(device, image, memory, offset);
 }
 
 }  // namespace vulkan
