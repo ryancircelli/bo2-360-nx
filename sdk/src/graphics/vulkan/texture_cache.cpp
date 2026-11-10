@@ -25,6 +25,9 @@
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/vulkan/command_processor.h>
+#if REX_GPU_TRACE
+#include <rex/graphics/trace/texture_probe.h>
+#endif
 #include <rex/graphics/vulkan/deferred_command_buffer.h>
 #include <rex/graphics/vulkan/texture_cache.h>
 #include <rex/logging.h>
@@ -106,9 +109,6 @@ namespace shaders {
 #include "../shaders/vulkan_spirv/texture_load_rgba16_snorm_float_scaled_cs.h"
 #include "../shaders/vulkan_spirv/texture_load_rgba16_unorm_float_cs.h"
 #include "../shaders/vulkan_spirv/texture_load_rgba16_unorm_float_scaled_cs.h"
-#if REX_GPU_TRACE
-#include <rex/graphics/trace/texture_probe.h>
-#endif
 }  // namespace shaders
 
 namespace {
