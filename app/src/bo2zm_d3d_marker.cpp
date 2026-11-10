@@ -70,6 +70,7 @@
 #include "native/render/bo2zm_deferred_report.h"
 #include "native/render/bo2zm_microcode_versions.h"
 #include "native/render/bo2zm_native_hooks.h"
+#include <rex/system/xmemory.h>
 
 REXCVAR_DEFINE_BOOL(bo2zm_d3d_marker, true, "BO2",
                     "D3D state marker: each draw's register dumps reach the native renderer as one NOP packet "
@@ -95,14 +96,10 @@ using bo2zm::native::kMarkerApply;
 using bo2zm::native::kMarkerCheck;
 using bo2zm::native::kMarkerMagic;
 
-// ---- Guest memory (as REX_RAW_ADDR in the generated code: on Win32 0xE0000000 and up is 0x1000 higher) ----
+// ---- Guest memory (as REX_RAW_ADDR in the generated code: on Win32 and macOS arm64 0xE0000000 and up is 0x1000 higher) ----
 
 inline uint8_t* Pointer(uint8_t* base, uint32_t address) {
-#if REX_PLATFORM_WIN32
-  return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
-#else
-  return base + address;
-#endif
+  return base + address + rex::memory::detail::PhysicalHostOffset(address);
 }
 inline uint32_t Read32(uint8_t* base, uint32_t address) {
   uint32_t v;

@@ -37,6 +37,11 @@ extern "C" char** __system_argv;
 namespace bo2zm::platform {
 void RestartProcessLinux();  // bo2zm_linux.cpp
 }
+#elif REX_PLATFORM_MAC
+namespace bo2zm::platform {
+std::filesystem::path ExecutablePathMac();                            // bo2zm_mac.cpp
+void RestartProcessMac(const std::filesystem::path& program);         // bo2zm_mac.cpp
+}
 #endif
 
 namespace fs = std::filesystem;
@@ -201,6 +206,14 @@ fs::path CampaignProgram() {
   }
   const fs::path program = exe.parent_path() / "bo2cp";
   return fs::is_regular_file(program, ec) ? program : fs::path();
+#elif REX_PLATFORM_MAC
+  const fs::path exe = bo2zm::platform::ExecutablePathMac();
+  if (exe.empty() || !REXCVAR_GET(bo2zm_campaign)) {
+    return {};
+  }
+  std::error_code ec;
+  const fs::path program = exe.parent_path() / "bo2cp";
+  return fs::is_regular_file(program, ec) ? program : fs::path();
 #else
   return {};
 #endif
@@ -298,6 +311,11 @@ launch::Mode MainProgramMode(const launch::InstalledModes& installed) {
     std::_Exit(1);
   }
   bo2zm::platform::RestartProcessLinux();
+#elif REX_PLATFORM_MAC
+  bo2zm::platform::RestartProcessMac(program);
+  if (!program.empty()) {
+    std::_Exit(1);
+  }
 #else
   (void)program;
   REXLOG_ERROR("[relaunch] not implemented on this platform; exiting");
@@ -379,7 +397,7 @@ static void ApplyDefaultLaunchData() {
     REXLOG_WARN("[relaunch] {} is not installed; starting {}", ModeName(wanted), ModeName(selected));
   }
   if (selected == launch::Mode::Campaign && installed.campaign) {
-#if defined(_WIN32) || REX_PLATFORM_GNU_LINUX
+#if defined(_WIN32) || REX_PLATFORM_GNU_LINUX || REX_PLATFORM_MAC
     if (const fs::path campaign = CampaignProgram(); !campaign.empty()) {
       rex::kernel::xam::XamModule::LoaderData launch;
       launch.launch_path = "game:\\default.xex";
@@ -435,7 +453,7 @@ static void ApplyPendingLaunchData(const fs::path& user_dir) {
     return;
   }
   if (requested == launch::Mode::Campaign) {
-#if defined(_WIN32) || REX_PLATFORM_GNU_LINUX
+#if defined(_WIN32) || REX_PLATFORM_GNU_LINUX || REX_PLATFORM_MAC
     if (const fs::path campaign = CampaignProgram(); !campaign.empty()) {
       RestartProcess(campaign);  // leave the explicit pending file for the campaign
     }

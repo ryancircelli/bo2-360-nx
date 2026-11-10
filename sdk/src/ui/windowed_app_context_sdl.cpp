@@ -46,6 +46,12 @@ bool SDLWindowedAppContext::Initialize() {
   if (requested_driver.empty()) {
     requested_driver = "cocoa";
   }
+  // Fullscreen without a separate Space. The Space transition animates the window from its
+  // windowed size, and the swapchain recreated during it intermittently leaves the CAMetalLayer
+  // stretching a single texel over the screen (solid color, the game itself rendering fine).
+  // Non-Space fullscreen switches instantly. Default priority: SDL_VIDEO_MAC_FULLSCREEN_SPACES=1
+  // in the environment still restores the Space behavior.
+  SDL_SetHintWithPriority(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0", SDL_HINT_DEFAULT);
 #endif
   if (!requested_driver.empty()) {
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, requested_driver.c_str());

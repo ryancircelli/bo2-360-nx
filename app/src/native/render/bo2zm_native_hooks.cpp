@@ -22,6 +22,7 @@
 #include <vector>
 #include <array>  // bo2zm_d3d_game_vegetation
 #include <string>
+#include <rex/system/xmemory.h>
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_d3d_shadow, false, "BO2",
                     "Native renderer (Direct3D-level renderer): on 1 in 64 draws it snapshots the "
@@ -107,13 +108,9 @@ Shot g_shots[kShots];
 std::atomic<uint64_t> g_next_shot{1};
 uint32_t g_counter_shots = 0;  // AnnotateDraw's thread only
 
-// As REX_RAW_ADDR in the generated code: on Win32 the area from 0xE0000000 is 0x1000 higher.
+// As REX_RAW_ADDR in the generated code: on Win32 and macOS arm64 the area from 0xE0000000 is 0x1000 higher.
 inline const uint8_t* Guest(const uint8_t* base, uint32_t address) {
-#if REX_PLATFORM_WIN32
-  return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
-#else
-  return base + address;
-#endif
+  return base + address + rex::memory::detail::PhysicalHostOffset(address);
 }
 
 // Per device, the shader constants its stream has given the GPU as far as the shadow can tell, laid over the mirror's
@@ -438,13 +435,9 @@ void RegisterShaderObject(const uint8_t* base, uint32_t object, uint32_t physica
   }
   // The library's blob: the container (flags 0x102A11xx, bit 0 for a vertex shader; virtual size at +4, physical
   // size at +8) followed by the physical part, as tools/inspect/ff_shaders.py built the pack.
-  // As REX_RAW_ADDR in the generated code: on Win32 the area from 0xE0000000 is 0x1000 higher.
+  // As REX_RAW_ADDR in the generated code: on Win32 and macOS arm64 the area from 0xE0000000 is 0x1000 higher.
   auto host = [base](uint32_t address) {
-#if REX_PLATFORM_WIN32
-    return base + address + (address >= 0xE0000000u ? 0x1000u : 0u);
-#else
-    return base + address;
-#endif
+    return base + address + rex::memory::detail::PhysicalHostOffset(address);
   };
   const uint8_t* c = host(object + (vertices ? 0x368u : 0x28u));
   const uint32_t flags = ReadBE(c);

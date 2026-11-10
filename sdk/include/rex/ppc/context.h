@@ -147,12 +147,17 @@ constexpr uint32_t kRoundMask = 0x03;
 struct FPSCRRegister {
   uint32_t csr;
 
-  static constexpr size_t HostToGuest[] = {kRoundNearest, kRoundDown, kRoundUp, kRoundTowardZero};
-
   using Platform = platform::FPSCRPlatform;
   static constexpr size_t RoundShift = Platform::RoundShift;
   static constexpr size_t RoundMaskVal = Platform::RoundMaskVal;
   static constexpr size_t FlushMask = Platform::FlushMask;
+
+  // Host rounding field -> guest RN. Per arch: the ARM FPCR RMode order (N, +Inf, -Inf, Z)
+  // is not the x86 MXCSR order (N, -Inf, +Inf, Z). A shared x86-ordered table made mffs
+  // report round-up and round-down swapped on ARM64 (and a partial mtfsf write them back
+  // swapped). The tables live in platform/fpscr.h.
+  static_assert(kRoundNearest == 0 && kRoundTowardZero == 1 && kRoundUp == 2 && kRoundDown == 3,
+                "PowerPC FPSCR[RN] encodings (platform/fpscr.h tables assume them)");
 
   // Bits the guest owns; the rest is host policy seeded by InitHost.
   static constexpr uint32_t GuestMask = uint32_t(RoundMaskVal) | uint32_t(FlushMask);
@@ -168,7 +173,7 @@ struct FPSCRRegister {
 
   inline uint32_t loadFromHost() noexcept {
     csr = getcsr();
-    return HostToGuest[(csr & RoundMaskVal) >> RoundShift];
+    return uint32_t(Platform::HostToGuest[(csr & RoundMaskVal) >> RoundShift]);
   }
 
   inline void storeFromGuest(uint32_t value) noexcept {

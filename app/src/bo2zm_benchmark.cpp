@@ -27,6 +27,7 @@
 
 #include "bo2zm_cheats.h"
 #include "bo2zm_lifecycle.h"
+#include "bo2zm_perf_log.h"
 #include "bo2zm_preset.h"
 #include "native/render/bo2zm_native_capture.h"
 
@@ -609,10 +610,18 @@ void Summarize(double seconds) {
     over50 += v > 50.0f;
   }
   const double n = double(ms.size());
+  // 1 % low: the average of the slowest 1 % of the frames (at least one), as frame-time tools report it.
+  const size_t slowest = std::max<size_t>(1, ms.size() / 100);
+  double slowest_sum = 0.0;
+  for (size_t i = ms.size() - slowest; i < ms.size(); ++i) {
+    slowest_sum += ms[i];
+  }
+  const double low_1 = slowest_sum / double(slowest);
   REXLOG_INFO("[benchmark] {} frames in {:.0f} s: {:.1f} FPS average, median {:.1f} ms ({:.1f} FPS), p90 {:.1f} ms, "
-              "p99 {:.1f} ms, worst {:.1f} ms; over 33.3 ms {:.1f} %, over 50 ms {:.1f} %",
+              "p99 {:.1f} ms, worst {:.1f} ms; over 33.3 ms {:.1f} %, over 50 ms {:.1f} %; 1 % low {:.1f} ms "
+              "({:.1f} FPS)",
               ms.size(), seconds, n / seconds, pct(0.5), 1000.0 / pct(0.5), pct(0.9), pct(0.99), ms.back(),
-              100.0 * double(over33) / n, 100.0 * double(over50) / n);
+              100.0 * double(over33) / n, 100.0 * double(over50) / n, low_1, 1000.0 / low_1);
   if (AbSeconds() > 0) {
     SummarizeAb();
   }
@@ -795,6 +804,7 @@ void AnnotateFrame() {
   }
   if (t >= Duration()) {
     g_summarized = true;
+    bo2zm::perf_log::Event("route_end");  // the end of perf_summary.py's window
     Summarize(Duration());
 #if defined(BO2ZM_PGO_GENERATE)
     mkdir("/switch/bo2zm/pgo", 0777);
@@ -812,6 +822,20 @@ void AnnotateFrame() {
     REXLOG_INFO("[pgo] counters reset at the start of the route");
   }
 #endif
+  // bo2zm_perf_log: one segment per span of the path (30 s turning right, 30 s turning left, repeated), so the
+  // summary gives each its own statistics; "look_right_2" is the second minute's turn to the right. A spot test
+  // (bo2zm_test_spot) does not follow the path.
+  if (bo2zm::perf_log::Enabled() && !ParsedSpot().valid) {
+    constexpr double kSpan = kPath[0].until - kPath[0].since;
+    constexpr int kSpans = int(sizeof(kPath) / sizeof(kPath[0]));
+    static int segment = -1;
+    if (const int now_segment = int(t / kSpan); now_segment != segment) {
+      segment = now_segment;
+      const bool right = kPath[segment % kSpans].buttons == kLookRight;
+      bo2zm::perf_log::Event("segment",
+                             fmt::format("name={}_{}", right ? "look_right" : "look_left", segment / kSpans + 1));
+    }
+  }
   // bo2zm_benchmark_next_round_s: a soak test's round changes.
   static const int next_round_s = REXCVAR_GET(bo2zm_benchmark_next_round_s);
   static double next_round_at = double(next_round_s);

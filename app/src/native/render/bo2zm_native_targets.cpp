@@ -38,6 +38,7 @@
 #include "../../bo2zm_cheats.h"  // the third-person crosshair on the output
 #include "../../bo2zm_preset.h"  // the preset note on the output
 #include "../../bo2zm_credits.h"  // the home screen's credits line on the output
+#include "../../bo2zm_perf_log.h"  // bo2zm_perf_log: GPU time per frame, GPU name
 
 #include <rex/cvar.h>
 #include <rex/graphics/xenos.h>
@@ -1046,6 +1047,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
         period_mark_ns_ = physical.limits.timestampPeriod;
       }
+      bo2zm::perf_log::SetMeta("gpu", physical.deviceName);
       REXLOG_INFO("[native] C2: GPU time per Swap {}",
                   queries_ != VK_NULL_HANDLE ? "measured with timestamps"
                                                : "not available (the queue has no timestamps)");
@@ -1302,6 +1304,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     VkPipelineInputAssemblyStateCreateInfo assembly{};
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    // Not indexed, so restart changes nothing; Metal cannot turn it off and MoltenVK warns when it is off.
+    assembly.primitiveRestartEnable = VK_TRUE;
     VkPipelineViewportStateCreateInfo view{};
     view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     view.viewportCount = 1;
@@ -3337,6 +3341,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     nanoseconds = gpu_ns_;
     jobs = gpu_jobs_;
   }
+
+  uint64_t JobsSubmitted() const override { return submits_; }
 
   uint64_t MarkGpuFinalNs() const override { return uint64_t(double(last_mark_gpu_) * period_mark_ns_); }
   uint64_t JobsMarksPrecise() const override { return gpu_jobs_precise_; }
@@ -6133,16 +6139,20 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
         mark_end_previous_ = marks[marked - 1];
         last_mark_gpu_ = marks[marked - 1];
-        gpu_ns_ += uint64_t(double(marks[marked - 1] - marks[0]) * period_mark_ns_);
+        const uint64_t ns_job = uint64_t(double(marks[marked - 1] - marks[0]) * period_mark_ns_);
+        gpu_ns_ += ns_job;
         ++gpu_jobs_;
+        bo2zm::perf_log::NoteGpuJob(slot.order, ns_job, true);
         if (slot.marks_precise) {
           ++gpu_jobs_precise_;
         }
       } else {
         mark_end_previous_ = 0;  // without this submission's timestamps, the next gap is not counted
+        bo2zm::perf_log::NoteGpuJob(slot.order, 0, false);
       }
     } else {
       mark_end_previous_ = 0;
+      bo2zm::perf_log::NoteGpuJob(slot.order, 0, false);
     }
     slot.categories.clear();
     ReadOcclusions(slot);

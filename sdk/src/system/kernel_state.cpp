@@ -53,6 +53,10 @@ REXCVAR_DEFINE_INT32(offline_user_count, 1, "Kernel", "Offline local profiles av
     .range(1, 4).lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(offline_user_name_1, "Player 2", "Kernel", "Second offline profile's name (up to 15 printable ASCII characters)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(offline_user_name_2, "Player 3", "Kernel", "Third offline profile's name (up to 15 printable ASCII characters)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(offline_user_name_3, "Player 4", "Kernel", "Fourth offline profile's name (up to 15 printable ASCII characters)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex::system {
 
@@ -113,6 +117,8 @@ KernelState::KernelState(Runtime* emulator)
     user_profiles_[i]->set_kernel_state(this);
   }
   if (user_profiles_[1]) user_profiles_[1]->set_name(REXCVAR_GET(offline_user_name_1));
+  if (user_profiles_[2]) user_profiles_[2]->set_name(REXCVAR_GET(offline_user_name_2));
+  if (user_profiles_[3]) user_profiles_[3]->set_name(REXCVAR_GET(offline_user_name_3));
 
   auto user_data_root = emulator_->user_data_root();
   if (!user_data_root.empty()) {

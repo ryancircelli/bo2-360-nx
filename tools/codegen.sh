@@ -19,17 +19,22 @@
 # the junction to the main checkout's.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if [ -L "$ROOT/app/generated" ]; then
+# BO2_GENERATED_LINK_OK=1 (tools/build_mac.sh): app/generated is a link to a folder outside every checkout (the data
+# folder), which is what keeps generated code out of the repository; the check above is for worktree junctions.
+if [ -L "$ROOT/app/generated" ] && [ "${BO2_GENERATED_LINK_OK:-0}" != 1 ]; then
   echo "app/generated is a link to another checkout's generated code: run tools/bootstrap_worktree.sh <tag> --own-generated" >&2
   echo "(after removing the link), or run this in the checkout that owns it" >&2
   exit 1
 fi
-SDK_BIN="$ROOT/sdk/out/win-amd64"
+SDK_BIN="${REXGLUE_BIN_DIR:-$ROOT/sdk/out/win-amd64}"
 export PATH="$SDK_BIN:$PATH"
 PY="${PYTHON:-python}"
+# rexglue.exe on Windows, rexglue elsewhere (tools/build_mac.sh sets REXGLUE_BIN_DIR to its host build).
+REXGLUE=rexglue.exe
+command -v "$REXGLUE" > /dev/null 2>&1 || REXGLUE=rexglue
 
 echo "== codegen"
-(cd "$ROOT/app" && rexglue.exe codegen --ignore-stamp bo2zm_manifest.toml > codegen.log 2>&1) || {
+(cd "$ROOT/app" && "$REXGLUE" codegen --ignore-stamp bo2zm_manifest.toml > codegen.log 2>&1) || {
   echo "codegen failed, see app/codegen.log" >&2
   exit 1
 }

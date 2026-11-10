@@ -12,8 +12,9 @@ TR="$HERE/translator"            # XenosRecomp (MIT, hedge-dev) with our changes
 TP="$ROOT/sdk/thirdparty"             # fmt + xxHash (fetched by tools/fetch_thirdparty.py)
 . "$ROOT/tools/toolchain.sh"  # LLVM and the Vulkan SDK (VULKAN_SDK)
 VK="$VULKAN_SDK"
-DXC="$VK/Bin/dxc.exe"
-VAL="$VK/Bin/spirv-val.exe"
+# Windows SDK layout (Bin/*.exe), else the macOS/Linux one (bin/), else PATH.
+DXC="$VK/Bin/dxc.exe"; [ -x "$DXC" ] || DXC="$VK/bin/dxc"; [ -x "$DXC" ] || DXC="$(command -v dxc)"
+VAL="$VK/Bin/spirv-val.exe"; [ -x "$VAL" ] || VAL="$VK/bin/spirv-val"; [ -x "$VAL" ] || VAL="$(command -v spirv-val)"
 JOBS="${JOBS:-12}"
 
 case "$(cd "$OUT" 2>/dev/null && pwd || echo "$OUT")" in

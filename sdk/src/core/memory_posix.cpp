@@ -478,9 +478,15 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
   if (ret < 0) {
     return kFileMappingHandleInvalid;
   }
+  // Remove the name right away. The descriptor and every view of it keep the object alive, and
+  // the kernel frees it when the last one goes, however the process ends. Unlinking only in
+  // CloseFileMappingHandle leaked the whole guest memory object (every page the game touched,
+  // about 1.3 GB per launch) until reboot whenever the process exited without running the
+  // destructor: a hard exit, a kill or a crash. Nothing opens these objects by name again, and
+  // each launch picks a new name.
+  shm_unlink(full_path.c_str());
   if (rex_ftruncate64(ret, static_cast<off_t>(length)) != 0) {
     close(ret);
-    shm_unlink(full_path.c_str());
     return kFileMappingHandleInvalid;
   }
   return static_cast<FileMappingHandle>(ret);
@@ -490,6 +496,7 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
 void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {
   close(static_cast<int>(handle));
 #if !REX_PLATFORM_ANDROID
+  // Normally already unlinked at creation, so ENOENT here is expected.
   auto full_path = MakeShmName(path);
   shm_unlink(full_path.c_str());
 #endif

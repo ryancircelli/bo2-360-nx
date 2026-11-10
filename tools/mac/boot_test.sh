@@ -50,8 +50,21 @@ fullenv=(); for e in "${envs[@]}"; do fullenv+=("REX_$e"); done
 [ "$pads" = sdk ] && [ "$scripted" = 1 ] && fullenv+=(REX_HID_VIRTUAL_PAD_SCRIPT="$(cd "$(dirname "$route")" && pwd)/$(basename "$route")")
 fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$portoff")   # other instances bind UDP 31000/31001; each test run uses its own ports
 fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
-          MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs")
+          MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs"
+          BO2ZM_ROUTE="$rname" BO2ZM_PLAYERS="$players")   # the perf log's route and players header lines
 [ -n "$data" ] && fullenv+=(BO2_DATA="$data")
+# Another copy of the game on the default ports makes the socket bind fail, and the game then reboots itself over and
+# over (an empty perf log). Unless the caller or the route chose one, pick an offset whose UDP ports (offset + 1000 and
+# + 1001) are free.
+if [ -z "${REX_NET_SYSTEM_PORT_OFFSET:-}" ] && [[ " ${envs[*]} " != *" NET_SYSTEM_PORT_OFFSET="* ]]; then
+  port_offset=50000
+  while lsof -nP -iUDP:$((port_offset + 1000)) >/dev/null 2>&1 || lsof -nP -iUDP:$((port_offset + 1001)) >/dev/null 2>&1; do
+    port_offset=$((port_offset + 1000))
+    [ "$port_offset" -le 63000 ] || { echo "no free port offset between 50000 and 63000" >&2; exit 2; }
+  done
+  fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$port_offset")
+  echo "port offset $port_offset (UDP $((port_offset + 1000)), $((port_offset + 1001)))"
+fi
 
 # ---- stop leftovers ----
 pat="${app:-$exe}"; pat="$(cd "$(dirname "$pat")" && pwd)/$(basename "$pat")"

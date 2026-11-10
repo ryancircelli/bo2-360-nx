@@ -446,6 +446,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_deferred_reports, true, "BO2",
 #include "../../bo2zm_memcpy_callers.h"
 #include "../../bo2zm_page_writes.h"
 #include "../../bo2zm_pc_profiler.h"
+#include "../../bo2zm_perf_log.h"
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_im_load_without_memcmp, true, "BO2",
                     "Native renderer: an IM_LOAD whose microcode nobody has written since the last "
@@ -2127,6 +2128,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       reader.pos = read;
       reader.end = written;
       const auto start_ring = Clock::now();
+      start_batch_ = start_ring;  // bo2zm_perf_log: Present counts the batch it is part of
       while (reader.Pending()) {
         if (!Packet(reader, 0)) {
           // Partial packet: the rest will arrive with the next CP_RB_WPTR.
@@ -5123,6 +5125,26 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
   // --- Test presentation -------------------------------------------------
 
+  // bo2zm_perf_log: this frame's cumulative counters (bo2zm_perf_log.cpp says which number goes in which column).
+  // g_ns_ring_working is only added once a batch of packets ends, and this Swap is in the middle of one, so the
+  // batch's time so far is added here: otherwise each frame's last batch would count in the next frame.
+  void LogFrame() {
+    bo2zm::perf_log::Counters c;
+    c.ns_working = bo2zm::waits::g_ns_ring_working.load(std::memory_order_relaxed) + NanosecondsSince(start_batch_);
+    c.ns_waiting_guest = bo2zm::waits::g_ns[bo2zm::waits::kRingRegMem].load(std::memory_order_relaxed);
+    uint64_t cost[12] = {};
+    targets_->CostPresent(cost);
+    uint64_t waits_slot = 0, ns_waits_slot = 0;
+    targets_->WaitsGpu(waits_slot, ns_waits_slot);
+    // The output fence, the SDK's part of RefreshGuestOutput (swapchain acquire and present) and the slot fences.
+    c.ns_present_wait = cost[1] + cost[9] + cost[11] + ns_waits_slot;
+    c.draws = draws_.load(std::memory_order_relaxed);
+    c.jobs_submitted = targets_->JobsSubmitted();
+    c.width = swap_width_.load(std::memory_order_relaxed);
+    c.height = swap_height_.load(std::memory_order_relaxed);
+    bo2zm::perf_log::OnPresent(c);
+  }
+
   void Present() {
     swaps_.fetch_add(1, std::memory_order_relaxed);
     bo2zm::benchmark::AnnotateFrame();  // bo2zm_benchmark's frame times
@@ -5146,6 +5168,9 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       time_present_ns_ += NanosecondsSince(start);
       ++presents_measures_;
       if (presented) {
+        if (bo2zm::perf_log::Enabled()) {
+          LogFrame();
+        }
         return;
       }
     }
@@ -6366,6 +6391,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   uint64_t time_draws_ns_ = 0;
   uint64_t time_copies_ns_ = 0;
   uint64_t time_present_ns_ = 0;
+  Clock::time_point start_batch_{};  // start of the packet batch being executed (bo2zm_perf_log)
   uint64_t draws_measured_ = 0;
   uint64_t phase_stopwatch_draws_ = 0;  // phase of the DrawNative timer, never reset
   uint64_t copies_measures_ = 0;

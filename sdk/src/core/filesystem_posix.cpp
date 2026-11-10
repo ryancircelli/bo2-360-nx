@@ -166,7 +166,15 @@ std::filesystem::path GetUserFolder() {
 }
 
 FILE* OpenFile(const std::filesystem::path& path, const std::string_view mode) {
-  return fopen(path.c_str(), std::string(mode).c_str());
+  FILE* file = fopen(path.c_str(), std::string(mode).c_str());
+  // The initial read position of an "a+" stream is implementation-defined: glibc and the MSVC CRT
+  // start at 0, macOS starts at the end. The shader/pipeline storages read their header first and
+  // reset the file when that read fails, which wiped them on every macOS launch. Appends still go
+  // to the end regardless of the position.
+  if (file && !mode.empty() && mode[0] == 'a') {
+    rewind(file);
+  }
+  return file;
 }
 
 bool Seek(FILE* file, int64_t offset, int origin) {

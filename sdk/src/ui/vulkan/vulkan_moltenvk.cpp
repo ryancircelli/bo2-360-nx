@@ -187,6 +187,18 @@ MacOSVulkanRuntimePaths DetectMacOSVulkanRuntimePaths() {
 }
 
 void ConfigureMacOSVulkanEnvironment(const MacOSVulkanRuntimePaths& paths) {
+  // MoltenVK configuration defaults, read when the first Vulkan instance is created. The last
+  // argument 0 keeps any value the user already set in the environment.
+  //
+  // MoltenVK compiles shaders with Metal fast math by default, which assumes there are no
+  // infinities or NaNs and may reorder float math freely. Translated Xenos shaders depend on IEEE
+  // results (for example a clamped rsqrt(0) multiplied by 0 must give 0, not NaN), so turn it off.
+  // The GTA V recomp measured no frame rate cost from this.
+  setenv("MVK_CONFIG_FAST_MATH_ENABLED", "0", 0);
+  // Games create pipelines in bursts of hundreds when a level or cutscene loads. Let Metal compile
+  // them on more threads.
+  setenv("MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", "1", 0);
+
   if (!paths.sdk_root.empty()) {
     const char* vulkan_sdk = std::getenv("VULKAN_SDK");
     if (!vulkan_sdk || !vulkan_sdk[0]) {

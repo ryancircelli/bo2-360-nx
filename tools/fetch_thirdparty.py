@@ -44,16 +44,23 @@ def main():
         copied = kept = 0
         for dirpath, dirnames, filenames in os.walk(source):
             dirnames[:] = [d for d in dirnames if d != '.git']
-            for name in filenames:
+            # os.walk lists symlinks to directories as dirnames; copy them as links too
+            links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+            dirnames[:] = [d for d in dirnames if d not in links]
+            for name in filenames + links:
                 if name == '.git':
                     continue
                 src = os.path.join(dirpath, name)
                 dst = os.path.join(target, os.path.relpath(src, source))
-                if os.path.exists(dst):
+                if os.path.lexists(dst):
                     kept += 1
                     continue
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(src, dst)
+                if os.path.islink(src):
+                    # Some submodules (MoltenVK) ship relative symlinks whose targets are not fetched
+                    os.symlink(os.readlink(src), dst)
+                else:
+                    shutil.copy2(src, dst)
                 copied += 1
         print(f'{copied} files copied into sdk/thirdparty, {kept} files of this project kept')
     finally:

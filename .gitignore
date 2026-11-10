@@ -3,6 +3,9 @@ game/
 work/
 generated/
 **/generated/
+# tools/build_mac.sh links these to the data folder, so they are symlinks, not directories
+/work
+/app/generated
 *.xex
 *.xexp
 *.pe
