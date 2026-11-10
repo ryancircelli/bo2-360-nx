@@ -917,18 +917,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (render_pass_output_ != VK_NULL_HANDLE)
       dfn_.vkDestroyRenderPass(device_, render_pass_output_, nullptr);
     for (WorkSlot& slot : slots_) {
-      if (slot.fence != VK_NULL_HANDLE) dfn_.vkDestroyFence(device_, slot.fence, nullptr);
-      if (slot.pool_job != VK_NULL_HANDLE)
-        dfn_.vkDestroyCommandPool(device_, slot.pool_job, nullptr);
-      if (slot.pool_upload != VK_NULL_HANDLE)
-        dfn_.vkDestroyCommandPool(device_, slot.pool_upload, nullptr);
+      work_.DestroyFence(slot.fence);
+      work_.DestroyPool(slot.pool_job);
+      work_.DestroyPool(slot.pool_upload);
     }
     work_.DestroyQueries(queries_);
     work_.DestroyQueries(occlusions_);
     work_.DestroyQueries(visibility_);
     for (uint32_t i = 0; i < kSlotsOutput; ++i) {
-      if (fences_output_[i] != VK_NULL_HANDLE) dfn_.vkDestroyFence(device_, fences_output_[i], nullptr);
-      if (pools_output_[i] != VK_NULL_HANDLE) dfn_.vkDestroyCommandPool(device_, pools_output_[i], nullptr);
+      work_.DestroyFence(fences_output_[i]);
+      work_.DestroyPool(pools_output_[i]);
     }
   }
 
@@ -989,41 +987,26 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     // One pool per command buffer: the SDK table does not include
     // vkResetCommandBuffer either, so the whole pool is reset.
-    VkCommandPoolCreateInfo info_pool{};
-    info_pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    info_pool.queueFamilyIndex = family_;
-    VkCommandBufferAllocateInfo reserve{};
-    reserve.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    reserve.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    reserve.commandBufferCount = 1;
-    VkFenceCreateInfo info_fence{};
-    info_fence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     for (WorkSlot& slot : slots_) {
-      if (dfn_.vkCreateCommandPool(device_, &info_pool, nullptr, &slot.pool_job) !=
-              VK_SUCCESS ||
-          dfn_.vkCreateCommandPool(device_, &info_pool, nullptr, &slot.pool_upload) !=
-              VK_SUCCESS ||
-          dfn_.vkCreateFence(device_, &info_fence, nullptr, &slot.fence) != VK_SUCCESS) {
+      if (!work_.CreatePool(family_, slot.pool_job) || !work_.CreatePool(family_, slot.pool_upload) ||
+          !work_.CreateFence(slot.fence)) {
         return false;
       }
-      reserve.commandPool = slot.pool_job;
-      if (dfn_.vkAllocateCommandBuffers(device_, &reserve, &slot.job) != VK_SUCCESS) {
+      if (!work_.AllocateCommands(slot.pool_job, slot.job)) {
         return false;
       }
-      reserve.commandPool = slot.pool_upload;
-      if (dfn_.vkAllocateCommandBuffers(device_, &reserve, &slot.upload) != VK_SUCCESS) {
+      if (!work_.AllocateCommands(slot.pool_upload, slot.upload)) {
         return false;
       }
     }
     for (uint32_t i = 0; i < kSlotsOutput; ++i) {
-      if (dfn_.vkCreateCommandPool(device_, &info_pool, nullptr, &pools_output_[i]) != VK_SUCCESS) {
+      if (!work_.CreatePool(family_, pools_output_[i])) {
         return false;
       }
-      reserve.commandPool = pools_output_[i];
-      if (dfn_.vkAllocateCommandBuffers(device_, &reserve, &commands_output_[i]) != VK_SUCCESS) {
+      if (!work_.AllocateCommands(pools_output_[i], commands_output_[i])) {
         return false;
       }
-      if (dfn_.vkCreateFence(device_, &info_fence, nullptr, &fences_output_[i]) != VK_SUCCESS) {
+      if (!work_.CreateFence(fences_output_[i])) {
         return false;
       }
     }
