@@ -6029,12 +6029,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!on) {
       return;
     }
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    gpu_.Barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0,
-                 nullptr, 0, nullptr);
+    gpu::MemoryBarrier barrier;
+    barrier.before = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.after = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, &barrier);
   }
 
   void FinishPass() override {
@@ -10262,12 +10260,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     gpu_.Dispatch(upload, table.groups - table.dispatched, 1, 1);
     table.dispatched = table.groups;
     bo2zm::gpu_skin::Counts().submit_dispatches.fetch_add(1, std::memory_order_relaxed);
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-    gpu_.Barrier(upload, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1,
-                 &barrier, 0, nullptr, 0, nullptr);
+    gpu::MemoryBarrier barrier;
+    barrier.before = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.after = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    gpu_.Barrier(upload, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, &barrier);
   }
 
   // bo2zm_gpu_skin_check: the checks recorded in upload buffer `index`, now that the GPU is done with it.
@@ -10834,12 +10830,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
     for (uint32_t i = 0; i < 3; ++i) {
       const uint32_t layers = i == 2 ? 6 : 1;
       Barrier(upload, empty_[i].image, layers);
-      VkClearColorValue cero{};
+      gpu::ClearColor cero{};
       if (REXCVAR_GET(bo2zm_native_diag_gray_empties)) {
-        cero.float32[0] = cero.float32[1] = cero.float32[2] = 0.5f;
-        cero.float32[3] = 1.0f;
+        cero.f[0] = cero.f[1] = cero.f[2] = 0.5f;
+        cero.f[3] = 1.0f;
       }
-      const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+      const gpu::Range range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
       gpu_.ClearColorImage(upload, empty_[i].image, VK_IMAGE_LAYOUT_GENERAL, &cero, 1,
                            &range);
       empty_[i].prepared = true;
@@ -10849,18 +10845,14 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   void Barrier(gpu::CommandList cmd, gpu::Image image, uint32_t layers) {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    gpu::ImageBarrier barrier;
+    barrier.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.new_layout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, layers};  // and mips
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, gpu::kAllLevels, 0, layers};  // and mips
+    barrier.after = VK_ACCESS_TRANSFER_WRITE_BIT;
     gpu_.Barrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                 &barrier);
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, nullptr, 1, &barrier);
   }
 
   void WriteImage(uint32_t heap, uint32_t slot, gpu::ImageView view) {
