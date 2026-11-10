@@ -34,6 +34,9 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #include <memory>
 
 #include <pthread.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 #include <semaphore.h>
 
 #if defined(__APPLE__)
@@ -2423,6 +2426,11 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   // priority or affinity change made from another thread looks the handle up there. Without this registration every
   // such change fails with ESRCH ("set_priority: pthread_setschedparam failed (3)").
   RexSwitchRegisterCurrentThread();
+#elif defined(__APPLE__)
+  // Guest threads (game, render, audio) at the user-interactive QoS class, as the main thread already is: the
+  // default class lets macOS move them to efficiency cores and delay their wake-ups. Only a thread itself can set
+  // its class once it runs.
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #endif
   {
     std::unique_lock<std::mutex> lock(thread->handle_.state_mutex_);
