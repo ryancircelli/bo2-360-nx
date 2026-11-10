@@ -1,0 +1,11 @@
+# Sign-in join test (research/splitscreen-signin.md). Fails if the log has a STUB line for XamUserGetAgeGroup or XamUserGetMembershipTier.
+# Four pads: players 2 to 4 join one after another.
+players = 4
+duration_s = 170
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_START_WAIT_S = 55
+BO2ZM_TEST_BUTTONS_P2 = 44:a
+BO2ZM_TEST_BUTTONS_P3 = 46:a
+BO2ZM_TEST_BUTTONS_P4 = 48:a
