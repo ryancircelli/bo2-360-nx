@@ -89,6 +89,39 @@ uint32_t ReadBE(const uint8_t* p) {
   return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
 }
 
+// True if the vertex shader's control flow allocates memory exports (ALLOC of type 3, kMemory in Xenia's ucode.h),
+// as NativeRenderSystem::VsExportsMemory checks the ring's microcode. The container (virtual part, big-endian) holds
+// the program's offset in the physical part: the offset at container + 0x18 points to it (see WarnRegister in
+// bo2zm_d3d_marker.cpp).
+bool ExportsMemory(const uint8_t* container, uint32_t size_virtual, const uint8_t* physical, uint32_t size_physical) {
+  const uint32_t o = ReadBE(container + 0x18);
+  if (o > size_virtual - 4) {
+    return false;
+  }
+  const uint32_t start = ReadBE(container + o);
+  if (start >= size_physical) {
+    return false;
+  }
+  const uint32_t words = (size_physical - start) / 4;
+  const uint8_t* p = physical + start;
+  for (uint32_t i = 0; i + 2 < words && i < 3 * 64; i += 3) {
+    const uint32_t w1 = ReadBE(p + 4 * (i + 1)), w2 = ReadBE(p + 4 * (i + 2));
+    const uint32_t high[2] = {w1 & 0xFFFF, w2 >> 16};
+    bool end = false;
+    for (uint32_t height : high) {
+      const uint32_t opcode = (height >> 12) & 0xF;
+      if (opcode == 12 && ((height >> 9) & 0x3) == 3) {
+        return true;
+      }
+      end |= opcode == 2 || opcode == 4;  // exec_end / cond_exec_end
+    }
+    if (end) {
+      break;
+    }
+  }
+  return false;
+}
+
 // The D3D shadow's snapshots (see MirrorSnapshot in the header).
 constexpr uint32_t kShotEvery = 64;            // 1 in 64 draws
 constexpr uint32_t kShots = 256;              // snapshots in flight between the game thread and the ring thread
@@ -452,9 +485,21 @@ void RegisterShaderObject(const uint8_t* base, uint32_t object, uint32_t physica
     blob.insert(blob.end(), p, p + size_physical);
     number = shaders->NumberOfContainer(blob);
   }
+  // BO2's texture-streaming copy shaders (shaders/gpu_transfer/gpu_transfer.xvu and gpu_transfer_128in256.xvu in
+  // code_post_gfx; container flags 0x102A1111) write memory and draw nothing. They are not in the library on purpose:
+  // the native renderer runs their draws on the CPU (NativeRenderSystem::ExecuteMemexportBo2zm), which it does only
+  // for draws without a library vertex shader.
+  const bool memexport = number < 0 && vertices && (flags & 0xFFFFFF00u) == 0x102A1100u &&
+                         size_virtual >= 0x24 && uint64_t(size_virtual) + size_physical <= 65536 &&
+                         ExportsMemory(c, size_virtual, host(physical), size_physical);
   (vertices ? g_created_vs : g_created_ps).fetch_add(1, std::memory_order_relaxed);
-  if (number >= 0) {
+  if (number >= 0 || memexport) {
     (vertices ? g_known_vs : g_known_ps).fetch_add(1, std::memory_order_relaxed);
+    if (memexport) {
+      REXLOG_DEBUG("[native] C5b: vertex shader registered at {:08X} writes memory (memexport): its draws run on "
+                   "the CPU, not from the library",
+                   object);
+    }
   } else if (g_warnings.fetch_add(1, std::memory_order_relaxed) < 16) {
     REXLOG_WARN("[native] C5b: {} shader registered at {:08X} (flags {:08X}) that is not in the library",
                 vertices ? "vertex" : "pixel", object, flags);
