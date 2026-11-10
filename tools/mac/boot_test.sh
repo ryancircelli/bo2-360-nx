@@ -49,7 +49,11 @@ grep -q '^PLACEHOLDER *= *true' "$route" && echo "note: $rname is a placeholder 
 duration=60; players=1; quad=0; envs=(); allow_relaunch=0; scripted=0
 CHECK_PATTERNS='unregistered function|MISMATCH|lost wake'
 # known defects of the 23:37 build, logged on every run: counted and printed, they fail the run only with --strict
-KNOWN_PATTERNS='signal delivery failed|not in the library|primitive restart'
+KNOWN_PATTERNS='not in the library'
+# allowed only where they are harmless, any other occurrence fails the run (see the check below):
+#  - "QueueUserCallback: signal delivery failed" once shutdown has begun (pthread_kill of guest threads that have
+#    already exited): after "Window closing" / "Title terminated", or in the block of them that ends the log
+#  - one MoltenVK "does not support disabling primitive restart" (Vulkan fallback, at its first strip pipeline)
 while IFS= read -r line; do
   line="${line%%#*}"; [[ "$line" == *=* ]] || continue
   k="$(echo "${line%%=*}" | tr -d ' ')"; v="$(echo "${line#*=}" | sed 's/^ *//;s/ *$//')"
@@ -146,6 +150,12 @@ if [ -f "$out/game.log" ]; then
   grep -q '\[benchmark\] [0-9]* frames in' "$out/game.log" && echo "route reached its end: benchmark summary written"
   known="$(grep -Ec "$KNOWN_PATTERNS" "$out/game.log")"
   if [ "${known:-0}" -gt 0 ]; then echo "known defects: $known log lines ($KNOWN_PATTERNS)"; [ "$strict" = 1 ] && logfail=1; fi
+  early_signals="$(awk '/Window closing|Title terminated/ { down = 1 }
+    /signal delivery failed/ { if (!down) pending++; next }
+    { early += pending; pending = 0 } END { print early + 0 }' "$out/game.log")"
+  if [ "$early_signals" -gt 0 ]; then echo "FAIL: $early_signals 'signal delivery failed' lines before shutdown"; logfail=1; fi
+  restarts="$(grep -c 'does not support disabling primitive restart' "$out/game.log")"
+  if [ "${restarts:-0}" -gt 1 ]; then echo "FAIL: $restarts MoltenVK primitive restart warnings (one is expected on the Vulkan fallback)"; logfail=1; fi
   # "verify mismatches 0" is an info line of the Metal plugin, not an error
   hits="$(grep -E "$CHECK_PATTERNS" "$out/game.log" | grep -Evic "mismatches 0")"
   if [ "${hits:-0}" -gt 0 ]; then echo "FAIL: $hits log lines match: $CHECK_PATTERNS"; grep -E "$CHECK_PATTERNS" "$out/game.log" | grep -Evi "mismatches 0" | sort | uniq -c | sort -rn | head -5; logfail=1; fi
