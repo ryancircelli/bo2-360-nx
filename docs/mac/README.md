@@ -7,7 +7,7 @@ Files in this branch (all new, nothing existing is edited):
 | `tools/mac/pack_app.py` | Builds `Black Ops II.app` from the build output, shaders and data folder. |
 | `tools/mac/app/launcher.c` | The app's `CFBundleExecutable`: finds the data, sets paths, starts `bo2zm`. |
 | `tools/mac/boot_test.sh` | Launches the app muted and in the background, plays a route, collects stats and video. |
-| `tools/mac/routes/*.route` | smoke, town_benchmark, splitscreen4 (placeholder). |
+| `tools/mac/routes/*.route` | smoke, town_benchmark, splitscreen4. |
 | `tools/mac/perf_summary.py` | Frame-time statistics and regression check from a perf log. |
 | `tools/mac/make_video.sh`, `compare_video.py` | Raw capture to mp4, and frame comparison against a reference. |
 | `tools/mac/pso_list.py` | Merge and check pipeline lists. |
@@ -50,7 +50,7 @@ Missing, in priority order:
 1. `bo2zm_video_rgba` (env `REX_BO2ZM_VIDEO_RGBA`): record presented frames as raw rgba plus `<name>.txt`
    (`w h fps count`), as peggle1-nx does with `REX_PEGGLE1_VIDEO_*`. Needed for `--video` and `--reference`.
 2. `bo2zm_pso_record`, `bo2zm_pso_verify`, loading of `bo2zm_pso.psolist` (`pso-list-format.md`).
-3. Route timings: `town_benchmark.route` button timings and the whole split screen route need real values from a run.
+3. Route timings: `town_benchmark.route` button timings need real values from a run (`splitscreen4.route` has measured join timings).
 
 ## Credits
 

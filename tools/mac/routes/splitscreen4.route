@@ -1,14 +1,18 @@
-# PLACEHOLDER: 4-player split screen (Town). Player 0 uses BO2ZM_TEST_BUTTONS, players 1-3 use _P2.._P4.
-# The join/lobby sequence is not recorded yet: fill in the button timings from a real run, then drop PLACEHOLDER.
-PLACEHOLDER = true
+# 4-player split screen (Town). Player 0 uses BO2ZM_TEST_BUTTONS, players 1-3 use _P2.._P4.
+# The local lobby opens 10-30 s after start (later under load) and waits BO2ZM_TEST_START_WAIT_S; players 2-4 join
+# with A ("Press A To Play"; Start does nothing there). Each presses A twice so a slow lobby still catches one; a
+# press after the match has started is ignored. The match starts about 80 s in. Measured on purple-fix, 2026-11-10:
+# all four "local player" lines in three runs out of three.
 duration_s = 300
 players = 4
 BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_START_WAIT_S = 50
 BO2ZM_TEST_GOD = true
+BO2ZM_TEST_ALL_GOD = true
 BO2ZM_BENCHMARK = true
 BO2ZM_BENCHMARK_S = 180
 BO2ZM_TEST_BUTTONS =
-BO2ZM_TEST_BUTTONS_P2 =
-BO2ZM_TEST_BUTTONS_P3 =
-BO2ZM_TEST_BUTTONS_P4 =
+BO2ZM_TEST_BUTTONS_P2 = 33:a,45:a
+BO2ZM_TEST_BUTTONS_P3 = 35:a,47:a
+BO2ZM_TEST_BUTTONS_P4 = 37:a,49:a
 compare_quadrants = true
