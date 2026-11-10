@@ -64,6 +64,7 @@ config, on the command line (`--metal_retina=false`) or through the environment 
 | `metal_dedupe_gpu_access` | true | Skip re-marking a shared memory range as GPU-accessed within the same submission. |
 | `metal_tile_resolve_half_bits` | true | Run integer 64bpp resolves of RGBA16Float targets in the open draw pass (tile resolve). Bit-exact: see `tools/half_bits_tile_test.mm`. |
 | `metal_fetch_constants_shared` | true | Upload fetch constants only after a fetch register actually changes, and share that one upload across shader stages and draws until the next change. Set false for the old per-draw upload. |
+| `metal_3d_as_2d_refresh` | true | Reload the 2D copy of a 3D texture that a shader samples as 2D (`gpu_3d_to_2d_texture`) when its guest data was written. The copy lives outside the texture map, so without this it keeps its first contents for as long as the 3D texture lives. |
 | `metal_native_shaders` | true | Optimize guest pixel shaders with metal-opt. Off also turns off everything below it. |
 | `metal_native_xlate` | true | Translate guest shaders to MSL directly (native translator). |
 | `metal_native_first` | true | Compile the native translation first instead of swapping it in later. |
