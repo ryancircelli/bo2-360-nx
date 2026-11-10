@@ -6,6 +6,8 @@
 
 #include <cstring>
 
+#include <zlib.h>
+
 namespace rex::graphics::trace {
 
 bool TraceWriter::Open(const std::filesystem::path& path, uint32_t title_id) {
@@ -96,6 +98,23 @@ void TraceWriter::WriteMemoryRead(uint32_t base_ptr, const void* data, uint32_t 
   cmd.encoding_format = MemoryEncodingFormat::kNone;
   cmd.encoded_length = length;
   cmd.decoded_length = length;
+  memory_raw_bytes_ += length;
+  if (compress_ && length >= 256) {
+    uLongf bound = compressBound(length);
+    if (compress_buffer_.size() < bound) {
+      compress_buffer_.resize(bound);
+    }
+    uLongf out_length = bound;
+    if (compress2(compress_buffer_.data(), &out_length, static_cast<const Bytef*>(data), length,
+                  1) == Z_OK &&
+        out_length < length) {
+      cmd.encoding_format = MemoryEncodingFormat::kZlib;
+      cmd.encoded_length = uint32_t(out_length);
+      Write(&cmd, sizeof(cmd));
+      Write(compress_buffer_.data(), out_length);
+      return;
+    }
+  }
   Write(&cmd, sizeof(cmd));
   Write(data, length);
 }

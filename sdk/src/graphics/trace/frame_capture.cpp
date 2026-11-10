@@ -274,6 +274,10 @@ void FrameCapture::BeginTrace(CommandProcessor& cp) {
   written_ranges_.clear();
   resolved_ranges_.clear();
   traced_draws_ = 0;
+  {
+    const char* compress = std::getenv("REX_GPU_TRACE_COMPRESS");
+    writer_.set_compress(!compress || std::strcmp(compress, "0") != 0);
+  }
 
   // Initial state, as Xenia's CommandProcessor::InitializeTrace.
   const RegisterFile& regs = TraceAccess::registers(cp);
@@ -312,8 +316,9 @@ void FrameCapture::EndTrace() {
   if (!writer_.is_open()) {
     return;
   }
-  REXGPU_INFO("GPU trace: wrote {} ({} draws, {} bytes)", writer_.path().string(), traced_draws_,
-              writer_.bytes_written());
+  REXGPU_INFO("GPU trace: wrote {} ({} draws, {} bytes, {} bytes of guest memory before compression)",
+              writer_.path().string(), traced_draws_, writer_.bytes_written(),
+              writer_.memory_raw_bytes());
   writer_.Close();
   written_ranges_.clear();
   resolved_ranges_.clear();

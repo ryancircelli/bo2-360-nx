@@ -27,6 +27,13 @@ enum RexGpuTraceReplayFlags : uint32_t {
   kRexGpuTraceReplayReadbackDepth = 1u << 1,
   // Write the full image for every draw instead of the changed rectangle.
   kRexGpuTraceReplayFullImages = 1u << 2,
+  // Check every bound texture against the guest bytes it was loaded from and
+  // write texcheck.jsonl (stale texture report).
+  kRexGpuTraceReplayTexCheck = 1u << 3,
+  // Race mode (implies TexCheck): apply each recorded guest write that hits a
+  // texture inside that texture's load window, after the copy and before the
+  // cache marks it up to date.
+  kRexGpuTraceReplayRace = 1u << 4,
 };
 
 struct RexGpuTraceReplayOptions {
@@ -45,6 +52,9 @@ struct RexGpuTraceReplayOptions {
   // all draws. Draws outside still execute and get JSON records.
   uint32_t first_draw;
   uint32_t draw_count;
+  // Race mode: how many frames ahead of the current one a recorded write may
+  // be pulled into a load window. 0 = default (1).
+  uint32_t race_frames;
 };
 
 // Returns 0 on success, nonzero on failure.

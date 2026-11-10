@@ -10,6 +10,9 @@
 
 #include "rex/graphics/metal/metal_hitch.h"
 #include "rex/graphics/metal/metal_texture_cache.h"
+#if REX_GPU_TRACE
+#include <rex/graphics/trace/texture_probe.h>
+#endif
 #include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_encoder_trim.h"
 #include "rex/graphics/metal/metal_pass_merge.h"
@@ -5929,6 +5932,11 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     if (load_base) metal_texture->resident_load_pending_[0] = true;
     if (load_mips) metal_texture->resident_load_pending_[1] = true;
   }
+#if REX_GPU_TRACE
+  // GPU trace replay: the copy is encoded, the texture is marked up to date
+  // (and watched) only later by the caller under the global lock.
+  trace::NotifyTextureLoadWindow(texture, load_base, load_mips, 0);
+#endif
   if (command_processor_) {
     const TextureKey& texture_key = texture.key();
     const uint64_t upload_bytes =
@@ -6060,6 +6068,11 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
     }
     TexRenameClearPending(*metal_texture, base_outdated, mips_outdated);
     metal_texture->set_loaded_once();
+#if REX_GPU_TRACE
+    // GPU trace replay: the guest bytes are copied, the watch is checked and
+    // the texture marked up to date below under the global lock.
+    trace::NotifyTextureLoadWindow(texture, base_outdated, mips_outdated, 1);
+#endif
 
     auto global_lock = AcquireGlobalLock();
     if (watch_first) {

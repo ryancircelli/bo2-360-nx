@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <vector>
 
 #include <rex/graphics/trace/trace_protocol.h>
 
@@ -25,6 +26,11 @@ class TraceWriter {
   TraceWriter& operator=(const TraceWriter&) = delete;
 
   bool is_open() const { return file_ != nullptr; }
+  // zlib-compress memory blocks of at least 256 bytes when that saves space
+  // (encoding kZlib). Off by default; frame capture turns it on unless
+  // REX_GPU_TRACE_COMPRESS=0.
+  void set_compress(bool compress) { compress_ = compress; }
+  uint64_t memory_raw_bytes() const { return memory_raw_bytes_; }
   const std::filesystem::path& path() const { return path_; }
   uint64_t bytes_written() const { return bytes_written_; }
 
@@ -51,6 +57,9 @@ class TraceWriter {
   std::FILE* file_ = nullptr;
   std::filesystem::path path_;
   uint64_t bytes_written_ = 0;
+  uint64_t memory_raw_bytes_ = 0;
+  bool compress_ = false;
+  std::vector<uint8_t> compress_buffer_;
 };
 
 }  // namespace rex::graphics::trace

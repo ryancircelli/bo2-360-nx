@@ -97,6 +97,8 @@ enum class MemoryEncodingFormat {
   kNone,
   // Data is compressed with third_party/snappy.
   kSnappy,
+  // Data is a zlib stream (ReXGlue extension; Xenia does not read it).
+  kZlib,
 };
 
 // Represents the GPU reading or writing data from or to memory.
