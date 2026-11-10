@@ -746,8 +746,8 @@ struct TargetState {
 // Readback of a small resolved texture (bo2zm_native_read_resolved_texels):
 // host-visible buffer it is copied to and what is needed to write it to the guest.
 struct Readback {
-  VkBuffer buffer = VK_NULL_HANDLE;
-  VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+  gpu::Buffer buffer = nullptr;
+  gpu::Memory guest_memory = nullptr;
   uint8_t* data = nullptr;
   VkDeviceSize bytes = 0;
   bool coherent = true;
@@ -790,11 +790,11 @@ constexpr uint32_t kPixelsBucket[kBucketsCopy] = {64 * 64, 320 * 320, 1024 * 102
 // One of the work slots: while a frame is being recorded, the previous ones can still be
 // on the GPU with the other one.
 struct WorkSlot {
-  VkCommandPool pool_job = VK_NULL_HANDLE;
-  VkCommandPool pool_upload = VK_NULL_HANDLE;
-  VkCommandBuffer job = VK_NULL_HANDLE;
-  VkCommandBuffer upload = VK_NULL_HANDLE;
-  VkFence fence = VK_NULL_HANDLE;
+  gpu::CommandPool pool_job = nullptr;
+  gpu::CommandPool pool_upload = nullptr;
+  gpu::CommandList job = nullptr;
+  gpu::CommandList upload = nullptr;
+  gpu::Fence fence = nullptr;
   bool pending = false;
   uint64_t order = 0;                        // submission number
   // Wall-clock time of the work, from vkQueueSubmit to the signaled fence. The GPU timestamps can add up to
@@ -871,50 +871,50 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       DestroyRead(read);
     }
     for (auto& f : framebuffers_) {
-      if (f.framebuffer != VK_NULL_HANDLE) {
+      if (f.framebuffer != nullptr) {
         gpu::vulkan::DestroyFramebuffer(dfn_, device_, f.framebuffer);
       }
     }
-    if (pipeline_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pipeline_);
+    if (pipeline_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, pipeline_);
 
     for (auto& [view, fb] : conv_framebuffers_) {
-      if (fb != VK_NULL_HANDLE) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb);
+      if (fb != nullptr) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb);
     }
     for (auto& [format, p] : conv_pipelines_) {
-      if (p != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, p);
+      if (p != nullptr) gpu::vulkan::Destroy(dfn_, device_, p);
     }
     for (auto& [format, rp] : conv_passes_) {
-      if (rp != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, rp);
+      if (rp != nullptr) gpu::vulkan::Destroy(dfn_, device_, rp);
     }
-    if (conv_pool_ != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, conv_pool_);
-    if (conv_fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, conv_fs_);
-    for (VkPipeline p : pipelines_ramp_) {
-      if (p != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, p);
+    if (conv_pool_ != nullptr) gpu::vulkan::Destroy(dfn_, device_, conv_pool_);
+    if (conv_fs_ != nullptr) gpu::vulkan::DestroyShader(dfn_, device_, conv_fs_);
+    for (gpu::Pipeline p : pipelines_ramp_) {
+      if (p != nullptr) gpu::vulkan::Destroy(dfn_, device_, p);
     }
-    if (fs_ramp_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_ramp_);
+    if (fs_ramp_ != nullptr) gpu::vulkan::DestroyShader(dfn_, device_, fs_ramp_);
     // The credits line
-    if (credits_.pipeline != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.pipeline);
-    if (credits_.fs != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, credits_.fs);
-    if (credits_.pool != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.pool);
-    if (credits_.view != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.view);
-    if (credits_.image != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.image);
-    if (credits_.memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, credits_.memory);
-    if (credits_.staging != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, credits_.staging);
-    if (credits_.staging_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, credits_.staging_memory);
+    if (credits_.pipeline != nullptr) gpu::vulkan::Destroy(dfn_, device_, credits_.pipeline);
+    if (credits_.fs != nullptr) gpu::vulkan::DestroyShader(dfn_, device_, credits_.fs);
+    if (credits_.pool != nullptr) gpu::vulkan::Destroy(dfn_, device_, credits_.pool);
+    if (credits_.view != nullptr) gpu::vulkan::Destroy(dfn_, device_, credits_.view);
+    if (credits_.image != nullptr) gpu::vulkan::Destroy(dfn_, device_, credits_.image);
+    if (credits_.memory != nullptr) gpu::vulkan::Free(dfn_, device_, credits_.memory);
+    if (credits_.staging != nullptr) gpu::vulkan::Destroy(dfn_, device_, credits_.staging);
+    if (credits_.staging_memory != nullptr) gpu::vulkan::Free(dfn_, device_, credits_.staging_memory);
     for (OutputRamp& ramp : ramps_output_) {
-      if (ramp.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, ramp.buffer);
-      if (ramp.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, ramp.guest_memory);
+      if (ramp.buffer != nullptr) gpu::vulkan::Destroy(dfn_, device_, ramp.buffer);
+      if (ramp.guest_memory != nullptr) gpu::vulkan::Free(dfn_, device_, ramp.guest_memory);
     }
-    if (layout_pipeline_ != VK_NULL_HANDLE)
+    if (layout_pipeline_ != nullptr)
       gpu::vulkan::Destroy(dfn_, device_, layout_pipeline_);
-    if (pool_descriptors_ != VK_NULL_HANDLE)
+    if (pool_descriptors_ != nullptr)
       gpu::vulkan::Destroy(dfn_, device_, pool_descriptors_);
-    if (layout_descriptors_ != VK_NULL_HANDLE)
+    if (layout_descriptors_ != nullptr)
       gpu::vulkan::Destroy(dfn_, device_, layout_descriptors_);
-    if (sampler_ != VK_NULL_HANDLE) gpu::vulkan::DestroySampler(dfn_, device_, sampler_);
-    if (vs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, vs_);
-    if (fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_);
-    if (render_pass_output_ != VK_NULL_HANDLE)
+    if (sampler_ != nullptr) gpu::vulkan::DestroySampler(dfn_, device_, sampler_);
+    if (vs_ != nullptr) gpu::vulkan::DestroyShader(dfn_, device_, vs_);
+    if (fs_ != nullptr) gpu::vulkan::DestroyShader(dfn_, device_, fs_);
+    if (render_pass_output_ != nullptr)
       gpu::vulkan::Destroy(dfn_, device_, render_pass_output_);
     for (WorkSlot& slot : slots_) {
       work_.DestroyFence(slot.fence);
@@ -1048,7 +1048,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       bo2zm::perf_log::SetMeta("gpu", physical.deviceName);
       REXLOG_INFO("[native] C2: GPU time per Swap {}",
-                  queries_ != VK_NULL_HANDLE ? "measured with timestamps"
+                  queries_ != nullptr ? "measured with timestamps"
                                                : "not available (the queue has no timestamps)");
       // The game's occlusion queries (the sun flare), counted on the GPU.
       if (read_queries_) {
@@ -1057,14 +1057,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       occlusion_precise_ = vulkan_device_->properties().occlusionQueryPrecise;
       REXLOG_INFO("[native] C2: host occlusion queries {} ({})",
-                  occlusions_ != VK_NULL_HANDLE ? "available" : "not available: fake count",
+                  occlusions_ != nullptr ? "available" : "not available: fake count",
                   occlusion_precise_ ? "precise" : "not precise: they count whether there was any sample");
       // Reflection visibility, in a separate pool so as not to touch the count of the game's queries.
       if (bo2zm::reflection_demand::MeasureVisibility() && read_queries_) {
         visibility_ =
             work_.CreateQueries(gpu::QueryKind::kOcclusion, uint32_t(slots_.size() * kVisibilityPerSlot));
         REXLOG_INFO("[native] C2: reflection visibility: {}",
-                    visibility_ != VK_NULL_HANDLE ? "queries available"
+                    visibility_ != nullptr ? "queries available"
                                                    : "NO queries: the reflection is decided by readbacks (like 191)");
       }
       // Pipeline statistics per pass. The order of the counters is the order of the bits,
@@ -1073,14 +1073,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         stats_ =
             work_.CreateQueries(gpu::QueryKind::kPipelineStatistics, uint32_t(slots_.size() * kStatsPerSlot));
       }
-      if (stats_ != VK_NULL_HANDLE) {
+      if (stats_ != nullptr) {
         stats_draw_ = work_.CreateQueries(gpu::QueryKind::kPipelineStatistics,
                                           uint32_t(slots_.size() * kStatsDrawPerSlot));
         fragments_per_shader_.assign(size_t(kLabelsShader) * kGpuCategories, 0);
         draws_per_shader_.assign(size_t(kLabelsShader) * kGpuCategories, 0);
       }
       REXLOG_INFO("[native] C2: pipeline statistics per pass {}",
-                  stats_ != VK_NULL_HANDLE ? "available (bo2zm_native_pipeline_stats)"
+                  stats_ != nullptr ? "available (bo2zm_native_pipeline_stats)"
                                                   : "not available");
     }
 
@@ -1158,8 +1158,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (!ramp_gamma_) {
       // Without a ramp, binding 2 stays unwritten: the pipeline without the ramp does not read it.
       for (OutputRamp& ramp : ramps_output_) {
-        if (ramp.buffer != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, ramp.buffer);
-        if (ramp.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, ramp.guest_memory);
+        if (ramp.buffer != nullptr) gpu::vulkan::Destroy(dfn_, device_, ramp.buffer);
+        if (ramp.guest_memory != nullptr) gpu::vulkan::Free(dfn_, device_, ramp.guest_memory);
         ramp = OutputRamp{};
       }
     }
@@ -1193,12 +1193,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
 
     pipeline_ = CreatePipelineOutput(fs_);
-    if (pipeline_ == VK_NULL_HANDLE) {
+    if (pipeline_ == nullptr) {
       return false;
     }
     // The ramp variants without extras (bilinear and exact texel) are created now; the post-processing ones
     // with per-pixel work and FXAA, the first time they are requested (PipelineRamp).
-    if (ramp_gamma_ && (PipelineRamp(0) == VK_NULL_HANDLE || PipelineRamp(1) == VK_NULL_HANDLE)) {
+    if (ramp_gamma_ && (PipelineRamp(0) == nullptr || PipelineRamp(1) == nullptr)) {
       return false;
     }
     REXLOG_INFO("[native] C2: the game's gamma ramp at the output (bo2zm_native_gamma_ramp) = {}",
@@ -1210,8 +1210,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   // Pipeline of the output pass with the fragment shader fs (and its 32-bit specialization constants
   // 0..n_constants-1, if any).
-  VkPipeline CreatePipelineOutput(VkShaderModule fs, const uint32_t* constants = nullptr, uint32_t n_constants = 0,
-                                 VkRenderPass pass = VK_NULL_HANDLE,  // the render pass to draw in
+  gpu::Pipeline CreatePipelineOutput(gpu::Shader fs, const uint32_t* constants = nullptr, uint32_t n_constants = 0,
+                                 gpu::Pass pass = nullptr,  // the render pass to draw in
                                  bool alpha_blend = false) {  // blended over the image (the credits)
     gpu::PipelineState state;
     state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
@@ -1242,10 +1242,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     desc.with_depth = false;
     desc.dynamic = gpu::kDynamicView;
     desc.layout = layout_pipeline_;
-    desc.pass = pass != VK_NULL_HANDLE ? pass : render_pass_output_;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    if (gpu::vulkan::CreateGraphicsPipeline(dfn_, device_, VK_NULL_HANDLE, desc, pipeline) != VK_SUCCESS) {
-      return VK_NULL_HANDLE;
+    desc.pass = pass != nullptr ? pass : render_pass_output_;
+    gpu::Pipeline pipeline = nullptr;
+    if (gpu::vulkan::CreateGraphicsPipeline(dfn_, device_, nullptr, desc, pipeline) != VK_SUCCESS) {
+      return nullptr;
     }
     return pipeline;
   }
@@ -1253,14 +1253,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // Variant of the output pass with the ramp, by index: 4 * fxaa + 2 * grading + exact (specialization
   // constants 2, 1 and 0 of the shader). Created the first time it is requested; VK_NULL_HANDLE if it fails
   // (and it is logged).
-  VkPipeline PipelineRamp(uint32_t index) {
-    VkPipeline& pipeline = pipelines_ramp_[index];
-    if (pipeline == VK_NULL_HANDLE && !pipelines_ramp_failed_[index]) {
+  gpu::Pipeline PipelineRamp(uint32_t index) {
+    gpu::Pipeline& pipeline = pipelines_ramp_[index];
+    if (pipeline == nullptr && !pipelines_ramp_failed_[index]) {
       const uint32_t values[3] = {(index & 1) ? VK_TRUE : VK_FALSE, (index & 2) ? VK_TRUE : VK_FALSE,
                                   (index & 4) ? VK_TRUE : VK_FALSE};
       const auto before = std::chrono::steady_clock::now();
       pipeline = CreatePipelineOutput(fs_ramp_, values, 3);
-      if (pipeline == VK_NULL_HANDLE) {
+      if (pipeline == nullptr) {
         pipelines_ramp_failed_[index] = true;
         REXLOG_ERROR("[native] C2: could not create variant {} of the output pass", index);
       } else {
@@ -1277,7 +1277,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // output, made the first time it shows. false: not available (logged once, never tried again).
   bool CreditsReady() {
     Credits& c = credits_;
-    if (c.pipeline != VK_NULL_HANDLE || c.failed) {
+    if (c.pipeline != nullptr || c.failed) {
       return !c.failed;
     }
     c.failed = true;  // until everything below is made
@@ -1327,8 +1327,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       REXLOG_ERROR("[native] credits: could not create the shader: no credits line");
       return false;
     }
-    c.pipeline = CreatePipelineOutput(c.fs, nullptr, 0, VK_NULL_HANDLE, true);
-    if (c.pipeline == VK_NULL_HANDLE) {
+    c.pipeline = CreatePipelineOutput(c.fs, nullptr, 0, nullptr, true);
+    if (c.pipeline == nullptr) {
       REXLOG_ERROR("[native] credits: could not create the pipeline: no credits line");
       return false;
     }
@@ -1338,7 +1338,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   // The picture into the credits image, in the output's command buffer before its pass (once).
-  void RecordCreditsUpload(VkCommandBuffer commands) {
+  void RecordCreditsUpload(gpu::CommandList commands) {
     const bo2zm::credits::Picture* picture = bo2zm::credits::Images();
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -1366,7 +1366,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   // The credits line over the output, inside its pass, after the image.
-  void DrawCredits(VkCommandBuffer commands, const bo2zm::credits::Placement& place, uint32_t width,
+  void DrawCredits(gpu::CommandList commands, const bo2zm::credits::Placement& place, uint32_t width,
                    uint32_t height) {
     const uint32_t* rect = bo2zm::credits::Images()->rects[place.image];
     gpu_.BindGraphicsPipeline(commands, credits_.pipeline);
@@ -2526,7 +2526,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     reserve.pNext = &import;
     reserve.allocationSize = bytes;
     reserve.memoryTypeIndex = type;
-    VkDeviceMemory imported = VK_NULL_HANDLE;
+    gpu::Memory imported = nullptr;
     const auto t1 = std::chrono::steady_clock::now();
     const VkResult r_import = dfn_.vkAllocateMemory(device_, &reserve, nullptr, &imported);
     const auto t2 = std::chrono::steady_clock::now();
@@ -2544,11 +2544,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     info.size = bytes;
     info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VkBuffer source = VK_NULL_HANDLE, target = VK_NULL_HANDLE;
-    VkDeviceMemory target_memory = VK_NULL_HANDLE;
-    VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer commands = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
+    gpu::Buffer source = nullptr, target = nullptr;
+    gpu::Memory target_memory = nullptr;
+    gpu::CommandPool pool = nullptr;
+    gpu::CommandList commands = nullptr;
+    gpu::Fence fence = nullptr;
     void* mapped = nullptr;
     uint32_t target_type = 0;
     const char* failed = nullptr;
@@ -2620,12 +2620,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                 failed ? "no comparison"
                        : match ? "the GPU read the same bytes as the CPU"
                                : fmt::format("DIFFERENT from byte {}", first_difference));
-    if (fence != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, fence);
-    if (pool != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, pool);
+    if (fence != nullptr) gpu::vulkan::Destroy(dfn_, device_, fence);
+    if (pool != nullptr) gpu::vulkan::Destroy(dfn_, device_, pool);
     if (mapped) gpu::vulkan::Unmap(dfn_, device_, target_memory);
-    if (target != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, target);
-    if (target_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, target_memory);
-    if (source != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, source);
+    if (target != nullptr) gpu::vulkan::Destroy(dfn_, device_, target);
+    if (target_memory != nullptr) gpu::vulkan::Free(dfn_, device_, target_memory);
+    if (source != nullptr) gpu::vulkan::Destroy(dfn_, device_, source);
     gpu::vulkan::Free(dfn_, device_, imported);
     (void)sum;
   }
@@ -2786,7 +2786,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   // An image that is destroyed (Destroy) cannot stay in the deferred copy.
   void CompositeOnDestroy(const OwnedImage& image) {
-    if (!composite_has_ || image.image == VK_NULL_HANDLE) {
+    if (!composite_has_ || image.image == nullptr) {
       return;
     }
     if (image.image == composite_.source_vk) {
@@ -3302,7 +3302,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // --- TargetContext (what the draws use) ---------------------------------------
 
   gpu::CommandList CommandsJob() override {
-    return Record() ? commands_job_ : VK_NULL_HANDLE;
+    return Record() ? commands_job_ : nullptr;
   }
 
   // The upload buffer (texture uploads, clears, image copies, the GPU skinning dispatch) is submitted
@@ -3325,11 +3325,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   gpu::CommandList CommandsUpload() override {
     if (!Record()) {
-      return VK_NULL_HANDLE;
+      return nullptr;
     }
     if (!recording_upload_) {
       if (!work_.Begin(commands_upload_)) {
-        return VK_NULL_HANDLE;
+        return nullptr;
       }
       recording_upload_ = true;
       UploadBarrier();  // what this buffer writes waits for the earlier submissions' work (see UploadBarrier)
@@ -3539,11 +3539,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // are made on first use and kept; the descriptor sets go round a ring long enough for the frames in flight.
   bool CopyConverted(OwnedImage& source, OwnedImage& target, int32_t x0, int32_t y0, uint32_t dx, uint32_t dy,
                        uint32_t width, uint32_t height, uint32_t info_target) {
-    if (!width || !height || source.view == VK_NULL_HANDLE || target.view == VK_NULL_HANDLE ||
+    if (!width || !height || source.view == nullptr || target.view == nullptr ||
         IsDepthFormat(source.format) || IsDepthFormat(target.format)) {
       return false;
     }
-    if (conv_fs_ == VK_NULL_HANDLE && !conv_failed_) {
+    if (conv_fs_ == nullptr && !conv_failed_) {
       gpu::PoolCounts counts{};
       counts.max_sets = kConvSets;
       counts.sampled_images = kConvSets;
@@ -3564,35 +3564,35 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
     // Render pass and pipeline for this destination format.
-    VkRenderPass& pass = conv_passes_[gpu::ToVkFormat(target.format)];
-    if (pass == VK_NULL_HANDLE) {
+    gpu::Pass& pass = conv_passes_[gpu::ToVkFormat(target.format)];
+    if (pass == nullptr) {
       gpu::PassDesc desc{};
       desc.color_count = 1;
       desc.colors[0].format = target.format;
       desc.colors[0].load = gpu::kLoadLoad;
       desc.colors[0].store = gpu::kStoreStore;
       if (!gpu::vulkan::CreatePass(dfn_, device_, desc, pass)) {
-        pass = VK_NULL_HANDLE;
+        pass = nullptr;
         return false;
       }
     }
-    VkPipeline& pipeline = conv_pipelines_[gpu::ToVkFormat(target.format)];
-    if (pipeline == VK_NULL_HANDLE) {
+    gpu::Pipeline& pipeline = conv_pipelines_[gpu::ToVkFormat(target.format)];
+    if (pipeline == nullptr) {
       pipeline = CreatePipelineOutput(conv_fs_, nullptr, 0, pass);
-      if (pipeline == VK_NULL_HANDLE) {
+      if (pipeline == nullptr) {
         return false;
       }
       REXLOG_INFO("[native] BO2: converted copy of resolves to format {}", uint32_t(target.format));
     }
-    VkFramebuffer& framebuffer = conv_framebuffers_[target.view];
-    if (framebuffer == VK_NULL_HANDLE) {
+    gpu::Framebuffer& framebuffer = conv_framebuffers_[target.view];
+    if (framebuffer == nullptr) {
       if (!gpu::vulkan::CreateFramebuffer(dfn_, device_, pass, 1, &target.view, target.width, target.height,
                                           framebuffer)) {
-        framebuffer = VK_NULL_HANDLE;
+        framebuffer = nullptr;
         return false;
       }
     }
-    const VkDescriptorSet set = conv_sets_[conv_next_++ % kConvSets];
+    const gpu::Set set = conv_sets_[conv_next_++ % kConvSets];
     gpu::vulkan::WriteSampledImage(dfn_, device_, set, 0, 0, source.view);
 
     // The render target's writes before it is read, and the result before it is sampled, copied or read back.
@@ -4069,7 +4069,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // bo2zm_native_clear_useful_area. The bottom band the last clear left uncleared.
     bool band = false;
     uint32_t band_since = 0;
-    VkImage band_image = VK_NULL_HANDLE;
+    gpu::Image band_image = nullptr;
     VkClearColorValue band_color{};
     uint32_t bands_completed = 0;
     bool area_useful_off = false;  // its useful area is not stable: cleared entirely
@@ -4342,7 +4342,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // Before any write to a depth render target. The deferred copies that come from it are recorded (same
   // frame, or the composition has not requested them yet) or dropped (nobody has sampled them).
   void BeforeWriteDepth(const OwnedImage& image) {
-    if (pending_.empty() || image.image == VK_NULL_HANDLE) {
+    if (pending_.empty() || image.image == nullptr) {
       return;
     }
     for (auto it = pending_.begin(); it != pending_.end();) {
@@ -4396,9 +4396,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // bo2zm_native_lazy_front. Deferred copy to a front buffer, and the render target's spare images.
   struct PendingFront {
     OwnedImage* target = nullptr;           // source render target (targets_ never erases: the pointer stays valid)
-    VkImage source_vk = VK_NULL_HANDLE;  // image holding the content: the target's own or a retained one
+    gpu::Image source_vk = nullptr;  // image holding the content: the target's own or a retained one
     int32_t retained = -1;               // index in fronts_images_ if it is no longer in the target
-    VkImage texture_vk = VK_NULL_HANDLE;
+    gpu::Image texture_vk = nullptr;
     VkImageCopy copy{};
   };
   struct FrontImage {
@@ -4536,7 +4536,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // Before writing to a color target in any way other than a full clear (a pass, a restore, an image
   // swap): deferred copies whose source is its image are recorded now (exact).
   void BeforeWriteColor(const OwnedImage& target) {
-    if (fronts_pending_.empty() || target.image == VK_NULL_HANDLE) {
+    if (fronts_pending_.empty() || target.image == nullptr) {
       return;
     }
     for (auto it = fronts_pending_.begin(); it != fronts_pending_.end();) {
@@ -4556,7 +4556,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // front buffer: the clear does not need the old content, so nothing is copied. Without a spare (or with
   // two front buffers from the same image), the copy is recorded first, as usual.
   void RotateFrontBeforeClear(OwnedImage& target) {
-    if (fronts_pending_.empty() || target.image == VK_NULL_HANDLE) {
+    if (fronts_pending_.empty() || target.image == nullptr) {
       return;
     }
     uint32_t base = 0;
@@ -4574,7 +4574,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (how_many == 1) {
       for (size_t i = 0; i < fronts_images_.size(); ++i) {
         const OwnedImage& candidate = fronts_images_[i].image;
-        if (fronts_images_[i].retained_per == 0 && candidate.image != VK_NULL_HANDLE &&
+        if (fronts_images_[i].retained_per == 0 && candidate.image != nullptr &&
             candidate.width == target.width && candidate.height == target.height &&
             candidate.format == target.format) {
           free = int32_t(i);
@@ -4707,7 +4707,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   void MarkGpu(uint32_t category) override {
-    if (queries_ == VK_NULL_HANDLE || !recording_) {
+    if (queries_ == nullptr || !recording_) {
       return;
     }
     WorkSlot& slot = slots_[slot_];
@@ -4727,7 +4727,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       uint64_t discarded = 0;
       FinishOcclusion(0, discarded);
     }
-    if (!draws_ || occlusions_ == VK_NULL_HANDLE) {
+    if (!draws_ || occlusions_ == nullptr) {
       return;
     }
     if (occlusions_game_.size() >= 256) {
@@ -4765,7 +4765,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   uint32_t BeginQueryOcclusion() override {
-    if (occlusions_ == VK_NULL_HANDLE || occlusion_open_ == 0 || !recording_) {
+    if (occlusions_ == nullptr || occlusion_open_ == 0 || !recording_) {
       return UINT32_MAX;
     }
     const auto it = occlusions_game_.find(occlusion_open_);
@@ -4788,7 +4788,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   void FinishQueryOcclusion(uint32_t index) override {
-    if (occlusions_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
+    if (occlusions_ != nullptr && index != UINT32_MAX && recording_) {
       gpu_.EndQuery(commands_job_, occlusions_, index);
     }
   }
@@ -4797,7 +4797,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // or the witness), inside the open pass. UINT32_MAX if there is no pool, nothing is being recorded or
   // there is no room left.
   uint32_t BeginQueryVisibility(bool witness) override {
-    if (visibility_ == VK_NULL_HANDLE || !recording_) {
+    if (visibility_ == nullptr || !recording_) {
       return UINT32_MAX;
     }
     WorkSlot& slot = slots_[slot_];
@@ -4812,7 +4812,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   void FinishQueryVisibility(uint32_t index) override {
-    if (visibility_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
+    if (visibility_ != nullptr && index != UINT32_MAX && recording_) {
       gpu_.EndQuery(commands_job_, visibility_, index);
     }
   }
@@ -4821,7 +4821,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint32_t BeginStats(uint32_t category) override {
     // With the per-draw diagnostic enabled this one is not opened: two queries of the same type cannot be
     // active at once, and the per-pass query would enclose the per-draw ones.
-    if (stats_ == VK_NULL_HANDLE || !recording_ ||
+    if (stats_ == nullptr || !recording_ ||
         !REXCVAR_GET(bo2zm_native_pipeline_stats) ||
         REXCVAR_GET(bo2zm_native_per_draw_stats_s) > 0) {
       return UINT32_MAX;
@@ -4843,14 +4843,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   void FinishStats(uint32_t index) override {
-    if (stats_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
+    if (stats_ != nullptr && index != UINT32_MAX && recording_) {
       gpu_.EndQuery(commands_job_, stats_, index);
     }
   }
 
   // One query per draw, tagged with its pixel shader.
   uint32_t BeginStatsDraw(uint32_t label, uint32_t category) override {
-    if (stats_draw_ == VK_NULL_HANDLE || !recording_ || !window_diagnostic_) {
+    if (stats_draw_ == nullptr || !recording_ || !window_diagnostic_) {
       return UINT32_MAX;
     }
     WorkSlot& slot = slots_[slot_];
@@ -4871,7 +4871,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   void FinishStatsDraw(uint32_t index) override {
-    if (stats_draw_ != VK_NULL_HANDLE && index != UINT32_MAX && recording_) {
+    if (stats_draw_ != nullptr && index != UINT32_MAX && recording_) {
       gpu_.EndQuery(commands_job_, stats_draw_, index);
     }
   }
@@ -5789,7 +5789,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // are not destroyed, and whatever leaves a target through a swap is recorded first), the texture lacks
     // that copy: it becomes stale and, if something requests it before another full resolve, the guard
     // trips.
-    if (!fronts_pending_.empty() && image.image != VK_NULL_HANDLE) {
+    if (!fronts_pending_.empty() && image.image != nullptr) {
       for (auto it = fronts_pending_.begin(); it != fronts_pending_.end();) {
         if (it->second.texture_vk == image.image) {
           FreeRetained(it->second);
@@ -5805,7 +5805,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     // bo2zm_native_lazy_depth. Without the image there is no copy to do: its texture becomes
     // stale (if something samples it before the next resolve, the guard trips).
-    if (!pending_.empty() && image.image != VK_NULL_HANDLE) {
+    if (!pending_.empty() && image.image != nullptr) {
       for (auto it = pending_.begin(); it != pending_.end();) {
         if (it->second.source_vk == image.image || it->second.target_vk == image.image) {
           expired_.insert(it->first);
@@ -5819,19 +5819,19 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // handle to a new view and FramebufferOf would return a stale one (see
     // bo2zm_native_framebuffers_forget_views). At shutdown, draws_ is already gone and so are its
     // framebuffers.
-    if (draws_ && image.view != VK_NULL_HANDLE) {
+    if (draws_ && image.view != nullptr) {
       draws_->ForgetView(image.view);
     }
-    if (image.view != VK_NULL_HANDLE) {  // Its CopyConverted framebuffer goes too
+    if (image.view != nullptr) {  // Its CopyConverted framebuffer goes too
       const auto fb = conv_framebuffers_.find(image.view);
       if (fb != conv_framebuffers_.end()) {
-        if (fb->second != VK_NULL_HANDLE) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb->second);
+        if (fb->second != nullptr) gpu::vulkan::DestroyFramebuffer(dfn_, device_, fb->second);
         conv_framebuffers_.erase(fb);
       }
     }
-    if (image.view != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.view);
-    if (image.image != VK_NULL_HANDLE) gpu::vulkan::Destroy(dfn_, device_, image.image);
-    if (image.guest_memory != VK_NULL_HANDLE) gpu::vulkan::Free(dfn_, device_, image.guest_memory);
+    if (image.view != nullptr) gpu::vulkan::Destroy(dfn_, device_, image.view);
+    if (image.image != nullptr) gpu::vulkan::Destroy(dfn_, device_, image.image);
+    if (image.guest_memory != nullptr) gpu::vulkan::Free(dfn_, device_, image.guest_memory);
     image = OwnedImage{};
   }
 
@@ -5842,8 +5842,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     // In the upload command buffer, which runs before the work one (the reflection cubemap copies
     // its resolved faces there and, on its first frame, read them unprepared).
-    const VkCommandBuffer commands = CommandsUpload();
-    if (commands == VK_NULL_HANDLE) {
+    const gpu::CommandList commands = CommandsUpload();
+    if (commands == nullptr) {
       return;
     }
     VkImageMemoryBarrier barrier{};
@@ -5920,11 +5920,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     deferred::Begin(commands_job_);  // from here to SubmitJob its vkCmd* calls are queued
     slot.categories.clear();
-    if (queries_ != VK_NULL_HANDLE) {
+    if (queries_ != nullptr) {
       gpu_.ResetQueries(commands_job_, queries_, slot_ * kMarksPerSlot,
                         kMarksPerSlot);
     }
-    if (occlusions_ != VK_NULL_HANDLE) {
+    if (occlusions_ != nullptr) {
       DiscardOcclusions(slot);  // Complete already read the last submission's; these were never submitted
       gpu_.ResetQueries(commands_job_, occlusions_, slot_ * kOcclusionsPerSlot,
                         kOcclusionsPerSlot);
@@ -5932,7 +5932,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // Reflection visibility. Any left over belong to work that was never submitted: without a
     // measurement, they count as visible. The reset always happens when there is a pool, even if the
     // guard trips mid-frame.
-    if (visibility_ != VK_NULL_HANDLE) {
+    if (visibility_ != nullptr) {
       if (!slot.visibility.empty()) {
         bo2zm::reflection_demand::AnnotateVisible(false);
         slot.visibility.clear();
@@ -5960,12 +5960,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
      */
     slot.stats.clear();  // those never submitted are not read
     slot.stats_draw.clear();
-    if (stats_ != VK_NULL_HANDLE && REXCVAR_GET(bo2zm_native_pipeline_stats) &&
+    if (stats_ != nullptr && REXCVAR_GET(bo2zm_native_pipeline_stats) &&
         REXCVAR_GET(bo2zm_native_per_draw_stats_s) <= 0) {
       gpu_.ResetQueries(commands_job_, stats_,
                         slot_ * kStatsPerSlot, kStatsPerSlot);
     }
-    if (stats_draw_ != VK_NULL_HANDLE && window_diagnostic_) {
+    if (stats_draw_ != nullptr && window_diagnostic_) {
       gpu_.ResetQueries(commands_job_, stats_draw_,
                         slot_ * kStatsDrawPerSlot,
                         kStatsDrawPerSlot);
@@ -6035,7 +6035,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     work_.Rearm(slot.fence);
     slot.pending = false;
     const uint32_t marked = uint32_t(slot.categories.size());
-    if (queries_ != VK_NULL_HANDLE && marked >= 2) {
+    if (queries_ != nullptr && marked >= 2) {
       std::array<uint64_t, kMarksPerSlot> marks{};
       const uint32_t index = uint32_t(&slot - slots_.data());
       if (read_queries_(device_, queries_, index * kMarksPerSlot, marked,
@@ -6090,7 +6090,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     const uint32_t n = uint32_t(slot.stats_draw.size());
     std::vector<uint64_t> values(size_t(n) * kCountersStat, 0);
-    if (stats_draw_ != VK_NULL_HANDLE && read_queries_ &&
+    if (stats_draw_ != nullptr && read_queries_ &&
         read_queries_(device_, stats_draw_, slot.stats_draw.front().first, n,
                         sizeof(uint64_t) * values.size(), values.data(),
                         sizeof(uint64_t) * kCountersStat,
@@ -6116,7 +6116,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     const uint32_t n = uint32_t(slot.stats.size());
     std::array<uint64_t, kStatsPerSlot * kCountersStat> values{};
-    if (stats_ != VK_NULL_HANDLE && read_queries_ &&
+    if (stats_ != nullptr && read_queries_ &&
         read_queries_(device_, stats_, slot.stats.front().first, n,
                         sizeof(uint64_t) * kCountersStat * n, values.data(),
                         sizeof(uint64_t) * kCountersStat,
@@ -6141,7 +6141,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     const uint32_t n = uint32_t(slot.occlusions.size());
     std::array<uint64_t, kOcclusionsPerSlot> counts{};
-    const bool read = occlusions_ != VK_NULL_HANDLE && read_queries_ &&
+    const bool read = occlusions_ != nullptr && read_queries_ &&
                         read_queries_(device_, occlusions_, slot.occlusions.front().first, n,
                                         sizeof(uint64_t) * n, counts.data(), sizeof(uint64_t),
                                         VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
@@ -6174,7 +6174,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     const uint32_t n = uint32_t(slot.visibility.size());
     std::array<uint64_t, kVisibilityPerSlot> counts{};
-    const bool read = visibility_ != VK_NULL_HANDLE && read_queries_ &&
+    const bool read = visibility_ != nullptr && read_queries_ &&
                         read_queries_(device_, visibility_, slot.visibility.front().first, n,
                                         sizeof(uint64_t) * n, counts.data(), sizeof(uint64_t),
                                         VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
@@ -6240,7 +6240,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
         buffers[n++] = commands_upload_;
       }
-      if (queries_ != VK_NULL_HANDLE) {
+      if (queries_ != nullptr) {
         // Final mark: closes the last span (MarkGpu leaves room for it).
         WorkSlot& marked = slots_[slot_];
         gpu_.WriteTimestamp(commands_job_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_,
@@ -6308,7 +6308,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (bases.empty() || !gpu_.loaded().blit) {
       return false;
     }
-    if (tiled_.image == VK_NULL_HANDLE &&
+    if (tiled_.image == nullptr &&
         !Create(tiled_, 1280, 720, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
       gpu_.loaded().blit = nullptr;
       return false;
@@ -6543,7 +6543,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // bit: with three slots, 0 and 2 shared a buffer, and finishing slot 0 could read slot 2's copy, newer or half
     // written, so the exposure the game computes from it could go back and forth [inference, not measured].
     Readback* pointer = &reads_[key | (uint64_t(slot_) << 61)];
-    if (pointer->bytes < bytes && pointer->buffer != VK_NULL_HANDLE) {
+    if (pointer->bytes < bytes && pointer->buffer != nullptr) {
       // Larger: the old buffer may have recorded or submitted copies.
       SubmitJob(true);
       WaitGpu();
@@ -6552,7 +6552,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         return;
       }
       pointer = &reads_[key | (uint64_t(slot_) << 61)];
-      if (pointer->bytes < bytes && pointer->buffer != VK_NULL_HANDLE) {
+      if (pointer->bytes < bytes && pointer->buffer != nullptr) {
         DestroyRead(*pointer);  // the GPU has nothing pending any more
       }
     }
@@ -6780,13 +6780,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   }
 
   void DestroyRead(Readback& read) {
-    if (read.guest_memory != VK_NULL_HANDLE) {
+    if (read.guest_memory != nullptr) {
       if (read.data) {
         gpu::vulkan::Unmap(dfn_, device_, read.guest_memory);
       }
       gpu::vulkan::Free(dfn_, device_, read.guest_memory);
     }
-    if (read.buffer != VK_NULL_HANDLE) {
+    if (read.buffer != nullptr) {
       gpu::vulkan::Destroy(dfn_, device_, read.buffer);
     }
     read = Readback{};
@@ -6857,24 +6857,24 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         ramp.crosshairs = crosshairs;
       }
     }
-    VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    gpu::Framebuffer framebuffer = nullptr;
     for (const auto& f : framebuffers_) {
-      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.image_version()) {
+      if (f.framebuffer != nullptr && f.version == context.image_version()) {
         framebuffer = f.framebuffer;
       }
     }
-    if (framebuffer == VK_NULL_HANDLE) {
+    if (framebuffer == nullptr) {
       auto& f = framebuffers_[next_framebuffer_];
       next_framebuffer_ = (next_framebuffer_ + 1) % framebuffers_.size();
-      if (f.framebuffer != VK_NULL_HANDLE) {
+      if (f.framebuffer != nullptr) {
         WaitOutputs();  // a pending output could still use this framebuffer
         gpu::vulkan::DestroyFramebuffer(dfn_, device_, f.framebuffer);
-        f.framebuffer = VK_NULL_HANDLE;
+        f.framebuffer = nullptr;
       }
-      VkImageView view = context.image_view();
+      gpu::ImageView view = context.image_view();
       if (!gpu::vulkan::CreateFramebuffer(dfn_, device_, render_pass_output_, 1, &view, width, height,
                                           f.framebuffer)) {
-        f.framebuffer = VK_NULL_HANDLE;
+        f.framebuffer = nullptr;
         return false;
       }
       f.version = context.image_version();
@@ -6913,7 +6913,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu_.BeginPass(commands_output_[s], pass);
     gpu_.SetViewport(commands_output_[s], gpu::Viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f});
     gpu_.SetScissor(commands_output_[s], gpu::Rect{0, 0, width, height});
-    VkPipeline pipeline = pipeline_;
+    gpu::Pipeline pipeline = pipeline_;
     if (ramp_gamma_) {
       // With an output the size of the source (the normal case), the exact texel, unfiltered.
       // From a render target, the output has the front buffer's size, not the image's, and has no FXAA
@@ -6926,7 +6926,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         REXLOG_INFO("[native] C2: antialiasing at the output: {}", fxaa ? "FXAA" : "none");
       }
       pipeline = PipelineRamp((fxaa ? 4 : 0) + (grading_ ? 2 : 0) + (exact ? 1 : 0));
-      if (pipeline == VK_NULL_HANDLE) {
+      if (pipeline == nullptr) {
         pipeline = pipelines_ramp_[exact ? 1 : 0];  // requested variant missing: the usual one
       }
       if (!exact && !warned_ramp_bilinear_) {
@@ -6997,7 +6997,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   struct Framebuffer {
     uint64_t version = UINT64_MAX;
-    VkFramebuffer framebuffer = VK_NULL_HANDLE;
+    gpu::Framebuffer framebuffer = nullptr;
   };
 
   const VulkanDevice* vulkan_device_;
@@ -7008,11 +7008,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   rex::memory::Memory* memory_;
   uint32_t family_;
 
-  std::array<VkCommandPool, kSlotsOutput> pools_output_{};  // output slots
+  std::array<gpu::CommandPool, kSlotsOutput> pools_output_{};  // output slots
   uint32_t reductions_ = 0;  // resolves that had to shrink
   // Those of the slot being recorded (Record switches them).
-  VkCommandBuffer commands_job_ = VK_NULL_HANDLE;
-  VkCommandBuffer commands_upload_ = VK_NULL_HANDLE;
+  gpu::CommandList commands_job_ = nullptr;
+  gpu::CommandList commands_upload_ = nullptr;
   // Room for four work slots; bo2zm_native_work_slots sets how many are used (three by default, see its
   // explanation). With two, the CPU is only one frame ahead and waits for the GPU inside Record() about half the time
   // on the console. A fourth slot would help where the GPU is the bottleneck (the fence wait inside Record() is
@@ -7022,8 +7022,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint32_t slots_used_ = 3;  // set by the cvar (bo2zm_native_work_slots)
   uint32_t slot_ = 1;  // Record starts with slot 0
   uint64_t submits_ = 0;
-  std::array<VkCommandBuffer, kSlotsOutput> commands_output_{};
-  std::array<VkFence, kSlotsOutput> fences_output_{};
+  std::array<gpu::CommandList, kSlotsOutput> commands_output_{};
+  std::array<gpu::Fence, kSlotsOutput> fences_output_{};
   bool recording_ = false;
   std::array<bool, kSlotsOutput> outputs_pending_{};
   uint32_t output_current_ = 0;
@@ -7035,22 +7035,22 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   bool recording_upload_ = false;
   uint64_t generation_commands_ = 0;
   // GPU time of the submissions (timestamps, if the queue supports them).
-  using FnReadQueries = VkResult(VKAPI_PTR*)(VkDevice, VkQueryPool, uint32_t, uint32_t, size_t,
+  using FnReadQueries = VkResult(VKAPI_PTR*)(VkDevice, gpu::QueryPool, uint32_t, uint32_t, size_t,
                                               void*, VkDeviceSize, VkQueryResultFlags);
   bool marks_categories_ = true;  // bo2zm_native_gpu_categories
   FnReadQueries read_queries_ = nullptr;
-  VkQueryPool queries_ = VK_NULL_HANDLE;
+  gpu::QueryPool queries_ = nullptr;
   // The game's occlusion queries. The open one (0 = none), those waiting for their spans by number, the last
   // complete count of each D3D structure and, accumulated, spans, spans without room, published queries,
   // published samples and the maximum of a single query.
-  VkQueryPool occlusions_ = VK_NULL_HANDLE;
+  gpu::QueryPool occlusions_ = nullptr;
   // Pipeline statistics per pass category.
-  VkQueryPool stats_ = VK_NULL_HANDLE;
+  gpu::QueryPool stats_ = nullptr;
   std::array<uint64_t, kGpuCategories> fragments_category_{};
   std::array<uint64_t, kGpuCategories> vertices_category_{};
   std::array<uint64_t, kGpuCategories> primitives_category_{};
   uint64_t stats_no_room_ = 0;
-  VkQueryPool stats_draw_ = VK_NULL_HANDLE;
+  gpu::QueryPool stats_draw_ = nullptr;
   std::vector<uint64_t> fragments_per_shader_;
   std::vector<uint64_t> draws_per_shader_;
   uint64_t frames_diagnostic_ = 0;
@@ -7063,7 +7063,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   bool window_read_ = false;
   std::chrono::steady_clock::time_point last_window_ = std::chrono::steady_clock::now();
   bool occlusion_precise_ = false;
-  VkQueryPool visibility_ = VK_NULL_HANDLE;  // reflection visibility
+  gpu::QueryPool visibility_ = nullptr;  // reflection visibility
   uint64_t visibility_no_room_ = 0;
   uint64_t occlusion_open_ = 0;
   uint64_t next_occlusion_ = 1;
@@ -7175,8 +7175,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     uint32_t address = 0;
     uint32_t source = 0;                 // EDRAM base | pitch << 12 of the source target
     OwnedImage* target = nullptr;           // that target (targets_ never erases: the pointer stays valid)
-    VkImage source_vk = VK_NULL_HANDLE;  // its image when deferred: if it changes, it can no longer be recorded
-    VkImage texture_vk = VK_NULL_HANDLE;
+    gpu::Image source_vk = nullptr;  // its image when deferred: if it changes, it can no longer be recorded
+    gpu::Image texture_vk = nullptr;
     VkImageCopy copy{};
   };
   static constexpr uint64_t kCompositeALook = 900;  // watched writes without late reads (~30 s of play)
@@ -7199,19 +7199,19 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint64_t depth_draw_order_ = 0;
   uint64_t warnings_depth_banks_ = 0;
 
-  VkSampler sampler_ = VK_NULL_HANDLE;
-  VkDescriptorSetLayout layout_descriptors_ = VK_NULL_HANDLE;
-  VkPipelineLayout layout_pipeline_ = VK_NULL_HANDLE;
-  VkDescriptorPool pool_descriptors_ = VK_NULL_HANDLE;
-  std::array<VkDescriptorSet, kSlotsOutput> descriptors_output_{};
-  VkShaderModule vs_ = VK_NULL_HANDLE;
-  VkShaderModule fs_ = VK_NULL_HANDLE;
-  VkRenderPass render_pass_output_ = VK_NULL_HANDLE;
-  VkPipeline pipeline_ = VK_NULL_HANDLE;
+  gpu::Sampler sampler_ = nullptr;
+  gpu::SetLayout layout_descriptors_ = nullptr;
+  gpu::PipelineLayout layout_pipeline_ = nullptr;
+  gpu::SetPool pool_descriptors_ = nullptr;
+  std::array<gpu::Set, kSlotsOutput> descriptors_output_{};
+  gpu::Shader vs_ = nullptr;
+  gpu::Shader fs_ = nullptr;
+  gpu::Pass render_pass_output_ = nullptr;
+  gpu::Pipeline pipeline_ = nullptr;
   // Output with the game's gamma ramp (bo2zm_native_gamma_ramp).
   struct OutputRamp {
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory guest_memory = VK_NULL_HANDLE;
+    gpu::Buffer buffer = nullptr;
+    gpu::Memory guest_memory = nullptr;
     uint8_t* data = nullptr;
     uint32_t type = 0;
     uint64_t version = UINT64_MAX;  // the ramp_values_ version the buffer holds
@@ -7219,24 +7219,24 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   };
   bool ramp_gamma_ = false;
   std::array<OutputRamp, kSlotsOutput> ramps_output_{};
-  VkShaderModule fs_ramp_ = VK_NULL_HANDLE;
+  gpu::Shader fs_ramp_ = nullptr;
   // Index 4 * fxaa + 2 * grading + exact: 0 bilinear (like guest_output_bilinear_ps), 1 exact texel
   // (output the same size as the source); +2 with the saturation, vibrance, vignette or scanline
   // post-processing; +4 with FXAA. Those other than 0 and 1 are created on request (PipelineRamp).
-  std::array<VkPipeline, 8> pipelines_ramp_{};
+  std::array<gpu::Pipeline, 8> pipelines_ramp_{};
   std::array<bool, 8> pipelines_ramp_failed_{};
   bool warned_ramp_bilinear_ = false;
   // The home screen's credits line (CreditsReady).
   struct Credits {
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    VkBuffer staging = VK_NULL_HANDLE;
-    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
-    VkDescriptorPool pool = VK_NULL_HANDLE;
-    VkDescriptorSet set = VK_NULL_HANDLE;
-    VkShaderModule fs = VK_NULL_HANDLE;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    gpu::Image image = nullptr;
+    gpu::Memory memory = nullptr;
+    gpu::ImageView view = nullptr;
+    gpu::Buffer staging = nullptr;
+    gpu::Memory staging_memory = nullptr;
+    gpu::SetPool pool = nullptr;
+    gpu::Set set = nullptr;
+    gpu::Shader fs = nullptr;
+    gpu::Pipeline pipeline = nullptr;
     bool uploaded = false;
     bool failed = false;
   } credits_;
@@ -7276,14 +7276,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   std::unordered_map<const OwnedImage*, TargetState> state_target_;
   // CopyConverted: resolves that are not a plain bit copy.
   static constexpr uint32_t kConvSets = 256;
-  VkShaderModule conv_fs_ = VK_NULL_HANDLE;
-  VkDescriptorPool conv_pool_ = VK_NULL_HANDLE;
-  std::array<VkDescriptorSet, kConvSets> conv_sets_{};
+  gpu::Shader conv_fs_ = nullptr;
+  gpu::SetPool conv_pool_ = nullptr;
+  std::array<gpu::Set, kConvSets> conv_sets_{};
   uint64_t conv_next_ = 0;
   bool conv_failed_ = false;
-  std::unordered_map<VkFormat, VkRenderPass> conv_passes_;
-  std::unordered_map<VkFormat, VkPipeline> conv_pipelines_;
-  std::unordered_map<VkImageView, VkFramebuffer> conv_framebuffers_;
+  std::unordered_map<VkFormat, gpu::Pass> conv_passes_;
+  std::unordered_map<VkFormat, gpu::Pipeline> conv_pipelines_;
+  std::unordered_map<gpu::ImageView, gpu::Framebuffer> conv_framebuffers_;
   uint64_t copies_converted_ = 0;
   std::unordered_set<uint64_t> conv_views_;
   // Resolves through an alias (Copy): surface pairs already logged, and blits not done
@@ -7297,7 +7297,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     uint32_t pitch_flat = 0;  // of the resolve it comes from
     uint32_t block = 0;       // block size of the regions: width | height << 16
     uint64_t write = 0;    // writes_resolved_ value it was built from
-    VkImage source = VK_NULL_HANDLE;
+    gpu::Image source = nullptr;
     std::vector<VkImageCopy> regions;
     // bo2zm_native_volume_gather: one host-visible buffer, by its device address: the table (texels words: the
     // index in the resolve of each 3D texel), the resolve's texels (texels_flat words), the 3D texels (texels words).
@@ -7378,8 +7378,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // bo2zm_native_lazy_depth. Deferred depth copies, by texture address.
   struct PendingCopy {
     const OwnedImage* source = nullptr;  // depth target (depths_ never erases: the pointer stays valid)
-    VkImage source_vk = VK_NULL_HANDLE;
-    VkImage target_vk = VK_NULL_HANDLE;
+    gpu::Image source_vk = nullptr;
+    gpu::Image target_vk = nullptr;
     VkImageCopy copy{};
     uint64_t frame = 0;     // presented_ when postponing it
     bool read_dead = false;  // the composite without blur already requested it

@@ -26,6 +26,13 @@ struct VkRenderPass_T;
 struct VkPipelineLayout_T;
 struct VkPipeline_T;
 struct VkPipelineCache_T;
+struct VkBuffer_T;
+struct VkFramebuffer_T;
+struct VkDescriptorSet_T;
+struct VkDescriptorPool_T;
+struct VkQueryPool_T;
+struct VkFence_T;
+struct VkCommandPool_T;
 
 namespace bo2zm::native::gpu {
 
@@ -40,6 +47,13 @@ using Pass = VkRenderPass_T*;  // the formats and load/store of a pass
 using PipelineLayout = VkPipelineLayout_T*;
 using Pipeline = VkPipeline_T*;
 using PipelineCache = VkPipelineCache_T*;  // Metal: an MTLBinaryArchive
+using Buffer = VkBuffer_T*;
+using Framebuffer = VkFramebuffer_T*;  // the images a pass draws in (Metal: part of the pass descriptor)
+using Set = VkDescriptorSet_T*;  // Metal: an argument buffer
+using SetPool = VkDescriptorPool_T*;
+using QueryPool = VkQueryPool_T*;
+using Fence = VkFence_T*;
+using CommandPool = VkCommandPool_T*;
 
 enum class Backend : uint8_t { kVulkan, kMetal };
 
