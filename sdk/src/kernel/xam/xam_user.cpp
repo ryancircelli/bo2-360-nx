@@ -434,10 +434,70 @@ u32 XamUserGetMembershipTier_entry(u32 user_index) {
   if (user_index >= 4) {
     return X_ERROR_INVALID_PARAMETER;
   }
-  if (user_index) {
-    return X_ERROR_NO_SUCH_USER;
+  // The return value is the tier itself, never an error code: an error here
+  // reads as a tier of 0x525 to the game. Profiles 2 to 4 are offline-only
+  // (XamUserIsOnlineEnabled returns 0 for them), so they report no tier.
+  const auto profile = REX_KERNEL_STATE()->user_profile(user_index);
+  if (!profile || user_index != 0) {
+    return 0 /* none */;
   }
   return 6 /* 6 appears to be Gold */;
+}
+
+// Local profile index for an offline XUID (the only kind this SDK hands out).
+static bool FindUserIndexForXuid(uint64_t xuid, uint32_t* index_out) {
+  if (!xuid) return false;
+  for (uint32_t i = 0; i < 4; ++i) {
+    const auto profile = REX_KERNEL_STATE()->user_profile(i);
+    if (profile && profile->xuid() == xuid) {
+      *index_out = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+u32 XamUserGetIndexFromXUID_entry(u64 xuid, u32 flags, mapped_u32 index_ptr) {
+  if (!index_ptr) return X_E_INVALIDARG;
+  uint32_t index = 0;
+  if (!FindUserIndexForXuid(xuid, &index)) return X_E_NO_SUCH_USER;
+  *index_ptr = index;
+  return X_E_SUCCESS;
+}
+
+u32 XamUserGetMembershipTierFromXUID_entry(u64 xuid) {
+  uint32_t index = 0;
+  if (!FindUserIndexForXuid(xuid, &index)) return 0;
+  return XamUserGetMembershipTier_entry(index);
+}
+
+u32 XamUserGetOnlineCountryFromXUID_entry(u64 xuid) {
+  // 103 = United States (XONLINE_COUNTRY_UNITED_STATES), the console default.
+  return 103;
+}
+
+u32 XamUserIsGuest_entry(u32 user_index) {
+  // Every local profile here is a full offline profile, never a guest.
+  return 0;
+}
+
+// Black Ops II (sub_825DB540) treats any result other than 0 or ERROR_IO_PENDING
+// as failure. The old stub left r3 untouched, so it "returned" the user index:
+// success for player 1 by accident, failure for players 2 to 4.
+u32 XamUserGetAgeGroup_entry(u32 user_index, mapped_u32 age_group_ptr, u32 overlapped_ptr) {
+  X_RESULT result = X_ERROR_SUCCESS;
+  if (user_index >= 4) {
+    result = X_ERROR_INVALID_PARAMETER;
+  } else if (!REX_KERNEL_STATE()->user_profile(user_index)) {
+    result = X_ERROR_NO_SUCH_USER;
+  } else if (age_group_ptr) {
+    *age_group_ptr = 2 /* XUSER_AGE_GROUP_ADULT */;
+  }
+  if (overlapped_ptr) {
+    REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped_ptr, result);
+    return X_ERROR_IO_PENDING;
+  }
+  return result;
 }
 
 u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32 out_value,
@@ -750,6 +810,11 @@ REX_EXPORT(__imp__XamUserIsOnlineEnabled, rex::kernel::xam::XamUserIsOnlineEnabl
 REX_EXPORT(__imp__XamUserGetMembershipTier, rex::kernel::xam::XamUserGetMembershipTier_entry)
 REX_EXPORT(__imp__XamUserAreUsersFriends, rex::kernel::xam::XamUserAreUsersFriends_entry)
 REX_EXPORT(__imp__XamShowSigninUI, rex::kernel::xam::XamShowSigninUI_entry)
+REX_EXPORT(__imp__XamUserGetIndexFromXUID, rex::kernel::xam::XamUserGetIndexFromXUID_entry)
+REX_EXPORT(__imp__XamUserGetMembershipTierFromXUID, rex::kernel::xam::XamUserGetMembershipTierFromXUID_entry)
+REX_EXPORT(__imp__XamUserGetOnlineCountryFromXUID, rex::kernel::xam::XamUserGetOnlineCountryFromXUID_entry)
+REX_EXPORT(__imp__XamUserIsGuest, rex::kernel::xam::XamUserIsGuest_entry)
+REX_EXPORT(__imp__XamUserGetAgeGroup, rex::kernel::xam::XamUserGetAgeGroup_entry)
 REX_EXPORT(__imp__XamUserCreateAchievementEnumerator,
            rex::kernel::xam::XamUserCreateAchievementEnumerator_entry)
 REX_EXPORT(__imp__XamParseGamerTileKey, rex::kernel::xam::XamParseGamerTileKey_entry)
@@ -766,12 +831,8 @@ REX_EXPORT_STUB(__imp__XamUserCreateStatsEnumerator);
 REX_EXPORT_STUB(__imp__XamUserCreateTitlesPlayedEnumerator);
 REX_EXPORT_STUB(__imp__XamUserFlushLogonQueue);
 REX_EXPORT_STUB(__imp__XamUserGetAge);
-REX_EXPORT_STUB(__imp__XamUserGetAgeGroup);
 REX_EXPORT_STUB(__imp__XamUserGetCachedUserFlags);
 REX_EXPORT_STUB(__imp__XamUserGetDeviceId);
-REX_EXPORT_STUB(__imp__XamUserGetIndexFromXUID);
-REX_EXPORT_STUB(__imp__XamUserGetMembershipTierFromXUID);
-REX_EXPORT_STUB(__imp__XamUserGetOnlineCountryFromXUID);
 REX_EXPORT_STUB(__imp__XamUserGetOnlineLanguageFromXUID);
 REX_EXPORT_STUB(__imp__XamUserGetOnlineXUIDFromOfflineXUID);
 REX_EXPORT_STUB(__imp__XamUserGetReportingInfo);
@@ -784,7 +845,6 @@ REX_EXPORT_STUB(__imp__XamUserGetUserTenure);
 REX_EXPORT_STUB(__imp__XamUserGetUsersMissingAvatars);
 REX_EXPORT_STUB(__imp__XamUserGetXUIDForTFA);
 REX_EXPORT_STUB(__imp__XamUserInvalidateProfileSetting);
-REX_EXPORT_STUB(__imp__XamUserIsGuest);
 REX_EXPORT_STUB(__imp__XamUserIsLogonPreviewModeEnabled);
 REX_EXPORT_STUB(__imp__XamUserIsParentalControlled);
 REX_EXPORT_STUB(__imp__XamUserIsPartial);
