@@ -1,0 +1,37 @@
+# bo2-zm-nx for macOS (Apple silicon): settings
+#
+# This file sits next to the game and is read every time it starts. Each setting is one line, name = value. A line
+# that starts with # is a comment: remove the # in front of a setting to use it, and put it back to return to the
+# default. Many of these can also be changed in the game's own menus (Options > Graphics and Extras), which remember
+# your choice; a value set in this file wins over the remembered one every time the game starts. The names are the
+# same as the command-line options (--name=value).
+
+# ---- Graphics ----------------------------------------------------------------------------------------------------
+
+# The renderer. "native" sends the game's drawing to your GPU through Vulkan, using the shader library
+# bo2zm_shaders.spvpack next to this file; the first start with a new library saves an index beside it
+# (bo2zm_shaders.spvidx). "xenos" emulates the Xbox 360's GPU instead: faithful, but far too slow to play.
+gpu_plugin = "xenos"
+bo2zm_renderer = "native"
+
+# Window or full screen.
+# fullscreen = true
+
+# Graphics preset: "lowest", "very_low" (the default), "low", "medium" (the highest) or "custom" (the settings picked
+# one by one in Options > Graphics). A preset set here wins at every start and applies to every map.
+# bo2zm_preset = "very_low"
+
+# Frames per second in the top-left corner.
+bo2zm_show_fps = false
+
+# ---- Game --------------------------------------------------------------------------------------------------------
+
+# Start in the Zombies menu, and bring every mode switch back to Zombies (the only mode in this port).
+bo2zm_boot_zombies = true
+bo2zm_zombies_only = true
+
+# ---- Logs --------------------------------------------------------------------------------------------------------
+
+# The game writes a log to logs/ next to it. By default it follows DEBUG in Extras: with DEBUG off only warnings and
+# errors are written. Set log_level to keep the full log whatever DEBUG says, for example to report a problem.
+# log_level = "info"
