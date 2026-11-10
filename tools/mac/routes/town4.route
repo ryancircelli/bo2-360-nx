@@ -1,0 +1,14 @@
+# Four players in Town, the same walk for everyone's view to differ. P0 route "4-player Town".
+# Players 2 to 4 join in the lobby (start wait 15 s) and then look in different directions.
+duration_s = 300
+players = 4
+BO2ZM_TEST_START = zm_transit town zstandard zsurvival
+BO2ZM_TEST_START_WAIT_S = 15
+BO2ZM_TEST_ALL_GOD = true
+BO2ZM_BENCHMARK = true
+BO2ZM_BENCHMARK_S = 180
+BO2ZM_TEST_BUTTONS = 60-120:up,120-180:look_right
+BO2ZM_TEST_BUTTONS_P2 = 3:start,60-120:look_left
+BO2ZM_TEST_BUTTONS_P3 = 5:start,60-120:look_up
+BO2ZM_TEST_BUTTONS_P4 = 7:start,60-120:look_down
+compare_quadrants = true
