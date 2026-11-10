@@ -72,6 +72,12 @@ class Device {
   Image CreateImage(const ImageDesc& desc);
   static void Release(Image image);
 
+  // Samplers (bo2zm_gpu_metal_samplers.mm), usable in argument buffers; SamplerId is the 64-bit
+  // MTLResourceID the bindless sampler heap stores.
+  Sampler CreateSampler(const SamplerDesc& desc);
+  static void Release(Sampler sampler);
+  static uint64_t SamplerId(Sampler sampler);
+
   // The function of a shader, from its library (loaded the first time one of its functions is asked for).
   // nullptr if there is no such function; the returned id<MTLFunction> is owned by the device.
   void* Function(std::string_view name);
