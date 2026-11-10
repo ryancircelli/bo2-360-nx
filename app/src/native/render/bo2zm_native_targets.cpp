@@ -887,14 +887,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (rp != VK_NULL_HANDLE) dfn_.vkDestroyRenderPass(device_, rp, nullptr);
     }
     if (conv_pool_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, conv_pool_, nullptr);
-    if (conv_fs_ != VK_NULL_HANDLE) dfn_.vkDestroyShaderModule(device_, conv_fs_, nullptr);
+    if (conv_fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, conv_fs_);
     for (VkPipeline p : pipelines_ramp_) {
       if (p != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, p, nullptr);
     }
-    if (fs_ramp_ != VK_NULL_HANDLE) dfn_.vkDestroyShaderModule(device_, fs_ramp_, nullptr);
+    if (fs_ramp_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_ramp_);
     // The credits line
     if (credits_.pipeline != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, credits_.pipeline, nullptr);
-    if (credits_.fs != VK_NULL_HANDLE) dfn_.vkDestroyShaderModule(device_, credits_.fs, nullptr);
+    if (credits_.fs != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, credits_.fs);
     if (credits_.pool != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, credits_.pool, nullptr);
     if (credits_.view != VK_NULL_HANDLE) dfn_.vkDestroyImageView(device_, credits_.view, nullptr);
     if (credits_.image != VK_NULL_HANDLE) dfn_.vkDestroyImage(device_, credits_.image, nullptr);
@@ -912,8 +912,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (layout_descriptors_ != VK_NULL_HANDLE)
       dfn_.vkDestroyDescriptorSetLayout(device_, layout_descriptors_, nullptr);
     if (sampler_ != VK_NULL_HANDLE) dfn_.vkDestroySampler(device_, sampler_, nullptr);
-    if (vs_ != VK_NULL_HANDLE) dfn_.vkDestroyShaderModule(device_, vs_, nullptr);
-    if (fs_ != VK_NULL_HANDLE) dfn_.vkDestroyShaderModule(device_, fs_, nullptr);
+    if (vs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, vs_);
+    if (fs_ != VK_NULL_HANDLE) gpu::vulkan::DestroyShader(dfn_, device_, fs_);
     if (render_pass_output_ != VK_NULL_HANDLE)
       dfn_.vkDestroyRenderPass(device_, render_pass_output_, nullptr);
     for (WorkSlot& slot : slots_) {
@@ -1197,22 +1197,17 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
     }
 
-    VkShaderModuleCreateInfo module_info{};
-    module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    module_info.codeSize = sizeof(shaders::guest_output_triangle_strip_rect_vs);
-    module_info.pCode = shaders::guest_output_triangle_strip_rect_vs;
-    if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &vs_) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateShader(dfn_, device_, shaders::guest_output_triangle_strip_rect_vs,
+                                   sizeof(shaders::guest_output_triangle_strip_rect_vs), vs_)) {
       return false;
     }
-    module_info.codeSize = sizeof(shaders::guest_output_bilinear_ps);
-    module_info.pCode = shaders::guest_output_bilinear_ps;
-    if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &fs_) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateShader(dfn_, device_, shaders::guest_output_bilinear_ps,
+                                   sizeof(shaders::guest_output_bilinear_ps), fs_)) {
       return false;
     }
     if (ramp_gamma_) {
-      module_info.codeSize = sizeof(shaders::bo2zm_output_gamma_ramp_ps);
-      module_info.pCode = shaders::bo2zm_output_gamma_ramp_ps;
-      if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &fs_ramp_) != VK_SUCCESS) {
+      if (!gpu::vulkan::CreateShader(dfn_, device_, shaders::bo2zm_output_gamma_ramp_ps,
+                                     sizeof(shaders::bo2zm_output_gamma_ramp_ps), fs_ramp_)) {
         return false;
       }
     }
@@ -1440,11 +1435,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     write.pImageInfo = &info_image;
     dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    VkShaderModuleCreateInfo module_info{};
-    module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    module_info.codeSize = sizeof(shaders::bo2zm_credits_ps);
-    module_info.pCode = shaders::bo2zm_credits_ps;
-    if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &c.fs) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateShader(dfn_, device_, shaders::bo2zm_credits_ps, sizeof(shaders::bo2zm_credits_ps), c.fs)) {
       REXLOG_ERROR("[native] credits: could not create the shader: no credits line");
       return false;
     }
@@ -3668,10 +3659,6 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
     if (conv_fs_ == VK_NULL_HANDLE && !conv_failed_) {
-      VkShaderModuleCreateInfo module_info{};
-      module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-      module_info.codeSize = sizeof(shaders::kSpirvBo2zmCopyResolve);
-      module_info.pCode = shaders::kSpirvBo2zmCopyResolve;
       VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kConvSets},
                                          {VK_DESCRIPTOR_TYPE_SAMPLER, kConvSets},
                                          {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kConvSets}};
@@ -3680,7 +3667,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       info_pool.maxSets = kConvSets;
       info_pool.poolSizeCount = 3;
       info_pool.pPoolSizes = sizes;
-      bool ok = dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &conv_fs_) == VK_SUCCESS &&
+      bool ok = gpu::vulkan::CreateShader(dfn_, device_, shaders::kSpirvBo2zmCopyResolve,
+                                           sizeof(shaders::kSpirvBo2zmCopyResolve), conv_fs_) &&
                 dfn_.vkCreateDescriptorPool(device_, &info_pool, nullptr, &conv_pool_) == VK_SUCCESS;
       for (uint32_t i = 0; ok && i < kConvSets; ++i) {
         VkDescriptorSetAllocateInfo reserve{};
