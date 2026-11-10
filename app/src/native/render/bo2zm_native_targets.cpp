@@ -1176,14 +1176,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       ramp.data = static_cast<uint8_t*>(mapped);
       ramp.type = type;
       VkDescriptorBufferInfo info_buffer{ramp.buffer, 0, sizeof(ramp_values_) + sizeof(bo2zm::native::output::Crosshairs)};
-      VkWriteDescriptorSet write{};
-      write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-      write.dstSet = descriptors_output_[i];
-      write.dstBinding = 2;
-      write.descriptorCount = 1;
-      write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-      write.pBufferInfo = &info_buffer;
-      dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+      gpu::vulkan::WriteUniforms(dfn_, device_, descriptors_output_[i], 2, 1, &info_buffer, false);
     }
     if (!ramp_gamma_) {
       // Without a ramp, binding 2 stays unwritten: the pipeline without the ramp does not read it.
@@ -1421,17 +1414,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       REXLOG_ERROR("[native] credits: could not get a descriptor set: no credits line");
       return false;
     }
-    VkDescriptorImageInfo info_image{};
-    info_image.imageView = c.view;
-    info_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = c.set;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    write.pImageInfo = &info_image;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    gpu::vulkan::WriteSampledImage(dfn_, device_, c.set, 0, 0, c.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     if (!gpu::vulkan::CreateShader(dfn_, device_, shaders::bo2zm_credits_ps, sizeof(shaders::bo2zm_credits_ps), c.fs)) {
       REXLOG_ERROR("[native] credits: could not create the shader: no credits line");
       return false;
@@ -3735,15 +3718,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
     }
     const VkDescriptorSet set = conv_sets_[conv_next_++ % kConvSets];
-    VkDescriptorImageInfo info_image{VK_NULL_HANDLE, source.view, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = set;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    write.pImageInfo = &info_image;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    gpu::vulkan::WriteSampledImage(dfn_, device_, set, 0, 0, source.view);
 
     // The render target's writes before it is read, and the result before it is sampled, copied or read back.
     VkMemoryBarrier barrier{};
@@ -7064,17 +7039,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       framebuffer = f.framebuffer;
     }
 
-    VkDescriptorImageInfo info_image{};
-    info_image.imageView = source.view;
-    info_image.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = descriptors_output_[s];
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    write.pImageInfo = &info_image;
-    dfn_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    gpu::vulkan::WriteSampledImage(dfn_, device_, descriptors_output_[s], 0, 0, source.view);
 
     // The home screen's credits line (bo2zm_credits.cpp), while the menu shows it.
     bo2zm::credits::Placement credits{};
