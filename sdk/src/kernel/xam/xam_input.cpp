@@ -43,6 +43,19 @@ rex::input::InputSystem* input_system() {
   return static_cast<rex::input::InputSystem*>(REX_KERNEL_STATE()->emulator()->input_system());
 }
 
+// XN_SYS_INPUTDEVICESCHANGED. The real XAM sends it whenever a controller is plugged in or pulled;
+// titles (Black Ops II among them) use it to notice a lost controller and pause for that player.
+// Sent after the input call returns, so the kernel lock is never taken under the input lock.
+constexpr uint32_t kXNotificationSystemInputDevicesChanged = 0x00000012;
+
+X_RESULT NotifyIfDevicesChanged(rex::input::InputSystem* is, X_RESULT result) {
+  if (is && is->TakeDevicesChanged()) {
+    REXKRNL_INFO("XamInput: controllers changed, sending XN_SYS_INPUTDEVICESCHANGED");
+    REX_KERNEL_STATE()->BroadcastNotification(XNotificationID(kXNotificationSystemInputDevicesChanged), 0);
+  }
+  return result;
+}
+
 void XamResetInactivity_entry() {
   // Do we need to do anything?
 }
@@ -71,7 +84,7 @@ u32 XamInputGetCapabilities_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_C
   }
 
   auto* is = input_system();
-  return is->GetCapabilities(actual_user_index, flags, caps);
+  return NotifyIfDevicesChanged(is, is->GetCapabilities(actual_user_index, flags, caps));
 }
 
 u32 XamInputGetCapabilitiesEx_entry(u32 unk, u32 user_index, u32 flags,
@@ -93,7 +106,7 @@ u32 XamInputGetCapabilitiesEx_entry(u32 unk, u32 user_index, u32 flags,
 
   (void)unk;  // Unused in this implementation
   auto* is = input_system();
-  return is->GetCapabilities(actual_user_index, flags, caps);
+  return NotifyIfDevicesChanged(is, is->GetCapabilities(actual_user_index, flags, caps));
 }
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputgetstate(v=vs.85).aspx
@@ -117,7 +130,7 @@ u32 XamInputGetState_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_STATE> i
   }
 
   auto* is = input_system();
-  return is->GetState(actual_user_index, input_state);
+  return NotifyIfDevicesChanged(is, is->GetState(actual_user_index, input_state));
 }
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputsetstate(v=vs.85).aspx

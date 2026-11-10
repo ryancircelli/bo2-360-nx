@@ -344,6 +344,9 @@ void InputSystem::RefreshDevices() {
     device_owners_.push_back(owners[i]);
   }
 
+  if (changed) {
+    devices_changed_.store(true, std::memory_order_release);
+  }
   if (changed && assignment_) {
     assignment_->OnDevicesChanged(devices_);
     // Player lights follow the guest user, not the driver's own order.
