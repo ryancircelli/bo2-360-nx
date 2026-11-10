@@ -64,6 +64,7 @@
 
 #include "bo2zm_debug_options.h"
 
+#include <cstdlib>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -284,7 +285,7 @@ Found Collect(int tier) {
              [](const std::string& name) { return EndsWith(name, ".log") && name != "rex_stderr.log"; });
   }
   if (all || tier == 1) {
-    AddFiles(found, exe / "captures", false, [](const std::string& name) { return EndsWith(name, ".png"); });
+    AddFiles(found, (std::getenv("BO2_LOG_DIR") && *std::getenv("BO2_LOG_DIR")) ? std::filesystem::path(std::getenv("BO2_LOG_DIR")) / "captures" : exe / "captures", false, [](const std::string& name) { return EndsWith(name, ".png"); });
   }
   if (all || tier == 2) {
     AddFiles(found, exe / "d3d_shaders", true, [](const std::string&) { return true; });
