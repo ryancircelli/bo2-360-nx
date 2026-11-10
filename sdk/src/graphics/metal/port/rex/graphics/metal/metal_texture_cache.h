@@ -890,6 +890,7 @@ class MetalTextureCache : public TextureCache {
   static bool TexLoadDirectVerify();
   // [cpu-source-watch] see LoadTextureDataFromCpuGuestMemory.
   static bool CpuSourceWatchFirst();
+  static uint32_t CpuSourceMaxRetries();
   static void CpuSourceWatchThunk(const global_unique_lock_type& global_lock,
                                   void* context, void* data, uint64_t argument,
                                   bool invalidated_by_gpu);
