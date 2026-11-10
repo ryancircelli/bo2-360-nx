@@ -169,6 +169,45 @@ class Recorder {
     dynamic_.color_mask(c, 0, count, masks);
   }
 
+  // Render passes, clears, copies, barriers and queries. These still take the Vulkan structures (the images,
+  // buffers and passes are Vulkan objects until the resources move behind the layer); each is the same call.
+  void BeginPass(VkCommandBuffer c, const VkRenderPassBeginInfo& begin) const {
+    dfn_.vkCmdBeginRenderPass(c, &begin, VK_SUBPASS_CONTENTS_INLINE);
+  }
+  void EndPass(VkCommandBuffer c) const { dfn_.vkCmdEndRenderPass(c); }
+  void ClearAttachments(VkCommandBuffer c, uint32_t count, const VkClearAttachment* attachments, uint32_t rects,
+                        const VkClearRect* rectangles) const {
+    dfn_.vkCmdClearAttachments(c, count, attachments, rects, rectangles);
+  }
+  void ClearColorImage(VkCommandBuffer c, VkImage image, VkImageLayout layout, const VkClearColorValue* color,
+                       uint32_t count, const VkImageSubresourceRange* ranges) const {
+    dfn_.vkCmdClearColorImage(c, image, layout, color, count, ranges);
+  }
+  void CopyBuffer(VkCommandBuffer c, VkBuffer source, VkBuffer target, uint32_t count,
+                  const VkBufferCopy* regions) const {
+    dfn_.vkCmdCopyBuffer(c, source, target, count, regions);
+  }
+  void CopyBufferToImage(VkCommandBuffer c, VkBuffer source, VkImage target, VkImageLayout layout, uint32_t count,
+                         const VkBufferImageCopy* regions) const {
+    dfn_.vkCmdCopyBufferToImage(c, source, target, layout, count, regions);
+  }
+  void CopyImageToBuffer(VkCommandBuffer c, VkImage source, VkImageLayout layout, VkBuffer target, uint32_t count,
+                         const VkBufferImageCopy* regions) const {
+    dfn_.vkCmdCopyImageToBuffer(c, source, layout, target, count, regions);
+  }
+  void Barrier(VkCommandBuffer c, VkPipelineStageFlags source, VkPipelineStageFlags target,
+               VkDependencyFlags dependencies, uint32_t memories, const VkMemoryBarrier* memory, uint32_t buffers,
+               const VkBufferMemoryBarrier* buffer, uint32_t images, const VkImageMemoryBarrier* image) const {
+    dfn_.vkCmdPipelineBarrier(c, source, target, dependencies, memories, memory, buffers, buffer, images, image);
+  }
+  void BeginQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index, VkQueryControlFlags flags) const {
+    dfn_.vkCmdBeginQuery(c, pool, index, flags);
+  }
+  void EndQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index) const { dfn_.vkCmdEndQuery(c, pool, index); }
+  void ResetQueries(VkCommandBuffer c, VkQueryPool pool, uint32_t first, uint32_t count) const {
+    dfn_.vkCmdResetQueryPool(c, pool, first, count);
+  }
+
  private:
   const Functions& dfn_;
   DynamicState dynamic_;
