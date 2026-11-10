@@ -1546,21 +1546,20 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   void DrawCredits(VkCommandBuffer commands, const bo2zm::credits::Placement& place, uint32_t width,
                    uint32_t height) {
     const uint32_t* rect = bo2zm::credits::Images()->rects[place.image];
-    dfn_.vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, credits_.pipeline);
-    dfn_.vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 1, &credits_.set, 0,
-                                 nullptr);
+    gpu_.BindGraphicsPipeline(commands, credits_.pipeline);
+    gpu_.BindSets(commands, layout_pipeline_, 0, 1, &credits_.set);
     const float rectangle[4] = {-1.0f + 2.0f * float(place.x) / float(width),
                                 -1.0f + 2.0f * float(place.y) / float(height), 2.0f * float(rect[2]) / float(width),
                                 2.0f * float(rect[3]) / float(height)};
-    dfn_.vkCmdPushConstants(commands, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(rectangle), rectangle);
+    gpu_.PushConstants(commands, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(rectangle), rectangle);
     const struct {
       int32_t origin[2];
       int32_t source[2];
       float alpha;
     } constants = {{place.x, place.y}, {int32_t(rect[0]), int32_t(rect[1])}, place.alpha};
-    dfn_.vkCmdPushConstants(commands, layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16, sizeof(constants),
+    gpu_.PushConstants(commands, layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16, sizeof(constants),
                             &constants);
-    dfn_.vkCmdDraw(commands, 4, 1, 0, 0);
+    gpu_.Draw(commands, 4, 0);
   }
 
   bool FrontTraceLine() {
@@ -3837,13 +3836,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     start.renderArea = {{int32_t(dx), int32_t(dy)}, {width, height}};
     MarkGpu(kGpuCopies);
     dfn_.vkCmdBeginRenderPass(commands_job_, &start, VK_SUBPASS_CONTENTS_INLINE);
-    dfn_.vkCmdBindPipeline(commands_job_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    dfn_.vkCmdBindDescriptorSets(commands_job_, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 1,
-                                 &set, 0, nullptr);
+    gpu_.BindGraphicsPipeline(commands_job_, pipeline);
+    gpu_.BindSets(commands_job_, layout_pipeline_, 0, 1, &set);
     gpu_.SetViewport(commands_job_, gpu::Viewport{float(dx), float(dy), float(width), float(height), 0.0f, 1.0f});
     gpu_.SetScissor(commands_job_, gpu::Rect{int32_t(dx), int32_t(dy), width, height});
     const float rectangle[4] = {-1.0f, -1.0f, 2.0f, 2.0f};
-    dfn_.vkCmdPushConstants(commands_job_, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(rectangle),
+    gpu_.PushConstants(commands_job_, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(rectangle),
                             rectangle);
     const uint32_t number = (info_target >> 13) & 0x7;
     const int32_t bias = int32_t(info_target << 10) >> 26;
@@ -3863,9 +3861,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     } constants{{x0 - int32_t(dx), y0 - int32_t(dy)},
                  std::ldexp(1.0f, bias),
                  target.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 4u : number <= 3 ? number : 0u};
-    dfn_.vkCmdPushConstants(commands_job_, layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16,
+    gpu_.PushConstants(commands_job_, layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16,
                             sizeof(constants), &constants);
-    dfn_.vkCmdDraw(commands_job_, 4, 1, 0, 0);
+    gpu_.Draw(commands_job_, 4, 0);
     dfn_.vkCmdEndRenderPass(commands_job_);
     // This pass bound its own pipeline, set 0, push constants, viewport and scissor in the same command
     // buffer the draws use, and VulkanDraws only rebinds what it believes changed (sets_bound_, push_recorded_,
@@ -7215,11 +7213,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                     height, source.width, source.height);
       }
     }
-    dfn_.vkCmdBindPipeline(commands_output_[s], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    dfn_.vkCmdBindDescriptorSets(commands_output_[s], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                 layout_pipeline_, 0, 1, &descriptors_output_[s], 0, nullptr);
+    gpu_.BindGraphicsPipeline(commands_output_[s], pipeline);
+    gpu_.BindSets(commands_output_[s], layout_pipeline_, 0, 1, &descriptors_output_[s]);
     const float rectangle[4] = {-1.0f, -1.0f, 2.0f, 2.0f};  // x, y, width, height in NDC
-    dfn_.vkCmdPushConstants(commands_output_[s], layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0,
+    gpu_.PushConstants(commands_output_[s], layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0,
                             sizeof(rectangle), rectangle);
     struct {
       int32_t displacement[2];
@@ -7243,9 +7240,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (ramp_gamma_ && bo2zm::preset::OnScreenBanner(bilinear.banner)) {
       bilinear.banner_info[0] = std::max<uint32_t>(3, height / 180);  // a size larger than the note's
     }
-    dfn_.vkCmdPushConstants(commands_output_[s], layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16,
+    gpu_.PushConstants(commands_output_[s], layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16,
                             sizeof(bilinear), &bilinear);
-    dfn_.vkCmdDraw(commands_output_[s], 4, 1, 0, 0);
+    gpu_.Draw(commands_output_[s], 4, 0);
     if (draw_credits) {
       DrawCredits(commands_output_[s], credits, width, height);
     }
