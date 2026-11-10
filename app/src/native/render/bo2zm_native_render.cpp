@@ -130,6 +130,14 @@ REXCVAR_DEFINE_STRING(bo2zm_native_dump_memory, "", "BO2",
 extern std::atomic<uint64_t> g_bo2zm_dump_texture;  // bo2zm_native_draws.cpp
 
 // Diagnostics: the color-grading strip's inputs (NativeRenderSystem::DiagDropsLutBo2zm).
+#if BO2ZM_NATIVE_METAL
+REXCVAR_DEFINE_BOOL(bo2zm_native_metal_present, false, "BO2",
+                    "Native renderer, Metal backend (work in progress): present with Metal instead of the SDK's "
+                    "Vulkan presenter. The game image is not shown yet (a plain colour is), and the debug UI is "
+                    "not drawn")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+#endif
+
 REXCVAR_DEFINE_BOOL(bo2zm_native_diag_lut, false, "BO2",
                     "Diagnostics: log the colour-grading strip draw's constants and base table every 5 s")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -449,6 +457,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_deferred_reports, true, "BO2",
 #include "../../bo2zm_perf_log.h"
 #if BO2ZM_NATIVE_METAL
 #include "metal/bo2zm_gpu_metal.h"
+#include "metal/bo2zm_metal_presenter.h"
 #endif
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_im_load_without_memcmp, true, "BO2",
@@ -1094,7 +1103,27 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         return X_STATUS_UNSUCCESSFUL;
       }
     }
-    auto create = [this]() { presenter_ = provider_->CreatePresenter(); };
+#if BO2ZM_NATIVE_METAL
+    // The Metal libraries made ahead of time (tools/metal) sit in metal/ next to the executable.
+    if (!metal_) {
+      metal_ = gpu::metal::Device::Create(rex::filesystem::GetExecutableFolder() / "metal");
+    }
+    const bool metal_present = metal_ && REXCVAR_GET(bo2zm_native_metal_present);
+#else
+    const bool metal_present = false;
+#endif
+    auto create = [this, metal_present]() {
+#if BO2ZM_NATIVE_METAL
+      if (metal_present) {
+        auto metal = gpu::metal::Presenter::Create(*metal_);
+        metal_presenter_ = metal.get();
+        presenter_ = std::move(metal);
+        return;
+      }
+#endif
+      (void)metal_present;
+      presenter_ = provider_->CreatePresenter();
+    };
     if (app_context_) {
       app_context_->CallInUIThreadSynchronous(create);
     } else {
@@ -1104,12 +1133,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       REXLOG_ERROR("[native] Could not create the presenter");
       return X_STATUS_UNSUCCESSFUL;
     }
-#if BO2ZM_NATIVE_METAL
-    // The Metal libraries made ahead of time (tools/metal) sit in metal/ next to the executable.
-    if (!metal_) {
-      metal_ = gpu::metal::Device::Create(rex::filesystem::GetExecutableFolder() / "metal");
-    }
-#endif
     REXLOG_INFO("[native] Native graphics system (C1): the SDK's presenter, without Xenos emulation");
     return X_STATUS_SUCCESS;
   }
@@ -1143,7 +1166,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       progress->Update(done, total);
     };
     const bool library = shaders_.Load(rex::filesystem::GetExecutableFolder() / BO2ZM_SHADER_LIBRARY_FILE,
-                                       presenter_ ? NativeShaders::IndexProgress(show) : nullptr);
+                                       presenter_ && !metal_presenting() ? NativeShaders::IndexProgress(show)
+                                                                         : nullptr);
     if (progress) {
       progress->Finish();
       progress.reset();
@@ -1168,6 +1192,13 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   }
 
   bool has_presentation() const override { return presenter_ != nullptr; }
+  bool metal_presenting() const {
+#if BO2ZM_NATIVE_METAL
+    return metal_presenter_ != nullptr;
+#else
+    return false;
+#endif
+  }
   rex::ui::GraphicsProvider* provider() const override { return provider_.get(); }
   rex::ui::Presenter* presenter() const override { return presenter_.get(); }
 
@@ -1216,6 +1247,9 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       }
       presenter_.reset();
     }
+#if BO2ZM_NATIVE_METAL
+    metal_presenter_ = nullptr;
+#endif
     provider_.reset();
   }
 
@@ -5163,6 +5197,16 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     if (!presenter_) {
       return;
     }
+#if BO2ZM_NATIVE_METAL
+    if (metal_presenter_) {
+      // The first Metal-drawn frames: a clear whose colour moves (so a frozen paint shows), until the renderer
+      // draws on Metal. The Vulkan renderer still draws, off screen.
+      const float t = float(counter_.load(std::memory_order_relaxed) % 120) / 120.0f;
+      const float rgba[4] = {0.05f, 0.15f + 0.35f * t, 0.35f, 1.0f};
+      metal_presenter_->RefreshWithClear(kOutputWidth, kOutputHeight, rgba);
+      return;
+    }
+#endif
     // The game image, if this Swap has a resolved texture.
     if (targets_) {
       // The gamma ramp, if the game has changed it (same thread as AnnotateRampGamma).
@@ -6211,6 +6255,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   // The Metal backend while it is built up: its device and shader libraries are opened next to the Vulkan one,
   // which still does all the drawing.
   std::unique_ptr<gpu::metal::Device> metal_;
+  // presenter_, when bo2zm_native_metal_present made it a Metal presenter.
+  gpu::metal::Presenter* metal_presenter_ = nullptr;
 #endif
   std::unique_ptr<rex::ui::Presenter> presenter_;
 
