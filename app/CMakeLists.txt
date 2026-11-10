@@ -183,6 +183,21 @@ if(TARGET bo2zm_recomp)
   endif()
 endif()
 
+# BO2ZM_NATIVE_METAL: the native renderer's Metal backend (src/native/render/metal), on Apple platforms only. It is
+# being built up next to the Vulkan one, which stays the default and the only backend on the Switch and elsewhere.
+# Its shaders are Metal libraries made ahead of time from the shader pack (tools/metal), never compiled at runtime.
+option(BO2ZM_NATIVE_METAL "Native renderer: the Metal backend (Apple platforms; work in progress)" OFF)
+if(BO2ZM_NATIVE_METAL)
+  if(NOT APPLE)
+    message(FATAL_ERROR "BO2ZM_NATIVE_METAL needs an Apple platform")
+  endif()
+  enable_language(OBJCXX)
+  target_sources(bo2zm PRIVATE src/native/render/metal/bo2zm_gpu_metal.mm)
+  set_source_files_properties(src/native/render/metal/bo2zm_gpu_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  target_compile_definitions(bo2zm PRIVATE BO2ZM_NATIVE_METAL=1)
+  target_link_libraries(bo2zm PRIVATE "-framework Metal" "-framework QuartzCore" "-framework Foundation")
+endif()
+
 # Profile-guided optimization of the generated code (app/build_switch.sh, BO2_PGO), and of the app's hot native code
 # (the list below). Not the SDK: a training build that instruments everything, including the SDK's platform layer with
 # its wrapped threadCreate, mutexes and fault handler, hangs at startup on the console, probably from the same
