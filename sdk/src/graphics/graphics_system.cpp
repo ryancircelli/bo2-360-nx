@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -157,6 +158,8 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
         uint64_t vsync_interval_ticks =
             std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
         uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+        const double nanoseconds_per_tick = 1e9 / double(guest_tick_frequency);
+        constexpr std::chrono::milliseconds kLongestSleep{50};
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
@@ -165,8 +168,14 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
           while (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
             last_frame_time += interval_ticks;
+            current_time = chrono::Clock::QueryGuestTickCount();
           }
-          rex::thread::Sleep(std::chrono::milliseconds(1));
+          // Sleep until the next vblank instead of waking up every millisecond.
+          const uint64_t remaining_ticks = last_frame_time + interval_ticks - current_time;
+          rex::thread::Sleep(std::min<std::chrono::nanoseconds>(
+              std::chrono::nanoseconds(
+                  static_cast<int64_t>(double(remaining_ticks) * nanoseconds_per_tick)),
+              kLongestSleep));
         }
         return 0;
       }));
