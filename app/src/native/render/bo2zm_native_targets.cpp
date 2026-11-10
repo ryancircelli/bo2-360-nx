@@ -838,6 +838,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   VulkanTargets(const VulkanDevice* vulkan_device, rex::memory::Memory* guest_memory)
       : vulkan_device_(vulkan_device),
         dfn_(deferred::Table(*vulkan_device)),  // the device's, with the vkCmd* calls queued (deferred.h)
+        gpu_(dfn_),
         device_(vulkan_device->device()),
         memory_(guest_memory),
         family_(vulkan_device->queue_family_graphics_compute()) {}
@@ -3839,10 +3840,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     dfn_.vkCmdBindPipeline(commands_job_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     dfn_.vkCmdBindDescriptorSets(commands_job_, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_pipeline_, 0, 1,
                                  &set, 0, nullptr);
-    const VkViewport view{float(dx), float(dy), float(width), float(height), 0.0f, 1.0f};
-    const VkRect2D scissor{{int32_t(dx), int32_t(dy)}, {width, height}};
-    dfn_.vkCmdSetViewport(commands_job_, 0, 1, &view);
-    dfn_.vkCmdSetScissor(commands_job_, 0, 1, &scissor);
+    gpu_.SetViewport(commands_job_, gpu::Viewport{float(dx), float(dy), float(width), float(height), 0.0f, 1.0f});
+    gpu_.SetScissor(commands_job_, gpu::Rect{int32_t(dx), int32_t(dy), width, height});
     const float rectangle[4] = {-1.0f, -1.0f, 2.0f, 2.0f};
     dfn_.vkCmdPushConstants(commands_job_, layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(rectangle),
                             rectangle);
@@ -7192,10 +7191,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     }
     dfn_.vkCmdBeginRenderPass(commands_output_[s], &pass, VK_SUBPASS_CONTENTS_INLINE);
-    const VkViewport viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f};
-    dfn_.vkCmdSetViewport(commands_output_[s], 0, 1, &viewport);
-    const VkRect2D scissor{{0, 0}, {width, height}};
-    dfn_.vkCmdSetScissor(commands_output_[s], 0, 1, &scissor);
+    gpu_.SetViewport(commands_output_[s], gpu::Viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f});
+    gpu_.SetScissor(commands_output_[s], gpu::Rect{0, 0, width, height});
     VkPipeline pipeline = pipeline_;
     if (ramp_gamma_) {
       // With an output the size of the source (the normal case), the exact texel, unfiltered.
@@ -7290,6 +7287,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
   const VulkanDevice* vulkan_device_;
   const VulkanDevice::Functions& dfn_;
+  gpu::vulkan::Recorder gpu_;  // the layer's recording calls (bo2zm_gpu_vulkan.h), through dfn_
   VkDevice device_;
   rex::memory::Memory* memory_;
   uint32_t family_;
