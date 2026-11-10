@@ -2006,6 +2006,16 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     return false;
   }
   const TextureKey& key = texture.key();
+  if (!rtt_verify_only_) {
+    // [tex-content-check] a load path that does not record its source hash
+    // must not leave the previous load's hash behind.
+    if (load_base) metal_texture->cc_have_[0] = false;
+    if (load_mips) metal_texture->cc_have_[1] = false;
+    // [resident-load-window] only the resident path re-arms these, after
+    // this load; a CPU-source load must not see a stale flag.
+    if (load_base) metal_texture->resident_load_pending_[0] = false;
+    if (load_mips) metal_texture->resident_load_pending_[1] = false;
+  }
   if (precommit_target_cb_ &&
       ((key.scaled_resolve && !ScaledTexturePrecommitEnabled()) ||
        metal_texture->presented() ||
@@ -5911,6 +5921,14 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   }
   TexRenameClearPending(*metal_texture, load_base, load_mips);
   metal_texture->set_loaded_once();
+  if (TexContentCheckInterval()) {
+    TexContentRecord(*metal_texture, load_base, load_mips, 1);
+  }
+  if (ResidentLoadRecheck() && !texture.key().scaled_resolve) {
+    auto global_lock = AcquireGlobalLock();
+    if (load_base) metal_texture->resident_load_pending_[0] = true;
+    if (load_mips) metal_texture->resident_load_pending_[1] = true;
+  }
   if (command_processor_) {
     const TextureKey& texture_key = texture.key();
     const uint64_t upload_bytes =
@@ -6060,6 +6078,10 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
     texture.MakeLoadedDataUpToDateAndWatch(
         global_lock, base_outdated && !base_written,
         mips_outdated && !mips_written);
+    if (TexContentCheckInterval()) {
+      TexContentRecord(*metal_texture, base_outdated && !base_written,
+                       mips_outdated && !mips_written, 2);
+    }
     if (retries || written_during_load) {
       static std::atomic<uint32_t> logged{0};
       const uint32_t n = logged.fetch_add(1, std::memory_order_relaxed);
@@ -6171,6 +6193,57 @@ bool MetalTextureCache::CpuSourceWatchFirst() {
     return e;
   }();
   return on;
+}
+
+bool MetalTextureCache::ResidentLoadRecheck() {
+  static const bool on = [] {
+    const char* v = MetalDebugEnv("RESIDENT_LOAD_RECHECK");
+    const bool r = !(v && v[0] == '0');
+    REXLOG_INFO("[resident-load-window] {} (REX_METAL_RESIDENT_LOAD_RECHECK)",
+                r ? "on" : "off");
+    return r;
+  }();
+  return on;
+}
+
+// [resident-load-window] A resident load checks that its ranges are valid in
+// shared memory (RequestTextureDataRange), encodes the copy from the shared
+// memory buffer, and only later does the caller mark the texture up to date
+// and register its watch. A CPU write in between (a streaming thread filling
+// a recycled image block, typically a mip tail) invalidates the shared memory
+// range while the texture is not watching yet, so the texture was marked up to
+// date with the old bytes. The next request re-uploads the range and nothing
+// ever reloads the texture: a zombie drawn with another image's data until it
+// is evicted. Shared memory ranges only become valid again through a request
+// on this thread, so a range still valid here was not written since the load.
+bool MetalTextureCache::LoadedRangeStillCurrent(Texture& texture,
+                                                bool is_mips) {
+  auto& t = static_cast<MetalTexture&>(texture);
+  const uint32_t i = is_mips ? 1 : 0;
+  const bool pending = t.resident_load_pending_[i];
+  t.resident_load_pending_[i] = false;
+  const TextureKey& key = texture.key();
+  const uint32_t start =
+      (is_mips ? uint32_t(key.mip_page) : uint32_t(key.base_page)) << 12;
+  const uint32_t length =
+      is_mips ? texture.GetGuestMipsSize() : texture.GetGuestBaseSize();
+  if (!pending || !length || shared_memory().IsRangeValid(start, length)) {
+    // Every load route ends here when a range becomes up to date, so the
+    // content verifier takes its reference hash here.
+    if (TexContentCheckInterval()) TexContentMarkCurrent(t, i);
+    return true;
+  }
+  if (TexContentCheckInterval()) t.cc_have_[i] = false;
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = ++count;
+  if (n <= 32 || (n & (n - 1)) == 0) {
+    REXLOG_INFO(
+        "[resident-load-window] write between a resident load and its watch "
+        "(#{}): {} {:08X}+{} fmt {} {}x{}; reloading on next use",
+        n, is_mips ? "mips" : "base", start, length, uint32_t(key.format),
+        key.GetWidth(), key.GetHeight());
+  }
+  return false;
 }
 
 uint32_t MetalTextureCache::CpuSourceMaxRetries() {

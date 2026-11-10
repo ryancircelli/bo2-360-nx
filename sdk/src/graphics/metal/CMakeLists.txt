@@ -79,6 +79,7 @@ set(_metal_patches
     sdk-metal-hle-census.patch
     sdk-metal-gpucmd.patch
     sdk-metal-ssmask.patch
+    sdk-metal-loadwindow.patch
 )
 set(_sdk_private ${_metal_work}/sdk-private)
 
