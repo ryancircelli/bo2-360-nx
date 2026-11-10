@@ -421,6 +421,32 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
                           [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
 }
 
+// Host access to a whole allocation (offset 0, VK_WHOLE_SIZE). Metal's shared storage needs neither the mapping nor
+// the flushes; its backend makes them no-ops.
+inline bool Map(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDeviceMemory memory,
+                void*& out) {
+  return dfn.vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &out) == VK_SUCCESS;
+}
+inline void Unmap(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDeviceMemory memory) {
+  dfn.vkUnmapMemory(device, memory);
+}
+// Makes the GPU's writes visible to the CPU (non-coherent memory).
+inline void Invalidate(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDeviceMemory memory) {
+  VkMappedMemoryRange range{};
+  range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+  range.memory = memory;
+  range.size = VK_WHOLE_SIZE;
+  dfn.vkInvalidateMappedMemoryRanges(device, 1, &range);
+}
+// Makes the CPU's writes visible to the GPU (non-coherent memory).
+inline void Flush(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkDeviceMemory memory) {
+  VkMappedMemoryRange range{};
+  range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+  range.memory = memory;
+  range.size = VK_WHOLE_SIZE;
+  dfn.vkFlushMappedMemoryRanges(device, 1, &range);
+}
+
 // Object destruction, one overload per handle type (each is its own type on the 64-bit targets the renderer builds
 // for). Metal releases the matching objects; memory is freed with Free.
 inline void Destroy(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkPipeline object) {
