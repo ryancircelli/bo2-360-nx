@@ -535,9 +535,9 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
   if (!used_result_nonzero_components) {
     // Nothing to fetch, only constant 0/1 writes - simplify the rest of the
     // function so it doesn't have to handle this case.
-    if (used_result_components) {
-      StoreResult(instr.result, const_float_vectors_0_[used_result_component_count - 1]);
-    }
+    StoreResult(instr.result, used_result_components
+                                  ? const_float_vectors_0_[used_result_component_count - 1]
+                                  : spv::NoResult);
     return;
   }
 
