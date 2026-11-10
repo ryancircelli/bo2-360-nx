@@ -609,10 +609,18 @@ void Summarize(double seconds) {
     over50 += v > 50.0f;
   }
   const double n = double(ms.size());
+  // 1 % low: the average of the slowest 1 % of the frames (at least one), as frame-time tools report it.
+  const size_t slowest = std::max<size_t>(1, ms.size() / 100);
+  double slowest_sum = 0.0;
+  for (size_t i = ms.size() - slowest; i < ms.size(); ++i) {
+    slowest_sum += ms[i];
+  }
+  const double low_1 = slowest_sum / double(slowest);
   REXLOG_INFO("[benchmark] {} frames in {:.0f} s: {:.1f} FPS average, median {:.1f} ms ({:.1f} FPS), p90 {:.1f} ms, "
-              "p99 {:.1f} ms, worst {:.1f} ms; over 33.3 ms {:.1f} %, over 50 ms {:.1f} %",
+              "p99 {:.1f} ms, worst {:.1f} ms; over 33.3 ms {:.1f} %, over 50 ms {:.1f} %; 1 % low {:.1f} ms "
+              "({:.1f} FPS)",
               ms.size(), seconds, n / seconds, pct(0.5), 1000.0 / pct(0.5), pct(0.9), pct(0.99), ms.back(),
-              100.0 * double(over33) / n, 100.0 * double(over50) / n);
+              100.0 * double(over33) / n, 100.0 * double(over50) / n, low_1, 1000.0 / low_1);
   if (AbSeconds() > 0) {
     SummarizeAb();
   }

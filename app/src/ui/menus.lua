@@ -2687,15 +2687,15 @@ do
     Engine.Exec(controller, "xupdatepartystate")
   end
 
-  -- After 1.5 s on menu (so it has settled), f(menu, controller, t) once per run under the flag name.
-  local function TestStep(menu, controller, flag, f)
+  -- After 1.5 s on menu (so it has settled), or delay_ms, f(menu, controller, t) once per run under the flag name.
+  local function TestStep(menu, controller, flag, f, delay_ms)
     local t = TestSpec()
     if not t or state[flag] then
       return
     end
     state[flag] = true
     local event = "bo2zm_" .. flag
-    menu:addElement(LUI.UITimer.new(1500, event, true))
+    menu:addElement(LUI.UITimer.new(delay_ms or 1500, event, true))
     menu:registerEventHandler(event, Protect(function(self, e)
       if state[flag .. "Done"] then
         return
@@ -2735,6 +2735,15 @@ do
     end)
   end
 
+  -- bo2zm_test_start_wait_s: the lobby waits for test pad players to join split screen.
+  local function TestStartWaitMs()
+    local seconds = tonumber(UIExpression.DvarString(nil, "bo2zm_test_start_wait_ui"))
+    if seconds and seconds > 0 then
+      return math.floor(seconds * 1000)
+    end
+    return nil
+  end
+
   function TestStartMatch(menu, controller)
     ClearStartMatchHint(menu.buttonPane)
     PatchBotsLobby(menu, controller)
@@ -2744,7 +2753,7 @@ do
       SetTestMatch(c, t)
       Engine.PartyHostToggleStart()
       Log("test start: " .. t.spec .. " started")
-    end)
+    end, TestStartWaitMs())
   end
 end
 

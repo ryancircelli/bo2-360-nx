@@ -102,6 +102,12 @@ REXCVAR_DEFINE_STRING(bo2zm_test_start, "", "BO2",
                       "mp_hijacked dm. Empty = "
                       "off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(bo2zm_test_start_wait_s, 0, "BO2",
+                     "Test helper, with bo2zm_test_start: seconds the local lobby waits before it starts the match, "
+                     "so test pad players 2-4 (bo2zm_test_buttons_p2..p4) can press Start to join split screen. "
+                     "0 = 1.5 s")
+    .range(0, 600)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(bo2zm_test_god, false, "BO2",
                     "God mode at start-up (keep player 0 invulnerable). The Extras menu turns it on or off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -812,7 +818,9 @@ void bo2zm::extras::EveryFrame(PPCContext& ctx, uint8_t* base) {
     ApplyVsync();
     if (const std::string& start = REXCVAR_GET(bo2zm_test_start);
         !start.empty() && start.find_first_of("\";") == std::string::npos) {
-      bo2zm::autoexec::ExecuteCommands(ctx, base, "set bo2zm_test_start_ui \"" + start + "\"");
+      bo2zm::autoexec::ExecuteCommands(ctx, base, "set bo2zm_test_start_ui \"" + start + "\"; set "
+                                                  "bo2zm_test_start_wait_ui " +
+                                                  std::to_string(REXCVAR_GET(bo2zm_test_start_wait_s)));
       REXLOG_INFO("[extras] test start: {} (from the first game lobby)", start);
     }
     bo2zm::debug::LoadCustom();  // CUSTOM's picks, before a saved "debug_preset = custom" applies them
