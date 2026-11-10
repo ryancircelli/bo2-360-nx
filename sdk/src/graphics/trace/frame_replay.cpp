@@ -322,6 +322,17 @@ ThreadCounts ReadThreadCounts() {
   return c;
 }
 
+// REX_REPLAY_BENCH_REWRITE_ALL=1: rewrite every trace memory record in every
+// bench pass, even when the bytes are already in place, so watched ranges are
+// invalidated as if the game had rewritten them (upper bound on upload work).
+bool BenchRewriteAll() {
+  static const bool v = [] {
+    const char* e = std::getenv("REX_REPLAY_BENCH_REWRITE_ALL");
+    return e && e[0] == '1';
+  }();
+  return v;
+}
+
 struct BenchPass {
   uint64_t cp_cpu_ns = 0;    // thread CPU in packet execution
   uint64_t cp_cycles = 0;    // core cycles in packet execution
@@ -893,7 +904,7 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
             texcheck_->NoteWrite(cmd->base_ptr, data, cmd->decoded_length, frame_index_);
             WriteMemory(cmd->base_ptr, data, cmd->decoded_length);
           }
-        } else if (bench_ && cmd->decoded_length &&
+        } else if (bench_ && cmd->decoded_length && !BenchRewriteAll() &&
                    std::memcmp(memory_->TranslatePhysical(cmd->base_ptr & 0x1FFFFFFF), data,
                                cmd->decoded_length) == 0) {
           // Bench: bytes already in guest memory. The game's CPU would not
