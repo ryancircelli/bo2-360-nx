@@ -10006,12 +10006,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       REXLOG_ERROR("[gpu_skin] the compute shader could not be created: skinning stays on the CPU");
       return;
     }
-    const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SkinPush)};
-    VkPipelineLayoutCreateInfo layout{};
-    layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout.pushConstantRangeCount = 1;
-    layout.pPushConstantRanges = &range;
-    if (dfn_.vkCreatePipelineLayout(device_, &layout, nullptr, &skin_layout_) == VK_SUCCESS) {
+    const gpu::PushRange range{gpu::kStageCompute, 0, sizeof(SkinPush)};
+    if (gpu::vulkan::CreatePipelineLayout(dfn_, device_, 0, nullptr, 1, &range, skin_layout_)) {
       VkComputePipelineCreateInfo pipeline{};
       pipeline.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
       pipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -10713,29 +10709,15 @@ class VulkanDrawsImpl final : public VulkanDraws {
   }
 
   bool CreateDescriptors() {
-    static constexpr VkDescriptorType kTypes[4] = {
-        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER};
-    const VkDescriptorBindingFlags flags_binding =
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-        VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+    static constexpr gpu::DescriptorKind kKinds[4] = {gpu::kDescriptorSampledImage, gpu::kDescriptorSampledImage,
+                                                       gpu::kDescriptorSampledImage, gpu::kDescriptorSampler};
     for (uint32_t i = 0; i < 4; ++i) {
-      VkDescriptorSetLayoutBinding binding{};
+      gpu::SetBinding binding{};
       binding.binding = 0;
-      binding.descriptorType = kTypes[i];
-      binding.descriptorCount = kCapacityHeap[i];
-      binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-      VkDescriptorSetLayoutBindingFlagsCreateInfo flags{};
-      flags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-      flags.bindingCount = 1;
-      flags.pBindingFlags = &flags_binding;
-      VkDescriptorSetLayoutCreateInfo info{};
-      info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-      info.pNext = &flags;
-      info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-      info.bindingCount = 1;
-      info.pBindings = &binding;
-      if (dfn_.vkCreateDescriptorSetLayout(device_, &info, nullptr, &layouts_[i]) != VK_SUCCESS) {
+      binding.kind = kKinds[i];
+      binding.count = kCapacityHeap[i];
+      binding.stages = gpu::kStageVertex | gpu::kStageFragment;
+      if (!gpu::vulkan::CreateSetLayout(dfn_, device_, &binding, 1, true, layouts_[i])) {
         return false;
       }
       heaps_[i].capacity = kCapacityHeap[i];
@@ -10782,18 +10764,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
     REXLOG_INFO("[native] C6: constants by dynamic UBO (bo2zm_native_constants_ubo) = {}; alternate every {} s; "
                 "alignment {} bytes",
                 use_ubo_ ? "SI" : "no", alternate_ubo_s_, alignment_ubo_);
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings_ubo{};
+    std::array<gpu::SetBinding, 3> bindings_ubo{};
     for (uint32_t b = 0; b < 3; ++b) {
       bindings_ubo[b].binding = b;
-      bindings_ubo[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-      bindings_ubo[b].descriptorCount = 1;
-      bindings_ubo[b].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+      bindings_ubo[b].kind = gpu::kDescriptorUniformBufferDynamic;
+      bindings_ubo[b].stages = gpu::kStageVertex | gpu::kStageFragment;
     }
-    VkDescriptorSetLayoutCreateInfo info_ubo{};
-    info_ubo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    info_ubo.bindingCount = 3;
-    info_ubo.pBindings = bindings_ubo.data();
-    if (dfn_.vkCreateDescriptorSetLayout(device_, &info_ubo, nullptr, &layout_ubo_) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreateSetLayout(dfn_, device_, bindings_ubo.data(), 3, false, layout_ubo_)) {
       return false;
     }
     gpu::PoolCounts counts_ubo{};
@@ -10816,18 +10793,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                                   0, kUboBytesShared}};
       gpu::vulkan::WriteUniforms(dfn_, device_, sets_ubo_[slot], 0, 3, blocks, true);
     }
-    const VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                    24};
-    VkPipelineLayoutCreateInfo info_layout{};
-    info_layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    const gpu::PushRange range{gpu::kStageVertex | gpu::kStageFragment, 0, 24};
     const std::array<VkDescriptorSetLayout, 5> layouts_pipeline = {layouts_[0], layouts_[1], layouts_[2],
                                                                     layouts_[3], layout_ubo_};
-    info_layout.setLayoutCount = 5;
-    info_layout.pSetLayouts = layouts_pipeline.data();
-    info_layout.pushConstantRangeCount = 1;
-    info_layout.pPushConstantRanges = &range;
-    return dfn_.vkCreatePipelineLayout(device_, &info_layout, nullptr, &layout_pipeline_) ==
-           VK_SUCCESS;
+    return gpu::vulkan::CreatePipelineLayout(dfn_, device_, 5, layouts_pipeline.data(), 1, &range,
+                                             layout_pipeline_);
   }
 
   // Slot 0 of each heap: a transparent black texture and a basic sampler, as the emulation does for an

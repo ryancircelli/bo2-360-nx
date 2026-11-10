@@ -19,6 +19,8 @@ struct VkCommandBuffer_T;
 struct VkImage_T;
 struct VkImageView_T;
 struct VkDeviceMemory_T;
+struct VkSampler_T;
+struct VkDescriptorSetLayout_T;
 
 namespace bo2zm::native::gpu {
 
@@ -26,6 +28,8 @@ using CommandList = VkCommandBuffer_T*;  // the commands being recorded
 using Image = VkImage_T*;
 using ImageView = VkImageView_T*;
 using Memory = VkDeviceMemory_T*;  // a dedicated allocation
+using Sampler = VkSampler_T*;
+using SetLayout = VkDescriptorSetLayout_T*;  // what a descriptor set holds
 
 enum class Backend : uint8_t { kVulkan, kMetal };
 
@@ -142,6 +146,37 @@ enum AddressMode : uint32_t {
 enum BorderColor : uint32_t { kBorderTransparentBlack = 0, kBorderOpaqueWhite = 4 };
 // No upper limit on the level of detail (VK_LOD_CLAMP_NONE).
 inline constexpr float kLodUnclamped = 1000.0f;
+
+// Shader stages (Vulkan's bits).
+using ShaderStages = uint32_t;
+inline constexpr ShaderStages kStageVertex = 0x1;
+inline constexpr ShaderStages kStageFragment = 0x10;
+inline constexpr ShaderStages kStageCompute = 0x20;
+
+// Kinds of descriptor (Vulkan's numbering).
+enum DescriptorKind : uint32_t {
+  kDescriptorSampler = 0,
+  kDescriptorSampledImage = 2,
+  kDescriptorUniformBuffer = 6,
+  kDescriptorUniformBufferDynamic = 8,
+};
+
+// One binding of a descriptor set layout: `count` descriptors of `kind` seen by `stages`, and optionally an
+// immutable sampler (one, for a count of 1).
+struct SetBinding {
+  uint32_t binding = 0;
+  DescriptorKind kind = kDescriptorSampler;
+  uint32_t count = 1;
+  ShaderStages stages = 0;
+  const Sampler* immutable_samplers = nullptr;
+};
+
+// A push constant range (layout of VkPushConstantRange).
+struct PushRange {
+  ShaderStages stages = 0;
+  uint32_t offset = 0;
+  uint32_t size = 0;
+};
 
 // What a descriptor pool holds: `max_sets` sets and the descriptors of each kind across them.
 // `update_after_bind` for the bindless heaps (written while bound). Metal sizes argument buffers from it.
