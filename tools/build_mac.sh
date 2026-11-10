@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds bo2zm for macOS on Apple silicon from your own copy of the game, start to finish:
 #
-#   tools/build_mac.sh [--from <step>]
+#   tools/build_mac.sh [--from <step> | --only <step>[,<step>...]]
 #
 # Steps, in order (--from skips the ones before):
 #   host     rexglue and xexdump for this Mac (out/host-mac)
@@ -37,12 +37,19 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
   exit 1
 fi
 FROM=host
+ONLY=""
 if [ "${1:-}" = --from ]; then
   FROM="${2:?--from needs a step name}"
+elif [ "${1:-}" = --only ]; then
+  ONLY="${2:?--only needs step names}"
+  FROM="${ONLY%%,*}"
 fi
 STEPS=(host data dump codegen shaders app package)
 started=0
 want() {
+  if [ -n "$ONLY" ]; then
+    case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+  fi
   [ "$1" = "$FROM" ] && started=1
   [ "$started" = 1 ]
 }
