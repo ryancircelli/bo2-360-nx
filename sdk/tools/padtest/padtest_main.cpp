@@ -27,6 +27,7 @@
 #include <fmt/format.h>
 
 #include <rex/cvar.h>
+#include <rex/input/device.h>
 #include <rex/input/device_assignment.h>
 #include <rex/input/input_system.h>
 #include <rex/input/sdl/sdl_input_driver.h>
@@ -75,7 +76,36 @@ std::string Pad(std::string text, size_t width) {
   return text;
 }
 
-std::string Row(const InputSystem::DeviceSnapshot& snap) {
+// The identity the slot table keys this pad by, and why that one. `all` is
+// every listed pad, to call out identical pads that only connection order
+// tells apart.
+std::string IdentityLine(const DeviceInfo& info,
+                         const std::vector<InputSystem::DeviceSnapshot>* all) {
+  if (info.synthetic) {
+    return "id=(keyboard and mouse)";
+  }
+  const DeviceIdentity id = ResolveDeviceIdentity(info);
+  std::string text = fmt::format("id={} [{}] {}", id.key, IdentitySourceName(id.source), id.reason);
+  if (all && !id.unique) {
+    size_t twins = 0;
+    for (const auto& other : *all) {
+      if (other.info.id != info.id && !other.info.synthetic &&
+          ResolveDeviceIdentity(other.info).key == id.key) {
+        twins++;
+      }
+    }
+    if (twins) {
+      text += fmt::format(" (shared with {} other pad{})", twins, twins == 1 ? "" : "s");
+    }
+  }
+  if (id.source == IdentitySource::kLocation) {
+    text += fmt::format("\n      pin: input_player_slots=\"<player>=port:{}\"", info.location);
+  }
+  return text;
+}
+
+std::string Row(const InputSystem::DeviceSnapshot& snap,
+                const std::vector<InputSystem::DeviceSnapshot>* all = nullptr) {
   const auto& info = snap.info;
   std::string player = snap.user >= 0 ? fmt::format("P{}", snap.user + 1) : "--";
   std::string ids = info.vendor_id || info.product_id
@@ -89,10 +119,12 @@ std::string Row(const InputSystem::DeviceSnapshot& snap) {
   if (!info.synthetic && info.transport != "script") {
     flags += info.can_rumble ? " rumble" : " no-rumble";
   }
-  return fmt::format("{} {} {} {}{}\n      serial={} guid={}\n      {}", Pad(player, 3),
-                     Pad(info.name.empty() ? "?" : info.name, 28), Pad(ids, 9), Pad(link, 9),
-                     flags, info.serial.empty() ? "(none)" : info.serial,
+  return fmt::format("{} {} {} {}{}\n      serial={} guid={} port={} path={}\n      {}\n      {}",
+                     Pad(player, 3), Pad(info.name.empty() ? "?" : info.name, 28), Pad(ids, 9),
+                     Pad(link, 9), flags, info.serial.empty() ? "(none)" : info.serial,
                      info.guid.empty() ? "(none)" : info.guid,
+                     info.location.empty() ? "(none)" : info.location,
+                     info.path.empty() ? "(none)" : info.path, IdentityLine(info, all),
                      snap.has_state ? FormatGamepad(snap.state.gamepad) : "no state");
 }
 
@@ -183,7 +215,7 @@ int main(int argc, char** argv) {
     const auto snaps = input.SnapshotDevices();
     std::printf("%zu controller(s)\n", snaps.size());
     for (const auto& snap : snaps) {
-      std::printf("%s\n", Row(snap).c_str());
+      std::printf("%s\n", Row(snap, &snaps).c_str());
     }
     return 0;
   }

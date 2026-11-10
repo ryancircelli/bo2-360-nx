@@ -79,6 +79,10 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     bool virtual_device;
     std::string transport;
     bool can_rumble;
+    // Port identity for pads without a serial (pad_location.h).
+    std::string location;
+    std::string location_note;
+    std::string path;
     // Per pad rather than per guest user, so it survives reassignment.
     KeystrokeState keystroke;
   };

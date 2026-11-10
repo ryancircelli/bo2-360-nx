@@ -36,9 +36,21 @@ motor, so you can tell which physical pad is which player.
 * A pad that disconnects keeps its player while it is away. When it reconnects
   it gets the same player back, and nobody else moves. If a new pad arrives
   while all other players are taken, it may take the waiting player.
-* Pads are recognised by serial number when the OS reports one, otherwise by
-  SDL GUID (two identical pads share a GUID, so those fall back to connection
-  order).
+* Pads are recognised by the first of these they have:
+  1. serial number, when the OS reports one;
+  2. the USB port they are plugged into (macOS: the IOKit LocationID, found
+     through SDL's path or the GameController framework). Wired Xbox Series
+     pads on macOS report no serial, so this is what keeps four identical pads
+     apart;
+  3. SDL's device path, when it names a port (not macOS `DevSrvsID:`, Linux
+     `/dev/input/eventN` or `XInput#N`, which change on every replug);
+  4. SDL GUID. Identical pads share it, so connection order decides.
+  A pad known by port that comes back in a different port falls back to step
+  4, and pads known by port that are connected at launch take players in port
+  order, so the same ports give the same players every launch.
+* `--list` prints, per pad, the identity actually used (`id=...`), which step
+  it came from and why the stronger ones were missing, and for port-identified
+  pads a ready `input_player_slots` pin.
 * Virtual pads (Steam Input's virtual controllers, SDL virtual joysticks) are
   never player 1 unless pinned there.
 
@@ -49,7 +61,7 @@ game's config, or set `REX_<NAME>` in the environment.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `input_player_slots` | empty | pin pads to players, e.g. `1=<serial>;2=054c:0ce6;3=Xbox Wireless`. A match is a serial, an SDL GUID, a `vendor:product` id, or part of the name. |
+| `input_player_slots` | empty | pin pads to players, e.g. `1=<serial>;2=054c:0ce6;3=Xbox Wireless;4=port:14200000`. A match is a serial, an SDL GUID, a `vendor:product` id, a port (`port:<location>` as `--list` prints it), or part of the name. |
 | `input_virtual_pads` | `after` | `after`: virtual pads never take player 1; `normal`: treat them like real pads; `ignore`: hide them |
 | `input_remember_slots` | `true` | keep a disconnected pad's player for it |
 | `input_log_state` | `false` | log every pad's player and state every 0.5 s |

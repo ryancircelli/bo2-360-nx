@@ -21,6 +21,8 @@
 #include <rex/logging.h>
 #include <rex/ui/virtual_key.h>
 
+#include "pad_location.h"
+
 REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
                       "Path to SDL gamecontroller mappings file");
 
@@ -199,6 +201,9 @@ void SDLInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
     info.virtual_device = controller.virtual_device;
     info.transport = controller.transport;
     info.can_rumble = controller.can_rumble;
+    info.location = controller.location;
+    info.location_note = controller.location_note;
+    info.path = controller.path;
     out.push_back(info);
   }
 }
@@ -520,6 +525,15 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   }
   state.can_rumble = SDL_GetBooleanProperty(SDL_GetGamepadProperties(controller),
                                             SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
+  const char* path = SDL_GetGamepadPath(controller);
+  state.path = path ? path : "";
+  // Only pads without a serial need their port; the lookup may briefly retag
+  // the pad's player index to find it.
+  if (state.serial.empty() && !state.virtual_device) {
+    PadLocation location = FindPadLocation(controller);
+    state.location = std::move(location.location);
+    state.location_note = std::move(location.note);
+  }
   state.state_changed = true;  // XInput starts with packet_number = 1
   UpdateXCapabilities(state);
   controllers_.push_back(state);
@@ -529,8 +543,10 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   // (OnDeviceUserChanged).
   SDL_SetGamepadPlayerIndex(controller, -1);
 
-  REXLOG_INFO("SDL OnControllerDeviceAdded: connection order {}, device {}, serial \"{}\", {}{}{}.",
-              ordinal, static_cast<uint64_t>(state.id), state.serial,
+  REXLOG_INFO("SDL OnControllerDeviceAdded: connection order {}, device {}, serial \"{}\", "
+              "port \"{}\" ({}), path \"{}\", {}{}{}.",
+              ordinal, static_cast<uint64_t>(state.id), state.serial, state.location,
+              state.location_note.empty() ? "-" : state.location_note, state.path,
               state.transport.empty() ? "unknown link" : state.transport,
               state.can_rumble ? ", rumble" : ", no rumble",
               state.virtual_device ? ", virtual" : "");

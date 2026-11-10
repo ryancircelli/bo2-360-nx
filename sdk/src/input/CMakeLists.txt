@@ -43,6 +43,15 @@ if(NOT REXGLUE_PLATFORM_SWITCH)
     target_sources(rexinput PRIVATE script/script_events.cpp script/script_input_driver.cpp
         steam_detect.cpp)
 endif()
+# USB port lookup for pads without a serial, used by the SDL driver.
+if(APPLE)
+    target_sources(rexinput PRIVATE sdl/pad_location_mac.mm)
+    set_source_files_properties(sdl/pad_location_mac.mm PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(rexinput PUBLIC "-framework GameController" "-framework IOKit")
+elseif(NOT REXGLUE_PLATFORM_SWITCH)
+    target_sources(rexinput PRIVATE sdl/pad_location_stub.cpp)
+endif()
 
 target_link_libraries(rexinput PUBLIC rexcore rexui)
 if(NOT REXGLUE_PLATFORM_SWITCH)

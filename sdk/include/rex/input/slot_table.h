@@ -40,8 +40,9 @@ struct SlotPin {
 /// ','). Malformed entries are skipped and described in *error.
 std::vector<SlotPin> ParseSlotPins(std::string_view text, std::string* error = nullptr);
 
-/// Case-insensitive: equal to the serial, the GUID or "vvvv:pppp", or
-/// contained in the name.
+/// Case-insensitive: equal to the serial, the GUID, "vvvv:pppp", the port
+/// location ("14200000", "port:14200000" or the full "port:vvvv:pppp@14200000"
+/// key) or a port-naming path, or contained in the name.
 bool PinMatches(std::string_view match, const DeviceInfo& info);
 
 /// Gives each newly connected pad a player and remembers the player of each pad
@@ -51,12 +52,20 @@ bool PinMatches(std::string_view match, const DeviceInfo& info);
 /// Order of preference for a new pad:
 ///  0. its fixed_user, if it has one and that player is free (script pads);
 ///  1. the player the config pins it to, if free;
-///  2. the player it had before it disconnected, if free;
+///  2. the player it had before it disconnected, if free (matched by serial,
+///     then port, then path; a serial-less pad that comes back in another
+///     port falls back to the oldest player an identical pad left);
 ///  3. the lowest free player nobody is pinned to or waiting to reconnect to;
 ///  4. the lowest free player nobody is pinned to (the waiting pad loses it);
 ///  5. the lowest free player;
 ///  6. past the last player (connected, but the game does not see it).
 /// Virtual pads under kAfterPhysical skip player 1 in every step but 1.
+/// The order to place pads that arrive together (at launch): pads identified by
+/// port go in ascending port order among the positions they hold, so the same
+/// ports give the same players on every launch. Other pads keep connection
+/// order. Returns indices into `pads`.
+std::vector<size_t> PlacementOrder(const std::vector<DeviceInfo>& pads);
+
 class SlotTable {
  public:
   void SetPins(std::vector<SlotPin> pins) { pins_ = std::move(pins); }
@@ -77,7 +86,9 @@ class SlotTable {
 
  private:
   struct Reservation {
-    std::string key;
+    std::string key;    // ResolveDeviceIdentity(pad).key
+    std::string model;  // DeviceModelKey(pad)
+    bool serial;        // key is a serial; never handed to another pad
     uint32_t ordinal;
   };
 

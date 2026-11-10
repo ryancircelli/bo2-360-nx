@@ -48,9 +48,11 @@ REXCVAR_DEFINE_BOOL(input_vibration, false, "Input",
                     "zero vibration). true = the game's vibration");
 
 REXCVAR_DEFINE_STRING(input_player_slots, "", "Input",
-                      "Pin controllers to players, e.g. \"1=<serial>;2=054c:0ce6;3=Xbox\": each "
-                      "player 1-4 takes the pad whose serial, GUID or vid:pid equals the text, or "
-                      "whose name contains it. rex-padtest prints these for each pad. Pads not "
+                      "Pin controllers to players, e.g. "
+                      "\"1=<serial>;2=054c:0ce6;3=Xbox;4=port:14200000\": each player 1-4 "
+                      "takes the pad whose serial, GUID, vid:pid or USB port (port:<location>) "
+                      "equals the text, or whose name contains it. rex-padtest prints these for "
+                      "each pad. Pads not "
                       "pinned take players in connection order");
 REXCVAR_DEFINE_STRING(input_virtual_pads, "after", "Input",
                       "Software-made pads (Steam Input's virtual pad): after = never player 1, "
@@ -292,17 +294,26 @@ void InputSystem::RefreshDevices() {
 
   // Runs after the carry-forward pass so a new device cannot take an ordinal a
   // live one is still holding. New pads are placed one at a time in the
-  // drivers' connection order, each seeing the ones placed before it.
+  // drivers' connection order (adjusted by PlacementOrder), each seeing the
+  // ones placed before it.
   std::vector<DeviceInfo> live;
   for (size_t i = 0; i < seen.size(); i++) {
     if (!fresh[i] || seen[i].synthetic) {
       live.push_back(seen[i]);
     }
   }
+  // Pads that arrive together (at launch) are placed by port where the port is
+  // known, so identical pads without serials get the same players each launch.
+  std::vector<size_t> fresh_index;
+  std::vector<DeviceInfo> fresh_pads;
   for (size_t i = 0; i < seen.size(); i++) {
-    if (!fresh[i]) {
-      continue;
+    if (fresh[i]) {
+      fresh_index.push_back(i);
+      fresh_pads.push_back(seen[i]);
     }
+  }
+  for (size_t k : PlacementOrder(fresh_pads)) {
+    const size_t i = fresh_index[k];
     // Only physical devices consume an ordinal, so the first pad to connect is
     // guest user 0 however many synthetic devices enumerated ahead of it.
     if (seen[i].synthetic) {
