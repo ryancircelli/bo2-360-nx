@@ -728,7 +728,7 @@ struct Readback {
   gpu::Buffer buffer = nullptr;
   gpu::Memory guest_memory = nullptr;
   uint8_t* data = nullptr;
-  VkDeviceSize bytes = 0;
+  gpu::Size bytes = 0;
   bool coherent = true;
 };
 struct PendingRead {
@@ -2460,10 +2460,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
    * copies the first 1 MB into a readback buffer, and that is compared with what the CPU sees. The log says what
    * worked, what each step cost and whether the bytes match.
    */
-  static constexpr VkDeviceSize kProbeBytes = VkDeviceSize(1) << 20;
+  static constexpr gpu::Size kProbeBytes = gpu::Size(1) << 20;
   bool probe_done_ = false;
 
-  void ProbeHostImport(VkDeviceSize bytes) {
+  void ProbeHostImport(gpu::Size bytes) {
     const uint32_t vertex = g_probe_vertex_address.load(std::memory_order_relaxed);
     const uint32_t address = vertex & ~uint32_t(bytes - 1);
     if (vertex == 0 || uint64_t(address) + bytes > 0x20000000ull) {
@@ -2473,7 +2473,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     uint8_t* const host = memory_->TranslatePhysical(address);
     const auto t0 = std::chrono::steady_clock::now();
     uint32_t sum = 0;
-    for (VkDeviceSize i = 0; i < bytes; i += 4096) {
+    for (gpu::Size i = 0; i < bytes; i += 4096) {
       sum += host[i];  // a first touch commits the page on the Switch
     }
     const auto& ifn = vulkan_device_->vulkan_instance()->functions();
@@ -6357,7 +6357,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       ++target.skipped;  // exposure changes slowly: the guest keeps the previous one
       return;
     }
-    const VkDeviceSize bytes = VkDeviceSize(width) * height * (Is16BitsPerChannel(resolved.image.format) ? 8 : 4);
+    const gpu::Size bytes = gpu::Size(width) * height * (Is16BitsPerChannel(resolved.image.format) ? 8 : 4);
     const uint64_t key = (uint64_t(reg.rb_copy_dest_base & 0x1FFFFFFF) << 32) ^ (uint64_t(uint32_t(x0)) << 16) ^
                            uint64_t(uint32_t(y0));
     // One buffer per slot: earlier submissions may still be copying into the other slots'. The slot goes
@@ -6858,7 +6858,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   uint64_t generation_commands_ = 0;
   // GPU time of the submissions (timestamps, if the queue supports them).
   using FnReadQueries = VkResult(VKAPI_PTR*)(VkDevice, gpu::QueryPool, uint32_t, uint32_t, size_t,
-                                              void*, VkDeviceSize, VkQueryResultFlags);
+                                              void*, gpu::Size, VkQueryResultFlags);
   FnReadQueries read_queries_ = nullptr;
   gpu::QueryPool queries_ = nullptr;
   // The game's occlusion queries. The open one (0 = none), those waiting for their spans by number, the last
