@@ -164,3 +164,8 @@ if(REXGLUE_USE_D3D12)
         dxguid
     )
 endif()
+
+# Native Metal plugin (macOS, Apple Silicon), see metal/README.md
+if(REXGLUE_USE_METAL)
+    add_subdirectory(metal)
+endif()

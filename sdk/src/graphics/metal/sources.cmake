@@ -1,0 +1,74 @@
+# Sources of rexgpu-metal. ${SDK} is the private patched copy of the SDK graphics
+# sources (see CMakeLists.txt); everything else is relative to this directory.
+set(REXGPU_METAL_COMMON_SOURCES
+  ${SDK}/src/graphics/flags.cpp
+  ${SDK}/src/graphics/register_file.cpp
+  ${SDK}/src/graphics/registers.cpp
+  ${SDK}/src/graphics/pipeline/shader/shader.cpp
+  ${SDK}/src/graphics/format/ucode.cpp
+  ${SDK}/src/graphics/sampler_info.cpp
+  ${SDK}/src/graphics/graphics_system.cpp
+  ${SDK}/src/graphics/command_processor.cpp
+  ${SDK}/src/graphics/util/draw_extent_estimator.cpp
+  ${SDK}/src/graphics/util/draw.cpp
+  ${SDK}/src/graphics/packet_disassembler.cpp
+  ${SDK}/src/graphics/primitive_processor.cpp
+  ${SDK}/src/graphics/pipeline/render_target/cache.cpp
+  ${SDK}/src/graphics/shared_memory.cpp
+  ${SDK}/src/graphics/pipeline/texture/cache.cpp
+  ${SDK}/src/graphics/pipeline/shader/interpreter.cpp
+  ${SDK}/src/graphics/pipeline/shader/translator.cpp
+  ${SDK}/src/graphics/pipeline/shader/translator_disasm.cpp
+  ${SDK}/src/graphics/pipeline/shader/dxbc.cpp
+  ${SDK}/src/graphics/pipeline/shader/dxbc_translator.cpp
+  ${SDK}/src/graphics/pipeline/shader/dxbc_translator_alu.cpp
+  ${SDK}/src/graphics/pipeline/shader/dxbc_translator_fetch.cpp
+  ${SDK}/src/graphics/pipeline/shader/dxbc_translator_memexport.cpp
+  ${SDK}/src/graphics/pipeline/shader/dxbc_translator_om.cpp
+  ${SDK}/thirdparty/dxbc/DXBCChecksum.cpp
+)
+
+set(REXGPU_METAL_SOURCES
+  port/rex/graphics/metal/metal_frame_log.cc
+  port/rex/graphics/metal/metal_vsync_lock.cc
+  port/rex/graphics/metal/metal_readiness.cc
+  port/rex/graphics/metal/metal_trace.cc
+  port/rex/graphics/metal/metal_pass_trace.cc
+  port/rex/graphics/metal/metal_heap_pool.cc
+  port/rex/graphics/metal/metal_zpd_visibility_pool.cc
+  port/rex/graphics/metal/metal_zpd_real.cc
+  port/rex/graphics/metal/metal_render_target_cache.cc
+  port/rex/graphics/metal/metal_shader.cc
+  port/rex/graphics/metal/metal_msl_translator.cc
+  port/rex/graphics/metal/metal_air_optimizer.cc
+  port/rex/graphics/metal/metal_ref_tessellator.cc
+  port/rex/graphics/metal/metal_ns_specialize.cc
+  port/rex/graphics/metal/metal_geometry_shader.cc
+  port/rex/graphics/metal/ir_runtime_impl.mm
+  port/rex/graphics/metal/metal_shared_memory.cc
+  port/rex/graphics/metal/metal_pipeline_cache.cc
+  port/rex/graphics/metal/metal_upload_buffer_pool.cc
+  port/rex/graphics/metal/metal_shader_cache.cc
+  port/rex/graphics/metal/metal_direct_host_resolve.cc
+  port/rex/graphics/metal/metal_resolve_to_texture.cc
+  port/rex/graphics/metal/metal_tile_resolve.cc
+  port/rex/graphics/metal/metal_tex_rename.cc
+  port/rex/graphics/metal/metal_miplod_proof.cc
+  port/rex/graphics/metal/metal_miplod_draw.cc
+  port/rex/graphics/metal/metal_graphics_system.cc
+  port/rex/graphics/metal/metal_primitive_processor.cc
+  port/rex/graphics/metal/metal_backend_telemetry.cc
+  port/rex/graphics/metal/metal_stage_compile_cache.cc
+  port/rex/graphics/metal/metal_command_processor.cc
+  port/rex/graphics/metal/metal_texture_cache.cc
+  port/rex/ui/metal/metal_api.cc
+  port/rex/ui/metal/metal_provider.cc
+  port/rex/ui/metal/metal_presenter.mm
+  port/rex/ui/metal/metal_frame_interp.mm
+  port/rex/ui/metal/metal_immediate_drawer.mm
+  port/rex/ui/metal/metal_gpu_completion_timeline.cc
+  port/rex/ui/metal/metal_test_control.mm
+  port/rex/ui/metal/metal_startup_wait.mm
+  port/rex/graphics/pipeline/shader/dxbc_geometry_shader.cc
+  port/rex/graphics/metal/metal_converter_stubs.cc
+)
