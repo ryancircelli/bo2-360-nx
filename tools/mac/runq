@@ -1,0 +1,844 @@
+#!/usr/bin/env -S python3 -I
+"""runq: the run queue for game boots on the shared Mac, and buildq: the build-job throttle that goes with it.
+
+  runq submit [options] --app APP --scene SCENE.json [--renderer metal|native]   a scene (scenes/*.json) run
+  runq submit [options] --app APP --route ROUTE.route                            a boot_test.sh route run
+  runq submit [options] [--app APP] -- CMD ARGS...                                any command ({APP} {OUT} {PORT})
+      options: --name N  --out DIR  --priority (ship-gate smoke: ahead of the FIFO)  --timeout S
+               --env K=V (repeatable)  --wait (block until done, exit with the job's exit code)
+      prints:  "job <id> out <dir>"   (the result dir; <dir>/result.json and result.txt once done)
+  runq wait ID [ID...]      block until the jobs are done (no polling needed on the caller's side); exit = worst exit
+  runq status               the queue, running jobs, build throttle
+  runq cancel ID            dequeue, or stop a running job (its own process group only)
+  runq result ID            print result.txt
+  runq install              copy runq, buildq and the boot_test tools to the spool's bin/ (a path that outlives worktrees)
+
+  buildq [-t N] [--ship] [--] CMD ARGS...
+      Runs a build under the shared token pool. ninja and `cmake --build` (Ninja generator) take tokens job by job
+      through the GNU make jobserver protocol (a fifo); their -j/--parallel is removed so the pool decides. Any other
+      command takes N tokens (-t, default 1) for its whole run. The command runs at nice 15 (--ship: normal priority,
+      for the integrator's ship build only). Pool size: idle_cap (16) when no game runs, game_cap (4) while runq
+      runs a game. Each build also holds one token for its own first job, so the floor is one job per running build.
+
+Spool: ~/Games/Xbox360/bo2-build/runq/{queue,running,done,jobs,builds,bin}; config.json there overrides slots (2),
+idle_cap (16), game_cap (4). A single detached daemon (lock file daemon.lock) runs at most `slots` jobs at normal
+priority, FIFO with --priority first, enforces timeouts, kills only its own children (each job's own process group),
+and holds back build tokens while a game runs. Any runq/buildq command starts it when it is not running.
+"""
+import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, time
+
+SPOOL = os.path.expanduser(os.environ.get('RUNQ_SPOOL', '~/Games/Xbox360/bo2-build/runq'))
+D = {k: os.path.join(SPOOL, k) for k in ('queue', 'running', 'done', 'jobs', 'builds', 'bin')}
+FIFO = os.path.join(SPOOL, 'pool.fifo')
+POOL_LOCK = os.path.join(SPOOL, 'pool.lock')
+DAEMON_LOCK = os.path.join(SPOOL, 'daemon.lock')
+STATE = os.path.join(SPOOL, 'state.json')
+DLOG = os.path.join(SPOOL, 'daemon.log')
+HERE = os.path.dirname(os.path.realpath(__file__))
+DEFAULTS = {'slots': 2, 'idle_cap': 16, 'game_cap': 4, 'port_base': 60000, 'kill_grace_s': 15}
+COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift-frontend|metal|metallib|'
+                       r'dxc|rustc|cc|c\+\+)$')
+
+
+def cfg():
+    c = dict(DEFAULTS)
+    try:
+        with open(os.path.join(SPOOL, 'config.json')) as f:
+            c.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return c
+
+
+def mkdirs():
+    for p in D.values():
+        os.makedirs(p, exist_ok=True)
+
+
+def now_s():
+    return time.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def loadavg():
+    return [round(x, 2) for x in os.getloadavg()]
+
+
+def wjson(path, obj):
+    tmp = f'{path}.{os.getpid()}.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(obj, f, indent=1)
+    os.replace(tmp, path)
+
+
+def rjson(path, default=None):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def compile_procs():
+    try:
+        out = subprocess.run(['ps', '-axo', 'comm='], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return -1
+    return sum(1 for line in out.splitlines() if COMPILERS.match(os.path.basename(line.strip())))
+
+
+def games_outside(own_pgids):
+    """bo2zm processes that are not in one of runq's job process groups (someone booted the game by hand)."""
+    try:
+        out = subprocess.run(['ps', '-axo', 'pid=,pgid=,comm='], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and os.path.basename(parts[2]) == 'bo2zm' and int(parts[1]) not in own_pgids:
+            found.append(int(parts[0]))
+    return found
+
+
+def paused(c):
+    """config.json "paused_until": "HH:MM" (today) holds the queue, e.g. for a quiet window already promised."""
+    pu = c.get('paused_until')
+    if not pu:
+        return False
+    try:
+        h, m = map(int, pu.split(':'))
+    except ValueError:
+        return False
+    t = time.localtime()
+    return (t.tm_hour, t.tm_min) < (h, m)
+
+
+def active_builds():
+    n = 0
+    for f in os.listdir(D['builds']):
+        if not f.endswith('.json'):
+            continue
+        b = rjson(os.path.join(D['builds'], f)) or {}
+        if b.get('pid') and alive(b['pid']):
+            n += 1
+        else:
+            try:
+                os.unlink(os.path.join(D['builds'], f))
+            except OSError:
+                pass
+    return n
+
+
+# ------------------------------------------------------------------ daemon
+def daemon_running():
+    mkdirs()
+    fd = os.open(DAEMON_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return True
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+    return False
+
+
+def ensure_daemon():
+    if daemon_running():
+        return
+    if os.getpriority(os.PRIO_PROCESS, 0) > 0:
+        print('runq: starting the daemon from a niced shell; games would inherit the nice value. Run any runq '
+              'command once without nice first.', file=sys.stderr)
+    me = os.path.realpath(__file__)
+    with open(DLOG, 'a') as log:
+        subprocess.Popen([sys.executable, '-I', me, '_daemon'], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True, close_fds=True)
+    for _ in range(100):
+        st = rjson(STATE) or {}
+        if st.get('pid') and alive(st['pid']) and daemon_running():
+            return
+        time.sleep(0.1)
+    sys.exit('runq: the daemon did not start; see ' + DLOG)
+
+
+class Daemon:
+    def __init__(self):
+        self.c = cfg()
+        self.held = 0           # build tokens the daemon holds back while games run
+        self.jobs = {}          # id -> {proc, job, slot, start, samples, cancel}
+        self.last_repair = 0.0
+        self.outside = []
+
+    def log(self, msg):
+        print(f'[{now_s()}] {msg}', flush=True)
+
+    # --- token pool
+    def pool_open(self):
+        if not os.path.exists(FIFO):
+            os.mkfifo(FIFO, 0o666)
+        self.fifo = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)  # keeps the fifo's contents alive while the daemon runs
+        self.refill(force=True)
+
+    def drain(self):
+        n = 0
+        while True:
+            try:
+                b = os.read(self.fifo, 64)
+            except BlockingIOError:
+                return n
+            if not b:
+                return n
+            n += len(b)
+
+    def refill(self, force=False):
+        """With no build running (pool.lock free), the pool must hold exactly idle_cap - held tokens: lost tokens (a
+        build killed with SIGKILL) come back and extras go."""
+        lk = os.open(POOL_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+        try:
+            fcntl.flock(lk, fcntl.LOCK_EX | (0 if force else fcntl.LOCK_NB))
+        except OSError:
+            os.close(lk)
+            return
+        try:
+            had = self.drain()
+            want = max(0, self.c['idle_cap'] - self.held)
+            os.write(self.fifo, b'+' * want)
+            if had != want and not force:
+                self.log(f'pool repaired: {had} tokens -> {want}')
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+            os.close(lk)
+
+    def throttle(self):
+        games = len(self.jobs) + len(self.outside)
+        target = max(0, self.c['idle_cap'] - self.c['game_cap']) if games else 0
+        while self.held < target:
+            try:
+                b = os.read(self.fifo, target - self.held)
+            except BlockingIOError:
+                break
+            self.held += len(b)
+        if self.held > target:
+            os.write(self.fifo, b'+' * (self.held - target))
+            self.held = target
+        if time.time() - self.last_repair > 30:
+            self.last_repair = time.time()
+            self.refill()
+
+    # --- jobs
+    def queued(self):
+        return sorted(f for f in os.listdir(D['queue']) if f.endswith('.json'))
+
+    def launch(self, qfile):
+        src = os.path.join(D['queue'], qfile)
+        job = rjson(src)
+        if not job:
+            os.unlink(src)
+            return
+        used = {j['slot'] for j in self.jobs.values()}
+        slot = min(set(range(self.c['slots'])) - used)
+        out = job['out']
+        os.makedirs(out, exist_ok=True)
+        app = job.get('app') or ''
+        if app and job.get('clone_app', True):
+            dst = os.path.join(out, 'app', os.path.basename(app.rstrip('/')))
+            if os.path.exists(dst):
+                shutil.rmtree(os.path.dirname(dst))
+            os.makedirs(os.path.dirname(dst))
+            r = subprocess.run(['cp', '-cR', app, dst], capture_output=True, text=True)  # APFS clone: no copy
+            if r.returncode:
+                self.finish_record(job, slot, 2, 'error', time.time(), [], f'app clone failed: {r.stderr.strip()}')
+                os.unlink(src)
+                return
+            app = dst
+        port = str(self.c['port_base'] + 2000 * slot)
+        subst = {'{APP}': app, '{OUT}': out, '{PORT}': port, '{SLOT}': str(slot)}
+        cmd = [subst.get(a, a) for a in job['cmd']]
+        cmd = [re.sub(r'\{(APP|OUT|PORT|SLOT)\}', lambda m: subst['{' + m.group(1) + '}'], a) for a in cmd]
+        env = dict(os.environ)
+        env.update(job.get('env') or {})
+        env.update(RUNQ_JOB=job['id'], RUNQ_SLOT=str(slot), RUNQ_OUT=out, BO2_NET_PORT_OFFSET=port)
+        start = time.time()
+        la = loadavg()
+        rec = {'id': job['id'], 'pid': None, 'slot': slot, 'started': now_s(), 'load_start': la,
+               'cmd': cmd}
+        log = open(os.path.join(out, 'runq.log'), 'ab')
+        try:
+            proc = subprocess.Popen(cmd, cwd=job.get('cwd') or out, env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as e:
+            log.close()
+            self.finish_record(job, slot, 2, 'error', start, [], f'cannot start: {e}')
+            os.unlink(src)
+            return
+        log.close()
+        rec['pid'] = proc.pid
+        os.replace(src, os.path.join(D['running'], job['id'] + '.json'))
+        wjson(os.path.join(D['running'], job['id'] + '.run.json'), rec)
+        with open(os.path.join(out, 'conditions.tsv'), 'w') as f:
+            f.write('t_s\tload1\tload5\tactive_builds\tcompile_procs\tbuild_cap\n')
+        self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
+                                'next_sample': 0.0, 'load_start': la, 'killing': 0.0}
+        self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
+
+    def sample(self, j, t):
+        la = loadavg()
+        ab = active_builds()
+        cp = compile_procs()
+        cap = self.c['game_cap'] if self.jobs else self.c['idle_cap']
+        j['samples'].append((la[0], ab, cp))
+        with open(os.path.join(j['job']['out'], 'conditions.tsv'), 'a') as f:
+            f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\n')
+
+    def kill_job(self, j, why):
+        pid = j['proc'].pid
+        if not j['killing']:
+            j['killing'] = time.time()
+            j['why'] = why
+            self.log(f'stop {j["job"]["id"]} pgid {pid}: {why}')
+            try:
+                os.killpg(pid, signal.SIGTERM)   # the job's own process group (start_new_session), nothing else
+            except ProcessLookupError:
+                pass
+        elif time.time() - j['killing'] > self.c['kill_grace_s']:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None):
+        out = job['out']
+        res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code,
+               'submitted': job.get('submitted'), 'started': time.strftime('%Y-%m-%d %H:%M:%S',
+                                                                           time.localtime(start)),
+               'ended': now_s(), 'wall_s': round(time.time() - start, 1),
+               'queued_s': round(start - job.get('submitted_t', start), 1), 'slot': slot,
+               'priority': job.get('priority', False), 'out': out, 'note': note,
+               'conditions': {'load_start': load_start or loadavg()}}
+        if samples:
+            ls = [s[0] for s in samples]
+            res['conditions'].update(load_mean=round(sum(ls) / len(ls), 1), load_max=max(ls),
+                                     builds_mean=round(sum(s[1] for s in samples) / len(samples), 1),
+                                     builds_max=max(s[1] for s in samples),
+                                     compile_procs_mean=round(sum(s[2] for s in samples) / len(samples), 1),
+                                     compile_procs_max=max(s[2] for s in samples),
+                                     build_cap=self.c['game_cap'])
+        run = job.get('run_dir') or out
+        sj = rjson(os.path.join(run, 'summary.json'))
+        if sj and sj.get('summary'):
+            s = sj['summary']
+            res['fps'] = {k: (round(s[k], 2) if isinstance(s.get(k), float) else s.get(k))
+                          for k in ('fps_avg', 'fps_1pct_low', 'fps_01pct_low', 'ft_median', 'ft_p99', 'ft_worst',
+                                    'frames') if k in s}
+        caps = os.path.join(run, 'captures')
+        if os.path.isdir(caps):
+            res['captures'] = sorted(os.listdir(caps))
+        extra = rjson(os.path.join(out, 'scene_result.json'))
+        if extra:
+            res['scene'] = extra
+        log = os.path.join(run, 'game.log')
+        res['log'] = log if os.path.exists(log) else os.path.join(out, 'runq.log')
+        wjson(os.path.join(out, 'result.json'), res)
+        line = (f'{job["id"]} {job.get("name") or ""} {status} exit {code} wall {res["wall_s"]} s '
+                f'queued {res["queued_s"]} s load {res["conditions"]["load_start"][0]}'
+                f'->{res["conditions"].get("load_mean", "?")} builds {res["conditions"].get("builds_mean", "?")}'
+                + (f' fps {res["fps"].get("fps_avg")}/{res["fps"].get("fps_1pct_low")}' if res.get('fps') else '')
+                + (f' scene {extra.get("verdict")}' if extra else '') + (f' ({note})' if note else ''))
+        with open(os.path.join(out, 'result.txt'), 'w') as f:
+            f.write(line + '\n')
+        wjson(os.path.join(D['done'], job['id'] + '.json'), res)
+        self.log('done ' + line)
+        return res
+
+    def reap(self):
+        t = time.time()
+        for jid, j in list(self.jobs.items()):
+            if t >= j['next_sample']:
+                j['next_sample'] = t + 5
+                self.sample(j, t)
+            code = j['proc'].poll()
+            to = j['job'].get('timeout_s') or 1800
+            if code is None:
+                if os.path.exists(os.path.join(D['running'], jid + '.cancel')):
+                    self.kill_job(j, 'cancelled')
+                elif t - j['start'] > to:
+                    self.kill_job(j, f'timeout {to} s')
+                continue
+            status = {'cancelled': 'cancelled'}.get(j.get('why', ''), 'timeout' if j.get('why') else 'done')
+            if code < 0:
+                code = 128 - code
+            # stragglers in the job's own group (a game the job left running)
+            try:
+                os.killpg(j['proc'].pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
+                               j['load_start'])
+            if j['job'].get('clone_app', True) and j['job'].get('app'):
+                shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
+            for suf in ('.json', '.run.json', '.cancel'):
+                try:
+                    os.unlink(os.path.join(D['running'], jid + suf))
+                except OSError:
+                    pass
+            del self.jobs[jid]
+
+    def write_state(self):
+        wjson(STATE, {'pid': os.getpid(), 'updated': now_s(), 'nice': os.getpriority(os.PRIO_PROCESS, 0),
+                      'slots': self.c['slots'], 'idle_cap': self.c['idle_cap'], 'game_cap': self.c['game_cap'],
+                      'build_cap_now': self.c['game_cap'] if self.jobs else self.c['idle_cap'],
+                      'tokens_held_back': self.held, 'games_outside_runq': self.outside,
+                      'paused_until': self.c.get('paused_until') if paused(self.c) else None,
+                      'running': {k: {'slot': v['slot'], 'pid': v['proc'].pid, 'name': v['job'].get('name'),
+                                      'since_s': round(time.time() - v['start'])} for k, v in self.jobs.items()},
+                      'queued': self.queued()})
+
+    def run(self):
+        mkdirs()
+        lk = os.open(DAEMON_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # another daemon has it
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        if os.getpriority(os.PRIO_PROCESS, 0) > 0:
+            self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
+        # jobs left in running/ by a dead daemon: their processes are not ours any more; record them as lost
+        for f in os.listdir(D['running']):
+            if f.endswith('.json') and not f.endswith('.run.json'):
+                job = rjson(os.path.join(D['running'], f))
+                if job:
+                    self.finish_record(job, -1, 2, 'lost', time.time(), [], 'the daemon restarted during the job')
+                for suf in ('.json', '.run.json', '.cancel'):
+                    try:
+                        os.unlink(os.path.join(D['running'], f[:-5] + suf))
+                    except OSError:
+                        pass
+        self.pool_open()
+        self.log(f'daemon up pid {os.getpid()}, slots {self.c["slots"]}, build cap {self.c["idle_cap"]} idle / '
+                 f'{self.c["game_cap"]} with a game')
+        try:
+            while True:
+                self.c = cfg()
+                self.reap()
+                q = self.queued()
+                self.outside = games_outside({j['proc'].pid for j in self.jobs.values()})
+                free = self.c['slots'] - len(self.outside)
+                while q and not paused(self.c) and len(self.jobs) < free:
+                    self.launch(q.pop(0))
+                self.throttle()
+                self.write_state()
+                time.sleep(1)
+        finally:
+            if self.held:
+                os.write(self.fifo, b'+' * self.held)
+
+
+# ------------------------------------------------------------------ client side
+def new_id():
+    return time.strftime('%m%d-%H%M%S-') + f'{os.getpid() % 10000:04d}'
+
+
+def scene_route(scene, renderer, path):
+    """Writes a boot_test route from a scene file (the map-sweep format: route, renderer_route, duration_s)."""
+    lines = [f'# generated by runq from {scene["_path"]} ({renderer})', f'duration_s = {scene["duration_s"]}',
+             f'players = {scene.get("players", 1)}']
+    route = dict(scene.get('route') or {})
+    route.update((scene.get('renderer_route') or {}).get(renderer, {}))
+    for k, v in route.items():
+        lines.append(f'{k} = {v}')
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
+def cmd_submit(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog='runq submit')
+    ap.add_argument('--app')
+    ap.add_argument('--scene')
+    ap.add_argument('--renderer', default='metal')
+    ap.add_argument('--route')
+    ap.add_argument('--name')
+    ap.add_argument('--out')
+    ap.add_argument('--priority', action='store_true')
+    ap.add_argument('--timeout', type=int)
+    ap.add_argument('--env', action='append', default=[])
+    ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
+    ap.add_argument('--golden', help='scene runs: golden dir override')
+    ap.add_argument('--no-diff', action='store_true')
+    ap.add_argument('--wait', action='store_true')
+    if '--' in argv:
+        i = argv.index('--')
+        a, cmd = ap.parse_args(argv[:i]), argv[i + 1:]
+    else:
+        a, cmd = ap.parse_args(argv), []
+    mkdirs()
+    jid = new_id()
+    env = dict(e.split('=', 1) for e in a.env)
+    if a.app:
+        a.app = os.path.abspath(os.path.expanduser(a.app))
+        if not os.path.isdir(a.app):
+            sys.exit(f'runq: no app at {a.app}')
+    bt = os.path.join(HERE, 'boot_test.sh')
+    job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority,
+           'app': a.app, 'clone_app': not a.no_clone, 'env': env}
+    if a.scene:
+        sp = os.path.abspath(os.path.expanduser(a.scene))
+        scene = rjson(sp)
+        if not scene:
+            sys.exit(f'runq: cannot read scene {sp}')
+        if not a.app:
+            sys.exit('runq: --app is required with --scene')
+        name = a.name or f'{scene.get("name", os.path.basename(sp)[:-5])}-{a.renderer}'
+        out = os.path.abspath(os.path.expanduser(a.out)) if a.out else os.path.join(D['jobs'], f'{jid}-{name}')
+        os.makedirs(out, exist_ok=True)
+        scene['_path'] = sp
+        scene_route(scene, a.renderer, os.path.join(out, 'scene.route'))
+        job.update(name=name, out=out, run_dir=os.path.join(out, 'run'), scene=sp, renderer=a.renderer,
+                   cmd=[sys.executable, '-I', os.path.join(HERE, 'runq'), '_scene', sp, a.renderer, '{APP}',
+                        '{OUT}', '{PORT}'] + (['--golden', a.golden] if a.golden else [])
+                   + (['--no-diff'] if a.no_diff else []),
+                   timeout_s=a.timeout or int(scene['duration_s']) + 240)
+    elif a.route:
+        rp = os.path.abspath(os.path.expanduser(a.route))
+        if not a.app:
+            sys.exit('runq: --app is required with --route')
+        name = a.name or os.path.basename(rp).split('.')[0]
+        out = os.path.abspath(os.path.expanduser(a.out)) if a.out else os.path.join(D['jobs'], f'{jid}-{name}')
+        dur = 600
+        for line in open(rp):
+            m = re.match(r'\s*duration_s\s*=\s*(\d+)', line)
+            if m:
+                dur = int(m.group(1))
+        job.update(name=name, out=out, run_dir=os.path.join(out, 'run'),
+                   cmd=[bt, '--app', '{APP}', '--route', rp, '--out', os.path.join(out, 'run'), '--port-offset',
+                        '{PORT}'], timeout_s=a.timeout or dur + 240)
+    elif cmd:
+        name = a.name or os.path.basename(cmd[0])
+        out = os.path.abspath(os.path.expanduser(a.out)) if a.out else os.path.join(D['jobs'], f'{jid}-{name}')
+        job.update(name=name, out=out, cmd=cmd, cwd=os.getcwd(), timeout_s=a.timeout or 1800)
+    else:
+        sys.exit('runq submit: give --scene, --route or -- CMD')
+    os.makedirs(job['out'], exist_ok=True)
+    wjson(os.path.join(job['out'], 'job.json'), job)
+    wjson(os.path.join(D['queue'], f'{0 if a.priority else 1}-{time.time():.6f}-{jid}.json'), job)
+    ensure_daemon()
+    print(f'job {jid} out {job["out"]}', flush=True)
+    if a.wait:
+        sys.exit(cmd_wait([jid]))
+
+
+def find_done(jid):
+    return os.path.join(D['done'], jid + '.json')
+
+
+def cmd_wait(ids):
+    ensure_daemon()
+    ids = [i for i in ids if i]
+    pending = set(ids)
+    kq = select.kqueue()
+    dfd = os.open(D['done'], os.O_RDONLY)
+    ev = select.kevent(dfd, filter=select.KQ_FILTER_VNODE, flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                       fflags=select.KQ_NOTE_WRITE)
+    worst = 0
+    while pending:
+        for jid in sorted(pending):
+            res = rjson(find_done(jid))
+            if res:
+                pending.discard(jid)
+                try:
+                    print(open(os.path.join(res['out'], 'result.txt')).read().rstrip(), flush=True)
+                except OSError:
+                    print(json.dumps(res), flush=True)
+                worst = max(worst, res.get('exit', 2) if res.get('status') == 'done' else max(res.get('exit', 2), 2))
+            elif not any(f.endswith(jid + '.json') for f in os.listdir(D['queue']) + os.listdir(D['running'])):
+                print(f'{jid}: unknown job', flush=True)
+                pending.discard(jid)
+                worst = max(worst, 2)
+        if pending:
+            kq.control([ev], 1, 60)   # wakes when done/ changes; 60 s as a safety net
+            ensure_daemon()
+    os.close(dfd)
+    return worst
+
+
+def cmd_status(_argv):
+    ensure_daemon()
+    time.sleep(1.2)
+    st = rjson(STATE) or {}
+    up = bool(st.get('pid')) and daemon_running()
+    print(f'daemon: {"up pid " + str(st["pid"]) if up else "down"} nice {st.get("nice")}  updated {st.get("updated")}  '
+          f'load {loadavg()}')
+    print(f'build throttle: cap now {st.get("build_cap_now")} (idle {st.get("idle_cap")}, with a game '
+          f'{st.get("game_cap")}), tokens held back {st.get("tokens_held_back")}, active buildq builds '
+          f'{active_builds()}, compiler processes {compile_procs()}')
+    if st.get('games_outside_runq'):
+        print(f'games running outside runq (they take slots): pids {st["games_outside_runq"]}')
+    if st.get('paused_until'):
+        print(f'queue paused until {st["paused_until"]} (config.json paused_until)')
+    for jid, r in (st.get('running') or {}).items():
+        print(f'running {jid} slot {r["slot"]} pid {r["pid"]} {r["name"]} {r["since_s"]} s')
+    for q in sorted(os.listdir(D['queue'])):
+        j = rjson(os.path.join(D['queue'], q)) or {}
+        print(f'queued  {j.get("id")} {j.get("name")} {"PRIORITY" if j.get("priority") else ""}')
+    done = sorted(os.listdir(D['done']), key=lambda f: os.path.getmtime(os.path.join(D['done'], f)))[-5:]
+    for f in done:
+        r = rjson(os.path.join(D['done'], f)) or {}
+        print(f'done    {r.get("id")} {r.get("name")} {r.get("status")} exit {r.get("exit")} {r.get("out")}')
+
+
+def cmd_cancel(ids):
+    for jid in ids:
+        for q in os.listdir(D['queue']):
+            if q.endswith(jid + '.json'):
+                job = rjson(os.path.join(D['queue'], q))
+                os.unlink(os.path.join(D['queue'], q))
+                if job:
+                    wjson(os.path.join(D['done'], jid + '.json'),
+                          {'id': jid, 'status': 'cancelled', 'exit': 2, 'out': job['out']})
+                    with open(os.path.join(job['out'], 'result.txt'), 'w') as f:
+                        f.write(f'{jid} cancelled before start\n')
+                print(f'{jid}: dequeued')
+                break
+        else:
+            if os.path.exists(os.path.join(D['running'], jid + '.json')):
+                open(os.path.join(D['running'], jid + '.cancel'), 'w').close()
+                print(f'{jid}: stop requested')
+            else:
+                print(f'{jid}: not queued or running')
+
+
+def cmd_install(_argv):
+    mkdirs()
+    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py'):
+        s = os.path.join(HERE, f)
+        if os.path.exists(s):
+            shutil.copy2(s, os.path.join(D['bin'], f))
+    if os.path.isdir(os.path.join(HERE, 'scenes')):
+        shutil.copytree(os.path.join(HERE, 'scenes'), os.path.join(D['bin'], 'scenes'), dirs_exist_ok=True)
+    b = os.path.join(D['bin'], 'buildq')
+    if os.path.lexists(b):
+        os.unlink(b)
+    os.symlink('runq', b)
+    print(f'installed in {D["bin"]} (runq, buildq, boot_test.sh and helpers)')
+
+
+# ------------------------------------------------------------------ scene runner (inside a job)
+def cmd_scene(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog='runq _scene')
+    ap.add_argument('scene')
+    ap.add_argument('renderer')
+    ap.add_argument('app')
+    ap.add_argument('out')
+    ap.add_argument('port')
+    ap.add_argument('--golden')
+    ap.add_argument('--no-diff', action='store_true')
+    a = ap.parse_args(argv)
+    scene = rjson(a.scene)
+    run = os.path.join(a.out, 'run')
+    env = dict(os.environ)
+    env.update({k: str(v) for k, v in (scene.get('env') or {}).items()})
+    env.setdefault('CAPTURE_EVERY_S', str(scene.get('capture_every_s', 0) or 3600))
+    env.setdefault('SHOT_EVERY_S', '100000')
+    support_seed = scene.get('support_seed')
+    t0 = time.time()
+    if support_seed:
+        # a warm support folder (shader and pipeline caches, saved settings) cloned in before the run
+        seed = os.path.expanduser(support_seed)
+        if os.path.isdir(seed):
+            os.makedirs(run, exist_ok=True)
+            subprocess.run(['cp', '-cR', seed, os.path.join(run, 'support')])
+    bt = [os.path.join(HERE, 'boot_test.sh'), '--app', a.app, '--route', os.path.join(a.out, 'scene.route'), '--out',
+          run, '--port-offset', a.port]
+    rc = subprocess.run(bt, env=env).returncode
+    res = {'scene': scene.get('name'), 'renderer': a.renderer, 'boot_test_exit': rc, 'wall_s': round(time.time() - t0)}
+    log = os.path.join(run, 'game.log')
+    text = open(log, errors='replace').read() if os.path.exists(log) else ''
+    res['missing_pass_log'] = [p for p in scene.get('pass_log', []) if p not in text]
+    res['fail_log_hits'] = {p: text.count(p) for p in scene.get('fail_log', []) if p in text}
+    res['timeline'] = timeline(text)
+    verdict = 'PASS'
+    if rc not in (0, 1) or res['missing_pass_log'] or res['fail_log_hits']:
+        verdict = 'FAIL'
+    if not a.no_diff and scene.get('golden') is not None:
+        gd = a.golden or os.path.join(os.path.dirname(a.scene), 'golden', scene['name'])
+        sd = os.path.join(HERE, 'scenediff.py')
+        r = subprocess.run(scene_diff_cmd(sd, a.scene, os.path.join(run, 'captures'), gd, a.out),
+                           capture_output=True, text=True)
+        print(r.stdout + r.stderr)
+        d = rjson(os.path.join(a.out, 'diff.json')) or {}
+        res['diff'] = d
+        if r.returncode != 0 or d.get('verdict') != 'PASS':
+            verdict = 'FAIL'
+    res['verdict'] = verdict
+    wjson(os.path.join(a.out, 'scene_result.json'), res)
+    print(f'scene {scene.get("name")} {a.renderer}: {verdict}  boot_test exit {rc}  timeline {res["timeline"]}'
+          + (f'  missing {res["missing_pass_log"]}' if res['missing_pass_log'] else '')
+          + (f'  fail_log {res["fail_log_hits"]}' if res['fail_log_hits'] else ''))
+    return 0 if verdict == 'PASS' else 1
+
+
+def scene_diff_cmd(sd, scene, caps, golden, out):
+    py = os.environ.get('RUNQ_DIFF_PYTHON') or ''
+    if py:
+        return [py, '-I', sd, 'diff', scene, caps, golden, '--json', os.path.join(out, 'diff.json')]
+    return ['uv', 'run', '-q', '--no-project', '--with', 'numpy', '--with', 'pillow', 'python', '-I', sd, 'diff',
+            scene, caps, golden, '--json', os.path.join(out, 'diff.json')]
+
+
+TL_MARKS = [('local_lobby', 'Local lobby open'), ('map_picked', 'picked'), ('match', "the game's client is in a match"),
+            ('test_start', 'test start:'), ('first_capture', 'captures/')]
+
+
+def timeline(text):
+    """Seconds from the log's first line to the boot milestones."""
+    def ts(line):
+        m = re.match(r'^\[\d{4}-\d\d-\d\d (\d\d):(\d\d):(\d\d)(?:\.(\d+))?', line)
+        if not m:
+            return None
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + float('0.' + (m.group(4) or '0'))
+    lines = text.splitlines()
+    t0 = next((ts(l) for l in lines if ts(l) is not None), None)
+    out = {}
+    if t0 is None:
+        return out
+    for key, needle in TL_MARKS:
+        for l in lines:
+            if needle in l and ts(l) is not None:
+                out[key] = round(ts(l) - t0, 1)
+                break
+    return out
+
+
+# ------------------------------------------------------------------ buildq
+def buildq(argv):
+    tokens, ship, i = 1, False, 0
+    while i < len(argv):
+        if argv[i] == '-t':
+            tokens, i = int(argv[i + 1]), i + 2
+        elif argv[i] == '--ship':
+            ship, i = True, i + 1
+        elif argv[i] == '--':
+            i += 1
+            break
+        elif argv[i] in ('-h', '--help'):
+            print(__doc__)
+            return 0
+        else:
+            break
+    cmd = argv[i:]
+    if not cmd:
+        sys.exit('usage: buildq [-t N] [--ship] [--] CMD ARGS...')
+    ensure_daemon()
+    base = os.path.basename(cmd[0])
+    jobserver = base == 'ninja' or (base == 'cmake' and '--build' in cmd)
+    if jobserver:
+        cmd = strip_jobs(cmd)
+        tokens = 1   # the build's own first job; ninja reads the rest from the pool job by job
+    c = cfg()
+    tokens = max(1, min(tokens, c['game_cap']))
+    rec = os.path.join(D['builds'], f'{os.getpid()}.json')
+    wjson(rec, {'pid': os.getpid(), 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens, 'jobserver': jobserver,
+                'started': now_s()})
+    fifo = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)
+    lk = os.open(POOL_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+    got = 0
+    waited = time.time()
+    try:
+        while got < tokens:
+            fcntl.flock(lk, fcntl.LOCK_SH)   # the daemon repairs the pool only when no build holds this
+            try:
+                b = os.read(fifo, tokens - got)
+                got += len(b)
+            except BlockingIOError:
+                pass
+            if got < tokens:
+                if got == 0:
+                    fcntl.flock(lk, fcntl.LOCK_UN)
+                time.sleep(0.5)
+        w = time.time() - waited
+        if w > 2:
+            print(f'buildq: waited {w:.0f} s for build tokens (a game is running or the pool is busy)',
+                  file=sys.stderr)
+        env = dict(os.environ)
+        env.pop('CMAKE_BUILD_PARALLEL_LEVEL', None)
+        if jobserver:
+            env['MAKEFLAGS'] = f'-j --jobserver-auth=fifo:{FIFO}'
+        pre = None if ship else (lambda: os.nice(15))
+        p = subprocess.Popen(cmd, env=env, preexec_fn=pre)
+        while True:
+            try:
+                return p.wait()
+            except KeyboardInterrupt:
+                p.send_signal(signal.SIGINT)
+    finally:
+        if got:
+            os.write(fifo, b'+' * got)
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        os.close(lk)
+        os.close(fifo)
+        try:
+            os.unlink(rec)
+        except OSError:
+            pass
+
+
+def strip_jobs(cmd):
+    out, i = [], 0
+    while i < len(cmd):
+        a = cmd[i]
+        if a in ('-j', '--parallel'):
+            i += 2 if i + 1 < len(cmd) and cmd[i + 1].isdigit() else 1
+            continue
+        if re.fullmatch(r'-j\d+|--parallel=\d+', a):
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    return out
+
+
+def main():
+    if os.path.basename(sys.argv[0]) == 'buildq':
+        sys.exit(buildq(sys.argv[1:]))
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help', 'help'):
+        print(__doc__)
+        return
+    sub, argv = sys.argv[1], sys.argv[2:]
+    if sub == '_daemon':
+        Daemon().run()
+    elif sub == '_scene':
+        sys.exit(cmd_scene(argv))
+    elif sub == 'submit':
+        cmd_submit(argv)
+    elif sub == 'wait':
+        sys.exit(cmd_wait(argv))
+    elif sub == 'status':
+        cmd_status(argv)
+    elif sub == 'cancel':
+        cmd_cancel(argv)
+    elif sub == 'result':
+        for jid in argv:
+            r = rjson(find_done(jid))
+            print(open(os.path.join(r['out'], 'result.txt')).read().rstrip() if r else f'{jid}: not done')
+    elif sub == 'install':
+        cmd_install(argv)
+    elif sub == 'buildq':
+        sys.exit(buildq(argv))
+    else:
+        sys.exit(f'runq: unknown command {sub}')
+
+
+if __name__ == '__main__':
+    main()
