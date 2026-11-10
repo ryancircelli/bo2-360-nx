@@ -33,6 +33,7 @@
 #include "rex/graphics/util/draw.h"
 #include "rex/graphics/pipeline/shader/dxbc_translator.h"
 #include "rex/graphics/metal/dxbc_to_dxil_converter.h"
+#include "rex/graphics/metal/metal_deferred_render_encoder.h"
 #include "rex/graphics/metal/metal_geometry_shader.h"
 #include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_pipeline_cache.h"
@@ -323,8 +324,12 @@ class MetalCommandProcessor final : public CommandProcessor {
   void EndRenderEncoder();
   // [tile-resolve] The open render pass a resolve may run its tile function
   // in (docs/tile-resolve-20261013.md), and ending it for a resolve.
+  // Presence check that does not drain the encode thread.
+  bool HasTileResolveRenderEncoder() const {
+    return current_render_encoder_ != nullptr;
+  }
   MTL::RenderCommandEncoder* TileResolveRenderEncoder() const {
-    return current_render_encoder_;
+    return current_render_encoder_ ? current_render_encoder_->Sync() : nullptr;
   }
   MTL::RenderPassDescriptor* TileResolvePassDescriptor() const {
     return current_render_pass_descriptor_;
@@ -1265,7 +1270,10 @@ class MetalCommandProcessor final : public CommandProcessor {
       SharedMemoryRequestReason::kUnknown;
   // Current command buffer and encoder
   MTL::CommandBuffer* current_command_buffer_ = nullptr;
-  MTL::RenderCommandEncoder* current_render_encoder_ = nullptr;
+  // Wraps the real render encoder; with metal_encode_thread its calls are
+  // replayed on a second thread (see metal_deferred_render_encoder.h).
+  DeferredRenderEncoder* current_render_encoder_ = nullptr;
+  mutable DeferredRenderEncoder render_encoder_recorder_;
   pass_trace::PassRef current_render_pass_trace_;  // [pass-trace] trace-only
   // [upload-precommit] pass-trace end-reason detail for the next
   // EndRenderEncoder (a static string), and the pending upload break cause.

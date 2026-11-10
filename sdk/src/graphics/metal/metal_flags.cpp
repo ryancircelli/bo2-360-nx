@@ -17,6 +17,10 @@ DEFINE_int32(metal_backend_telemetry_interval, 120,
              "Number of guest swaps between Metal backend telemetry summaries. "
              "Set to 0 to log only on shutdown.",
              "Metal");
+DEFINE_bool(metal_encode_thread, false,
+            "Record render encoder calls on the command processor thread and "
+            "replay them into Metal on a second thread.",
+            "Metal");
 DEFINE_bool(metal_constant_payload_cache, false,
             "Reuse identical Metal constant/descriptor payload uploads across "
             "draws within a frame. Disable to A/B hash/cache CPU cost against "

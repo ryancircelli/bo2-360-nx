@@ -8423,7 +8423,7 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
         transfer_mutations =
             MetalRenderTargetCache::kDrawPassTransferEncoderMutationNone;
     if (!render_target_cache_->EncodePendingDrawPassTransfers(
-            current_render_encoder_, current_render_pass_descriptor_,
+            current_render_encoder_->Sync(), current_render_pass_descriptor_,
             &transfer_mutations)) {
       if (!render_target_cache_->FlushPendingDrawPassTransfers()) {
         return false;
@@ -9758,7 +9758,7 @@ bool MetalCommandProcessor::DispatchDraw(
     if (primitive_processing_result.index_buffer_type ==
         PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
       IRRuntimeDrawPatchesTessellationEmulation(
-          current_render_encoder_, tess_primitive, tess_config, 1,
+          current_render_encoder_->Sync(), tess_primitive, tess_config, 1,
           primitive_processing_result.host_draw_vertex_count, 0, 0);
     } else {
       MTL::IndexType index_type =
@@ -9777,7 +9777,7 @@ bool MetalCommandProcessor::DispatchDraw(
       uint32_t start_index =
           index_stride ? uint32_t(index_offset / index_stride) : 0;
       IRRuntimeDrawIndexedPatchesTessellationEmulation(
-          current_render_encoder_, tess_primitive, index_type, index_buffer,
+          current_render_encoder_->Sync(), tess_primitive, index_type, index_buffer,
           tess_config, 1, primitive_processing_result.host_draw_vertex_count, 0,
           0, start_index);
     }
@@ -9810,7 +9810,7 @@ bool MetalCommandProcessor::DispatchDraw(
     if (primitive_processing_result.index_buffer_type ==
         PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
       IRRuntimeDrawPrimitivesGeometryEmulation(
-          current_render_encoder_, geometry_primitive, geometry_config, 1,
+          current_render_encoder_->Sync(), geometry_primitive, geometry_config, 1,
           primitive_processing_result.host_draw_vertex_count, 0, 0);
     } else {
       MTL::IndexType index_type =
@@ -9829,7 +9829,7 @@ bool MetalCommandProcessor::DispatchDraw(
       uint32_t start_index =
           index_stride ? uint32_t(index_offset / index_stride) : 0;
       IRRuntimeDrawIndexedPrimitivesGeometryEmulation(
-          current_render_encoder_, geometry_primitive, index_type, index_buffer,
+          current_render_encoder_->Sync(), geometry_primitive, index_type, index_buffer,
           geometry_config, 1,
           primitive_processing_result.host_draw_vertex_count, start_index, 0,
           0);
@@ -9865,8 +9865,8 @@ bool MetalCommandProcessor::DispatchDraw(
     // Draw using primitive processor output.
     if (primitive_processing_result.index_buffer_type ==
         PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
-      IRRuntimeDrawPrimitives(
-          current_render_encoder_, mtl_primitive, NS::UInteger(0),
+      current_render_encoder_->IRDrawPrimitives(
+          mtl_primitive, NS::UInteger(0),
           NS::UInteger(primitive_processing_result.host_draw_vertex_count));
     } else {
       MTL::IndexType index_type =
@@ -9879,8 +9879,8 @@ bool MetalCommandProcessor::DispatchDraw(
       if (!resolve_index_buffer(index_type, index_buffer, index_offset)) {
         return false;
       }
-      IRRuntimeDrawIndexedPrimitives(
-          current_render_encoder_, mtl_primitive,
+      current_render_encoder_->IRDrawIndexedPrimitives(
+          mtl_primitive,
           NS::UInteger(primitive_processing_result.host_draw_vertex_count),
           index_type, index_buffer, index_offset, NS::UInteger(1), 0, 0);
     }
@@ -13032,8 +13032,14 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
       }
       current_render_pass_trace_ =
           pass_trace::BeginRender(current_command_buffer_, pass_descriptor, "draw");
-      current_render_encoder_ =
-          current_command_buffer_->renderCommandEncoder(pass_descriptor);
+      if (MTL::RenderCommandEncoder* real_encoder =
+              current_command_buffer_->renderCommandEncoder(pass_descriptor)) {
+        real_encoder->retain();
+        current_render_encoder_ = render_encoder_recorder_.Open(
+            real_encoder, REXCVAR_GET(metal_encode_thread));
+      } else {
+        current_render_encoder_ = nullptr;
+      }
       if (extent_h) {
         // The descriptor is the cache's; everything else sizes from the
         // attachments as before.
@@ -13046,7 +13052,6 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
         pass_trace::ClearRender(pass_descriptor);
       }
       if (current_render_encoder_) {
-        current_render_encoder_->retain();
         if (EncoderDebugLabelsEnabled()) {
           current_render_encoder_->setLabel(NS::String::string(
               "XeniaRenderEncoder", NS::UTF8StringEncoding));
