@@ -8,6 +8,7 @@
                --priority (= --class ship)  --wait (block until done, exit with the job's exit code)
                --solo (wait until no other game runs, then hold the machine alone; the default for class perf,
                --no-solo turns it off). Use --solo for FPS numbers and for proofs of timing-dependent bugs.
+               --quiet-machine stops builds, waits for load < 8, and records avg/min FPS.
       classes, first to run first: ship (0, ship-gate smokes), harness (1, harness/golden captures),
                proof (2, bug proof runs), sweep (3, scene sweeps; the default), perf (4, perf A/B), or a number.
       Within a class, jobs take turns by owner (--owner, else $RUNQ_OWNER, else the --name up to its first '-'):
@@ -106,6 +107,28 @@ def compile_procs():
     except (OSError, subprocess.SubprocessError):
         return -1
     return sum(1 for line in out.splitlines() if COMPILERS.match(os.path.basename(line.strip())))
+
+
+def process_tree(pid):
+    """Return a live PID and its descendants (buildq records can predate child_pid support)."""
+    try:
+        out = subprocess.run(['ps', '-axo', 'pid=,ppid='], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return [pid] if alive(pid) else []
+    children = {}
+    for line in out.splitlines():
+        try:
+            child, parent = map(int, line.split())
+            children.setdefault(parent, []).append(child)
+        except ValueError:
+            continue
+    result, todo = [], [pid]
+    while todo:
+        parent = todo.pop()
+        if parent not in result and alive(parent):
+            result.append(parent)
+            todo.extend(children.get(parent, []))
+    return result
 
 
 def games_outside(own_pgids):
@@ -213,6 +236,7 @@ class Daemon:
         self.c = cfg()
         self.held = 0           # build tokens the daemon holds back while games run
         self.jobs = {}          # id -> {proc, job, slot, start, samples, cancel}
+        self.quiet_starting = False
         self.last_repair = 0.0
         self.outside = []
         self.last_start = (rjson(STATE) or {}).get('last_start_by_owner') or {}
@@ -262,6 +286,9 @@ class Daemon:
     def cap_now(self):
         """(cap, why): game_cap while a measured job runs, run_cap while only unmeasured games run (games started
         outside runq count as unmeasured), idle_cap with no game."""
+        quiet = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if j['job'].get('quiet_machine')]
+        if quiet or self.quiet_starting:
+            return 0, 'quiet machine: ' + (', '.join(quiet) if quiet else 'preparing')
         measured = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if is_measured(j['job'])]
         if measured:
             return self.c['game_cap'], 'measured: ' + ', '.join(measured)
@@ -330,6 +357,31 @@ class Daemon:
         subst = {'{APP}': app, '{OUT}': out, '{PORT}': port, '{SLOT}': str(slot)}
         cmd = [subst.get(a, a) for a in job['cmd']]
         cmd = [re.sub(r'\{(APP|OUT|PORT|SLOT)\}', lambda m: subst['{' + m.group(1) + '}'], a) for a in cmd]
+        quiet_pids = []
+        if job.get('quiet_machine'):
+            self.quiet_starting = True
+            self.throttle()
+            for f in os.listdir(D['builds']):
+                b = rjson(os.path.join(D['builds'], f)) or {}
+                pid = b.get('pid')
+                if pid and alive(pid):
+                    # Freeze the token owner first so it cannot start another compiler while its tree is inspected.
+                    try:
+                        os.kill(pid, signal.SIGSTOP)
+                        quiet_pids.append(pid)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    for child in process_tree(pid):
+                        if child == pid:
+                            continue
+                        try:
+                            os.kill(child, signal.SIGSTOP)
+                            quiet_pids.append(child)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+            job['quiet_build_pids'] = quiet_pids
+            wjson(src, job)  # recover the suspension even if the daemon exits before Popen/run.json
+            cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_quiet-wait', '--'] + cmd
         env = dict(os.environ)
         env.update(job.get('env') or {})
         env.update(RUNQ_JOB=job['id'], RUNQ_SLOT=str(slot), RUNQ_OUT=out, BO2_NET_PORT_OFFSET=port)
@@ -347,11 +399,14 @@ class Daemon:
                                     stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as e:
             log.close()
+            self.resume_builds(quiet_pids)
+            self.quiet_starting = False
             self.finish_record(job, slot, 2, 'error', start, [], f'cannot start: {e}')
             os.unlink(src)
             return
         log.close()
         rec['pid'] = proc.pid
+        rec['quiet_pids'] = quiet_pids
         os.replace(src, os.path.join(D['running'], job['id'] + '.json'))
         wjson(os.path.join(D['running'], job['id'] + '.run.json'), rec)
         with open(os.path.join(out, 'conditions.tsv'), 'w') as f:
@@ -359,7 +414,8 @@ class Daemon:
         self.last_start[job_owner(job)] = time.time()
         self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
                                 'next_sample': 0.0, 'load_start': la, 'killing': 0.0,
-                                'games_start': len(self.jobs) + 1 + len(self.outside)}
+                                'games_start': len(self.jobs) + 1 + len(self.outside), 'quiet_pids': quiet_pids}
+        self.quiet_starting = False
         self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
 
     def sample(self, j, t):
@@ -411,6 +467,9 @@ class Daemon:
                 res['conditions'].update(games_mean=round(sum(gs) / len(gs), 2), games_max=max(gs))
         res['slots'] = self.c['slots']
         res['solo'] = is_solo(job)
+        if job.get('quiet_machine'):
+            res['quiet_machine'] = {'stopped_build_pids': job.get('quiet_build_pids', []), 'load_limit': 8,
+                                    'fps_valid_threshold': 30}
         if games_start is not None:
             res['conditions']['games_start'] = games_start
         g = max([x for x in (res['conditions'].get('games_max'), games_start) if x is not None], default=None)
@@ -423,6 +482,18 @@ class Daemon:
             res['fps'] = {k: (round(s[k], 2) if isinstance(s.get(k), float) else s.get(k))
                           for k in ('fps_avg', 'fps_1pct_low', 'fps_01pct_low', 'ft_median', 'ft_p99', 'ft_worst',
                                     'frames') if k in s}
+            if s.get('ft_worst'):
+                res['fps']['fps_min'] = round(1000.0 / s['ft_worst'], 2)
+            if job.get('quiet_machine'):
+                res['fps']['valid'] = res['fps'].get('fps_avg') is not None and res['fps']['fps_avg'] >= 30
+                if not res['fps']['valid'] and status == 'done':
+                    status, code, note = 'invalid', 2, 'quiet-machine average FPS below 30'
+                    res.update(status=status, exit=code, note=note)
+        elif job.get('quiet_machine'):
+            res['fps'] = {'fps_avg': None, 'fps_min': None, 'valid': False}
+            if status == 'done':
+                status, code, note = 'invalid', 2, 'quiet-machine FPS summary missing'
+                res.update(status=status, exit=code, note=note)
         caps = os.path.join(run, 'captures')
         if os.path.isdir(caps):
             res['captures'] = sorted(f for f in os.listdir(caps) if f.endswith('.png'))
@@ -472,6 +543,7 @@ class Daemon:
                 pass
             self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
                                j['load_start'], j.get('games_start'))
+            self.resume_builds(j.get('quiet_pids', []))
             if j['job'].get('clone_app', True) and j['job'].get('app'):
                 shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
             for suf in ('.json', '.run.json', '.cancel'):
@@ -491,6 +563,13 @@ class Daemon:
                       'running': {k: {'slot': v['slot'], 'pid': v['proc'].pid, 'name': v['job'].get('name'),
                                       'since_s': round(time.time() - v['start'])} for k, v in self.jobs.items()},
                       'queued': self.queued(), 'last_start_by_owner': self.last_start})
+
+    def resume_builds(self, pids):
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGCONT)
+            except (ProcessLookupError, PermissionError):
+                pass
 
     def run(self):
         mkdirs()
@@ -513,16 +592,23 @@ class Daemon:
                     self.jobs[job['id']] = {'proc': Adopted(rec['pid'], job['out']), 'job': job, 'slot': rec['slot'],
                                             'start': st, 'samples': [], 'next_sample': 0.0,
                                             'load_start': rec.get('load_start'), 'killing': 0.0,
-                                            'games_start': rec.get('games_start'), 'adopted': True}
+                                            'games_start': rec.get('games_start'), 'adopted': True,
+                                            'quiet_pids': rec.get('quiet_pids', [])}
                     self.log(f'adopted {job["id"]} slot {rec["slot"]} pid {rec["pid"]}')
                     continue
                 if job:
+                    self.resume_builds(job.get('quiet_build_pids', []))
                     self.finish_record(job, -1, 2, 'lost', time.time(), [], 'the daemon restarted during the job')
                 for suf in ('.json', '.run.json', '.cancel'):
                     try:
                         os.unlink(os.path.join(D['running'], f[:-5] + suf))
                     except OSError:
                         pass
+        for qf, job in load_queue():
+            stale = job.pop('quiet_build_pids', [])
+            if stale:
+                self.resume_builds(stale)
+                wjson(os.path.join(D['queue'], qf), job)
         self.pool_open()
         self.log(f'daemon up pid {os.getpid()}, slots {self.c["slots"]}, build cap {self.c["idle_cap"]} idle / '
                  f'{self.c.get("run_cap", 12)} unmeasured games / {self.c["game_cap"]} measured')
@@ -548,6 +634,8 @@ class Daemon:
                 self.write_state()
                 time.sleep(1)
         finally:
+            for j in self.jobs.values():
+                self.resume_builds(j.get('quiet_pids', []))
             if self.held:
                 os.write(self.fifo, b'+' * self.held)
 
@@ -744,6 +832,7 @@ def cmd_submit(argv):
     ap.add_argument('--measured', action='store_true', default=None,
                     help='keep builds at game_cap (4) during the run (default: solo jobs and timed benchmarks)')
     ap.add_argument('--no-measured', dest='measured', action='store_false')
+    ap.add_argument('--quiet-machine', action='store_true', help='stop active builds, wait for load < 8, record avg/min FPS')
     ap.add_argument('--timeout', type=int)
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
@@ -765,10 +854,14 @@ def cmd_submit(argv):
     bt = os.path.join(HERE, 'boot_test.sh')
     klass = 0 if a.priority else parse_class(a.klass) if a.klass else 3
     solo = a.solo if a.solo is not None else klass == CLASSES['perf']
+    if a.quiet_machine:
+        solo = True
     job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
            'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'env': env}
     if a.measured is not None:
         job['measured'] = a.measured
+    if a.quiet_machine:
+        job.update(quiet_machine=True, measured=True)
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
         scene = rjson(sp)
@@ -1149,7 +1242,9 @@ def buildq(argv):
         if jobserver:
             env['MAKEFLAGS'] = f'-j --jobserver-auth=fifo:{FIFO}'
         pre = None if ship else (lambda: os.nice(15))
-        p = subprocess.Popen(cmd, env=env, preexec_fn=pre)
+        p = subprocess.Popen(cmd, env=env, preexec_fn=pre, start_new_session=True)
+        wjson(rec, {'pid': os.getpid(), 'child_pid': p.pid, 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens,
+                    'jobserver': jobserver, 'started': now_s()})
         while True:
             try:
                 return p.wait()
@@ -1191,6 +1286,14 @@ def main():
     sub, argv = sys.argv[1], sys.argv[2:]
     if sub == '_daemon':
         Daemon().run()
+    elif sub == '_quiet-wait':
+        if argv and argv[0] == '--':
+            argv = argv[1:]
+        if not argv:
+            sys.exit('runq _quiet-wait: missing command')
+        while loadavg()[0] >= 8:
+            time.sleep(2)
+        os.execvpe(argv[0], argv, os.environ)
     elif sub == '_scene':
         sys.exit(cmd_scene(argv))
     elif sub == 'submit':
