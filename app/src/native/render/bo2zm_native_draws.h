@@ -54,7 +54,7 @@ struct NativeImage {
   // they have to be cleared by opening a pass with loadOp = CLEAR, and they cannot be swapped with their
   // resolved texture.
   bool accepts_copy_target = true;
-  VkFormat format = VK_FORMAT_UNDEFINED;
+  gpu::Format format = 0;  // VK_FORMAT_UNDEFINED
   bool prepared = false;  // already in GENERAL and initialized
   // Resolved texture with RB_COPY_DEST_INFO.copy_dest_swap: the guest sees it with red and blue swapped
   // relative to the render target it comes from.

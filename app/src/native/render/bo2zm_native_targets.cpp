@@ -608,7 +608,7 @@ VkFormat FormatHostResolved(uint32_t info_target) {
   return kFormatColor;
 }
 
-bool Is16BitsPerChannel(VkFormat format) {
+bool Is16BitsPerChannel(gpu::Format format) {
   return format == VK_FORMAT_R16G16B16A16_SFLOAT || format == VK_FORMAT_R16G16B16A16_UNORM ||
          format == VK_FORMAT_R16G16B16A16_SNORM;
 }
@@ -762,7 +762,7 @@ struct PendingRead {
   uint32_t pitch;         // RB_COPY_DEST_PITCH
   uint32_t height_target;
   uint32_t info;          // RB_COPY_DEST_INFO
-  VkFormat format_host = VK_FORMAT_R8G8B8A8_UNORM;  // the format of the image read back
+  gpu::Format format_host = VK_FORMAT_R8G8B8A8_UNORM;  // the format of the image read back
 };
 
 // Output slots with bo2zm_native_output_without_wait (without it, only slot 0 is used).
@@ -3699,10 +3699,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
     // Render pass and pipeline for this destination format.
-    VkRenderPass& pass = conv_passes_[target.format];
+    VkRenderPass& pass = conv_passes_[gpu::ToVkFormat(target.format)];
     if (pass == VK_NULL_HANDLE) {
       VkAttachmentDescription attachment{};
-      attachment.format = target.format;
+      attachment.format = gpu::ToVkFormat(target.format);
       attachment.samples = VK_SAMPLE_COUNT_1_BIT;
       attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
       attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -3726,7 +3726,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         return false;
       }
     }
-    VkPipeline& pipeline = conv_pipelines_[target.format];
+    VkPipeline& pipeline = conv_pipelines_[gpu::ToVkFormat(target.format)];
     if (pipeline == VK_NULL_HANDLE) {
       pipeline = CreatePipelineOutput(conv_fs_, nullptr, pass);
       if (pipeline == VK_NULL_HANDLE) {
@@ -4760,7 +4760,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         if (Create(fresh.image, target.width, target.height,
                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                  target.format)) {
+                  gpu::ToVkFormat(target.format))) {
           Prepare(fresh.image);
           fronts_images_.push_back(fresh);
           free = int32_t(fronts_images_.size()) - 1;
@@ -5291,7 +5291,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       // address, size and format) and taken back on the next resolve of that shape: nothing is destroyed, so
       // nothing waits. Not while the address's content is lent to a render target (bo2zm_native_resolve_without_copy).
       if (park_resolved_ && !lent_.count(base) && parked_.size() < 32) {
-        const auto key = [base](uint32_t w, uint32_t h, VkFormat f) {
+        const auto key = [base](uint32_t w, uint32_t h, gpu::Format f) {
           return (uint64_t(base) << 32) ^ (uint64_t(w) << 20) ^ (uint64_t(h) << 6) ^ uint64_t(f);
         };
         Resolved old = it->second;
@@ -5387,7 +5387,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     return no_copy;
   }
 
-  static bool IsDepthFormat(VkFormat format) {
+  static bool IsDepthFormat(gpu::Format format) {
     return format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
            format == VK_FORMAT_D16_UNORM || format == VK_FORMAT_D32_SFLOAT ||
            format == VK_FORMAT_X8_D24_UNORM_PACK32;
