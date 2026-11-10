@@ -255,6 +255,25 @@ class BaseHeap {
   // Only PhysicalHeap tracks this; every other heap has no watch state.
   virtual bool IsHostPageWriteWatched(uint32_t host_page_number) const { return false; }
 
+  // Returns the union of the committed guest protection of the guest pages in a
+  // host page, ignoring write watches. The caller holds the same locks as for
+  // GetHostPageAccess.
+  //
+  // @param host_page_number Host page number from the heap host base, with
+  // host_address_offset().
+  // @return The host access the guest protection allows.
+  rex::memory::PageAccess GetHostPageGuestAccess(uint32_t host_page_number) const;
+
+  // Returns the host access for a host page: the union of the committed guest
+  // protection of its guest pages, kept read only while the page is write
+  // watched. The caller holds the global critical region when guest pages are
+  // smaller than host pages, because the watch state read here is guarded by
+  // it.
+  //
+  // @param host_page_number Host page number from the heap host base, with
+  // host_address_offset().
+  rex::memory::PageAccess GetHostPageAccess(uint32_t host_page_number) const;
+
   void Initialize(memory::Memory* memory, uint8_t* membase, HeapType heap_type, uint32_t heap_base,
                   uint32_t heap_size, uint32_t page_size, uint32_t host_address_offset = 0);
 

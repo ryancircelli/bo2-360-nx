@@ -960,6 +960,77 @@ std::unique_lock<std::recursive_mutex> BaseHeap::AcquireHostPageReconcileLock() 
   return rex::thread::global_critical_region::AcquireDirect();
 }
 
+rex::memory::PageAccess BaseHeap::GetHostPageGuestAccess(uint32_t host_page_number) const {
+  const uint32_t host_page_size = memory_->system_page_size_;
+
+  // Multiple guest pages may share one host page. Keep the guest page table as
+  // the source of truth, then grant the host page the union of the access needed
+  // by its committed guest pages. This can't enforce stricter access for one
+  // guest page while a neighbor needs broader access, but it keeps neighboring
+  // committed pages usable and allows guest protection metadata to stay exact.
+  const uint64_t host_page_start = uint64_t(host_page_number) * host_page_size;
+  const uint64_t host_page_end = host_page_start + host_page_size;
+  const uint64_t heap_host_start = host_address_offset_;
+  const uint64_t heap_host_end = heap_host_start + heap_size_;
+  const uint64_t overlap_start = std::max(host_page_start, heap_host_start);
+  const uint64_t overlap_end = std::min(host_page_end, heap_host_end);
+  if (overlap_start >= overlap_end) {
+    return rex::memory::PageAccess::kNoAccess;
+  }
+
+  const uint32_t guest_page_start = uint32_t(overlap_start - heap_host_start) >> page_size_shift_;
+  const uint32_t guest_page_end = uint32_t(overlap_end - heap_host_start - 1) >> page_size_shift_;
+
+  bool has_read = false;
+  bool has_write = false;
+  bool has_committed = false;
+  for (uint32_t page_number = guest_page_start; page_number <= guest_page_end; ++page_number) {
+    const auto& page_entry = page_table_[page_number];
+    if (!(page_entry.state & memory::kMemoryAllocationCommit)) {
+      continue;
+    }
+    has_committed = true;
+    const rex::memory::PageAccess page_access = ToHostPageAccess(page_entry.current_protect, heap_type_);
+    if (page_access == rex::memory::PageAccess::kReadWrite) {
+      has_read = true;
+      has_write = true;
+      break;
+    }
+    if (page_access == rex::memory::PageAccess::kReadOnly) {
+      has_read = true;
+    }
+  }
+
+  rex::memory::PageAccess access;
+  // Physical aliases are intentionally left accessible after release unless
+  // protect_on_release is enabled because GPU users may still reference them.
+  if (!has_committed && heap_type_ == memory::HeapType::kGuestPhysical &&
+      !REXCVAR_GET(protect_on_release)) {
+    access = rex::memory::PageAccess::kReadWrite;
+  } else if (!has_read) {
+    access = rex::memory::PageAccess::kNoAccess;
+  } else {
+    access = has_write ? rex::memory::PageAccess::kReadWrite : rex::memory::PageAccess::kReadOnly;
+  }
+  return access;
+}
+
+rex::memory::PageAccess BaseHeap::GetHostPageAccess(uint32_t host_page_number) const {
+  rex::memory::PageAccess access = GetHostPageGuestAccess(host_page_number);
+  // The guest page table is not the whole truth: a physical heap page may
+  // also be write-watched for GPU invalidation. EnableAccessCallbacks records
+  // that in notify_on_invalidation and skips any page whose bit is already
+  // set, so handing write access back here would stop the watch firing
+  // permanently. One host page covers several guest pages, so an unrelated
+  // operation on a neighbour reaches this code constantly - clamp instead.
+  // Leaving the page read-only can only cause a spurious invalidation, which
+  // is safe; restoring write access loses invalidations, which is not.
+  if (access == rex::memory::PageAccess::kReadWrite && IsHostPageWriteWatched(host_page_number)) {
+    access = rex::memory::PageAccess::kReadOnly;
+  }
+  return access;
+}
+
 bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_number) {
   const uint32_t host_page_size = memory_->system_page_size_;
   if (page_size_ >= host_page_size) {
@@ -969,72 +1040,6 @@ bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_
   // The global critical region guards the watch flags read below and must
   // already be held by the caller (AcquireHostPageReconcileLock), acquired
   // ahead of heap_mutex_ so this never inverts against PhysicalHeap.
-
-  // Multiple guest pages may share one host page. Keep the guest page table as
-  // the source of truth, then grant the host page the union of the access needed
-  // by its committed guest pages. This can't enforce stricter access for one
-  // guest page while a neighbor needs broader access, but it keeps neighboring
-  // committed pages usable and allows guest protection metadata to stay exact.
-  const auto get_host_page_access = [&](uint32_t host_page_number) {
-    const uint64_t host_page_start = uint64_t(host_page_number) * host_page_size;
-    const uint64_t host_page_end = host_page_start + host_page_size;
-    const uint64_t heap_host_start = host_address_offset_;
-    const uint64_t heap_host_end = heap_host_start + heap_size_;
-    const uint64_t overlap_start = std::max(host_page_start, heap_host_start);
-    const uint64_t overlap_end = std::min(host_page_end, heap_host_end);
-    if (overlap_start >= overlap_end) {
-      return rex::memory::PageAccess::kNoAccess;
-    }
-
-    const uint32_t guest_page_start = uint32_t(overlap_start - heap_host_start) >> page_size_shift_;
-    const uint32_t guest_page_end = uint32_t(overlap_end - heap_host_start - 1) >> page_size_shift_;
-
-    bool has_read = false;
-    bool has_write = false;
-    bool has_committed = false;
-    for (uint32_t page_number = guest_page_start; page_number <= guest_page_end; ++page_number) {
-      const auto& page_entry = page_table_[page_number];
-      if (!(page_entry.state & memory::kMemoryAllocationCommit)) {
-        continue;
-      }
-      has_committed = true;
-      const rex::memory::PageAccess page_access =
-          ToHostPageAccess(page_entry.current_protect, heap_type_);
-      if (page_access == rex::memory::PageAccess::kReadWrite) {
-        has_read = true;
-        has_write = true;
-        break;
-      }
-      if (page_access == rex::memory::PageAccess::kReadOnly) {
-        has_read = true;
-      }
-    }
-
-    rex::memory::PageAccess access;
-    // Physical aliases are intentionally left accessible after release unless
-    // protect_on_release is enabled because GPU users may still reference them.
-    if (!has_committed && heap_type_ == memory::HeapType::kGuestPhysical &&
-        !REXCVAR_GET(protect_on_release)) {
-      access = rex::memory::PageAccess::kReadWrite;
-    } else if (!has_read) {
-      access = rex::memory::PageAccess::kNoAccess;
-    } else {
-      access = has_write ? rex::memory::PageAccess::kReadWrite : rex::memory::PageAccess::kReadOnly;
-    }
-
-    // The guest page table is not the whole truth: a physical heap page may
-    // also be write-watched for GPU invalidation. EnableAccessCallbacks records
-    // that in notify_on_invalidation and skips any page whose bit is already
-    // set, so handing write access back here would stop the watch firing
-    // permanently. One host page covers several guest pages, so an unrelated
-    // operation on a neighbour reaches this code constantly - clamp instead.
-    // Leaving the page read-only can only cause a spurious invalidation, which
-    // is safe; restoring write access loses invalidations, which is not.
-    if (access == rex::memory::PageAccess::kReadWrite && IsHostPageWriteWatched(host_page_number)) {
-      access = rex::memory::PageAccess::kReadOnly;
-    }
-    return access;
-  };
 
   const uint64_t guest_byte_start = uint64_t(start_page_number) << page_size_shift_;
   const uint64_t guest_byte_end = ((uint64_t(end_page_number) + 1) << page_size_shift_) - 1;
@@ -1049,7 +1054,7 @@ bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_
   // would cost thousands of syscalls where one suffices.
   uint8_t* const heap_host_base = membase_ + heap_base_;
   uint32_t run_first_page = host_page_first;
-  rex::memory::PageAccess run_access = get_host_page_access(host_page_first);
+  rex::memory::PageAccess run_access = GetHostPageAccess(host_page_first);
   const auto flush_run = [&](uint32_t run_last_page) {
     const size_t run_length = (size_t(run_last_page - run_first_page) + 1) * host_page_size;
     uint8_t* const run_pointer = heap_host_base + size_t(run_first_page) * host_page_size;
@@ -1062,7 +1067,7 @@ bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_
   };
 
   for (uint32_t host_page = host_page_first + 1; host_page <= host_page_last; ++host_page) {
-    const rex::memory::PageAccess access = get_host_page_access(host_page);
+    const rex::memory::PageAccess access = GetHostPageAccess(host_page);
     if (access == run_access) {
       continue;
     }
@@ -2187,8 +2192,11 @@ void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t len
       assert_always();
       continue;
     }
+    // A host page larger than a guest page takes the access of every guest page in it.
     rex::memory::PageAccess current_page_access =
-        ToPageAccess(page_table_[guest_page_number].current_protect);
+        page_size_ < system_page_size_
+            ? GetHostPageAccess(i)
+            : ToPageAccess(page_table_[guest_page_number].current_protect);
     bool protect_system_page = false;
     // Don't do anything with inaccessible pages - don't protect, don't enable
     // callbacks - because real access violations are needed there. And don't
@@ -2343,8 +2351,13 @@ bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> globa
       if (unprotect_page) {
         uint32_t guest_page_number =
             rex::sat_sub(i * system_page_size_, host_address_offset()) >> page_size_shift_;
-        if (ToPageAccess(page_table_[guest_page_number].current_protect) !=
-            rex::memory::PageAccess::kReadWrite) {
+        // A host page larger than a guest page is unprotected by the access of
+        // every guest page in it.
+        const rex::memory::PageAccess guest_access =
+            page_size_ < system_page_size_
+                ? GetHostPageGuestAccess(i)
+                : ToPageAccess(page_table_[guest_page_number].current_protect);
+        if (guest_access != rex::memory::PageAccess::kReadWrite) {
           unprotect_page = false;
         }
       }
