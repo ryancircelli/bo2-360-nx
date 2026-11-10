@@ -16,12 +16,15 @@
 // The game keeps one 76-byte record per mounted DLC package at 0x83880EF8 (8 records): +0 the content bit its id file
 // names (dlczm0.id: 8), +64 the license mask XamContentCreateEx returned for it, +69 a byte set once it is mounted.
 // sub_82412840(record) says whether a record may be used: it must be mounted, and when its license mask is exactly 1 it
-// also needs bit 2 of a flags byte at 0x837F8CB4 (sub_82406460). That byte only ever comes from a network message
-// (sub_82406428 is the only writer, from MSG_ReadByte), so it stays 0 in an offline or local game. The package headers
-// carry license bits 0x1 for Nuketown Zombies (and Nuketown 2025 and the Season Pass), 0x2/0x4/0x10/0x508 for the other
-// packs, and the content manager reports those bits. So Nuketown mounted and showed on the globe, but starting it
-// failed with Com_Error PLATFORM_MISSINGMAP (sub_82298CF8 -> sub_82412960 -> this check). The hook lets a mounted
-// record with license mask 1 count as usable.
+// also needs the online bit (0x4) of the session mode flags at 0x837F8CB4 (sub_82406460). The game treats mask 1 as a
+// trial or promotional license: it is only honoured in an online session (sub_82406470 sets or clears the bit when a
+// session goes online or offline, sub_82406428 copies the flags from the server's game state), where an online content
+// refresh (sub_82412E08) also sets +69 from the server's content_trialcontentpackbits dvar. An offline or local game
+// never sets the bit. The package headers carry license bits 0x1 for Nuketown Zombies (and Nuketown 2025 and the Season
+// Pass), 0x2/0x4/0x10/0x508 for the other packs, and the content manager reports those bits. So Nuketown mounted and
+// showed on the globe, but starting it failed with Com_Error PLATFORM_MISSINGMAP (sub_82298CF8 -> sub_82412960 -> this
+// check). The hook lets a mounted record with license mask 1 count as usable. It only changes a "no" for such a record,
+// which the game gives only when the online bit is clear, and it keeps the mounted byte as the game left it.
 
 #include "bo2zm_dlc.h"
 
@@ -45,8 +48,11 @@ namespace {
 constexpr uint32_t kDlcRecords = 0x83880EF8;
 constexpr uint32_t kDlcRecordSize = 76;
 constexpr uint32_t kDlcRecordCount = 8;
+constexpr uint32_t kDlcContentBit = 0;  // uint32, big-endian; dlczm0.id names bit 8
 constexpr uint32_t kDlcLicenseMask = 64;  // uint32, big-endian
 constexpr uint32_t kDlcMounted = 69;      // byte
+constexpr uint32_t kSessionModeFlags = 0x837F8CB4;  // uint32, big-endian; sub_82406460 tests bit 0x4
+constexpr uint32_t kSessionModeOnline = 0x4;
 
 }  // namespace
 
@@ -60,7 +66,14 @@ REX_HOOK_RAW(sub_82412840) {
   const uint8_t* entry = base + kDlcRecords + record * kDlcRecordSize;
   uint32_t mask;
   std::memcpy(&mask, entry + kDlcLicenseMask, sizeof(mask));
-  if (entry[kDlcMounted] == 0 || __builtin_bswap32(mask) != 1) {
+  uint32_t content_bit;
+  std::memcpy(&content_bit, entry + kDlcContentBit, sizeof(content_bit));
+  uint32_t session;
+  std::memcpy(&session, base + kSessionModeFlags, sizeof(session));
+  // Only the one refusal this is about: a mounted record, license mask exactly 1, and no online session (online, the
+  // game decides by itself, through the server's content_trialcontentpackbits).
+  if (entry[kDlcMounted] == 0 || __builtin_bswap32(content_bit) != 8 || __builtin_bswap32(mask) != 1 ||
+      (__builtin_bswap32(session) & kSessionModeOnline) != 0) {
     return;
   }
   static bool logged[kDlcRecordCount] = {};
