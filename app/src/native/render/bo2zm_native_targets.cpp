@@ -1136,25 +1136,17 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         VK_SUCCESS) {
       return false;
     }
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSlotsOutput},
-                                       {VK_DESCRIPTOR_TYPE_SAMPLER, kSlotsOutput},
-                                       {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSlotsOutput}};
-    VkDescriptorPoolCreateInfo info_pool_desc{};
-    info_pool_desc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    info_pool_desc.maxSets = kSlotsOutput;
-    info_pool_desc.poolSizeCount = 3;
-    info_pool_desc.pPoolSizes = sizes;
-    if (dfn_.vkCreateDescriptorPool(device_, &info_pool_desc, nullptr, &pool_descriptors_) !=
-        VK_SUCCESS) {
+    gpu::PoolCounts counts_output{};
+    counts_output.max_sets = kSlotsOutput;
+    counts_output.sampled_images = kSlotsOutput;
+    counts_output.samplers = kSlotsOutput;
+    counts_output.uniform_buffers = kSlotsOutput;
+    if (!gpu::vulkan::CreatePool(dfn_, device_, counts_output, pool_descriptors_)) {
       return false;
     }
-    VkDescriptorSetAllocateInfo reserve_desc{};
-    reserve_desc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    reserve_desc.descriptorPool = pool_descriptors_;
-    reserve_desc.descriptorSetCount = 1;
-    reserve_desc.pSetLayouts = &layout_descriptors_;
     for (uint32_t i = 0; i < kSlotsOutput; ++i) {
-      if (dfn_.vkAllocateDescriptorSets(device_, &reserve_desc, &descriptors_output_[i]) != VK_SUCCESS) {
+      if (!gpu::vulkan::AllocateSets(dfn_, device_, pool_descriptors_, 1, &layout_descriptors_,
+                                     &descriptors_output_[i])) {
         return false;
       }
     }
@@ -1398,19 +1390,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     std::memcpy(mapped, picture->rgba.data(), picture->rgba.size());
     rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, c.staging_memory, type);
     gpu::vulkan::Unmap(dfn_, device_, c.staging_memory);
-    const VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-                                           {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
-    VkDescriptorPoolCreateInfo info_pool{};
-    info_pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    info_pool.maxSets = 1;
-    info_pool.poolSizeCount = 3;
-    info_pool.pPoolSizes = sizes;
-    VkDescriptorSetAllocateInfo reserve{};
-    reserve.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    reserve.descriptorSetCount = 1;
-    reserve.pSetLayouts = &layout_descriptors_;
-    if (dfn_.vkCreateDescriptorPool(device_, &info_pool, nullptr, &c.pool) != VK_SUCCESS ||
-        (reserve.descriptorPool = c.pool, dfn_.vkAllocateDescriptorSets(device_, &reserve, &c.set)) != VK_SUCCESS) {
+    gpu::PoolCounts counts{};
+    counts.max_sets = 1;
+    counts.sampled_images = 1;
+    counts.samplers = 1;
+    counts.uniform_buffers = 1;
+    if (!gpu::vulkan::CreatePool(dfn_, device_, counts, c.pool) ||
+        !gpu::vulkan::AllocateSets(dfn_, device_, c.pool, 1, &layout_descriptors_, &c.set)) {
       REXLOG_ERROR("[native] credits: could not get a descriptor set: no credits line");
       return false;
     }
@@ -3636,24 +3622,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
     if (conv_fs_ == VK_NULL_HANDLE && !conv_failed_) {
-      VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kConvSets},
-                                         {VK_DESCRIPTOR_TYPE_SAMPLER, kConvSets},
-                                         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kConvSets}};
-      VkDescriptorPoolCreateInfo info_pool{};
-      info_pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-      info_pool.maxSets = kConvSets;
-      info_pool.poolSizeCount = 3;
-      info_pool.pPoolSizes = sizes;
+      gpu::PoolCounts counts{};
+      counts.max_sets = kConvSets;
+      counts.sampled_images = kConvSets;
+      counts.samplers = kConvSets;
+      counts.uniform_buffers = kConvSets;
       bool ok = gpu::vulkan::CreateShader(dfn_, device_, shaders::kSpirvBo2zmCopyResolve,
                                            sizeof(shaders::kSpirvBo2zmCopyResolve), conv_fs_) &&
-                dfn_.vkCreateDescriptorPool(device_, &info_pool, nullptr, &conv_pool_) == VK_SUCCESS;
+                gpu::vulkan::CreatePool(dfn_, device_, counts, conv_pool_);
       for (uint32_t i = 0; ok && i < kConvSets; ++i) {
-        VkDescriptorSetAllocateInfo reserve{};
-        reserve.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        reserve.descriptorPool = conv_pool_;
-        reserve.descriptorSetCount = 1;
-        reserve.pSetLayouts = &layout_descriptors_;
-        ok = dfn_.vkAllocateDescriptorSets(device_, &reserve, &conv_sets_[i]) == VK_SUCCESS;
+        ok = gpu::vulkan::AllocateSets(dfn_, device_, conv_pool_, 1, &layout_descriptors_, &conv_sets_[i]);
       }
       if (!ok) {
         conv_failed_ = true;
