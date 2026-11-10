@@ -1192,7 +1192,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
 
-    pipeline_ = CreatePipelineOutput(fs_, nullptr);
+    pipeline_ = CreatePipelineOutput(fs_);
     if (pipeline_ == VK_NULL_HANDLE) {
       return false;
     }
@@ -1208,78 +1208,43 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     return true;
   }
 
-  // Pipeline of the output pass with the fragment shader fs (and its specialization constants, if any).
-  VkPipeline CreatePipelineOutput(VkShaderModule fs, const VkSpecializationInfo* special,
+  // Pipeline of the output pass with the fragment shader fs (and its 32-bit specialization constants
+  // 0..n_constants-1, if any).
+  VkPipeline CreatePipelineOutput(VkShaderModule fs, const uint32_t* constants = nullptr, uint32_t n_constants = 0,
                                  VkRenderPass pass = VK_NULL_HANDLE,  // the render pass to draw in
                                  bool alpha_blend = false) {  // blended over the image (the credits)
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vs_;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fs;
-    stages[1].pName = "main";
-    stages[1].pSpecializationInfo = special;
-    VkPipelineVertexInputStateCreateInfo input{};
-    input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    VkPipelineInputAssemblyStateCreateInfo assembly{};
-    assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    gpu::PipelineState state;
+    state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     // Not indexed, so restart changes nothing; Metal cannot turn it off and MoltenVK warns when it is off.
-    assembly.primitiveRestartEnable = VK_TRUE;
-    VkPipelineViewportStateCreateInfo view{};
-    view.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    view.viewportCount = 1;
-    view.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo rasterization{};
-    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterization.cullMode = VK_CULL_MODE_NONE;
-    rasterization.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    rasterization.lineWidth = 1.0f;
-    VkPipelineMultisampleStateCreateInfo sampling{};
-    sampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    sampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    state.restart = VK_TRUE;
+    state.cull = VK_CULL_MODE_NONE;
+    state.front_face = VK_FRONT_FACE_CLOCKWISE;
+    state.n_colors = 1;
+    gpu::BlendTarget& target = state.blends[0];
+    target.mask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                  VK_COLOR_COMPONENT_A_BIT;
     if (alpha_blend) {
-      blend_attachment.blendEnable = VK_TRUE;
-      blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-      blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-      blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-      blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;  // the image's alpha stays
-      blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-      blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+      target.enable = VK_TRUE;
+      target.equation.src_color = VK_BLEND_FACTOR_SRC_ALPHA;
+      target.equation.dst_color = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+      target.equation.color_op = VK_BLEND_OP_ADD;
+      target.equation.src_alpha = VK_BLEND_FACTOR_ZERO;  // the image's alpha stays
+      target.equation.dst_alpha = VK_BLEND_FACTOR_ONE;
+      target.equation.alpha_op = VK_BLEND_OP_ADD;
     }
-    VkPipelineColorBlendStateCreateInfo blend{};
-    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blend_attachment;
-    const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic{};
-    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic.dynamicStateCount = 2;
-    dynamic.pDynamicStates = dynamic_states;
-    VkGraphicsPipelineCreateInfo info_pipeline{};
-    info_pipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info_pipeline.stageCount = 2;
-    info_pipeline.pStages = stages;
-    info_pipeline.pVertexInputState = &input;
-    info_pipeline.pInputAssemblyState = &assembly;
-    info_pipeline.pViewportState = &view;
-    info_pipeline.pRasterizationState = &rasterization;
-    info_pipeline.pMultisampleState = &sampling;
-    info_pipeline.pColorBlendState = &blend;
-    info_pipeline.pDynamicState = &dynamic;
-    info_pipeline.layout = layout_pipeline_;
-    info_pipeline.renderPass = pass != VK_NULL_HANDLE ? pass : render_pass_output_;
-    info_pipeline.basePipelineIndex = -1;
+    gpu::GraphicsPipelineDesc desc;
+    desc.vs = vs_;
+    desc.ps = fs;
+    desc.constants = constants;
+    desc.n_constants = n_constants;
+    desc.constant_stages = gpu::kStageFragment;
+    desc.state = &state;
+    desc.with_depth = false;
+    desc.dynamic = gpu::kDynamicView;
+    desc.layout = layout_pipeline_;
+    desc.pass = pass != VK_NULL_HANDLE ? pass : render_pass_output_;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    if (dfn_.vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info_pipeline, nullptr, &pipeline) !=
-        VK_SUCCESS) {
+    if (gpu::vulkan::CreateGraphicsPipeline(dfn_, device_, VK_NULL_HANDLE, desc, pipeline) != VK_SUCCESS) {
       return VK_NULL_HANDLE;
     }
     return pipeline;
@@ -1291,14 +1256,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   VkPipeline PipelineRamp(uint32_t index) {
     VkPipeline& pipeline = pipelines_ramp_[index];
     if (pipeline == VK_NULL_HANDLE && !pipelines_ramp_failed_[index]) {
-      const VkSpecializationMapEntry inputs[3] = {{0, 0, sizeof(VkBool32)},
-                                                    {1, sizeof(VkBool32), sizeof(VkBool32)},
-                                                    {2, 2 * sizeof(VkBool32), sizeof(VkBool32)}};
-      const VkBool32 values[3] = {(index & 1) ? VK_TRUE : VK_FALSE, (index & 2) ? VK_TRUE : VK_FALSE,
-                                   (index & 4) ? VK_TRUE : VK_FALSE};
-      const VkSpecializationInfo special{3, inputs, sizeof(values), values};
+      const uint32_t values[3] = {(index & 1) ? VK_TRUE : VK_FALSE, (index & 2) ? VK_TRUE : VK_FALSE,
+                                  (index & 4) ? VK_TRUE : VK_FALSE};
       const auto before = std::chrono::steady_clock::now();
-      pipeline = CreatePipelineOutput(fs_ramp_, &special);
+      pipeline = CreatePipelineOutput(fs_ramp_, values, 3);
       if (pipeline == VK_NULL_HANDLE) {
         pipelines_ramp_failed_[index] = true;
         REXLOG_ERROR("[native] C2: could not create variant {} of the output pass", index);
@@ -1366,7 +1327,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       REXLOG_ERROR("[native] credits: could not create the shader: no credits line");
       return false;
     }
-    c.pipeline = CreatePipelineOutput(c.fs, nullptr, VK_NULL_HANDLE, true);
+    c.pipeline = CreatePipelineOutput(c.fs, nullptr, 0, VK_NULL_HANDLE, true);
     if (c.pipeline == VK_NULL_HANDLE) {
       REXLOG_ERROR("[native] credits: could not create the pipeline: no credits line");
       return false;
@@ -3617,7 +3578,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     VkPipeline& pipeline = conv_pipelines_[gpu::ToVkFormat(target.format)];
     if (pipeline == VK_NULL_HANDLE) {
-      pipeline = CreatePipelineOutput(conv_fs_, nullptr, pass);
+      pipeline = CreatePipelineOutput(conv_fs_, nullptr, 0, pass);
       if (pipeline == VK_NULL_HANDLE) {
         return false;
       }
