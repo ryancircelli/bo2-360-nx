@@ -322,6 +322,7 @@ struct BenchPass {
   uint64_t unchanged_writes = 0;  // records skipped, bytes already in place
   uint32_t frames = 0;
   bool ok = false;
+  bool truncated = false;
 };
 
 // Bench: decoded memory records kept across passes, so passes after the
@@ -842,6 +843,13 @@ bool Replayer::ExecuteCommands(const std::vector<uint8_t>& trace) {
         auto cmd = reinterpret_cast<const MemoryCommand*>(ptr);
         ptr += sizeof(*cmd);
         if (!need(cmd->encoded_length)) {
+          if (bench_) {
+            // The capture writer can be stopped with a final memory record
+            // only partially written. The complete prefix is still useful for
+            // CP timing; report the truncation in bench.json.
+            bench_pass_->truncated = true;
+            return true;
+          }
           return false;
         }
         const uint8_t* data = ptr;
@@ -1375,6 +1383,9 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
       return 1;
     }
   }
+  if (results.back().truncated) {
+    std::printf("bench: using the complete prefix; truncated final memory record ignored\n");
+  }
   // Steady state: passes 2..N (all passes when there is only one).
   std::vector<double> us_per_draw, cp_ms, wall_ms, fps, cycles_per_draw, instr_per_draw;
   for (uint32_t i = passes > 1 ? 1 : 0; i < passes; ++i) {
@@ -1394,6 +1405,7 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
   std::string json = fmt::format(
       "{{\n  \"trace\": \"{}\",\n  \"backend\": \"{}\",\n  \"passes\": {},\n"
       "  \"draws_per_pass\": {},\n  \"frames_per_pass\": {},\n  \"packets_per_pass\": {},\n"
+      "  \"truncated_trace\": {},\n"
       "  \"median_us_per_draw\": {:.4f},\n  \"min_us_per_draw\": {:.4f},\n"
       "  \"max_us_per_draw\": {:.4f},\n  \"median_cp_cpu_ms\": {:.3f},\n"
       "  \"median_cp_wall_ms\": {:.3f},\n  \"median_cp_frames_per_s\": {:.2f},\n"
@@ -1402,8 +1414,8 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
       "  \"median_instructions_per_draw\": {:.1f},\n  \"pass_list\": [",
       JsonEscape(options.trace_path ? options.trace_path : ""),
       JsonEscape(options.backend_label ? options.backend_label : ""), passes, last.draws,
-      last.frames, last.packets, med, *lo, *hi, Median(cp_ms), Median(wall_ms), Median(fps),
-      results[0].cp_cpu_ns / 1e6, cmed, *clo, *chi, Median(instr_per_draw));
+      last.frames, last.packets, last.truncated, med, *lo, *hi, Median(cp_ms), Median(wall_ms),
+      Median(fps), results[0].cp_cpu_ns / 1e6, cmed, *clo, *chi, Median(instr_per_draw));
   for (uint32_t i = 0; i < passes; ++i) {
     const BenchPass& p = results[i];
     json += fmt::format(
