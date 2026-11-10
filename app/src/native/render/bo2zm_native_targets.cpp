@@ -923,9 +923,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (slot.pool_upload != VK_NULL_HANDLE)
         dfn_.vkDestroyCommandPool(device_, slot.pool_upload, nullptr);
     }
-    if (queries_ != VK_NULL_HANDLE) dfn_.vkDestroyQueryPool(device_, queries_, nullptr);
-    if (occlusions_ != VK_NULL_HANDLE) dfn_.vkDestroyQueryPool(device_, occlusions_, nullptr);
-    if (visibility_ != VK_NULL_HANDLE) dfn_.vkDestroyQueryPool(device_, visibility_, nullptr);
+    work_.DestroyQueries(queries_);
+    work_.DestroyQueries(occlusions_);
+    work_.DestroyQueries(visibility_);
     for (uint32_t i = 0; i < kSlotsOutput; ++i) {
       if (fences_output_[i] != VK_NULL_HANDLE) dfn_.vkDestroyFence(device_, fences_output_[i], nullptr);
       if (pools_output_[i] != VK_NULL_HANDLE) dfn_.vkDestroyCommandPool(device_, pools_output_[i], nullptr);
@@ -1060,13 +1060,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           ifn.vkGetDeviceProcAddr(device_, "vkGetQueryPoolResults"));
       if (family_ < families && queues[family_].timestampValidBits && gpu_.loaded().write_timestamp &&
           read_queries_ && physical.limits.timestampPeriod > 0.0f) {
-        VkQueryPoolCreateInfo info_queries{};
-        info_queries.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        info_queries.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        info_queries.queryCount = uint32_t(slots_.size() * kMarksPerSlot);
-        if (dfn_.vkCreateQueryPool(device_, &info_queries, nullptr, &queries_) != VK_SUCCESS) {
-          queries_ = VK_NULL_HANDLE;
-        }
+        queries_ = work_.CreateQueries(gpu::QueryKind::kTimestamp, uint32_t(slots_.size() * kMarksPerSlot));
         period_mark_ns_ = physical.limits.timestampPeriod;
       }
       bo2zm::perf_log::SetMeta("gpu", physical.deviceName);
@@ -1074,13 +1068,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                   queries_ != VK_NULL_HANDLE ? "measured with timestamps"
                                                : "not available (the queue has no timestamps)");
       // The game's occlusion queries (the sun flare), counted on the GPU.
-      VkQueryPoolCreateInfo info_occlusions{};
-      info_occlusions.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-      info_occlusions.queryType = VK_QUERY_TYPE_OCCLUSION;
-      info_occlusions.queryCount = uint32_t(slots_.size() * kOcclusionsPerSlot);
-      if (!read_queries_ ||
-          dfn_.vkCreateQueryPool(device_, &info_occlusions, nullptr, &occlusions_) != VK_SUCCESS) {
-        occlusions_ = VK_NULL_HANDLE;
+      if (read_queries_) {
+        occlusions_ =
+            work_.CreateQueries(gpu::QueryKind::kOcclusion, uint32_t(slots_.size() * kOcclusionsPerSlot));
       }
       occlusion_precise_ = vulkan_device_->properties().occlusionQueryPrecise;
       REXLOG_INFO("[native] C2: host occlusion queries {} ({})",
@@ -1088,13 +1078,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                   occlusion_precise_ ? "precise" : "not precise: they count whether there was any sample");
       // Reflection visibility, in a separate pool so as not to touch the count of the game's queries.
       if (bo2zm::reflection_demand::MeasureVisibility() && read_queries_) {
-        VkQueryPoolCreateInfo info_visibility{};
-        info_visibility.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        info_visibility.queryType = VK_QUERY_TYPE_OCCLUSION;
-        info_visibility.queryCount = uint32_t(slots_.size() * kVisibilityPerSlot);
-        if (dfn_.vkCreateQueryPool(device_, &info_visibility, nullptr, &visibility_) != VK_SUCCESS) {
-          visibility_ = VK_NULL_HANDLE;
-        }
+        visibility_ =
+            work_.CreateQueries(gpu::QueryKind::kOcclusion, uint32_t(slots_.size() * kVisibilityPerSlot));
         REXLOG_INFO("[native] C2: reflection visibility: {}",
                     visibility_ != VK_NULL_HANDLE ? "queries available"
                                                    : "NO queries: the reflection is decided by readbacks (like 191)");
@@ -1102,30 +1087,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       // Pipeline statistics per pass. The order of the counters is the order of the bits,
       // not the order of this list: vertices, clipped primitives and fragments.
       if (vulkan_device_->properties().pipelineStatisticsQuery && read_queries_) {
-        VkQueryPoolCreateInfo info_stats{};
-        info_stats.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        info_stats.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
-        info_stats.queryCount = uint32_t(slots_.size() * kStatsPerSlot);
-        info_stats.pipelineStatistics =
-            VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
-            VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
-            VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
-        if (dfn_.vkCreateQueryPool(device_, &info_stats, nullptr, &stats_) != VK_SUCCESS) {
-          stats_ = VK_NULL_HANDLE;
-        }
+        stats_ =
+            work_.CreateQueries(gpu::QueryKind::kPipelineStatistics, uint32_t(slots_.size() * kStatsPerSlot));
       }
       if (stats_ != VK_NULL_HANDLE) {
-        VkQueryPoolCreateInfo info_draw{};
-        info_draw.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-        info_draw.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
-        info_draw.queryCount = uint32_t(slots_.size() * kStatsDrawPerSlot);
-        info_draw.pipelineStatistics =
-            VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
-            VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
-            VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
-        if (dfn_.vkCreateQueryPool(device_, &info_draw, nullptr, &stats_draw_) != VK_SUCCESS) {
-          stats_draw_ = VK_NULL_HANDLE;
-        }
+        stats_draw_ = work_.CreateQueries(gpu::QueryKind::kPipelineStatistics,
+                                          uint32_t(slots_.size() * kStatsDrawPerSlot));
         fragments_per_shader_.assign(size_t(kLabelsShader) * kGpuCategories, 0);
         draws_per_shader_.assign(size_t(kLabelsShader) * kGpuCategories, 0);
       }

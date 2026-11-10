@@ -118,4 +118,12 @@ inline constexpr BufferUsage kBufferIndex = 0x40;
 inline constexpr BufferUsage kBufferVertex = 0x80;
 inline constexpr BufferUsage kBufferAddress = 0x20000;  // the shaders reach it by its GPU address
 
+// What a set of queries counts. Metal: timestamps are a counter sample buffer, occlusion counts a visibility result
+// buffer, and pipeline statistics have no equivalent (the renderer only uses them for diagnostics).
+enum class QueryKind : uint8_t {
+  kTimestamp,
+  kOcclusion,
+  kPipelineStatistics,  // vertex shader invocations, clipped primitives and fragment shader invocations, in that order
+};
+
 }  // namespace bo2zm::native::gpu
