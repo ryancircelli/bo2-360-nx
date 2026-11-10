@@ -270,6 +270,34 @@ class Work {
   // Unsignaled again, for its next submission.
   void Rearm(VkFence fence) const { dfn_.vkResetFences(device_, 1, &fence); }
 
+  // A command pool on queue family `family`, for one primary command buffer (the whole pool is reset, see Reset).
+  bool CreatePool(uint32_t family, VkCommandPool& pool) const {
+    VkCommandPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    info.queueFamilyIndex = family;
+    return dfn_.vkCreateCommandPool(device_, &info, nullptr, &pool) == VK_SUCCESS;
+  }
+  bool AllocateCommands(VkCommandPool pool, VkCommandBuffer& commands) const {
+    VkCommandBufferAllocateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    info.commandPool = pool;
+    info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    info.commandBufferCount = 1;
+    return dfn_.vkAllocateCommandBuffers(device_, &info, &commands) == VK_SUCCESS;
+  }
+  // Unsignaled.
+  bool CreateFence(VkFence& fence) const {
+    VkFenceCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    return dfn_.vkCreateFence(device_, &info, nullptr, &fence) == VK_SUCCESS;
+  }
+  void DestroyPool(VkCommandPool pool) const {
+    if (pool != VK_NULL_HANDLE) dfn_.vkDestroyCommandPool(device_, pool, nullptr);
+  }
+  void DestroyFence(VkFence fence) const {
+    if (fence != VK_NULL_HANDLE) dfn_.vkDestroyFence(device_, fence, nullptr);
+  }
+
   // A pool of `count` queries, or VK_NULL_HANDLE if the driver could not make it.
   VkQueryPool CreateQueries(QueryKind kind, uint32_t count) const {
     VkQueryPoolCreateInfo info{};
