@@ -15,6 +15,13 @@ static_assert(std::is_same_v<bo2zm::native::gpu::Image, VkImage>);
 static_assert(std::is_same_v<bo2zm::native::gpu::ImageView, VkImageView>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Memory, VkDeviceMemory>);
 
+static_assert(bo2zm::native::gpu::kFilterLinear == VK_FILTER_LINEAR &&
+              bo2zm::native::gpu::kFilterLinear == VK_SAMPLER_MIPMAP_MODE_LINEAR);
+static_assert(bo2zm::native::gpu::kAddressClampToBorder == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER &&
+              bo2zm::native::gpu::kAddressMirrorClampToEdge == VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE);
+static_assert(bo2zm::native::gpu::kBorderOpaqueWhite == VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE);
+static_assert(bo2zm::native::gpu::kLodUnclamped == VK_LOD_CLAMP_NONE);
+
 namespace bo2zm::native::gpu {
 
 inline VkRect2D ToVk(const Rect& r) { return VkRect2D{{r.x, r.y}, {r.width, r.height}}; }
@@ -412,6 +419,31 @@ inline HostBufferResult CreateHostBuffer(const rex::ui::vulkan::VulkanDevice::Fu
                                          BufferUsage usage, uint32_t type, HostBuffer& out) {
   return CreateHostBuffer(dfn, device, address_of, size, usage,
                           [type](uint32_t bits) { return ((bits >> type) & 1) ? type : UINT32_MAX; }, out);
+}
+
+// A sampler: true and the sampler in `out` if the driver created it. Every field the description does not have is
+// zero, as in the create info the renderer filled itself.
+inline bool CreateSampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device,
+                          const SamplerDesc& desc, VkSampler& out) {
+  VkSamplerCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  info.magFilter = VkFilter(desc.mag);
+  info.minFilter = VkFilter(desc.min);
+  info.mipmapMode = VkSamplerMipmapMode(desc.mip);
+  info.addressModeU = VkSamplerAddressMode(desc.u);
+  info.addressModeV = VkSamplerAddressMode(desc.v);
+  info.addressModeW = VkSamplerAddressMode(desc.w);
+  info.mipLodBias = desc.lod_bias;
+  info.anisotropyEnable = desc.anisotropy ? VK_TRUE : VK_FALSE;
+  info.maxAnisotropy = desc.anisotropy_max;
+  info.minLod = desc.lod_min;
+  info.maxLod = desc.lod_max;
+  info.borderColor = VkBorderColor(desc.border);
+  return dfn.vkCreateSampler(device, &info, nullptr, &out) == VK_SUCCESS;
+}
+
+inline void DestroySampler(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, VkSampler sampler) {
+  dfn.vkDestroySampler(device, sampler, nullptr);
 }
 
 // A shader from its SPIR-V (`bytes` long): true and the module in `out` if the driver created it. Metal's backend
