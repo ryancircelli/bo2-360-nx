@@ -218,6 +218,10 @@ class MetalSlabs final : public SlabMemory {
 
   void Release(gpu::Memory memory) override { gpu::metal::Device::ReleaseHeap(memory); }
 
+  // Metal places textures at 128-byte alignment (256 B to 4 KiB in check_backend's measurement), so 1 KiB units
+  // waste 0.2% over a grid of the game's texture shapes where 4 KiB units waste 0.9% and 64 KiB ones 20%.
+  gpu::Size Unit() const override { return 1024; }
+
  private:
   gpu::metal::Device& device_;
 };
@@ -254,7 +258,8 @@ bool TexturePool::Start(std::unique_ptr<SlabMemory> memory, int32_t mb_cache_max
 
   const int32_t slab_mb = std::max<int32_t>(REXCVAR_GET(bo2zm_native_texture_pool_slab_mb), 4);
   slab_bytes_ = uint64_t(slab_mb) << 20;
-  slab_units_ = uint32_t(slab_bytes_ / kUnitPoolBytes);
+  unit_ = memory_->Unit();
+  slab_units_ = uint32_t(slab_bytes_ / unit_);
 
   /*
    * How much to prewarm and how far to grow.
@@ -299,7 +304,7 @@ bool TexturePool::Start(std::unique_ptr<SlabMemory> memory, int32_t mb_cache_max
   REXLOG_INFO("[native] C3: texture pool ON: {} blocks of {} MB prewarmed ({} MB), cap {} blocks ({} MB); memory type "
               "{}, unit {} KB, alignment the driver asks for {} KB",
               slabs_.size(), slab_mb, (slabs_.size() * slab_bytes_) >> 20, slabs_cap_,
-              (uint64_t(slabs_cap_) * slab_bytes_) >> 20, type_memory_, kUnitPoolBytes >> 10,
+              (uint64_t(slabs_cap_) * slab_bytes_) >> 20, type_memory_, unit_ >> 10,
               alignment_view >> 10);
   return true;
 }
@@ -356,7 +361,7 @@ bool TexturePool::Reserve(const gpu::Requirements& requirements, gpu::Memory& me
     return false;
   }
 
-  const uint64_t units64 = (requirements.size + kUnitPoolBytes - 1) / kUnitPoolBytes;
+  const uint64_t units64 = (requirements.size + unit_ - 1) / unit_;
   if (units64 > slab_units_) {
     ++gaps_failed_;
     return false;  // does not fit even in an empty block: use the dedicated path
@@ -372,8 +377,8 @@ bool TexturePool::Reserve(const gpu::Requirements& requirements, gpu::Memory& me
    * bind fail on a driver assert (nvk_image.c:1692), a rare and late failure. Converted to
    * units, the alignment is the step used to search for candidate starts.
    */
-  const uint64_t alignment = std::max<uint64_t>(requirements.alignment, kUnitPoolBytes);
-  const uint32_t step = uint32_t(std::max<uint64_t>(1, alignment / kUnitPoolBytes));
+  const uint64_t alignment = std::max<uint64_t>(requirements.alignment, unit_);
+  const uint32_t step = uint32_t(std::max<uint64_t>(1, alignment / unit_));
 
   for (uint32_t s = 0; s < slabs_.size(); ++s) {
     Slab& slab = slabs_[s];
@@ -386,7 +391,7 @@ bool TexturePool::Reserve(const gpu::Requirements& requirements, gpu::Memory& me
     slab.units_in_use += units;
 
     memory_out = slab.guest_memory;
-    offset_out = gpu::Size(start) * kUnitPoolBytes;
+    offset_out = gpu::Size(start) * unit_;
     block_out = (s << 24) | start;
     ++textures_live_;
     ++textures_placed_;
@@ -431,7 +436,7 @@ void TexturePool::PerFrame(uint64_t frame) {
   }
   uint64_t free = 0;
   for (const Slab& slab : slabs_) {
-    free += uint64_t(slab.units - slab.units_in_use) * kUnitPoolBytes;
+    free += uint64_t(slab.units - slab.units_in_use) * unit_;
   }
   if (free >= kSlackBytes) {
     return;
@@ -448,11 +453,11 @@ TexturePoolState TexturePool::State() const {
   e.bytes_reserved = uint64_t(slabs_.size()) * slab_bytes_;
   uint32_t larger = 0;
   for (const Slab& slab : slabs_) {
-    e.bytes_in_use += uint64_t(slab.units_in_use) * kUnitPoolBytes;
+    e.bytes_in_use += uint64_t(slab.units_in_use) * unit_;
     larger = std::max(larger, LargerGap(slab.occupied, slab.units));
   }
   e.bytes_free = e.bytes_reserved - e.bytes_in_use;
-  e.bytes_larger_gap = uint64_t(larger) * kUnitPoolBytes;
+  e.bytes_larger_gap = uint64_t(larger) * unit_;
   e.textures_live = textures_live_;
   e.textures_placed = textures_placed_;
   e.textures_dedicated = textures_dedicated_;
