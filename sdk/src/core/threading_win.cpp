@@ -8,6 +8,7 @@
 
 #include <rex/platform.h>
 #include <rex/thread.h>
+#include <rex/thread_audio.h>
 
 static_assert(REX_PLATFORM_WIN32, "This file is Windows-only");
 
@@ -82,6 +83,10 @@ static void set_thread_name_impl(HANDLE thread, const std::string_view name) {
 
 void set_current_thread_name(const std::string_view name) {
   set_thread_name_impl(GetCurrentThread(), name);
+}
+
+std::string SetThreadAudioPriority(Thread*) {
+  return "unchanged (audio_diag_priority_critical covers Windows)";
 }
 
 void MaybeYield() {

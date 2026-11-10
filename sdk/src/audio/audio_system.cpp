@@ -9,6 +9,11 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <chrono>
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
 #include <rex/assert.h>
 #include <rex/audio/audio_driver.h>
 #include <rex/audio/audio_system.h>
@@ -119,12 +124,32 @@ void AudioSystem::WorkerThreadMain() {
 
   // Main run loop.
   uint32_t diag_pump_count = 0;
+  // Timing of the guest audio callback, reported every 10 s: one callback should produce one 256-sample frame, so
+  // it has 5.33 ms of real time. Calls that take longer leave the SDL queue to drain.
+  uint64_t cb_count = 0, cb_slow = 0;
+  double cb_total_ms = 0, cb_max_ms = 0, wait_total_ms = 0;
+  auto cb_report_time = std::chrono::steady_clock::now();
+#if defined(__APPLE__)
+  {
+    int relative = 0;
+    qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+    pthread_get_qos_class_np(pthread_self(), &qos, &relative);
+    sched_param param{};
+    int policy = 0;
+    pthread_getschedparam(pthread_self(), &policy, &param);
+    REXAPU_INFO("[audio] Audio Worker thread: QoS class 0x{:X}, policy {}, priority {}", uint32_t(qos), policy,
+                param.sched_priority);
+  }
+#endif
   while (worker_running_) {
+    const auto wait_start = std::chrono::steady_clock::now();
     // These handles signify the number of submitted samples. Once we reach
     // 64 samples, we wait until our audio backend releases a semaphore
     // (signaling a sample has finished playing)
     auto result = rex::thread::WaitAny(wait_handles_, rex::countof(wait_handles_), true,
                                        std::chrono::milliseconds(500));
+    const auto wait_end = std::chrono::steady_clock::now();
+    wait_total_ms += std::chrono::duration<double, std::milli>(wait_end - wait_start).count();
     if (result.first == rex::thread::WaitResult::kFailed) {
       REXAPU_WARN("AudioWorker: WaitAny failed");
       continue;
@@ -168,6 +193,21 @@ void AudioSystem::WorkerThreadMain() {
         uint64_t args[] = {client_callback_arg};
         function_dispatcher_->Execute(worker_thread_->thread_state(), client_callback, args,
                                       rex::countof(args));
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_end).count();
+        ++cb_count;
+        cb_total_ms += ms;
+        cb_max_ms = std::max(cb_max_ms, ms);
+        cb_slow += ms > 5.333;
+        if (wait_end - cb_report_time >= std::chrono::seconds(10)) {
+          REXAPU_INFO("[audio] guest callbacks in 10 s: {}, {:.2f} ms average, longest {:.2f} ms, {} over 5.33 ms; "
+                      "worker waited {:.0f} ms for the queue",
+                      cb_count, cb_total_ms / double(std::max<uint64_t>(cb_count, 1)), cb_max_ms, cb_slow,
+                      wait_total_ms);
+          cb_count = cb_slow = 0;
+          cb_total_ms = cb_max_ms = wait_total_ms = 0;
+          cb_report_time = wait_end;
+        }
         if (diag_pump_count < 10) {
           REXAPU_DEBUG("AudioWorker: callback returned for client {}", index);
         }

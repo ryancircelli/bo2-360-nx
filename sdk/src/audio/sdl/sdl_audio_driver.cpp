@@ -29,6 +29,11 @@
 #include <rex/perf/counter.h>
 #include <SDL3/SDL.h>
 
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
+
 REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
 REXCVAR_DEFINE_INT32(audio_sdl_burst_frames, 0, "Audio",
                      "Diagnostic: the SDL driver takes the game's frames N at a time, with N "
@@ -99,6 +104,51 @@ void RecordOutput(const float* data, int bytes, uint32_t channels) {
   dump_output.sample_count = std::vector<float>();
 }
 
+// Per-callback statistics for the 10 s report: how often SDL asks, how much it asks for, and how many frames the
+// game had queued when it asked. Only SDL's audio thread touches them.
+struct CallbackStats {
+  uint64_t callbacks = 0;
+  uint64_t frames_asked = 0;
+  uint64_t max_asked = 0;
+  uint64_t depth_sum = 0;  // frames queued at entry
+  uint64_t empty_at_entry = 0;
+  uint64_t short_callbacks = 0;  // at least one frame of silence
+  double interval_sum_ms = 0;
+  double interval_max_ms = 0;
+  std::chrono::steady_clock::time_point last{};
+  bool qos_logged = false;
+};
+CallbackStats cb_stats;
+
+void CountCallback(size_t depth, int frames_asked, uint64_t silent_in_callback) {
+  const auto now = std::chrono::steady_clock::now();
+  if (cb_stats.last.time_since_epoch().count() != 0) {
+    const double ms = std::chrono::duration<double, std::milli>(now - cb_stats.last).count();
+    cb_stats.interval_sum_ms += ms;
+    cb_stats.interval_max_ms = std::max(cb_stats.interval_max_ms, ms);
+  }
+  cb_stats.last = now;
+  ++cb_stats.callbacks;
+  cb_stats.frames_asked += uint64_t(frames_asked);
+  cb_stats.max_asked = std::max<uint64_t>(cb_stats.max_asked, uint64_t(frames_asked));
+  cb_stats.depth_sum += depth;
+  cb_stats.empty_at_entry += depth == 0;
+  cb_stats.short_callbacks += silent_in_callback != 0;
+  if (!cb_stats.qos_logged) {
+    cb_stats.qos_logged = true;
+#if defined(__APPLE__)
+    int relative = 0;
+    const qos_class_t qos = qos_class_self();
+    pthread_get_qos_class_np(pthread_self(), nullptr, &relative);
+    sched_param param{};
+    int policy = 0;
+    pthread_getschedparam(pthread_self(), &policy, &param);
+    REXAPU_INFO("[audio] SDL callback thread: QoS class 0x{:X}, policy {}, priority {}", uint32_t(qos), policy,
+                param.sched_priority);
+#endif
+  }
+}
+
 void CountFrame(bool silent) {
   ++(silent ? silence_frames : frames_with_data);
   const auto now = std::chrono::steady_clock::now();
@@ -108,7 +158,17 @@ void CountFrame(bool silent) {
   if (last_report_output.time_since_epoch().count() != 0) {
     REXAPU_INFO("[audio] SDL in 10 s: {} frames with data and {} of silence from missing frames",
                 frames_with_data, silence_frames);
+    const double n = double(std::max<uint64_t>(cb_stats.callbacks, 1));
+    REXAPU_INFO("[audio] SDL callbacks in 10 s: {}, every {:.2f} ms (longest gap {:.2f} ms), {:.2f} frames asked "
+                "per callback (most {}), {:.2f} frames queued at entry, {} found the queue empty, {} wrote silence",
+                cb_stats.callbacks, cb_stats.interval_sum_ms / n, cb_stats.interval_max_ms,
+                double(cb_stats.frames_asked) / n, cb_stats.max_asked, double(cb_stats.depth_sum) / n,
+                cb_stats.empty_at_entry, cb_stats.short_callbacks);
   }
+  const bool logged = cb_stats.qos_logged;
+  cb_stats = CallbackStats{};
+  cb_stats.qos_logged = logged;
+  cb_stats.last = now;
   frames_with_data = 0;
   silence_frames = 0;
   last_report_output = now;
@@ -160,7 +220,8 @@ bool SDLAudioDriver::Initialize() {
     return false;
   }
 
-  if (!SDL_GetAudioDeviceFormat(sdl_device, &obtained_spec, NULL)) {
+  int device_sample_frames = 0;
+  if (!SDL_GetAudioDeviceFormat(sdl_device, &obtained_spec, &device_sample_frames)) {
     REXAPU_WARN("SDL_GetAudioDeviceFormat() failed: {}", SDL_GetError());
     obtained_spec = desired_spec;
   }
@@ -189,9 +250,12 @@ bool SDLAudioDriver::Initialize() {
   // first thing worth knowing when a report says the balance is wrong on one
   // speaker setup and right on another.
   const char* device_name = SDL_GetAudioDeviceName(sdl_device);
-  REXAPU_INFO("audio endpoint '{}': {} ch, {} Hz, format 0x{:04X}; submitting {} ch",
+  REXAPU_INFO("audio endpoint '{}': {} ch, {} Hz, format 0x{:04X}; submitting {} ch; device buffer {} sample "
+              "frames ({:.2f} ms)",
               device_name ? device_name : "?", obtained_spec.channels, obtained_spec.freq,
-              static_cast<uint32_t>(obtained_spec.format), static_cast<int>(sdl_device_channels_));
+              static_cast<uint32_t>(obtained_spec.format), static_cast<int>(sdl_device_channels_),
+              device_sample_frames,
+              obtained_spec.freq ? 1000.0 * device_sample_frames / obtained_spec.freq : 0.0);
 
   if (!SDL_ResumeAudioDevice(sdl_device)) {
     REXAPU_ERROR("SDL_ResumeAudioDevice() failed: {}", SDL_GetError());
@@ -361,6 +425,13 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
     SDL_stack_free(data);
     return;
   }
+  size_t depth_at_entry;
+  {
+    std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+    depth_at_entry = driver->frames_queued_.size();
+  }
+  const int frames_asked = (additional_amount + len - 1) / len;
+  uint64_t silent_here = 0;
   while (additional_amount > 0) {
     static uint32_t sdl_callback_count = 0;
     std::unique_lock<std::mutex> guard(driver->frames_mutex_);
@@ -375,6 +446,7 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
         break;
       }
       RecordOutput(data, len, driver->sdl_device_channels_);
+      ++silent_here;
       CountFrame(true);
       additional_amount -= len;
     } else {
@@ -413,6 +485,7 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
       additional_amount -= len;
     }
   }
+  CountCallback(depth_at_entry, frames_asked, silent_here);
   SDL_stack_free(data);
 }
 

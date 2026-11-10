@@ -19,6 +19,8 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/hook.h>
+#include <rex/thread.h>
+#include <rex/thread_audio.h>
 #include <rex/logging.h>
 
 #if defined(__SWITCH__)
@@ -34,8 +36,8 @@ extern "C" void RexSwitchPerfSetStackSampling(int forced);
 #endif
 
 REXCVAR_DEFINE_BOOL(bo2zm_xaudio_threads_priority, true, "BO2",
-                    "Switch: the game's two audio engine threads run at the audio priority (0x2B) instead of the "
-                    "guest one (0x3B). false = the guest priority");
+                    "The game's two audio engine threads run at the audio priority: 0x2B instead of the guest 0x3B on "
+                    "the Switch, the SDK's audio_thread_policy elsewhere. false = like the other guest threads");
 
 REXCVAR_DEFINE_INT32(bo2zm_profile_stacks, -1, "BO2",
                      "Switch: stack sampling in rex_profile.log (pauses every thread each millisecond, which costs "
@@ -264,6 +266,13 @@ int ProcessCores() {
 
 void InitSwitchServices() {
   LogBuildIdentity();
+#if !defined(__SWITCH__)
+  // The guest thread BO2 mixes its sound on ("Sound Mix", see the Switch block below) runs in the audio scheduling
+  // class (the SDK's audio_thread_policy) with the Audio Worker it answers. A value from the toml wins.
+  if (rex::cvar::GetFlagByName("audio_guest_threads").empty()) {
+    rex::cvar::SetFlagByName("audio_guest_threads", "Sound Mix");
+  }
+#endif
 #if defined(__SWITCH__)
   if (REXCVAR_GET(bo2zm_malloc_spin)) {
     SetMallocSpin(true);
@@ -352,7 +361,13 @@ void AudioThread([[maybe_unused]] const char* which) {
                 accepted ? "" : " REFUSED by the kernel");
   }
 #else
-  REXLOG_INFO("[switch] audio engine {} thread started (the priority changes on the Switch only)", which);
+  // Elsewhere the same two hand-offs per block waited behind the game threads on a busy machine: the SDK's audio
+  // scheduling class (audio_thread_policy), as for the Audio Worker and "Sound Mix".
+  if (!REXCVAR_GET(bo2zm_xaudio_threads_priority)) {
+    REXLOG_INFO("[audio] audio engine {} thread started (bo2zm_xaudio_threads_priority = false)", which);
+    return;
+  }
+  REXLOG_INFO("[audio] audio engine {} thread: {}", which, rex::thread::SetThreadAudioPriority());
 #endif
 }
 }  // namespace
