@@ -10005,17 +10005,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     const gpu::PushRange range{gpu::kStageCompute, 0, sizeof(SkinPush)};
     if (gpu::vulkan::CreatePipelineLayout(dfn_, device_, 0, nullptr, 1, &range, skin_layout_)) {
-      VkComputePipelineCreateInfo pipeline{};
-      pipeline.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-      pipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-      pipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-      pipeline.stage.module = module;
-      pipeline.stage.pName = "main";
-      pipeline.layout = skin_layout_;
-      if (dfn_.vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipeline, nullptr, &skin_pipeline_) !=
-          VK_SUCCESS) {
-        skin_pipeline_ = VK_NULL_HANDLE;
-      }
+      gpu::vulkan::CreateComputePipeline(dfn_, device_, module, skin_layout_, skin_pipeline_);
     }
     gpu::vulkan::DestroyShader(dfn_, device_, module);
     const bool buffers =
@@ -15022,90 +15012,45 @@ class VulkanDrawsImpl final : public VulkanDraws {
   VkResult CreatePipelineVulkan(const PipelineKey& key, const VertexInput& input, VkShaderModule vs,
                                VkShaderModule ps, VkRenderPass pass, bool warn, VkPipeline& pipeline,
                                uint32_t& n_colors_output, VkPipelineCreateFlags create_flags = 0) {
-    const VkSpecializationMapEntry map{0, 0, sizeof(uint32_t)};
-    const VkSpecializationInfo specialization{1, &map, sizeof(uint32_t), &key.specialization};
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    for (auto& stage : stages) {
-      stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-      stage.pName = "main";
-      stage.pSpecializationInfo = &specialization;
+    std::vector<uint32_t> strides;
+    for (const VertexBinding& b : input.bindings) {
+      strides.push_back(b.stride);
     }
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vs;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = ps;
-
-    std::vector<VkVertexInputBindingDescription> bindings;
-    for (uint32_t i = 0; i < input.bindings.size(); ++i) {
-      bindings.push_back({i, input.bindings[i].stride, VK_VERTEX_INPUT_RATE_VERTEX});
-    }
-    std::vector<VkVertexInputAttributeDescription> attributes;
+    std::vector<gpu::VertexAttribute> attributes;
     for (const VertexAttribute& a : input.attributes) {
-      attributes.push_back({a.location, a.binding, a.format, a.offset});
+      attributes.push_back({a.location, a.binding, gpu::Format(a.format), a.offset});
     }
-    VkPipelineVertexInputStateCreateInfo vertices{};
-    vertices.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertices.vertexBindingDescriptionCount = uint32_t(bindings.size());
-    vertices.pVertexBindingDescriptions = bindings.data();
-    vertices.vertexAttributeDescriptionCount = uint32_t(attributes.size());
-    vertices.pVertexAttributeDescriptions = attributes.data();
 
     // The fixed state is filled in by FillStateFixed: it is the usual code, moved there without
     // changing any computation, so the guards of the canonical key and of dynamic state compare with what
-    // really goes into the VkGraphicsPipelineCreateInfo.
+    // really goes into the pipeline.
     PipelineFixedState state;
     FillStateFixed(key, state, warn);  // notify
-    const gpu::vulkan::FixedState fixed(state);
-    const VkPipelineInputAssemblyStateCreateInfo& assembly = fixed.assembly;
-    const VkPipelineViewportStateCreateInfo& view = fixed.view;
-    const VkPipelineRasterizationStateCreateInfo& rasterization = fixed.rasterization;
-    const VkPipelineMultisampleStateCreateInfo& sampling = fixed.sampling;
-    const VkPipelineDepthStencilStateCreateInfo& depth = fixed.depth;
-    const VkPipelineColorBlendStateCreateInfo& blend = fixed.blend;
-    const uint32_t n_colors = state.n_colors;
 
+    gpu::GraphicsPipelineDesc desc;
+    desc.vs = vs;
+    desc.ps = key.ps ? ps : nullptr;  // mode 5: VS only
+    desc.constants = &key.specialization;
+    desc.n_constants = 1;
+    desc.constant_stages = gpu::kStageVertex | gpu::kStageFragment;
+    desc.strides = strides.data();
+    desc.n_bindings = uint32_t(strides.size());
+    desc.attributes = attributes.data();
+    desc.n_attributes = uint32_t(attributes.size());
+    desc.state = &state;
     // Dynamic state phases 1 and 2. Their pipelines (flagged in padding2) also declare as dynamic what is
     // set with vkCmdSet*; their lookup key already has it zeroed (LookupKey).
-    VkDynamicState dynamic_states[24] = {
-        VK_DYNAMIC_STATE_VIEWPORT,          VK_DYNAMIC_STATE_SCISSOR,
-        VK_DYNAMIC_STATE_BLEND_CONSTANTS,   VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
-        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE,
-        VK_DYNAMIC_STATE_DEPTH_BIAS};
-    uint32_t n_dynamic = 7;
+    desc.dynamic = gpu::kDynamicView | gpu::kDynamicDraw;
     if (key.padding2 & kEds12) {
-      for (const VkDynamicState state : kDynamicEds12) {
-        dynamic_states[n_dynamic++] = state;
-      }
+      desc.dynamic |= gpu::kDynamicEds12;
     }
     if (key.padding2 & kEds3) {
-      for (const VkDynamicState state : kDynamicEds3) {
-        dynamic_states[n_dynamic++] = state;
-      }
+      desc.dynamic |= gpu::kDynamicEds3;
     }
-    VkPipelineDynamicStateCreateInfo dynamic{};
-    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic.dynamicStateCount = n_dynamic;
-    dynamic.pDynamicStates = dynamic_states;
-
-    VkGraphicsPipelineCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.stageCount = key.ps ? 2 : 1;  // mode 5: VS only
-    info.pStages = stages;
-    info.pVertexInputState = &vertices;
-    info.pInputAssemblyState = &assembly;
-    info.pViewportState = &view;
-    info.pRasterizationState = &rasterization;
-    info.pMultisampleState = &sampling;
-    info.pDepthStencilState = &depth;
-    info.pColorBlendState = &blend;
-    info.pDynamicState = &dynamic;
-    info.layout = layout_pipeline_;
-    info.renderPass = pass;  // the pass's (ring) or a compatible one (prewarm)
-    info.basePipelineIndex = -1;
-    info.flags = create_flags;
-    n_colors_output = n_colors;
-    pipeline = VK_NULL_HANDLE;
-    return dfn_.vkCreateGraphicsPipelines(device_, cache_pipelines_, 1, &info, nullptr, &pipeline);
+    desc.layout = layout_pipeline_;
+    desc.pass = pass;  // the pass's (ring) or a compatible one (prewarm)
+    n_colors_output = state.n_colors;
+    return gpu::vulkan::CreateGraphicsPipeline(dfn_, device_, cache_pipelines_, desc, pipeline, create_flags);
   }
 
   // --- Pipeline prewarming (bo2zm_native_prewarm_pipelines) ---------------------------
@@ -16534,12 +16479,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::chrono::steady_clock::time_point between_passes_report_{};
   // Dynamic state phases 1 and 2 (SetStateDynamic, its guard and its report).
   enum : uint32_t { kEds12 = 1, kEds3 = 2 };  // bits of eds_mode_ and of PipelineKey::padding2
-  static constexpr VkDynamicState kDynamicEds12[10] = {
-      VK_DYNAMIC_STATE_CULL_MODE,           VK_DYNAMIC_STATE_FRONT_FACE,
-      VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,  VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
-      VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,   VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
-      VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,  VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
-      VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP};
   static constexpr uint64_t kEdsACheck = 200000;
   enum : uint32_t {
     kEdsFace = 0,
@@ -16576,9 +16515,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::array<uint64_t, 4> pipelines_per_mode_{};  // pipelines created per mode (padding2) since start-up
   std::chrono::steady_clock::time_point eds_report_{};
   // Dynamic state, phase 2 (VK_EXT_extended_dynamic_state3).
-  static constexpr VkDynamicState kDynamicEds3[3] = {VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,
-                                                       VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT,
-                                                       VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT};
   // The same mapping as kFactors in FillStateFixed (fields 2, 3 and 17-31 give ZERO).
   static constexpr VkBlendFactor kFactorsBlend[32] = {
       VK_BLEND_FACTOR_ZERO,
