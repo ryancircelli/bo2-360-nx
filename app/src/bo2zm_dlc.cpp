@@ -10,12 +10,25 @@
 // loaded: it first checks a byte at 0x836BAE58 + 2000 + controller * 2008 (one 2008-byte block per controller). So the
 // per-frame hook watches that byte and, each time a profile finishes loading, runs "setprofile unlock_crumbs_zm
 // 16777215" for that controller with the game's own text runner.
+//
+// DLC map packs: packs whose license mask is exactly 1 (Nuketown Zombies).
+//
+// The game keeps one 76-byte record per mounted DLC package at 0x83880EF8 (8 records): +0 the content bit its id file
+// names (dlczm0.id: 8), +64 the license mask XamContentCreateEx returned for it, +69 a byte set once it is mounted.
+// sub_82412840(record) says whether a record may be used: it must be mounted, and when its license mask is exactly 1 it
+// also needs bit 2 of a flags byte at 0x837F8CB4 (sub_82406460). That byte only ever comes from a network message
+// (sub_82406428 is the only writer, from MSG_ReadByte), so it stays 0 in an offline or local game. The package headers
+// carry license bits 0x1 for Nuketown Zombies (and Nuketown 2025 and the Season Pass), 0x2/0x4/0x10/0x508 for the other
+// packs, and the content manager reports those bits. So Nuketown mounted and showed on the globe, but starting it
+// failed with Com_Error PLATFORM_MISSINGMAP (sub_82298CF8 -> sub_82412960 -> this check). The hook lets a mounted
+// record with license mask 1 count as usable.
 
 #include "bo2zm_dlc.h"
 
 #include <cstring>
 
 #include <rex/cvar.h>
+#include <rex/hook.h>
 #include <rex/logging.h>
 
 #include "bo2zm_autoexec.h"
@@ -23,6 +36,41 @@
 REXCVAR_DEFINE_BOOL(bo2zm_dlc_maps_seen, true, "BO2",
                     "Marks every Zombies map, start location and mode as already seen in each profile when it loads, "
                     "so installed DLC maps show no NEW badge on the globe");
+REXCVAR_DEFINE_BOOL(bo2zm_dlc_license_one_offline, true, "BO2",
+                    "Lets installed DLC packs whose license mask is 1 (Nuketown Zombies) be played offline; without "
+                    "it the game wants a flag only an online service sends and starting the map fails");
+
+namespace {
+
+constexpr uint32_t kDlcRecords = 0x83880EF8;
+constexpr uint32_t kDlcRecordSize = 76;
+constexpr uint32_t kDlcRecordCount = 8;
+constexpr uint32_t kDlcLicenseMask = 64;  // uint32, big-endian
+constexpr uint32_t kDlcMounted = 69;      // byte
+
+}  // namespace
+
+REX_EXTERN(__imp__sub_82412840);
+REX_HOOK_RAW(sub_82412840) {
+  const uint32_t record = ctx.r3.u32;
+  __imp__sub_82412840(ctx, base);
+  if ((ctx.r3.u32 & 0xFF) != 0 || record >= kDlcRecordCount || !REXCVAR_GET(bo2zm_dlc_license_one_offline)) {
+    return;
+  }
+  const uint8_t* entry = base + kDlcRecords + record * kDlcRecordSize;
+  uint32_t mask;
+  std::memcpy(&mask, entry + kDlcLicenseMask, sizeof(mask));
+  if (entry[kDlcMounted] == 0 || __builtin_bswap32(mask) != 1) {
+    return;
+  }
+  static bool logged[kDlcRecordCount] = {};
+  if (!logged[record]) {
+    logged[record] = true;
+    REXLOG_INFO("[dlc] package {} (content bit {:X}) has license mask 1: usable offline", record,
+                __builtin_bswap32(*reinterpret_cast<const uint32_t*>(entry)));
+  }
+  ctx.r3.u64 = 1;
+}
 
 namespace {
 
