@@ -30,12 +30,15 @@ Per view:
                 in play; the Vulkan 4-way reference and the owner's reference frames score 0.
   green_blocks  blocks with at least 6 more such green pixels than any golden in the group (speckle anywhere).
   sheet_blocks  stable blocks whose colour moved at least sheet_rgb(30)+spread from the golden median and lost fine
-                detail (at most 0.85x the least detailed golden): a see-through chain-link fence drawn as a solid
-                sheet (dark red with a dot grid), or a black blotch.
+                detail (at most lost_ratio 0.5x the least detailed golden, +0.3): a see-through chain-link fence
+                drawn as a solid sheet (dark red with a dot grid; 5-30 % of the detail), or a black blotch. Fire and
+                lava flares in front of the scene keep 50-90 % of the detail and do not count.
   sheet_cluster largest 8-connected group of sheet blocks. Clean frames (leave-one-out on four clean frames) reach 7;
                 the g1 fence sheet pasted into the same pose scores 20.
   dark_blocks   the sheet_blocks that went darker (reported only).
   outliers      green_blocks + sheet_blocks.
+pose          'unmatched' when ssim < min_pose_ssim 0.75 (a spawn spot no golden shows; matching spots score
+                0.8-0.95): only gun_green and ssim count for that view; bless the run once it is checked clean.
 A view fails when gun_green > 40, green_blocks > 4, sheet_cluster > 10, outliers > 40 or ssim < 0.30 (the scene's
 "golden" object overrides any key of DEFAULTS). A scene passes when every view of every frame passes.
 Needs numpy and Pillow (runq runs it through `uv run --with numpy --with pillow`).
@@ -55,7 +58,8 @@ DEFAULTS = {'views': 4, 'max_gun_green': 40, 'max_green_blocks': 4, 'max_sheet_c
             'ready_luma': 0.8, 'ready_ssim': 0.35, 'need': 0,  # need -1: every frame from the first in play
             # in-play frames to drop before scoring: the first one can still show low-res textures streaming in
             'settle': 0,
-            'block': 16, 'sheet_rgb': 30, 'max_spread': 60, 'green_ratio': 1.12, 'green_block_px': 6}
+            'block': 16, 'sheet_rgb': 30, 'max_spread': 60, 'lost_ratio': 0.5, 'min_pose_ssim': 0.75, 'green_ratio': 1.12, 'green_block_px': 6,
+            'fence_regions': None}
 W, H = 1280, 720
 
 
@@ -167,7 +171,7 @@ def block_stats(v, n):
     return mean, blocks(detail(luma(v)), n, np.mean)
 
 
-def score_view(v, gold, o):
+def score_view(v, gold, o, view_idx=0):
     x0, y0, x1, y1 = o['gun_box']
     h, w = v.shape[:2]
     gm = green_mask(v, o['green_ratio'])
@@ -196,8 +200,16 @@ def score_view(v, gold, o):
     for x0_, y0_, x1_, y1_ in o['ignore']:
         hud[int(y0_ * by):int(np.ceil(y1_ * by)), int(x0_ * bx):int(np.ceil(x1_ * bx))] = False
     stable &= hud
-    lost = dv <= gdet.min(0) * 0.85 + 0.3                      # fine detail gone (a see-through mesh filled in)
+    # fine detail gone: a filled-in mesh is flat (detail 5-30 % of the golden's); fire, lava flares and embers in
+    # front of the scene brighten a block but keep 50-90 % of its detail
+    lost = dv <= gdet.min(0) * o['lost_ratio'] + 0.3
     sheet_b = stable & lost & (moved >= o['sheet_rgb'] + spread)
+    regions = o.get('fence_regions')
+    if regions and view_idx < len(regions):
+        x0, y0, x1, y1 = regions[view_idx]
+        region = np.zeros_like(sheet_b)
+        region[int(y0 * by):int(np.ceil(y1 * by)), int(x0 * bx):int(np.ceil(x1 * bx))] = True
+        sheet_b &= region
     dark_b = sheet_b & (mv.sum(-1) < med.sum(-1))
     green_g = np.stack([blocks(green_mask(x, o['green_ratio']).astype(np.float32), n, np.sum) for x in gs]).max(0)
     green_b = blocks(gm.astype(np.float32), n, np.sum) - green_g
@@ -207,15 +219,54 @@ def score_view(v, gold, o):
                green_blocks=int((green_b >= o['green_block_px']).sum()), sheet_blocks=int(sheet_b.sum()),
                dark_blocks=int(dark_b.sum()), sheet_cluster=largest_cluster(sheet_b))
     res['outliers'] = res['green_blocks'] + res['sheet_blocks']
+    res['_sheet'] = sheet_b
+    return judge(res, o)
+
+
+def persist(frames_views, o):
+    """A broken fence texture stays broken from frame to frame; a fire flare, an explosion glow or a passing zombie
+    does not. With two or more scored frames, a sheet block only counts when a sheet block sits on it or next to it in
+    another frame of the same view (the players stand still), and sheet_cluster is recomputed on those blocks."""
+    if len(frames_views) < 2:
+        return
+    for i in range(len(frames_views[0])):
+        ms = [vs[i].get('_sheet') for vs in frames_views]
+        if any(m is None for m in ms):
+            continue
+        grown = []
+        for m in ms:                                           # 3x3 dilation: one block of slack
+            g = m.copy()
+            g[1:] |= m[:-1]; g[:-1] |= m[1:]
+            g2 = g.copy()
+            g2[:, 1:] |= g[:, :-1]; g2[:, :-1] |= g[:, 1:]
+            grown.append(g2)
+        for k, vs in enumerate(frames_views):
+            r = vs[i]
+            other = np.zeros_like(ms[k])
+            for j, g in enumerate(grown):
+                if j != k:
+                    other |= g
+            keep = ms[k] & other
+            r['sheet_cluster_frame'] = r['sheet_cluster']
+            r['sheet_cluster'] = largest_cluster(keep)
+            judge(r, o)
+
+
+def judge(res, o):
+    res.pop('verdict', None); res.pop('why', None)
+    # Block scores compare like with like: a player who spawned on a spot no golden shows (ssim 0.5-0.65, against
+    # 0.8-0.95 for a matching spot) moves every block, so only the pistol score counts and the view asks for a bless.
+    res['pose'] = 'matched' if res['ssim'] >= o['min_pose_ssim'] else 'unmatched'
     why = []
     if res['gun_green'] > o['max_gun_green']:
         why.append('gun speckle')
-    if res['green_blocks'] > o['max_green_blocks']:
-        why.append('green speckle blocks')
-    if res['sheet_cluster'] > o['max_sheet_cluster']:
-        why.append('solid sheet')
-    if res['outliers'] > o['max_outliers']:
-        why.append('block outliers')
+    if res['pose'] == 'matched':
+        if res['green_blocks'] > o['max_green_blocks']:
+            why.append('green speckle blocks')
+        if res['sheet_cluster'] > o['max_sheet_cluster']:
+            why.append('solid sheet')
+        if res['outliers'] > o['max_outliers']:
+            why.append('block outliers')
     if res['ssim'] < o['min_ssim']:
         why.append('low ssim')
     res['verdict'] = 'FAIL' if why else 'PASS'
@@ -259,8 +310,15 @@ def pick_frames(scene, caps, gold, o):
     return out
 
 
-def score(img_path, gold, o):
-    return [score_view(v, gold, o) for v in views(load(img_path), o['views'])]
+def score(img_path, gold, o, keep_masks=False):
+    vs = [score_view(v, gold, o, i) for i, v in enumerate(views(load(img_path), o['views']))]
+    return vs if keep_masks else strip(vs)
+
+
+def strip(vs):
+    for v in vs:
+        v.pop('_sheet', None)
+    return vs
 
 
 def golden_pool(path, o):
@@ -294,7 +352,12 @@ def find(root, name):
 def fmt_view(i, r):
     s = f'  view {i + 1}: {r["verdict"]}  gun_green {r["gun_green"]}'
     if 'ssim' in r:
-        s += f'  ssim {r["ssim"]}  mad {r["mad"]}  [{r["match"]} +{r["group"] - 1}, stable {r["stable_pct"]}%]  outliers {r["outliers"]} (green {r["green_blocks"]}, sheet {r["sheet_blocks"]} cluster {r["sheet_cluster"]}, dark {r["dark_blocks"]})'
+        s += f'  ssim {r["ssim"]}  mad {r["mad"]}  [{r["match"]} +{r["group"] - 1}, stable {r["stable_pct"]}%]  outliers {r["outliers"]} (green {r["green_blocks"]}, sheet {r["sheet_blocks"]} cluster {r["sheet_cluster"]}'
+        if 'sheet_cluster_frame' in r and r['sheet_cluster_frame'] != r['sheet_cluster']:
+            s += f' persistent, {r["sheet_cluster_frame"]} in this frame alone'
+        s += f', dark {r["dark_blocks"]})'
+    if r.get('pose') == 'unmatched':
+        s += '  (spawn spot not in the golden pool: block scores not counted; bless this run if it is clean)'
     return s + (f'  <- {", ".join(r["why"])}' if r.get('why') else '')
 
 
@@ -311,17 +374,21 @@ def cmd_diff(a):
         ok = False
         report['error'] = f'only {sum(1 for x in picked if x[3])} of {o["need"]} frames in play'
         print(f'FAIL  {report["error"]} (skipped as not in play: {" ".join(report["skipped"]) or "none"})')
+    scored = []
     for label, name, cap, take in picked:
         if cap and not take:
             continue
         if not cap and o.get('need'):
             continue
+        scored.append((label, name, cap, score(cap, gold, o, keep_masks=True) if cap else None))
+    persist([vs for _, _, cap, vs in scored if cap], o)
+    for label, name, cap, vs in scored:
         if not cap:
             report['frames'][label] = {'error': f'no capture {name}'}
             print(f'{label}: FAIL  no capture {name} under {a.captures}')
             ok = False
             continue
-        vs = score(cap, gold, o)
+        strip(vs)
         fv = 'PASS' if all(v['verdict'] == 'PASS' for v in vs) else 'FAIL'
         ok &= fv == 'PASS'
         report['frames'][label] = {'capture': cap, 'verdict': fv, 'views': vs}
@@ -341,6 +408,8 @@ def cmd_diff(a):
                      sheet_cluster=max(v['sheet_cluster'] for v in vv), outliers=max(v['outliers'] for v in vv))
         worst.append(w)
     report['worst_by_view'] = worst
+    report['unmatched_views'] = sum(1 for f in report['frames'].values() for v in f.get('views', [])
+                                    if v.get('pose') == 'unmatched')
     if a.json:
         json.dump(report, open(a.json, 'w'), indent=1)
     print(f'scenediff {scene["name"]}: {report["verdict"]}  worst by view: '
