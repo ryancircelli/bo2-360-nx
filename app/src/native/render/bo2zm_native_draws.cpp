@@ -2873,7 +2873,7 @@ struct CachedTexture {
   // 3D textures updated by pages (UpdateVolume) and the regions of a partial upload (data then
   // holds only those rows, back to back; bufferOffset is relative to data).
   std::unique_ptr<IncrementalVolume> incremental;
-  std::vector<VkBufferImageCopy> regions_partial;
+  std::vector<gpu::BufferImageCopy> regions_partial;
 };
 
 struct View {
@@ -11541,9 +11541,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
             texture.image.prepared = true;
           }
           for (uint32_t c = 0; c < 6; ++c) {
-            VkImageCopy copy{};
-            copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, c, 1};
+            gpu::ImageCopy copy{};
+            copy.source = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.target = {VK_IMAGE_ASPECT_COLOR_BIT, 0, c, 1};
             copy.extent = {width, height, 1};
             gpu_.CopyImage(upload, faces[c]->image, VK_IMAGE_LAYOUT_GENERAL, texture.image.image,
                            VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
@@ -12825,11 +12825,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
           const uint32_t x0 = lx * 32, y0 = ly * 32;
           const uint32_t width = std::min(end * 32, width_img) - x0;
           const uint32_t rows = std::min(y0 + 32, height_img) - y0;
-          VkBufferImageCopy region{};
-          region.bufferOffset = texture.data.size();
-          region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-          region.imageOffset = {int32_t(x0), int32_t(y0), int32_t(z)};
-          region.imageExtent = {width, rows, 1};
+          gpu::BufferImageCopy region{};
+          region.buffer_offset = texture.data.size();
+          region.layers = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+          region.offset = {int32_t(x0), int32_t(y0), int32_t(z)};
+          region.extent = {width, rows, 1};
           for (uint32_t r = 0; r < rows; ++r) {
             const uint8_t* since = v->host.data() + z * v->slice + (y0 + r) * v->row + x0 * tf.bytes;
             texture.data.insert(texture.data.end(), since, since + size_t(width) * tf.bytes);
@@ -13073,8 +13073,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!texture.regions_partial.empty()) {  // some rows of a 3D texture (UpdateVolume)
       Reserve(texture.data.size(), 16, offset);
       std::memcpy(upload_data_ + offset, texture.data.data(), texture.data.size());
-      for (VkBufferImageCopy& region : texture.regions_partial) {
-        region.bufferOffset += offset;
+      for (gpu::BufferImageCopy& region : texture.regions_partial) {
+        region.buffer_offset += offset;
       }
       gpu_.CopyBufferToImage(upload, upload_, texture.image.image, VK_IMAGE_LAYOUT_GENERAL,
                              uint32_t(texture.regions_partial.size()), texture.regions_partial.data());
@@ -13134,12 +13134,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // One range per mip level (with all its layers). Factored out for UploadTexture and for the deferred
   // copies of CollectBindings.
   void RecordCopyTexture(gpu::CommandList upload, const CachedTexture& texture, gpu::Size offset) {
-    std::array<VkBufferImageCopy, 16> copies{};
+    std::array<gpu::BufferImageCopy, 16> copies{};
     for (uint32_t n = 0; n < texture.levels; ++n) {
-      VkBufferImageCopy& copy = copies[n];
-      copy.bufferOffset = offset + texture.offset_level[n];
-      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, n, 0, texture.layers};
-      copy.imageExtent = {std::max(texture.image.width >> n, 1u), std::max(texture.image.height >> n, 1u),
+      gpu::BufferImageCopy& copy = copies[n];
+      copy.buffer_offset = offset + texture.offset_level[n];
+      copy.layers = {VK_IMAGE_ASPECT_COLOR_BIT, n, 0, texture.layers};
+      copy.extent = {std::max(texture.image.width >> n, 1u), std::max(texture.image.height >> n, 1u),
                            texture.depth3d ? texture.depth3d : 1};
     }
     gpu_.CopyBufferToImage(upload, upload_, texture.image.image, VK_IMAGE_LAYOUT_GENERAL,
