@@ -28,6 +28,34 @@ static_assert(std::is_same_v<bo2zm::native::gpu::PipelineCache, VkPipelineCache>
 static_assert(std::is_same_v<bo2zm::native::gpu::Buffer, VkBuffer>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Size, VkDeviceSize>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Address, VkDeviceAddress>);
+
+// The copy regions have Vulkan's layout, so the recorder passes them through.
+#define BO2ZM_GPU_SAME(G, V, gf, vf) static_assert(offsetof(G, gf) == offsetof(V, vf))
+static_assert(sizeof(bo2zm::native::gpu::Layers) == sizeof(VkImageSubresourceLayers));
+BO2ZM_GPU_SAME(bo2zm::native::gpu::Layers, VkImageSubresourceLayers, level, mipLevel);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::Layers, VkImageSubresourceLayers, base_layer, baseArrayLayer);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::Layers, VkImageSubresourceLayers, layers, layerCount);
+static_assert(sizeof(bo2zm::native::gpu::Offset3) == sizeof(VkOffset3D));
+static_assert(sizeof(bo2zm::native::gpu::Extent3) == sizeof(VkExtent3D));
+static_assert(sizeof(bo2zm::native::gpu::ImageCopy) == sizeof(VkImageCopy));
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageCopy, VkImageCopy, source_offset, srcOffset);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageCopy, VkImageCopy, target, dstSubresource);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageCopy, VkImageCopy, target_offset, dstOffset);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageCopy, VkImageCopy, extent, extent);
+static_assert(sizeof(bo2zm::native::gpu::ImageBlit) == sizeof(VkImageBlit));
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageBlit, VkImageBlit, source_offsets, srcOffsets);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageBlit, VkImageBlit, target, dstSubresource);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::ImageBlit, VkImageBlit, target_offsets, dstOffsets);
+static_assert(sizeof(bo2zm::native::gpu::BufferImageCopy) == sizeof(VkBufferImageCopy));
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, row_length, bufferRowLength);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, image_height, bufferImageHeight);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, layers, imageSubresource);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, offset, imageOffset);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferImageCopy, VkBufferImageCopy, extent, imageExtent);
+static_assert(sizeof(bo2zm::native::gpu::BufferCopy) == sizeof(VkBufferCopy));
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferCopy, VkBufferCopy, target_offset, dstOffset);
+BO2ZM_GPU_SAME(bo2zm::native::gpu::BufferCopy, VkBufferCopy, size, size);
+#undef BO2ZM_GPU_SAME
 static_assert(std::is_same_v<bo2zm::native::gpu::Framebuffer, VkFramebuffer>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Set, VkDescriptorSet>);
 static_assert(std::is_same_v<bo2zm::native::gpu::SetPool, VkDescriptorPool>);
@@ -245,16 +273,18 @@ class Recorder {
                               count, reinterpret_cast<const VkImageSubresourceRange*>(ranges));
   }
   void CopyBuffer(VkCommandBuffer c, VkBuffer source, VkBuffer target, uint32_t count,
-                  const VkBufferCopy* regions) const {
-    dfn_.vkCmdCopyBuffer(c, source, target, count, regions);
+                  const BufferCopy* regions) const {
+    dfn_.vkCmdCopyBuffer(c, source, target, count, reinterpret_cast<const VkBufferCopy*>(regions));
   }
-  void CopyBufferToImage(VkCommandBuffer c, VkBuffer source, VkImage target, VkImageLayout layout, uint32_t count,
-                         const VkBufferImageCopy* regions) const {
-    dfn_.vkCmdCopyBufferToImage(c, source, target, layout, count, regions);
+  void CopyBufferToImage(VkCommandBuffer c, VkBuffer source, VkImage target, Layout layout, uint32_t count,
+                         const BufferImageCopy* regions) const {
+    dfn_.vkCmdCopyBufferToImage(c, source, target, VkImageLayout(layout), count,
+                                reinterpret_cast<const VkBufferImageCopy*>(regions));
   }
-  void CopyImageToBuffer(VkCommandBuffer c, VkImage source, VkImageLayout layout, VkBuffer target, uint32_t count,
-                         const VkBufferImageCopy* regions) const {
-    dfn_.vkCmdCopyImageToBuffer(c, source, layout, target, count, regions);
+  void CopyImageToBuffer(VkCommandBuffer c, VkImage source, Layout layout, VkBuffer target, uint32_t count,
+                         const BufferImageCopy* regions) const {
+    dfn_.vkCmdCopyImageToBuffer(c, source, VkImageLayout(layout), target, count,
+                                reinterpret_cast<const VkBufferImageCopy*>(regions));
   }
   // memory: one memory barrier, or none (nullptr). Neither dependency flags nor buffer barriers are used.
   void Barrier(VkCommandBuffer c, Stages source, Stages target, const MemoryBarrier* memory, uint32_t images = 0,
@@ -286,18 +316,20 @@ class Recorder {
     dfn_.vkCmdBeginQuery(c, pool, index, flags);
   }
   void EndQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index) const { dfn_.vkCmdEndQuery(c, pool, index); }
-  void CopyImage(VkCommandBuffer c, VkImage source, VkImageLayout source_layout, VkImage target,
-                 VkImageLayout target_layout, uint32_t count, const VkImageCopy* regions) const {
-    loaded_.copy_image(c, source, source_layout, target, target_layout, count, regions);
+  void CopyImage(VkCommandBuffer c, VkImage source, Layout source_layout, VkImage target,
+                 Layout target_layout, uint32_t count, const ImageCopy* regions) const {
+    loaded_.copy_image(c, source, VkImageLayout(source_layout), target, VkImageLayout(target_layout), count,
+                       reinterpret_cast<const VkImageCopy*>(regions));
   }
   void ClearDepthStencilImage(VkCommandBuffer c, VkImage image, Layout layout, const ClearDepthStencil* value,
                               uint32_t count, const Range* ranges) const {
     loaded_.clear_depth(c, image, VkImageLayout(layout), reinterpret_cast<const VkClearDepthStencilValue*>(value),
                         count, reinterpret_cast<const VkImageSubresourceRange*>(ranges));
   }
-  void Blit(VkCommandBuffer c, VkImage source, VkImageLayout source_layout, VkImage target,
-            VkImageLayout target_layout, uint32_t count, const VkImageBlit* regions, VkFilter filter) const {
-    loaded_.blit(c, source, source_layout, target, target_layout, count, regions, filter);
+  void Blit(VkCommandBuffer c, VkImage source, Layout source_layout, VkImage target,
+            Layout target_layout, uint32_t count, const ImageBlit* regions, Filter filter) const {
+    loaded_.blit(c, source, VkImageLayout(source_layout), target, VkImageLayout(target_layout), count,
+                 reinterpret_cast<const VkImageBlit*>(regions), VkFilter(filter));
   }
   void WriteTimestamp(VkCommandBuffer c, VkPipelineStageFlagBits stage, VkQueryPool pool, uint32_t index) const {
     loaded_.write_timestamp(c, stage, pool, index);
