@@ -24,6 +24,13 @@ static_assert(std::is_same_v<bo2zm::native::gpu::Pass, VkRenderPass>);
 static_assert(std::is_same_v<bo2zm::native::gpu::PipelineLayout, VkPipelineLayout>);
 static_assert(std::is_same_v<bo2zm::native::gpu::Pipeline, VkPipeline>);
 static_assert(std::is_same_v<bo2zm::native::gpu::PipelineCache, VkPipelineCache>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Buffer, VkBuffer>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Framebuffer, VkFramebuffer>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Set, VkDescriptorSet>);
+static_assert(std::is_same_v<bo2zm::native::gpu::SetPool, VkDescriptorPool>);
+static_assert(std::is_same_v<bo2zm::native::gpu::QueryPool, VkQueryPool>);
+static_assert(std::is_same_v<bo2zm::native::gpu::Fence, VkFence>);
+static_assert(std::is_same_v<bo2zm::native::gpu::CommandPool, VkCommandPool>);
 static_assert(bo2zm::native::gpu::kStageVertex == VK_SHADER_STAGE_VERTEX_BIT &&
               bo2zm::native::gpu::kStageFragment == VK_SHADER_STAGE_FRAGMENT_BIT &&
               bo2zm::native::gpu::kStageCompute == VK_SHADER_STAGE_COMPUTE_BIT);
