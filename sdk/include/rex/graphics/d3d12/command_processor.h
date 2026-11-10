@@ -659,11 +659,7 @@ class D3D12CommandProcessor : public CommandProcessor {
     uint32_t host_index = UINT32_MAX;
     bool valid = false;
   } active_occlusion_query_;
-  struct VertexBufferState {
-    uint32_t address = UINT32_MAX;
-    uint32_t size = UINT32_MAX;
-  };
-  std::array<VertexBufferState, 96> vertex_buffer_states_{};
+  static constexpr uint32_t kVertexFetchCount = 96;
   uint64_t vertex_buffers_in_sync_[2] = {};
 
   // The current fixed-function drawing state.
