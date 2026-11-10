@@ -2,30 +2,36 @@
 """Golden-frame diff for runq scenes: a per-view score and PASS/FAIL, tuned to the two known Metal bugs on Town.
 
   scenediff.py diff SCENE.json CAPTURES_DIR GOLDEN_DIR [--json OUT]   score a scene run against its golden frames
-  scenediff.py score IMAGE [GOLDEN] [--views 4] [--json OUT]         score one frame (golden optional)
-  scenediff.py bless SCENE.json CAPTURES_DIR GOLDEN_DIR               make a run's frames the golden frames
+  scenediff.py score IMAGE [GOLDEN] [--views 4] [--json OUT]         score one frame (golden file or dir optional)
+  scenediff.py bless SCENE.json CAPTURES_DIR GOLDEN_DIR [--tag T]     add a run's frames to the golden pool
 
-Frames: the scene's "captures" ("6:a") are <scene name>_<label>.png anywhere under CAPTURES_DIR; the golden for a
-frame is GOLDEN_DIR/<same name>, else GOLDEN_DIR/default.png. Frames are compared at 1280x720, split into the
-scene's views ("golden": {"views": 4} = 2x2, 2 = top/bottom, 1 = whole frame).
+Frames: the scene's "captures" ("22:a") are <scene name>_<label>.png anywhere under CAPTURES_DIR. Frames are compared
+at 1280x720, split into the scene's views ("golden": {"views": 4} = 2x2, 2 = top/bottom, 1 = whole frame).
+
+Goldens are a pool: every view of every PNG under GOLDEN_DIR (verified-clean runs of the same scene). Each test view is
+matched to the golden views that look most like it (8x8-block luma distance, best*1.6+2, at most 8), so a shuffled
+spawn still finds its pose. Per 16x16 block the group gives a median colour and a spread (max-min); blocks whose
+spread is over max_spread (embers, fire, zombies) and the HUD boxes in "ignore" (points, ammo, round title) are not
+scored.
 
 Per view:
-  ssim         structural similarity of the luma (7x7 box windows); 1 = identical. Animated embers, fire and
-               zombies keep it below 1 even on a correct frame, so its bar is low; it catches a wrong pose or a
-               broken frame, not small defects.
-  mad          mean absolute difference, 0-255, over RGB.
-  gun_green    pixels in the held-weapon box (lower middle-right of the view) whose green beats red and blue by
-               12 %: the M1911 speckle bug paints the gunmetal green and red. Calibrated on the noise-run 4p Town
-               captures: the one stock run with the bug (g1, 560-600 s) scores 69-192 per view; 12 clean runs
-               (ga1-ga6, ha1-ha3, qs1, rp1, 740 frames) score at most 9 in play (24 on a loading frame).
-  green_blocks 16x16 blocks with at least 6 more such green pixels than the golden's block (speckle anywhere).
-  sheet_blocks 16x16 blocks whose mean colour moved at least 30 (sum of |dR|+|dG|+|dB|) from the golden's and lost
-               fine detail or gained a flat fill: a see-through chain-link fence drawn as a solid sheet (the bug's
-               sheet is dark red with a dot grid, darker or lighter than the background it hides), or a black blotch.
-  dark_blocks  the sheet_blocks that went darker (reported, not counted twice).
-  outliers     green_blocks + sheet_blocks.
-A view fails when gun_green > max_gun_green, outliers > max_outliers or ssim < min_ssim (thresholds in the scene's
-"golden" object override the defaults below). A scene passes when every view of every frame passes.
+  ssim          structural similarity of the luma vs the best-matching golden view; catches a wrong pose or a broken
+                frame, not small defects (bar 0.30).
+  mad           mean absolute difference, 0-255, over RGB, vs the same view.
+  gun_green     pixels in the held-weapon box (lower middle-right of the view) whose green beats red and blue by 12 %:
+                the M1911 speckle bug paints the gunmetal green and red. Needs no golden. Noise-run 4p Town captures:
+                the stock run with the bug (g1, 560-600 s) scores 69-192 per view; 12 clean runs (740 frames) at most 9
+                in play; the Vulkan 4-way reference and the owner's reference frames score 0.
+  green_blocks  blocks with at least 6 more such green pixels than any golden in the group (speckle anywhere).
+  sheet_blocks  stable blocks whose colour moved at least sheet_rgb(30)+spread from the golden median and lost fine
+                detail (at most 0.85x the least detailed golden): a see-through chain-link fence drawn as a solid
+                sheet (dark red with a dot grid), or a black blotch.
+  sheet_cluster largest 8-connected group of sheet blocks. Clean frames (leave-one-out on four clean frames) reach 7;
+                the g1 fence sheet pasted into the same pose scores 20.
+  dark_blocks   the sheet_blocks that went darker (reported only).
+  outliers      green_blocks + sheet_blocks.
+A view fails when gun_green > 40, green_blocks > 4, sheet_cluster > 10, outliers > 40 or ssim < 0.30 (the scene's
+"golden" object overrides any key of DEFAULTS). A scene passes when every view of every frame passes.
 Needs numpy and Pillow (runq runs it through `uv run --with numpy --with pillow`).
 """
 import argparse, json, os, shutil, sys
@@ -33,9 +39,12 @@ import argparse, json, os, shutil, sys
 import numpy as np
 from PIL import Image
 
-DEFAULTS = {'views': 4, 'max_gun_green': 40, 'max_outliers': 10, 'min_ssim': 0.30,
+DEFAULTS = {'views': 4, 'max_gun_green': 40, 'max_green_blocks': 4, 'max_sheet_cluster': 10, 'max_outliers': 40, 'min_ssim': 0.30,
             'gun_box': [0.55, 0.55, 0.75, 1.00],   # x0 y0 x1 y1 as fractions of a view: the held weapon
-            'block': 16, 'sheet_rgb': 30, 'green_ratio': 1.12, 'green_block_px': 6}
+            # HUD boxes left out of the block scores (fractions of a view): points, ammo and its blood icon, which come
+            # and go; the round title in the middle
+            'ignore': [[0.76, 0.55, 1.00, 0.92], [0.40, 0.25, 0.60, 0.40]],
+            'block': 16, 'sheet_rgb': 30, 'max_spread': 60, 'green_ratio': 1.12, 'green_block_px': 6}
 W, H = 1280, 720
 
 
@@ -95,33 +104,102 @@ def detail(l):
     return np.abs(l - box(l, 1))
 
 
-def score_view(v, g, o):
+def small(v):
+    return blocks(luma(v), 8, np.mean)
+
+
+class Golden:
+    """A pool of golden views: every view of every PNG in the golden dir (clean runs, any frame label). A test view
+    is matched to the golden views that show the same pose (players can spawn on different spots), and the spread
+    of that group says which blocks animate on their own (lava, embers, text fades, gun sway) and how much."""
+
+    def __init__(self, paths, o):
+        self.o, self.views, self.names = o, [], []
+        for p in paths:
+            for i, v in enumerate(views(load(p), o['views'])):
+                self.views.append(v)
+                self.names.append(f'{os.path.basename(p)}#{i + 1}')
+        self.small = [small(v) for v in self.views]
+
+    def group(self, v):
+        d = np.array([float(np.abs(small(v) - s).mean()) for s in self.small])
+        best = float(d.min())
+        idx = [i for i in np.argsort(d) if d[i] <= best * 1.6 + 2.0][:8]
+        return idx, best
+
+
+def largest_cluster(m):
+    """Size of the largest 8-connected group of True cells: a filled-in fence is one solid patch of blocks, while
+    clean frame-to-frame noise (embers, lava, gun sway) is scattered."""
+    seen = np.zeros_like(m, dtype=bool)
+    best = 0
+    for y, x in zip(*np.nonzero(m)):
+        if seen[y, x]:
+            continue
+        seen[y, x] = True
+        stack, size = [(y, x)], 0
+        while stack:
+            cy, cx = stack.pop()
+            size += 1
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < m.shape[0] and 0 <= nx < m.shape[1] and m[ny, nx] and not seen[ny, nx]:
+                        seen[ny, nx] = True
+                        stack.append((ny, nx))
+        best = max(best, size)
+    return best
+
+
+def block_stats(v, n):
+    mean = np.stack([blocks(v[..., c], n, np.mean) for c in range(3)], -1)
+    return mean, blocks(detail(luma(v)), n, np.mean)
+
+
+def score_view(v, gold, o):
     x0, y0, x1, y1 = o['gun_box']
     h, w = v.shape[:2]
     gm = green_mask(v, o['green_ratio'])
     gun = gm[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
     res = {'gun_green': int(gun.sum())}
-    if g is None:
+    if gold is None or not gold.views:
         res['verdict'] = 'FAIL' if res['gun_green'] > o['max_gun_green'] else 'PASS'
         return res
     n = o['block']
-    lv, lg = luma(v), luma(g)
-    gg = green_mask(g, o['green_ratio'])
-    green_b = blocks(gm.astype(np.float32), n, np.sum) - blocks(gg.astype(np.float32), n, np.sum)
-    mv = np.stack([blocks(v[..., c], n, np.mean) for c in range(3)], -1)
-    mg = np.stack([blocks(g[..., c], n, np.mean) for c in range(3)], -1)
-    moved = np.abs(mv - mg).sum(-1) >= o['sheet_rgb']
-    det_v, det_g = blocks(detail(lv), n, np.mean), blocks(detail(lg), n, np.mean)
-    sd_v, sd_g = blocks(lv, n, np.std), blocks(lg, n, np.std)
-    sheet_b = moved & ((det_v <= det_g * 1.1 + 0.5) | (sd_v <= sd_g * 0.8 + 0.5))
-    dark_b = sheet_b & (mv.sum(-1) < mg.sum(-1))
-    res.update(ssim=round(ssim(lv, lg), 3), mad=round(float(np.abs(v - g).mean()), 1),
+    idx, best = gold.group(v)
+    gs = [gold.views[i] for i in idx]
+    g = gs[0]
+    lv = luma(v)
+    mv, dv = block_stats(v, n)
+    st = [block_stats(x, n) for x in gs]
+    gmeans = np.stack([m for m, _ in st])                      # k x by x bx x 3
+    gdet = np.stack([d for _, d in st])
+    med = np.median(gmeans, 0)
+    spread = (gmeans.max(0) - gmeans.min(0)).sum(-1)           # how much each block moves between clean frames
+    if len(gs) < 2:
+        spread = spread + o['sheet_rgb']                       # one golden: no measure of motion, be lenient
+    moved = np.abs(mv - med).sum(-1)
+    stable = spread <= o['max_spread']
+    by, bx = stable.shape
+    for x0_, y0_, x1_, y1_ in o['ignore']:
+        stable[int(y0_ * by):int(np.ceil(y1_ * by)), int(x0_ * bx):int(np.ceil(x1_ * bx))] = False
+    lost = dv <= gdet.min(0) * 0.85 + 0.3                      # fine detail gone (a see-through mesh filled in)
+    sheet_b = stable & lost & (moved >= o['sheet_rgb'] + spread)
+    dark_b = sheet_b & (mv.sum(-1) < med.sum(-1))
+    green_g = np.stack([blocks(green_mask(x, o['green_ratio']).astype(np.float32), n, np.sum) for x in gs]).max(0)
+    green_b = blocks(gm.astype(np.float32), n, np.sum) - green_g
+    res.update(match=gold.names[idx[0]], group=len(gs), ssim=round(ssim(lv, luma(g)), 3),
+               mad=round(float(np.abs(v - g).mean()), 1), stable_pct=round(float(stable.mean()) * 100),
                green_blocks=int((green_b >= o['green_block_px']).sum()), sheet_blocks=int(sheet_b.sum()),
-               dark_blocks=int(dark_b.sum()))
+               dark_blocks=int(dark_b.sum()), sheet_cluster=largest_cluster(sheet_b))
     res['outliers'] = res['green_blocks'] + res['sheet_blocks']
     why = []
     if res['gun_green'] > o['max_gun_green']:
         why.append('gun speckle')
+    if res['green_blocks'] > o['max_green_blocks']:
+        why.append('green speckle blocks')
+    if res['sheet_cluster'] > o['max_sheet_cluster']:
+        why.append('solid sheet')
     if res['outliers'] > o['max_outliers']:
         why.append('block outliers')
     if res['ssim'] < o['min_ssim']:
@@ -132,14 +210,17 @@ def score_view(v, g, o):
     return res
 
 
-def score(img_path, golden_path, o):
-    img = load(img_path)
-    gold = load(golden_path) if golden_path else None
-    out = []
-    for i, v in enumerate(views(img, o['views'])):
-        g = views(gold, o['views'])[i] if gold is not None else None
-        out.append(score_view(v, g, o))
-    return out
+def score(img_path, gold, o):
+    return [score_view(v, gold, o) for v in views(load(img_path), o['views'])]
+
+
+def golden_pool(path, o):
+    if not path:
+        return None
+    if os.path.isfile(path):
+        return Golden([path], o)
+    ps = sorted(os.path.join(d, f) for d, _, fs in os.walk(path) for f in fs if f.endswith('.png'))
+    return Golden(ps, o) if ps else None
 
 
 def opts(scene):
@@ -164,7 +245,7 @@ def find(root, name):
 def fmt_view(i, r):
     s = f'  view {i + 1}: {r["verdict"]}  gun_green {r["gun_green"]}'
     if 'ssim' in r:
-        s += f'  ssim {r["ssim"]}  mad {r["mad"]}  outliers {r["outliers"]} (green {r["green_blocks"]}, sheet {r["sheet_blocks"]}, dark {r["dark_blocks"]})'
+        s += f'  ssim {r["ssim"]}  mad {r["mad"]}  [{r["match"]} +{r["group"] - 1}, stable {r["stable_pct"]}%]  outliers {r["outliers"]} (green {r["green_blocks"]}, sheet {r["sheet_blocks"]} cluster {r["sheet_cluster"]}, dark {r["dark_blocks"]})'
     return s + (f'  <- {", ".join(r["why"])}' if r.get('why') else '')
 
 
@@ -173,23 +254,20 @@ def cmd_diff(a):
     o = opts(scene)
     report = {'scene': scene['name'], 'golden': a.golden, 'options': o, 'frames': {}}
     ok = True
+    gold = golden_pool(a.golden, o)
+    report['golden_views'] = len(gold.views) if gold else 0
     for label, name in frames(scene):
         cap = find(a.captures, name)
-        gold = os.path.join(a.golden, name)
-        if not os.path.exists(gold):
-            gold = os.path.join(a.golden, 'default.png')
         if not cap:
             report['frames'][label] = {'error': f'no capture {name}'}
             print(f'{label}: FAIL  no capture {name} under {a.captures}')
             ok = False
             continue
-        if not os.path.exists(gold):
-            gold = None
         vs = score(cap, gold, o)
         fv = 'PASS' if all(v['verdict'] == 'PASS' for v in vs) else 'FAIL'
         ok &= fv == 'PASS'
-        report['frames'][label] = {'capture': cap, 'golden': gold, 'verdict': fv, 'views': vs}
-        print(f'{label}: {fv}  ({os.path.basename(cap)} vs {os.path.basename(gold) if gold else "no golden"})')
+        report['frames'][label] = {'capture': cap, 'verdict': fv, 'views': vs}
+        print(f'{label}: {fv}  ({os.path.basename(cap)} vs {len(gold.views) if gold else 0} golden views)')
         for i, v in enumerate(vs):
             print(fmt_view(i, v))
     report['verdict'] = 'PASS' if ok else 'FAIL'
@@ -201,7 +279,8 @@ def cmd_diff(a):
             continue
         w = {'gun_green': max(v['gun_green'] for v in vv)}
         if all('ssim' in v for v in vv):
-            w.update(ssim=min(v['ssim'] for v in vv), outliers=max(v['outliers'] for v in vv))
+            w.update(ssim=min(v['ssim'] for v in vv), green_blocks=max(v['green_blocks'] for v in vv),
+                     sheet_cluster=max(v['sheet_cluster'] for v in vv), outliers=max(v['outliers'] for v in vv))
         worst.append(w)
     report['worst_by_view'] = worst
     if a.json:
@@ -213,7 +292,7 @@ def cmd_diff(a):
 
 def cmd_score(a):
     o = dict(DEFAULTS, views=a.views)
-    vs = score(a.image, a.golden, o)
+    vs = score(a.image, golden_pool(a.golden, o), o)
     for i, v in enumerate(vs):
         print(fmt_view(i, v))
     if a.json:
@@ -228,8 +307,9 @@ def cmd_bless(a):
         cap = find(a.captures, name)
         if not cap:
             sys.exit(f'no capture {name} under {a.captures}')
-        shutil.copy2(cap, os.path.join(a.golden, name))
-        print(f'golden: {os.path.join(a.golden, name)}')
+        dst = os.path.join(a.golden, f'{a.tag}_{name}' if a.tag else name)
+        shutil.copy2(cap, dst)
+        print(f'golden: {dst}')
     return 0
 
 
@@ -243,6 +323,7 @@ def main():
     s.add_argument('--json')
     b = sp.add_parser('bless')
     b.add_argument('scene'); b.add_argument('captures'); b.add_argument('golden')
+    b.add_argument('--tag', help='prefix for the file names, so frames from several clean runs sit side by side')
     a = ap.parse_args()
     sys.exit({'diff': cmd_diff, 'score': cmd_score, 'bless': cmd_bless}[a.cmd](a))
 
