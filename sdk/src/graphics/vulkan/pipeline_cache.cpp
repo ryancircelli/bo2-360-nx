@@ -1538,7 +1538,8 @@ bool VulkanPipelineCache::GetCurrentStateDescription(
   // Tessellated draws are patch-domain polygonal primitives regardless of guest
   // register ambiguity in non-explicit major mode configurations.
   bool primitive_polygonal = tessellated ? true : draw_util::IsPrimitivePolygonal(regs);
-  bool rasterization_enabled = draw_util::IsRasterizationPotentiallyDone(regs, primitive_polygonal);
+  bool rasterization_enabled = draw_util::IsRasterizationDone(
+      regs, primitive_polygonal, pixel_shader && pixel_shader->shader().memexport_eM_written());
   if (!rasterization_enabled) {
     // Keep parity with D3D12 by fully disabling rasterization for draws where
     // only non-raster stages (for instance, vertex memexport) can have side

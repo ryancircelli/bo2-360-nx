@@ -65,6 +65,22 @@ bool IsRasterizationPotentiallyDone(const RegisterFile& regs, bool primitive_pol
   return true;
 }
 
+bool IsDepthTestNeverPassing(const RegisterFile& regs) {
+  xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+  if (edram_mode != xenos::EdramMode::kColorDepth && edram_mode != xenos::EdramMode::kDepthOnly) {
+    return false;
+  }
+  auto depthcontrol = regs.Get<reg::RB_DEPTHCONTROL>();
+  return depthcontrol.z_enable && depthcontrol.zfunc == xenos::CompareFunction::kNever &&
+         !depthcontrol.stencil_enable;
+}
+
+bool IsRasterizationDone(const RegisterFile& regs, bool primitive_polygonal,
+                         bool pixel_shader_memexports) {
+  return IsRasterizationPotentiallyDone(regs, primitive_polygonal) &&
+         (pixel_shader_memexports || !IsDepthTestNeverPassing(regs));
+}
+
 reg::RB_DEPTHCONTROL GetNormalizedDepthControl(const RegisterFile& regs) {
   xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
   if (edram_mode != xenos::EdramMode::kColorDepth && edram_mode != xenos::EdramMode::kDepthOnly) {
