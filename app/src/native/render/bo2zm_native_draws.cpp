@@ -13821,49 +13821,27 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // The PassOf render pass without its cache, with nothing changed. The pipeline prewarm also uses it
   // from its thread (a compatible one: the same formats). It only reads its arguments.
   VkRenderPass CreatePass(const uint32_t formats[5], uint32_t mode_load) const {
-    std::array<VkAttachmentDescription, 5> attachments{};
-    std::array<VkAttachmentReference, 4> colors{};
-    VkAttachmentReference depth{};
-    uint32_t n = 0, n_colors = 0;
+    gpu::PassDesc desc{};
     for (uint32_t i = 0; i < 5; ++i) {
       if (!formats[i]) {
         continue;
       }
-      VkAttachmentDescription& a = attachments[n];
-      a.format = VkFormat(formats[i]);
-      a.samples = VK_SAMPLE_COUNT_1_BIT;
+      gpu::PassAttachment& a = i < 4 ? desc.colors[desc.color_count++] : desc.depth;
+      a.format = formats[i];
       // With the test active, the shadow map does not load its previous content: the game clears it before
       // drawing it, so fetching the whole map only to throw it away is wasted work.
-      a.loadOp = mode_load == kLoadIgnore ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                 : mode_load == kLoadClear ? VK_ATTACHMENT_LOAD_OP_CLEAR
-                                              : VK_ATTACHMENT_LOAD_OP_LOAD;
-      a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-      a.stencilLoadOp = i != 4                       ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                        : mode_load == kLoadClear ? VK_ATTACHMENT_LOAD_OP_CLEAR
-                                                     : VK_ATTACHMENT_LOAD_OP_LOAD;
-      a.stencilStoreOp = i == 4 ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
-      a.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-      a.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
-      if (i < 4) {
-        colors[n_colors++] = {n, VK_IMAGE_LAYOUT_GENERAL};
-      } else {
-        depth = {n, VK_IMAGE_LAYOUT_GENERAL};
-      }
-      ++n;
+      a.load = mode_load == kLoadIgnore ? gpu::kLoadDontCare
+               : mode_load == kLoadClear ? gpu::kLoadClear
+                                         : gpu::kLoadLoad;
+      a.store = gpu::kStoreStore;
+      a.stencil_load = i != 4                    ? gpu::kLoadDontCare
+                       : mode_load == kLoadClear ? gpu::kLoadClear
+                                                 : gpu::kLoadLoad;
+      a.stencil_store = i == 4 ? gpu::kStoreStore : gpu::kStoreDontCare;
+      desc.has_depth = desc.has_depth || i == 4;
     }
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = n_colors;
-    subpass.pColorAttachments = colors.data();
-    subpass.pDepthStencilAttachment = formats[4] ? &depth : nullptr;
-    VkRenderPassCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = n;
-    info.pAttachments = attachments.data();
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
     VkRenderPass pass;
-    if (dfn_.vkCreateRenderPass(device_, &info, nullptr, &pass) != VK_SUCCESS) {
+    if (!gpu::vulkan::CreatePass(dfn_, device_, desc, pass)) {
       return VK_NULL_HANDLE;
     }
     return pass;

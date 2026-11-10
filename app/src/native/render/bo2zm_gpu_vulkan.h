@@ -23,6 +23,11 @@ static_assert(bo2zm::native::gpu::kDescriptorSampler == VK_DESCRIPTOR_TYPE_SAMPL
               bo2zm::native::gpu::kDescriptorSampledImage == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
               bo2zm::native::gpu::kDescriptorUniformBuffer == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
               bo2zm::native::gpu::kDescriptorUniformBufferDynamic == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+static_assert(bo2zm::native::gpu::kLoadClear == VK_ATTACHMENT_LOAD_OP_CLEAR &&
+              bo2zm::native::gpu::kLoadDontCare == VK_ATTACHMENT_LOAD_OP_DONT_CARE &&
+              bo2zm::native::gpu::kStoreDontCare == VK_ATTACHMENT_STORE_OP_DONT_CARE &&
+              bo2zm::native::gpu::kLayoutGeneral == VK_IMAGE_LAYOUT_GENERAL &&
+              bo2zm::native::gpu::kLayoutColorAttachment == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 static_assert(sizeof(bo2zm::native::gpu::PushRange) == sizeof(VkPushConstantRange) &&
               offsetof(bo2zm::native::gpu::PushRange, offset) == offsetof(VkPushConstantRange, offset) &&
               offsetof(bo2zm::native::gpu::PushRange, size) == offsetof(VkPushConstantRange, size));
@@ -496,6 +501,47 @@ inline void Free(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice d
   dfn.vkFreeMemory(device, memory, nullptr);
 }
 static_assert(sizeof(void*) == 8, "the Destroy overloads need distinct handle types");
+
+// A render pass for `desc`, one subpass: the colour attachments in order, then the depth one. True and the pass
+// in `out` if created. Metal has no pass object: the pass descriptor is filled per pass from the same desc.
+inline bool CreatePass(const rex::ui::vulkan::VulkanDevice::Functions& dfn, VkDevice device, const PassDesc& desc,
+                       VkRenderPass& out) {
+  VkAttachmentDescription attachments[5]{};
+  VkAttachmentReference colors[4]{};
+  VkAttachmentReference depth{};
+  uint32_t n = 0;
+  auto add = [&](const PassAttachment& a) {
+    VkAttachmentDescription& v = attachments[n];
+    v.format = VkFormat(a.format);
+    v.samples = VK_SAMPLE_COUNT_1_BIT;
+    v.loadOp = VkAttachmentLoadOp(a.load);
+    v.storeOp = VkAttachmentStoreOp(a.store);
+    v.stencilLoadOp = VkAttachmentLoadOp(a.stencil_load);
+    v.stencilStoreOp = VkAttachmentStoreOp(a.stencil_store);
+    v.initialLayout = VkImageLayout(a.initial);
+    v.finalLayout = VkImageLayout(a.final);
+    return VkAttachmentReference{n++, VkImageLayout(a.used)};
+  };
+  const uint32_t color_count = desc.color_count < 4 ? desc.color_count : 4;
+  for (uint32_t i = 0; i < color_count; ++i) {
+    colors[i] = add(desc.colors[i]);
+  }
+  if (desc.has_depth) {
+    depth = add(desc.depth);
+  }
+  VkSubpassDescription subpass{};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = color_count;
+  subpass.pColorAttachments = colors;
+  subpass.pDepthStencilAttachment = desc.has_depth ? &depth : nullptr;
+  VkRenderPassCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  info.attachmentCount = n;
+  info.pAttachments = attachments;
+  info.subpassCount = 1;
+  info.pSubpasses = &subpass;
+  return dfn.vkCreateRenderPass(device, &info, nullptr, &out) == VK_SUCCESS;
+}
 
 // The attachments of a render pass, `width` x `height`, one layer: true and the framebuffer in `out` if created.
 // Metal has no framebuffer object: its render pass descriptor names the textures directly.
