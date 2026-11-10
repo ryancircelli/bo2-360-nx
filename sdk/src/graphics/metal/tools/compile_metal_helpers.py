@@ -69,14 +69,16 @@ for msaa in [1,2,4]:
 # compute variant; rebuilt when any of the wrapper files changes.
 tile_wrapper=rtt_wrapper.parent/'resolve_tile.metal'
 tile_deps=[tile_wrapper,tile_wrapper.parent/'resolve_tile_entry.inc',rtt_wrapper]
-for full,bpps in [(False,[32,64]),(True,[8,16,32,64])]:
- for bpp in bpps:
+# Integer source views: only the full-destination 64bpp case games use
+# (bo2 HDR luminance chain, 1x MSAA).
+tile_variants=[(full,bpp,0) for full,bpps in [(False,[32,64]),(True,[8,16,32,64])] for bpp in bpps]+[(True,64,1)]
+for full,bpp,uint in tile_variants:
   stem='resolve_host_color'+('_full' if full else '')
   prefix='XE_RESOLVE_HOST_COLOR_FULL_DEST' if full else 'XE_RESOLVE_HOST_COLOR'
-  for msaa in [1,2,4]:
+  for msaa in ([1] if uint else [1,2,4]):
    for scaled in [True,False]:
-    name=stem+f'_{bpp}bpp_{msaa}xmsaa'+('_scaled' if scaled else '')+'_rtt_tile'
-    defines=[f'{prefix}_BPP={bpp}',f'XE_RESOLVE_HOST_COLOR_MSAA_SAMPLES={msaa}','XE_RESOLVE_HOST_COLOR_SOURCE_UINT=0']
+    name=stem+('_uint' if uint else '')+f'_{bpp}bpp_{msaa}xmsaa'+('_scaled' if scaled else '')+'_rtt_tile'
+    defines=[f'{prefix}_BPP={bpp}',f'XE_RESOLVE_HOST_COLOR_MSAA_SAMPLES={msaa}',f'XE_RESOLVE_HOST_COLOR_SOURCE_UINT={uint}']
     if scaled:defines.append('XE_RESOLVE_RESOLUTION_SCALED=1')
     jobs.append(('gpu',tile_wrapper,name,defines,[xenia/'gpu/shaders'],tile_deps))
 def compile(job):

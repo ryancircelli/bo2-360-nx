@@ -81,6 +81,8 @@
 #include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_32bpp_4xmsaa_scaled_rtt_tile.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_64bpp_1xmsaa_rtt_tile.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_64bpp_1xmsaa_scaled_rtt_tile.h"
+#include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_uint_64bpp_1xmsaa_rtt_tile.h"
+#include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_uint_64bpp_1xmsaa_scaled_rtt_tile.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_64bpp_2xmsaa_rtt_tile.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_64bpp_2xmsaa_scaled_rtt_tile.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_host_color_full_64bpp_4xmsaa_rtt_tile.h"
@@ -131,6 +133,8 @@ const TileLibrary kTileLibraries[] = {
     XE_TILE_LIB(resolve_host_color_full_32bpp_4xmsaa_scaled_rtt_tile),
     XE_TILE_LIB(resolve_host_color_full_64bpp_1xmsaa_rtt_tile),
     XE_TILE_LIB(resolve_host_color_full_64bpp_1xmsaa_scaled_rtt_tile),
+    XE_TILE_LIB(resolve_host_color_full_uint_64bpp_1xmsaa_rtt_tile),
+    XE_TILE_LIB(resolve_host_color_full_uint_64bpp_1xmsaa_scaled_rtt_tile),
     XE_TILE_LIB(resolve_host_color_full_64bpp_2xmsaa_rtt_tile),
     XE_TILE_LIB(resolve_host_color_full_64bpp_2xmsaa_scaled_rtt_tile),
     XE_TILE_LIB(resolve_host_color_full_64bpp_4xmsaa_rtt_tile),
@@ -219,6 +223,16 @@ struct VerifyPending {
 VerifyPending g_verify;
 std::atomic<uint64_t> g_verify_checked{0}, g_verify_mismatched{0},
     g_verify_bytes{0}, g_verify_bad_bytes{0};
+// Half-float special values in the reference (compute) destination, counted
+// per 16-bit word in either byte order: the integer 64bpp tile variant reads
+// an RGBA16Float attachment as half4 and reinterprets the bits, which would
+// break if tile memory flushed denormals or canonicalized NaN payloads.
+std::atomic<uint64_t> g_verify_special_words{0}, g_verify_special_bad_words{0};
+
+bool IsHalfDenormalOrNan(uint16_t v) {
+  const uint16_t e = v & 0x7C00, m = v & 0x03FF;
+  return m && (e == 0 || e == 0x7C00);
+}
 
 void EncodeSnapshot(MTL::CommandBuffer* cmd, const VerifyPending& v,
                     MTL::Buffer* into, const char* site) {
@@ -741,7 +755,15 @@ bool MetalRenderTargetCache::TryTileResolveEncode(
   // texture object the compute resolve reads.
   MTL::RenderPassColorAttachmentDescriptor* a0 =
       pass->colorAttachments()->object(0);
-  if (!a0 || a0->texture() != r.source_texture) {
+  // The integer 64bpp resolve reads an RGBA16Uint view of an RGBA16Float
+  // target; its tile variant reads the attachment's bits (resolve_tile_entry).
+  const bool half_bits_view =
+      REXCVAR_GET(metal_tile_resolve_half_bits) && a0 && a0->texture() && r.source_texture &&
+      r.source_texture->parentTexture() == a0->texture() &&
+      a0->texture()->pixelFormat() == MTL::PixelFormatRGBA16Float &&
+      r.source_texture->pixelFormat() == MTL::PixelFormatRGBA16Uint &&
+      label.find("_uint_64bpp_") != std::string::npos;
+  if (!a0 || (a0->texture() != r.source_texture && !half_bits_view)) {
     return fallback(u.tres_fb_pass, "not-attachment0");
   }
   if (r.source_texture->sampleCount() > 1 && !MsaaOn()) {
@@ -965,6 +987,17 @@ void TileResolveVerifyFinish(MTL::Device* device, MTL::CommandBuffer* cmd,
     for (size_t i = 0; i < total; ++i) {
       bad += pa[i] != pb[i];
     }
+    uint64_t special = 0, special_bad = 0;
+    for (size_t i = 0; i + 1 < total; i += 2) {
+      const uint16_t le = uint16_t(pa[i] | (pa[i + 1] << 8));
+      const uint16_t be = uint16_t(pa[i + 1] | (pa[i] << 8));
+      if (IsHalfDenormalOrNan(le) || IsHalfDenormalOrNan(be)) {
+        ++special;
+        special_bad += pa[i] != pb[i] || pa[i + 1] != pb[i + 1];
+      }
+    }
+    g_verify_special_words += special;
+    g_verify_special_bad_words += special_bad;
     const uint64_t checked = ++g_verify_checked;
     g_verify_bytes += total;
     g_verify_bad_bytes += bad;
@@ -978,9 +1011,10 @@ void TileResolveVerifyFinish(MTL::Device* device, MTL::CommandBuffer* cmd,
     if (checked % 2000 == 0) {
       REXLOG_INFO(
           "[tile-resolve] verify: {} resolves checked, {} mismatched ({} of "
-          "{} KB differ)",
+          "{} KB differ); half denormal/NaN words {} of which {} differ",
           checked, g_verify_mismatched.load(), g_verify_bad_bytes.load() >> 10,
-          g_verify_bytes.load() >> 10);
+          g_verify_bytes.load() >> 10, g_verify_special_words.load(),
+          g_verify_special_bad_words.load());
     }
     a->release();
     b->release();
@@ -992,9 +1026,10 @@ void TileResolveVerifyReport() {
   if (!VerifyOn()) return;
   REXLOG_INFO(
       "[tile-resolve] verify: {} resolves checked, {} mismatched ({} of {} KB "
-      "differ)",
+      "differ); half denormal/NaN words {} of which {} differ",
       g_verify_checked.load(), g_verify_mismatched.load(),
-      g_verify_bad_bytes.load() >> 10, g_verify_bytes.load() >> 10);
+      g_verify_bad_bytes.load() >> 10, g_verify_bytes.load() >> 10,
+      g_verify_special_words.load(), g_verify_special_bad_words.load());
 }
 
 bool TileResolveVerifyBreak() { return VerifyBreakOn(); }
