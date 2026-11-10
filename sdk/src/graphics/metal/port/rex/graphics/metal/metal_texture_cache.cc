@@ -4733,9 +4733,48 @@ void MetalTextureCache::WriteActiveTextureSRVKeys(
   }
 }
 
+MetalTextureCache::Texture* MetalTextureCache::SelectBindlessTexture(
+    uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed,
+    const TextureBinding** binding_out) const {
+  const TextureBinding* binding = GetValidTextureBinding(fetch_constant);
+  if (binding_out) {
+    *binding_out = binding;
+  }
+  if (!binding || !AreDimensionsCompatible(dimension, binding->key.dimension)) {
+    return nullptr;
+  }
+  if (is_signed) {
+    if (texture_util::IsAnySignSigned(binding->swizzled_signs)) {
+      return IsSignedVersionSeparateForFormat(binding->key)
+                 ? binding->texture_signed
+                 : binding->texture;
+    }
+  } else if (texture_util::IsAnySignNotSigned(binding->swizzled_signs)) {
+    return binding->texture;
+  }
+  return nullptr;
+}
+
+bool MetalTextureCache::AreBindlessTexturesCurrent(
+    const DxbcShader::TextureBinding* bindings, size_t count,
+    Texture* const* used_textures) const {
+  for (size_t i = 0; i < count; ++i) {
+    const DxbcShader::TextureBinding& b = bindings[i];
+    if (SelectBindlessTexture(b.fetch_constant, b.dimension, b.is_signed,
+                              nullptr) != used_textures[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
     uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed,
-    MTL::Texture** texture_for_encoder_out, uint32_t view_levels) {
+    MTL::Texture** texture_for_encoder_out, uint32_t view_levels,
+    Texture** used_texture_out) {
+  if (used_texture_out) {
+    *used_texture_out = nullptr;
+  }
   auto get_null_texture_for_dimension = [&]() -> MTL::Texture* {
     switch (dimension) {
       case xenos::FetchOpDimension::k1D:
@@ -4769,25 +4808,9 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
     return get_null_index_for_dimension();
   };
 
-  const TextureBinding* binding = GetValidTextureBinding(fetch_constant);
-  if (!binding) {
-    return return_null_index_for_dimension();
-  }
-  if (!AreDimensionsCompatible(dimension, binding->key.dimension)) {
-    return return_null_index_for_dimension();
-  }
-
-  Texture* texture = nullptr;
-  if (is_signed) {
-    if (texture_util::IsAnySignSigned(binding->swizzled_signs)) {
-      texture = IsSignedVersionSeparateForFormat(binding->key)
-                    ? binding->texture_signed
-                    : binding->texture;
-    }
-  } else if (texture_util::IsAnySignNotSigned(binding->swizzled_signs)) {
-    texture = binding->texture;
-  }
-
+  const TextureBinding* binding = nullptr;
+  Texture* texture =
+      SelectBindlessTexture(fetch_constant, dimension, is_signed, &binding);
   if (!texture) {
     return return_null_index_for_dimension();
   }
@@ -4798,6 +4821,9 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
     return return_null_index_for_dimension();
   }
   metal_texture->tres_bind_serial_ = ++tres_bind_serial_counter_;
+  if (used_texture_out) {
+    *used_texture_out = texture;
+  }
   MTL::Texture* texture_for_encoder = nullptr;
   uint32_t srv_index = metal_texture->GetOrCreateBindlessSRVIndexAndView(
       binding->host_swizzle, dimension, is_signed,
@@ -4811,6 +4837,24 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
                                    : get_null_texture_for_dimension();
   }
   return srv_index;
+}
+
+void MetalTextureCache::MarkBindlessTexturesUsed(Texture* const* textures,
+                                                 size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    Texture* texture = textures[i];
+    if (!texture) {
+      continue;
+    }
+    texture->MarkAsUsed();
+    static_cast<MetalTexture*>(texture)->tres_bind_serial_ =
+        ++tres_bind_serial_counter_;
+  }
+}
+
+uint64_t MetalTextureCache::BindlessBindingGeneration() const {
+  return (bindless_binding_generation_ << 8) ^
+         uint64_t(uint8_t(int32_t(REXCVAR_GET(anisotropic_override))));
 }
 
 uint32_t MetalTextureCache::GetBindlessSamplerIndexForBinding(
@@ -5728,6 +5772,7 @@ uint32_t MetalTextureCache::GetMaxHostTextureDepthOrArraySize(
 std::unique_ptr<TextureCache::Texture> MetalTextureCache::CreateTexture(
     TextureKey key) {
   SCOPE_profile_cpu_f("gpu");
+  ++bindless_binding_generation_;  // [bindless-memo]
 
   MTL::PixelFormat metal_format = GetPixelFormatForKey(key);
   if (metal_format == MTL::PixelFormatInvalid) {
@@ -6268,6 +6313,7 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateDirectWriteView(
 }
 
 MetalTextureCache::MetalTexture::~MetalTexture() {
+  ++texture_cache_.bindless_binding_generation_;  // [bindless-memo]
   if (!is_3d_as_2d_wrapper_) {
     texture_cache_.RttUnregister(this);
   }
