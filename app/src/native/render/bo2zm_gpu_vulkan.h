@@ -8,6 +8,7 @@
 #include <rex/ui/vulkan/util.h>
 
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
@@ -59,6 +60,12 @@ static_assert(bo2zm::native::gpu::kLodUnclamped == VK_LOD_CLAMP_NONE);
 namespace bo2zm::native::gpu {
 
 inline VkRect2D ToVk(const Rect& r) { return VkRect2D{{r.x, r.y}, {r.width, r.height}}; }
+static_assert(sizeof(Range) == sizeof(VkImageSubresourceRange));
+static_assert(sizeof(ClearColor) == sizeof(VkClearColorValue));
+static_assert(sizeof(ClearDepthStencil) == sizeof(VkClearDepthStencilValue));
+inline VkImageSubresourceRange ToVk(const Range& r) {
+  return VkImageSubresourceRange{r.aspects, r.base_level, r.levels, r.base_layer, r.layers};
+}
 
 inline Rect FromVk(const VkRect2D& r) { return Rect{r.offset.x, r.offset.y, r.extent.width, r.extent.height}; }
 
@@ -232,9 +239,10 @@ class Recorder {
                         const VkClearRect* rectangles) const {
     dfn_.vkCmdClearAttachments(c, count, attachments, rects, rectangles);
   }
-  void ClearColorImage(VkCommandBuffer c, VkImage image, VkImageLayout layout, const VkClearColorValue* color,
-                       uint32_t count, const VkImageSubresourceRange* ranges) const {
-    dfn_.vkCmdClearColorImage(c, image, layout, color, count, ranges);
+  void ClearColorImage(VkCommandBuffer c, VkImage image, Layout layout, const ClearColor* color, uint32_t count,
+                       const Range* ranges) const {
+    dfn_.vkCmdClearColorImage(c, image, VkImageLayout(layout), reinterpret_cast<const VkClearColorValue*>(color),
+                              count, reinterpret_cast<const VkImageSubresourceRange*>(ranges));
   }
   void CopyBuffer(VkCommandBuffer c, VkBuffer source, VkBuffer target, uint32_t count,
                   const VkBufferCopy* regions) const {
@@ -248,10 +256,31 @@ class Recorder {
                          const VkBufferImageCopy* regions) const {
     dfn_.vkCmdCopyImageToBuffer(c, source, layout, target, count, regions);
   }
-  void Barrier(VkCommandBuffer c, VkPipelineStageFlags source, VkPipelineStageFlags target,
-               VkDependencyFlags dependencies, uint32_t memories, const VkMemoryBarrier* memory, uint32_t buffers,
-               const VkBufferMemoryBarrier* buffer, uint32_t images, const VkImageMemoryBarrier* image) const {
-    dfn_.vkCmdPipelineBarrier(c, source, target, dependencies, memories, memory, buffers, buffer, images, image);
+  // memory: one memory barrier, or none (nullptr). Neither dependency flags nor buffer barriers are used.
+  void Barrier(VkCommandBuffer c, Stages source, Stages target, const MemoryBarrier* memory, uint32_t images = 0,
+               const ImageBarrier* image = nullptr) const {
+    VkMemoryBarrier vk_memory{};
+    if (memory) {
+      vk_memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+      vk_memory.srcAccessMask = memory->before;
+      vk_memory.dstAccessMask = memory->after;
+    }
+    VkImageMemoryBarrier vk_images[4]{};
+    assert(images <= 4);
+    for (uint32_t i = 0; i < images && i < 4; ++i) {
+      VkImageMemoryBarrier& b = vk_images[i];
+      b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+      b.srcAccessMask = image[i].before;
+      b.dstAccessMask = image[i].after;
+      b.oldLayout = VkImageLayout(image[i].old_layout);
+      b.newLayout = VkImageLayout(image[i].new_layout);
+      b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b.image = image[i].image;
+      b.subresourceRange = ToVk(image[i].range);
+    }
+    dfn_.vkCmdPipelineBarrier(c, source, target, 0, memory ? 1 : 0, memory ? &vk_memory : nullptr, 0, nullptr,
+                              images, images ? vk_images : nullptr);
   }
   void BeginQuery(VkCommandBuffer c, VkQueryPool pool, uint32_t index, VkQueryControlFlags flags) const {
     dfn_.vkCmdBeginQuery(c, pool, index, flags);
@@ -261,10 +290,10 @@ class Recorder {
                  VkImageLayout target_layout, uint32_t count, const VkImageCopy* regions) const {
     loaded_.copy_image(c, source, source_layout, target, target_layout, count, regions);
   }
-  void ClearDepthStencilImage(VkCommandBuffer c, VkImage image, VkImageLayout layout,
-                              const VkClearDepthStencilValue* value, uint32_t count,
-                              const VkImageSubresourceRange* ranges) const {
-    loaded_.clear_depth(c, image, layout, value, count, ranges);
+  void ClearDepthStencilImage(VkCommandBuffer c, VkImage image, Layout layout, const ClearDepthStencil* value,
+                              uint32_t count, const Range* ranges) const {
+    loaded_.clear_depth(c, image, VkImageLayout(layout), reinterpret_cast<const VkClearDepthStencilValue*>(value),
+                        count, reinterpret_cast<const VkImageSubresourceRange*>(ranges));
   }
   void Blit(VkCommandBuffer c, VkImage source, VkImageLayout source_layout, VkImage target,
             VkImageLayout target_layout, uint32_t count, const VkImageBlit* regions, VkFilter filter) const {
