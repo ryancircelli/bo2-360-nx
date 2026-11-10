@@ -1,0 +1,111 @@
+// Native renderer, Metal backend: the device and the shader libraries (see bo2zm_gpu_metal.h).
+
+#include "bo2zm_gpu_metal.h"
+
+#include <rex/logging.h>
+
+#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+
+#include <array>
+#include <cinttypes>
+#include <cstdio>
+#include <mutex>
+#include <unordered_map>
+
+#if !__has_feature(objc_arc)
+#error "bo2zm_gpu_metal.mm is built with -fobjc-arc"
+#endif
+
+namespace bo2zm::native::gpu::metal {
+
+struct Device::State {
+  id<MTLDevice> device = nil;
+  std::filesystem::path folder;
+  std::mutex lock;
+  // One library per first hex digit of the hash; nil until loaded, and kept nil (with `missing` set) if its
+  // file does not load, so a missing shard is reported once.
+  std::array<id<MTLLibrary>, 16> libraries{};
+  std::array<bool, 16> missing{};
+  std::unordered_map<std::string, id<MTLFunction>> functions;
+};
+
+Device::Device(std::unique_ptr<State> state) : state_(std::move(state)) {
+  name_ = [[state_->device name] UTF8String];
+}
+
+Device::~Device() = default;
+
+void* Device::native() const { return (__bridge void*)state_->device; }
+
+std::unique_ptr<Device> Device::Create(const std::filesystem::path& library_folder) {
+  @autoreleasepool {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (!device) {
+      REXLOG_ERROR("[native] Metal: no device");
+      return nullptr;
+    }
+    const bool family = [device supportsFamily:MTLGPUFamilyApple7] || [device supportsFamily:MTLGPUFamilyMetal3];
+    if (!family || device.argumentBuffersSupport < MTLArgumentBuffersTier2) {
+      REXLOG_ERROR("[native] Metal: {} lacks the Apple7 family or Metal 3, or tier 2 argument buffers",
+                   [[device name] UTF8String]);
+      return nullptr;
+    }
+    auto state = std::make_unique<State>();
+    state->device = device;
+    state->folder = library_folder;
+    std::unique_ptr<Device> result(new Device(std::move(state)));
+    REXLOG_INFO("[native] Metal: {}, shader libraries in {}", result->name_, library_folder.string());
+    return result;
+  }
+}
+
+std::string Device::FunctionName(bool vertex, uint64_t hash, bool early_z) {
+  char name[32];
+  std::snprintf(name, sizeof(name), "%s_%016" PRIx64 "%s", vertex ? "vs" : "ps", hash, early_z ? "_ez" : "");
+  return name;
+}
+
+void* Device::Function(std::string_view name) {
+  // vs_ or ps_, then the hash: the shard is the hash's first hex digit.
+  if (name.size() < 4) {
+    return nullptr;
+  }
+  const char digit = name[3];
+  const int shard = digit >= '0' && digit <= '9' ? digit - '0' : digit >= 'a' && digit <= 'f' ? digit - 'a' + 10 : -1;
+  if (shard < 0) {
+    return nullptr;
+  }
+  State& s = *state_;
+  std::lock_guard<std::mutex> guard(s.lock);
+  const std::string key(name);
+  if (auto found = s.functions.find(key); found != s.functions.end()) {
+    return (__bridge void*)found->second;
+  }
+  @autoreleasepool {
+    if (!s.libraries[shard] && !s.missing[shard]) {
+      char file[32];
+      std::snprintf(file, sizeof(file), "bo2zm_%x.metallib", shard);
+      const std::filesystem::path path = s.folder / file;
+      NSError* error = nil;
+      NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+      s.libraries[shard] = [s.device newLibraryWithURL:url error:&error];
+      if (!s.libraries[shard]) {
+        s.missing[shard] = true;
+        REXLOG_ERROR("[native] Metal: could not load {}: {}", path.string(),
+                     error ? [[error localizedDescription] UTF8String] : "unknown error");
+      }
+    }
+    if (!s.libraries[shard]) {
+      return nullptr;
+    }
+    id<MTLFunction> function = [s.libraries[shard] newFunctionWithName:[NSString stringWithUTF8String:key.c_str()]];
+    if (!function) {
+      return nullptr;
+    }
+    s.functions.emplace(key, function);
+    return (__bridge void*)function;
+  }
+}
+
+}  // namespace bo2zm::native::gpu::metal
