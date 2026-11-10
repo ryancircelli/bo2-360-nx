@@ -6166,7 +6166,7 @@ bool MetalTextureCache::CpuSourceWatchFirst() {
   static const bool on = [] {
     const char* v = MetalDebugEnv("CPU_SOURCE_WATCH_FIRST");
     const bool e = !(v && v[0] == '0');
-    REXLOG_INFO("[cpu-source-watch] {} (FABLE2_CPU_SOURCE_WATCH_FIRST)",
+    REXLOG_INFO("[cpu-source-watch] {} (REX_METAL_CPU_SOURCE_WATCH_FIRST)",
                 e ? "on" : "off");
     return e;
   }();
