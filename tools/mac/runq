@@ -872,7 +872,8 @@ def cmd_cancel(ids):
 
 def cmd_install(_argv):
     mkdirs()
-    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py'):
+    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py',
+              'scenes_gate.sh'):
         s = os.path.join(HERE, f)
         if os.path.exists(s):
             shutil.copy2(s, os.path.join(D['bin'], f))
@@ -936,7 +937,10 @@ def cmd_scene(argv):
     if rc not in (0, 1) or res['missing_pass_log'] or res['fail_log_hits']:
         verdict = 'FAIL'
     if not a.no_diff and scene.get('golden') is not None:
-        gd = a.golden or os.path.join(os.path.dirname(a.scene), 'golden', scene['name'])
+        # golden frames: --golden, else <scene dir>/golden/<name>, else <spool>/golden/<name> (outside git)
+        gd = a.golden or next((g for g in (os.path.join(os.path.dirname(a.scene), 'golden', scene['name']),
+                                           os.path.join(SPOOL, 'golden', scene['name'])) if os.path.isdir(g)),
+                              os.path.join(SPOOL, 'golden', scene['name']))
         sd = os.path.join(HERE, 'scenediff.py')
     if not a.no_diff and scene.get('golden') is not None and not (os.path.isdir(gd) and os.path.exists(sd)):
         res['diff'] = {'verdict': 'NO_GOLDEN', 'golden': gd}
