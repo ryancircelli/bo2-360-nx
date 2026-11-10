@@ -612,8 +612,8 @@ bool Is16BitsPerChannel(gpu::Format format) {
   return format == VK_FORMAT_R16G16B16A16_SFLOAT || format == VK_FORMAT_R16G16B16A16_UNORM ||
          format == VK_FORMAT_R16G16B16A16_SNORM;
 }
-constexpr VkImageSubresourceRange kRangeColor = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-constexpr VkImageSubresourceRange kRangeDepth = {
+constexpr gpu::Range kRangeColor = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+constexpr gpu::Range kRangeDepth = {
     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
 
 // Direct3D 11 16.8 fixed point with rounding, like ui::FloatToD3D11Fixed16p8.
@@ -1340,28 +1340,23 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // The picture into the credits image, in the output's command buffer before its pass (once).
   void RecordCreditsUpload(gpu::CommandList commands) {
     const bo2zm::credits::Picture* picture = bo2zm::credits::Images();
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    gpu::ImageBarrier barrier;
+    barrier.after = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.image = credits_.image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                 nullptr, 0, nullptr, 1, &barrier);
+    barrier.range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, nullptr, 1, &barrier);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {picture->width, picture->height, 1};
     gpu_.CopyBufferToImage(commands, credits_.staging, credits_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &region);
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
-                 nullptr, 0, nullptr, 1, &barrier);
+    barrier.before = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.after = VK_ACCESS_SHADER_READ_BIT;
+    barrier.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    gpu_.Barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, nullptr, 1, &barrier);
     credits_.uploaded = true;
   }
 
@@ -1783,8 +1778,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         }
         // bo2zm_native_clear_useful_area. Only the rows in use; the bottom band, if needed.
         if (!ClearColorAreaUseful(*target_render, color)) {
-          gpu_.ClearColorImage(commands_job_, target_render->image,
-                               VK_IMAGE_LAYOUT_GENERAL, &color, 1, &kRangeColor);
+          const gpu::ClearColor neutral = gpu::FromVk(color);
+          gpu_.ClearColorImage(commands_job_, target_render->image, VK_IMAGE_LAYOUT_GENERAL, &neutral, 1,
+                               &kRangeColor);
           RemoveBand(*target_render);
         }
         ++clears_;
@@ -1807,8 +1803,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     BeforeWriteDepth(*depth);  // bo2zm_native_lazy_depth
     ShadowMinBeforeClear(*depth);   // bo2zm_native_shadow_min
     depth->content_invalid = false;  // The clear gives it contents
-    const VkClearDepthStencilValue value{float(reg.rb_depth_clear >> 8) / 16777215.0f,
-                                         reg.rb_depth_clear & 0xFF};
+    const gpu::ClearDepthStencil value{float(reg.rb_depth_clear >> 8) / 16777215.0f,
+                                       reg.rb_depth_clear & 0xFF};
     // If it is already cleared with this same value and nobody has drawn anything since then, the clear does
     // not change a single bit. Mind the path below: the per-pass clear also resets the ZCULL plane, so that
     // one is never skipped (only the vkCmdClearDepthStencilImage one).
@@ -1879,18 +1875,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     };
     // Earlier draws and copies of the image finish before the clear, and the clear before what follows.
     const auto barrier = [this]() {
-      VkMemoryBarrier m{};
-      m.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-      m.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_TRANSFER_WRITE_BIT;
-      m.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+      gpu::MemoryBarrier m;
+      m.before = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                 VK_ACCESS_TRANSFER_WRITE_BIT;
+      m.after = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
       constexpr VkPipelineStageFlags kStages =
           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-      gpu_.Barrier(commands_job_, kStages, kStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
-                   &m, 0, nullptr, 0, nullptr);
+      gpu_.Barrier(commands_job_, kStages, kStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, &m);
     };
     bool done = false;
     if (b.depth || b.stencil) {
@@ -3315,12 +3309,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // the copy engine on for uploads, and never with it off or used for image copies only). One full
   // barrier when the buffer begins (after everything submitted before it) and one when it ends (before the job).
   void UploadBarrier() {
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    gpu::MemoryBarrier barrier;
+    barrier.before = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.after = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     gpu_.Barrier(commands_upload_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, &barrier);
   }
 
   gpu::CommandList CommandsUpload() override {
@@ -3459,13 +3452,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (!front.Begin(presented_, eligible, rect, resolved_input, opaque_rgba, known_clear)) return;
     // TargetColor has already materialized any older deferred resolve and restored lent contents.
     // Clear only the visible front region. Once per Swap, so later views and HUD passes survive.
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    gpu::MemoryBarrier barrier;
+    barrier.before = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.after = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     const auto order = [&]() {
       gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, &barrier);
     };
     order();
     MarkGpu(kGpuClears);
@@ -3596,15 +3588,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu::vulkan::WriteSampledImage(dfn_, device_, set, 0, 0, source.view);
 
     // The render target's writes before it is read, and the result before it is sampled, copied or read back.
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    gpu::MemoryBarrier barrier;
+    barrier.before = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.after = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     gpu_.Barrier(commands_job_,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                 1, &barrier, 0, nullptr, 0, nullptr);
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, &barrier);
     VkRenderPassBeginInfo start{};
     start.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     start.renderPass = pass;
@@ -3650,12 +3640,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // makes the next draw rebind everything, as after a new command buffer (its pass was already closed: copies
     // happen outside passes).
     ++generation_commands_;
-    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.before = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.after = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
-                 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                                  VK_PIPELINE_STAGE_TRANSFER_BIT, &barrier);
     return true;
   }
 
@@ -3730,24 +3719,20 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     // The resolve's writes (and the previous frame's reads of this volume) before the copy; the copy before the
     // draws that sample it.
-    VkMemoryBarrier before{};
-    before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    before.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    VkImageMemoryBarrier first{};
-    first.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    first.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    first.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    first.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    first.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    gpu::MemoryBarrier before;
+    before.before = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    before.after = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    gpu::ImageBarrier first;
+    first.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    first.new_layout = VK_IMAGE_LAYOUT_GENERAL;
     first.image = v.image.image;
-    first.subresourceRange = kRangeColor;
-    first.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    first.range = kRangeColor;
+    first.after = VK_ACCESS_TRANSFER_WRITE_BIT;
     gpu_.Barrier(commands_job_,
                  VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                      (v.gather != VK_NULL_HANDLE ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0),
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, v.image.prepared ? 0 : 1, &first);
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, &before, v.image.prepared ? 0 : 1, &first);
     v.image.prepared = true;
     MarkGpu(kGpuCopies);
     if (v.gather != VK_NULL_HANDLE) {
@@ -3785,13 +3770,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       gpu_.CopyImage(commands_job_, flat->image, VK_IMAGE_LAYOUT_GENERAL, v.image.image, VK_IMAGE_LAYOUT_GENERAL,
                      uint32_t(v.regions.size()), v.regions.data());
     }
-    VkMemoryBarrier later{};
-    later.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    later.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    later.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    gpu::MemoryBarrier later;
+    later.before = VK_ACCESS_TRANSFER_WRITE_BIT;
+    later.after = VK_ACCESS_SHADER_READ_BIT;
     gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
-                 &later, 0, nullptr, 0, nullptr);
+                 VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, &later);
     v.image.swap_rb = flat->swap_rb;
     v.write = write;
     v.source = flat->image;
@@ -5426,16 +5409,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     Prepare(target);
     const VkImageAspectFlags aspect =
         IsDepthFormat(target.format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                            VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    gpu::MemoryBarrier barrier;
+    barrier.before = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                     VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.after = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     constexpr VkPipelineStageFlags kWrites =
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-    gpu_.Barrier(commands_job_, kWrites, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
-                 nullptr, 0, nullptr);
+    gpu_.Barrier(commands_job_, kWrites, VK_PIPELINE_STAGE_TRANSFER_BIT, &barrier);
     VkImageCopy copy{};
     copy.srcSubresource = {aspect, 0, 0, 1};
     copy.dstSubresource = {aspect, 0, 0, 1};
@@ -5446,15 +5427,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                    1, &copy);
     // And the copied data made visible to what follows: the current resolve (copy or swap), the draws that
     // sample the texture that receives it, and the pass that draws to the render target again.
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    barrier.before = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.after = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     gpu_.Barrier(commands_job_, VK_PIPELINE_STAGE_TRANSFER_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
                                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, &barrier);
     ++restores_for_resolve_;
     pixels_restored_ += uint64_t(target.width) * target.height;
     AnnotateCopy(target.width, target.height);
@@ -5610,7 +5590,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     }
     Prepare(target);
     MarkGpu(kGpuClears);
-    const VkClearDepthStencilValue value{1.0f, 0};
+    const gpu::ClearDepthStencil value{1.0f, 0};
     gpu_.ClearDepthStencilImage(commands_job_, target.image, VK_IMAGE_LAYOUT_GENERAL, &value, 1, &kRangeDepth);
     AnnotateUseClear(target, target.width, target.height);  // bo2zm_native_diag_clears: like the restore
     ForgetClear(target);  // not a game clear: the game's next clear cannot be skipped
@@ -5846,20 +5826,16 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (commands == nullptr) {
       return;
     }
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    gpu::ImageBarrier barrier;
+    barrier.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.new_layout = VK_IMAGE_LAYOUT_GENERAL;
     const bool depth = image.format == VK_FORMAT_D24_UNORM_S8_UINT ||
                              image.format == VK_FORMAT_D32_SFLOAT_S8_UINT;
     barrier.image = image.image;
-    barrier.subresourceRange = depth ? kRangeDepth : kRangeColor;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.range = depth ? kRangeDepth : kRangeColor;
+    barrier.after = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     gpu_.Barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                 &barrier);
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, nullptr, 1, &barrier);
     if (depth) {
       // ZCULL: images created without TRANSFER_DST (the ones eligible for a ZCULL plane) cannot be
       // cleared with vkCmdClearDepthStencilImage. They are cleared by opening a pass with
@@ -5872,12 +5848,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                       image.width, image.height, clears_in_pass_failed_);
         }
       } else if (gpu_.loaded().clear_depth) {
-        const VkClearDepthStencilValue far_depth{1.0f, 0};
+        const gpu::ClearDepthStencil far_depth{1.0f, 0};
         gpu_.ClearDepthStencilImage(commands, image.image, VK_IMAGE_LAYOUT_GENERAL, &far_depth, 1,
                             &kRangeDepth);
       }
     } else {
-      const VkClearColorValue cero{};
+      const gpu::ClearColor cero{};
       gpu_.ClearColorImage(commands, image.image, VK_IMAGE_LAYOUT_GENERAL, &cero,
                            1, &kRangeColor);
     }
@@ -6320,7 +6296,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       return false;
     }
     Prepare(tiled_);
-    const VkClearColorValue depth3d{{0.12f, 0.0f, 0.12f, 1.0f}};
+    const gpu::ClearColor depth3d{{0.12f, 0.0f, 0.12f, 1.0f}};
     gpu_.ClearColorImage(commands_job_, tiled_.image, VK_IMAGE_LAYOUT_GENERAL, &depth3d,
                          1, &kRangeColor);
     std::string list;
@@ -6902,13 +6878,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (since_target) {
       // That image was just written as a render target (or copy destination) in the frame's work, which goes in
       // another submission: make the output read it fully written.
-      VkMemoryBarrier barrier{};
-      barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-      barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      gpu::MemoryBarrier barrier;
+      barrier.before = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.after = VK_ACCESS_SHADER_READ_BIT;
       gpu_.Barrier(commands_output_[s],
                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, &barrier);
     }
     gpu_.BeginPass(commands_output_[s], pass);
     gpu_.SetViewport(commands_output_[s], gpu::Viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f});
@@ -6973,8 +6948,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       // And nothing submitted later (the next frame draws and clears that image again) writes it before the
       // output has read it.
       gpu_.Barrier(commands_output_[s], VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                   nullptr, 0, nullptr, 0, nullptr);
+                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, nullptr);
     }
     if (!work_.End(commands_output_[s])) {
       return false;
