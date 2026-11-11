@@ -101,6 +101,10 @@ bool RunOurs(PPCContext& ctx, uint8_t* base, std::string_view command) {
     REXLOG_INFO("[lua] {}", argument);
     return true;
   }
+  if (name == "bo2zm_test_goto") {
+    bo2zm::cheats::TestGoto(argument);
+    return true;
+  }
   if (bo2zm::bots::Command(name, argument)) {
     bo2zm::bots::EveryFrame(ctx, base);
     return true;

@@ -100,6 +100,8 @@ void SetFlyCollision(bool on);
 bool Combo();
 void SetCombo(bool on);
 int ComboMode();  // kNoclip or kUfo
+// Test helper: "x y z" puts the players there; anything else only starts the origin log (see bo2zm_cheats.cpp).
+void TestGoto(std::string_view argument);
 void SetComboMode(int mode);
 int JumpLevel();  // 0 normal .. 5 extreme
 void SetJumpLevel(int level);

@@ -207,6 +207,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -4435,11 +4436,48 @@ static void ScaleMoveSpeed(uint8_t* base, uint32_t pm) {
   }
 }
 
+namespace {
+// Test helper (bo2zm_test_goto "x y z", or "log"): scripted test routes need the player at fixed places of a map (for
+// example across TranZit's area borders, where the game swaps the area's texture pack). For 0.3 s every movement step
+// (the server's and the client's prediction) starts from the given origin with no velocity; from the first command on,
+// the origin and yaw are logged every 2 s so a route can be read back from a log.
+std::atomic<bool> g_test_move{false};
+std::atomic<int64_t> g_test_goto_until{0};
+std::mutex g_test_goto_mutex;
+Vec3 g_test_goto_at{};
+
+int64_t TestNowNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+void TestMove(uint8_t* base, uint32_t pm) {
+  const uint32_t ps = Load32(base, pm + kPmPs);
+  if (!ps) return;
+  const int64_t now = TestNowNs();
+  if (now < g_test_goto_until.load(std::memory_order_relaxed)) {
+    Vec3 at;
+    { std::lock_guard lock(g_test_goto_mutex); at = g_test_goto_at; }
+    StoreVec(base, ps + kPsOrigin, at);
+    StoreVec(base, ps + kPsVelocity, Vec3{0.0f, 0.0f, 0.0f});
+  }
+  static std::atomic<int64_t> next_log{0};
+  int64_t due = next_log.load(std::memory_order_relaxed);
+  if (now >= due && next_log.compare_exchange_strong(due, now + 2000000000ll, std::memory_order_relaxed)) {
+    const Vec3 origin = LoadVec(base, ps + kPsOrigin);
+    REXLOG_INFO("[test-pos] at ({:.0f} {:.0f} {:.0f}) yaw {:.0f}", origin.x, origin.y, origin.z,
+                LoadFloat(base, ps + kPsViewAngles + 4));
+  }
+}
+
+}  // namespace
+
 REX_HOOK_RAW(sub_8269AE30) {
   if (!bo2zm::mode::IsZombies()) {
     __imp__sub_8269AE30(ctx, base);
     return;
   }
+  if (g_test_move.load(std::memory_order_relaxed)) [[unlikely]] TestMove(base, ctx.r3.u32);
   if (AnyOption(Option::Speed)) [[unlikely]] ScaleMoveSpeed(base, ctx.r3.u32);
   if (!g_hold.load(std::memory_order_relaxed) && !AnyOption(Option::Fly) &&
       !AnyOption(Option::Feather) && !AnyOption(Option::Jump)) {
@@ -4777,4 +4815,17 @@ void bo2zm::cheats::PlayRemoteBlast(const float at[3]) {
   std::lock_guard lock(g_blasts_mutex);
   g_blasts_waiting.store(true, std::memory_order_relaxed);
   if (g_blasts.size() < 16) g_blasts.push_back({actor, {at[0], at[1], at[2]}});
+}
+
+void bo2zm::cheats::TestGoto(std::string_view argument) {
+  g_test_move.store(true, std::memory_order_relaxed);
+  float x = 0, y = 0, z = 0;
+  const std::string text(argument);
+  if (std::sscanf(text.c_str(), "%f %f %f", &x, &y, &z) != 3) {
+    REXLOG_INFO("[test-pos] logging the player's origin (bo2zm_test_goto {})", text);
+    return;
+  }
+  { std::lock_guard lock(g_test_goto_mutex); g_test_goto_at = Vec3{x, y, z}; }
+  g_test_goto_until.store(TestNowNs() + 300000000ll, std::memory_order_relaxed);
+  REXLOG_INFO("[test-pos] goto ({:.0f} {:.0f} {:.0f})", x, y, z);
 }
