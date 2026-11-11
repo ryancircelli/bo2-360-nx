@@ -5721,6 +5721,12 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           }
           src_valid = src_valid && shared_memory_->IsRangeValid(vertex_fetch_ranges[i].start,
                                                                 vertex_fetch_ranges[i].length);
+          // Source bytes the GPU copy holds that guest RAM no longer has
+          // (meaningful only where the source is valid, so no upload refreshes it).
+          uint32_t d_first = 0, d_last = 0;
+          const size_t d = shared_memory_->DiffGpuAgainstGuest(vertex_fetch_ranges[i].start,
+                                                               vertex_fetch_ranges[i].length, &d_first, &d_last);
+          fetches += fmt::format("[gpu!=guest {} +{:X}..+{:X}]", d, d_first, d_last);
         }
         const double dst_cpu = rex::write_trace::LastCpuWriteMs(base_bytes, memexport_range.size_bytes, &dst_lr);
         rex::write_trace::Aux(fmt::format(

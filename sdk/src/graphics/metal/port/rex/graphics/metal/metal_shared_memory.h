@@ -342,6 +342,9 @@ class MetalSharedMemory : public SharedMemory {
   // FABLE2_SHMEM_VALID_FIRST (default on; CR-02): the direct-write upload
   // route marks a range valid before copying it, as the staged route does.
   static bool ShmemValidFirstEnabled();
+  // Write-trace diagnostic: bytes where the GPU copy differs from guest RAM.
+  size_t DiffGpuAgainstGuest(uint32_t start, uint32_t length,
+                             uint32_t* first, uint32_t* last);
   void NoteMemexportReadback(uint32_t start, uint32_t length,
                              uint64_t submission);
   void ApplyCompletedMemexportReadbacks(uint64_t completed_submission);

@@ -209,6 +209,24 @@ constexpr uint32_t kReadbackMaxRangeBytes = 8u << 20;
 constexpr size_t kReadbackMaxPending = 4096;
 }  // namespace
 
+size_t MetalSharedMemory::DiffGpuAgainstGuest(uint32_t start, uint32_t length,
+                                              uint32_t* first, uint32_t* last) {
+  *first = *last = 0;
+  if (!buffer_ || !buffer_->contents() || length == 0) return 0;
+  const uint8_t* gpu = static_cast<const uint8_t*>(buffer_->contents());
+  const uint8_t* guest =
+      static_cast<const uint8_t*>(memory().TranslatePhysical(0));
+  size_t differ = 0;
+  for (uint32_t k = 0; k < length; ++k) {
+    if (gpu[start + k] != guest[start + k]) {
+      if (!differ) *first = k;
+      *last = k + 1;
+      ++differ;
+    }
+  }
+  return differ;
+}
+
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
                                               uint64_t submission) {
   if (!length || start >= kBufferSize || !submission) {
