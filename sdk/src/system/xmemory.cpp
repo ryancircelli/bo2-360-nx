@@ -580,8 +580,18 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
   // Will be rounded to physical page boundaries internally, so just pass 1 as
   // the length - guranteed not to cross page boundaries also.
   auto physical_heap = static_cast<PhysicalHeap*>(heap);
-  if (physical_heap->TriggerCallbacks(std::move(global_lock_locked_once), virtual_address, 1,
-                                      is_write, false)) {
+  (void)global_lock_locked_once;  // Held on purpose until this function returns.
+  // TriggerCallbacks consumes the lock it is given, so hand it a second
+  // acquisition of the (recursive) global lock and keep ours. The recovery
+  // path below must run under the lock: with it dropped, another thread could
+  // re-arm the write watch (read-only host page + notify_on_invalidation) between
+  // the checks and the Protect(kReadWrite), leaving a page writable that the
+  // texture cache believes is watched, so later CPU writes would never
+  // invalidate it. global_lock_locked_once stays held to the end of this
+  // function, so a watch armed concurrently either shows up in this
+  // TriggerCallbacks check or waits until the recovery has finished.
+  if (physical_heap->TriggerCallbacks(rex::thread::global_critical_region::AcquireDirect(),
+                                      virtual_address, 1, is_write, false)) {
     return true;
   }
 
