@@ -310,6 +310,22 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
                              : XXH3_64bits(guest + p.start, p.end - p.start);
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
+    if (rex::write_trace::g_enabled.load(std::memory_order_relaxed) &&
+        rex::write_trace::OverlapsPhysical(uint32_t(e.start), uint32_t(len))) [[unlikely]] {
+      // Which bytes this readback changes: the GPU copy against guest RAM now.
+      size_t differ = 0, first = len, last = 0;
+      for (size_t k = 0; k < len; ++k) {
+        if (guest[e.start + k] != gpu[e.start + k]) {
+          ++differ;
+          first = std::min(first, k);
+          last = k;
+        }
+      }
+      rex::write_trace::NotePhysicalSlow(
+          "gpu-memexport-readback-pre", uint32_t(e.start), uint32_t(len), 0,
+          fmt::format("submission {} guest bytes before the copy; gpu!=guest {} bytes (+{:X}..+{:X}) hash@export {:016X} now {:016X}",
+                      e.submission, differ, differ ? first : 0, differ ? last + 1 : 0, e.guest_hash, guest_hash_now));
+    }
     std::memcpy(guest + e.start, gpu + e.start, len);
     if (rex::write_trace::Wanted(uint32_t(e.start), uint32_t(len))) [[unlikely]] {
       rex::write_trace::NotePhysicalSlow("gpu-memexport-readback", uint32_t(e.start), uint32_t(len), 0,

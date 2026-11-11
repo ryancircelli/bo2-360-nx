@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <fmt/format.h>
@@ -30,15 +31,8 @@ std::atomic<bool> g_enabled{false};
 
 namespace {
 
-constexpr size_t kMaxRanges = 16;
+constexpr size_t kMaxRanges = 128;
 constexpr uint32_t kViews[3] = {0xA0000000u, 0xC0000000u, 0xE0000000u};
-
-struct Range {
-  uint32_t start;  // physical, 4 KB aligned
-  uint32_t end;    // exclusive
-};
-Range g_ranges[kMaxRanges];
-size_t g_range_count = 0;
 
 // One guest view of one range in host memory: [host_start, host_end) holds physical [phys_start, ...).
 struct HostView {
@@ -46,23 +40,44 @@ struct HostView {
   uintptr_t host_end;
   uint32_t phys_start;
 };
-HostView g_views[kMaxRanges * 3];
-size_t g_view_count = 0;
-uintptr_t g_host_page = 16384;
-bool g_fault_mode = true;
 
-memory::Memory* g_memory = nullptr;
-std::atomic<Describer> g_describer{nullptr};
-
-// Watched 4 KB pages, flattened over all ranges.
+// A watched 4 KB page.
 struct Page {
   uint32_t phys;
   uint64_t hash;
   std::atomic<uint32_t> touched;  // notes and faults since the last scan
   std::string touched_by;         // under g_mutex: seqs of those notes/faults
 };
-Page* g_pages = nullptr;
-size_t g_page_count = 0;
+
+// Ranges are only added (from the environment at start, then by REX_TRACE_WRITE_FOLLOW matches), never removed: a
+// slot is filled under g_mutex and published by the release store of g_range_count, so readers need no lock.
+struct Range {
+  uint32_t start;  // physical, 4 KB aligned
+  uint32_t end;    // exclusive
+  Page* pages;
+  size_t page_count;
+  HostView views[3];
+  size_t view_count;
+};
+Range g_ranges[kMaxRanges];
+std::atomic<size_t> g_range_count{0};
+
+uintptr_t g_host_page = 16384;
+bool g_fault_mode = true;
+
+memory::Memory* g_memory = nullptr;
+std::atomic<Describer> g_describer{nullptr};
+
+// REX_TRACE_WRITE_FOLLOW: 512-byte blocks of known contents (hash -> blob, offset). A noted write that lands one of
+// them in guest RAM adds a watched range around it.
+struct FollowBlob {
+  std::string name;
+  uint32_t length;
+};
+std::vector<FollowBlob> g_follow_blobs;
+std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> g_follow_index;
+bool g_follow = false;
+uint32_t g_follow_span = 0x10000;  // watched on each side of the matched block
 
 std::mutex g_mutex;  // the log file, the dump counter, touched_by
 FILE* g_log = nullptr;
@@ -152,12 +167,19 @@ std::string Dump(const char* prefix, uint64_t seq, uint32_t physical, uint32_t l
 void MarkTouched(uint32_t physical, uint32_t length, uint64_t seq) {
   // Caller holds g_mutex.
   const uint64_t end = uint64_t(physical) + length;
-  for (size_t pi = 0; pi < g_page_count; ++pi) {
-    Page& p = g_pages[pi];
-    if (p.phys < end && uint64_t(p.phys) + 4096 > physical) {
-      p.touched.fetch_add(1, std::memory_order_relaxed);
-      if (p.touched_by.size() < 400) {
-        p.touched_by += fmt::format("{}{}", p.touched_by.empty() ? "" : ",", seq);
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t ri = 0; ri < n; ++ri) {
+    Range& r = g_ranges[ri];
+    if (r.start >= end || r.end <= physical) {
+      continue;
+    }
+    for (size_t pi = 0; pi < r.page_count; ++pi) {
+      Page& p = r.pages[pi];
+      if (p.phys < end && uint64_t(p.phys) + 4096 > physical) {
+        p.touched.fetch_add(1, std::memory_order_relaxed);
+        if (p.touched_by.size() < 400) {
+          p.touched_by += fmt::format("{}{}", p.touched_by.empty() ? "" : ",", seq);
+        }
       }
     }
   }
@@ -166,7 +188,8 @@ void MarkTouched(uint32_t physical, uint32_t length, uint64_t seq) {
 // The watched part of [physical, physical + length): first overlapping range's clipped piece.
 bool Clip(uint32_t physical, uint32_t length, uint32_t* out_start, uint32_t* out_length) {
   const uint64_t end = uint64_t(physical) + length;
-  for (size_t i = 0; i < g_range_count; ++i) {
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t i = 0; i < n; ++i) {
     if (g_ranges[i].start < end && g_ranges[i].end > physical) {
       const uint32_t s = std::max(g_ranges[i].start, physical);
       const uint32_t e = uint32_t(std::min<uint64_t>(g_ranges[i].end, end));
@@ -182,14 +205,17 @@ void Arm() {
   if (!g_fault_mode) {
     return;
   }
-  for (size_t i = 0; i < g_view_count; ++i) {
-    for (uintptr_t a = g_views[i].host_start & ~(g_host_page - 1); a < g_views[i].host_end; a += g_host_page) {
-      size_t len = g_host_page;
-      memory::PageAccess access = memory::PageAccess::kNoAccess;
-      if (memory::QueryProtect(reinterpret_cast<void*>(a), len, access) &&
-          access == memory::PageAccess::kReadWrite) {
-        memory::Protect(reinterpret_cast<void*>(a), g_host_page, memory::PageAccess::kReadOnly,
-                        nullptr);
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t ri = 0; ri < n; ++ri) {
+    const Range& r = g_ranges[ri];
+    for (size_t i = 0; i < r.view_count; ++i) {
+      for (uintptr_t a = r.views[i].host_start & ~(g_host_page - 1); a < r.views[i].host_end; a += g_host_page) {
+        size_t len = g_host_page;
+        memory::PageAccess access = memory::PageAccess::kNoAccess;
+        if (memory::QueryProtect(reinterpret_cast<void*>(a), len, access) &&
+            access == memory::PageAccess::kReadWrite) {
+          memory::Protect(reinterpret_cast<void*>(a), g_host_page, memory::PageAccess::kReadOnly, nullptr);
+        }
       }
     }
   }
@@ -221,8 +247,10 @@ void DrainFaults() {
 void Scan() {
   std::lock_guard<std::mutex> lock(g_mutex);
   DrainFaults();
-  for (size_t pi = 0; pi < g_page_count; ++pi) {
-    Page& p = g_pages[pi];
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t ri = 0; ri < n; ++ri)
+  for (size_t pi = 0; pi < g_ranges[ri].page_count; ++pi) {
+    Page& p = g_ranges[ri].pages[pi];
     const uint64_t h = XXH3_64bits(g_memory->TranslatePhysical(p.phys), 4096);
     const uint32_t touched = p.touched.exchange(0, std::memory_order_relaxed);
     if (h != p.hash) {
@@ -257,10 +285,47 @@ void Watcher() {
   }
 }
 
+// Adds a watched range (caller holds g_mutex). False when full or already covered.
+bool AddRange(uint32_t start, uint32_t end) {
+  start &= ~0xFFFu;
+  end = (end + 0xFFFu) & ~0xFFFu;
+  const size_t n = g_range_count.load(std::memory_order_relaxed);
+  if (n >= kMaxRanges || end <= start) {
+    return false;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (g_ranges[i].start <= start && g_ranges[i].end >= end) {
+      return false;
+    }
+  }
+  Range& r = g_ranges[n];
+  r.start = start;
+  r.end = end;
+  r.page_count = (end - start) / 4096;
+  r.pages = new Page[r.page_count];
+  for (size_t i = 0; i < r.page_count; ++i) {
+    r.pages[i].phys = start + uint32_t(i) * 4096;
+    r.pages[i].hash = XXH3_64bits(g_memory->TranslatePhysical(r.pages[i].phys), 4096);
+    r.pages[i].touched.store(0);
+  }
+  r.view_count = 0;
+  for (uint32_t view : kViews) {
+    // The E view starts at physical 0x1000 (ToPhysical).
+    if (view == 0xE0000000u && start < 0x1000u) {
+      continue;
+    }
+    const uint32_t guest = view + start - (view == 0xE0000000u ? 0x1000u : 0u);
+    const uintptr_t host = reinterpret_cast<uintptr_t>(g_memory->TranslateVirtual(guest));
+    r.views[r.view_count++] = {host, host + (end - start), start};
+  }
+  g_range_count.store(n + 1, std::memory_order_release);
+  return true;
+}
+
 bool ParseRanges(const char* text) {
   std::string s(text);
   size_t pos = 0;
-  while (pos < s.size() && g_range_count < kMaxRanges) {
+  while (pos < s.size()) {
     size_t comma = s.find(',', pos);
     std::string item = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
     pos = comma == std::string::npos ? s.size() : comma + 1;
@@ -281,16 +346,79 @@ bool ParseRanges(const char* text) {
     }
     const uint32_t start = ToPhysical(uint32_t(a));
     const uint32_t end = start + uint32_t(b - a);
-    g_ranges[g_range_count++] = {start & ~0xFFFu, (end + 0xFFFu) & ~0xFFFu};
+    AddRange(start, end);
   }
-  return g_range_count != 0;
+  return true;
+}
+
+// REX_TRACE_WRITE_FOLLOW=FILE[,FILE...]: index each file's non-constant 512-byte blocks.
+void LoadFollow(const char* text) {
+  std::string s(text);
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t comma = s.find(',', pos);
+    std::string path = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+    pos = comma == std::string::npos ? s.size() : comma + 1;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) {
+      REXSYS_ERROR("[write-trace] can't open follow file '{}'", path);
+      continue;
+    }
+    std::vector<uint8_t> data;
+    uint8_t buf[65536];
+    size_t got;
+    while ((got = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+      data.insert(data.end(), buf, buf + got);
+    }
+    std::fclose(f);
+    const uint32_t blob = uint32_t(g_follow_blobs.size());
+    const size_t slash = path.rfind('/');
+    g_follow_blobs.push_back({slash == std::string::npos ? path : path.substr(slash + 1), uint32_t(data.size())});
+    for (size_t o = 0; o + 512 <= data.size(); o += 512) {
+      bool constant = true;
+      for (size_t k = 1; k < 512 && constant; ++k) {
+        constant = data[o + k] == data[o];
+      }
+      if (!constant) {
+        g_follow_index.emplace(XXH3_64bits(&data[o], 512), std::make_pair(blob, uint32_t(o)));
+      }
+    }
+    g_follow = true;
+  }
+}
+
+// After a noted write: does [physical, physical + length) now hold a followed block? Then watch around it.
+void FollowCheck(const char* source, uint32_t physical, uint32_t length, uint32_t guest_lr, const std::string& detail) {
+  const uint32_t first = (physical + 511u) & ~511u;
+  const uint64_t end = uint64_t(physical) + length;
+  for (uint64_t b = first; b + 512 <= end; b += 512) {
+    auto it = g_follow_index.find(XXH3_64bits(g_memory->TranslatePhysical(uint32_t(b)), 512));
+    if (it == g_follow_index.end()) {
+      continue;
+    }
+    const uint32_t at = uint32_t(b);
+    const uint32_t lo = at > g_follow_span ? at - g_follow_span : 0;
+    const uint32_t hi = uint32_t(std::min<uint64_t>(uint64_t(at) + g_follow_span, 0x20000000u));
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (AddRange(lo, hi)) {
+      Line(fmt::format("t={:.3f} follow {}+0x{:X} found at {:08X} by src={} phys={:08X}+0x{:X} guest_lr={:08X} | "
+                       "{} -> watching {:08X}-{:08X} (range {})",
+                       NowMs(), g_follow_blobs[it->second.first].name, it->second.second, at, source, physical,
+                       length, guest_lr, detail, lo & ~0xFFFu, (hi + 0xFFFu) & ~0xFFFu,
+                       g_range_count.load(std::memory_order_relaxed)));
+    }
+    return;  // one match per write is enough
+  }
 }
 
 }  // namespace
 
+bool FollowEnabled() { return g_follow; }
+
 bool OverlapsPhysical(uint32_t physical, uint32_t length) {
   const uint64_t end = uint64_t(physical) + length;
-  for (size_t i = 0; i < g_range_count; ++i) {
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t i = 0; i < n; ++i) {
     if (g_ranges[i].start < end && g_ranges[i].end > physical) {
       return true;
     }
@@ -300,7 +428,13 @@ bool OverlapsPhysical(uint32_t physical, uint32_t length) {
 
 void NotePhysicalSlow(const char* source, uint32_t physical, uint32_t length, uint32_t guest_lr,
                       const std::string& detail) {
-  if (!g_enabled.load(std::memory_order_relaxed) || !OverlapsPhysical(physical, length)) {
+  if (!g_enabled.load(std::memory_order_relaxed)) {
+    return;
+  }
+  if (g_follow && length >= 512) {
+    FollowCheck(source, physical, length, guest_lr, detail);
+  }
+  if (!OverlapsPhysical(physical, length)) {
     return;
   }
   uint32_t clip_start = 0, clip_length = 0;
@@ -321,8 +455,13 @@ void OnWriteFault(uintptr_t host_address, uint64_t host_pc, uint64_t host_lr) {
   if (!g_enabled.load(std::memory_order_relaxed)) {
     return;
   }
-  for (size_t i = 0; i < g_view_count; ++i) {
-    const HostView& v = g_views[i];
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t i = 0; i < n * 3; ++i) {
+    const Range& r = g_ranges[i / 3];
+    if (i % 3 >= r.view_count) {
+      continue;
+    }
+    const HostView& v = r.views[i % 3];
     if (host_address < v.host_start || host_address >= v.host_end) {
       continue;
     }
@@ -364,10 +503,13 @@ bool IsArmedHostPage(uintptr_t host_address) {
   if (!g_enabled.load(std::memory_order_relaxed) || !g_fault_mode) {
     return false;
   }
-  for (size_t i = 0; i < g_view_count; ++i) {
-    const uintptr_t first = g_views[i].host_start & ~(g_host_page - 1);
-    if (host_address >= first && host_address < g_views[i].host_end) {
-      return true;
+  const size_t n = g_range_count.load(std::memory_order_acquire);
+  for (size_t ri = 0; ri < n; ++ri) {
+    for (size_t i = 0; i < g_ranges[ri].view_count; ++i) {
+      const HostView& v = g_ranges[ri].views[i];
+      if (host_address >= (v.host_start & ~(g_host_page - 1)) && host_address < v.host_end) {
+        return true;
+      }
     }
   }
   return false;
@@ -377,11 +519,8 @@ void SetDescriber(Describer describer) { g_describer.store(describer, std::memor
 
 void Initialize(memory::Memory* memory) {
   const char* ranges = std::getenv("REX_TRACE_WRITE_PAGES");
-  if (!ranges || !*ranges) {
-    return;
-  }
-  if (!ParseRanges(ranges)) {
-    REXSYS_ERROR("[write-trace] bad REX_TRACE_WRITE_PAGES '{}'", ranges);
+  const char* follow = std::getenv("REX_TRACE_WRITE_FOLLOW");
+  if ((!ranges || !*ranges) && (!follow || !*follow)) {
     return;
   }
   g_memory = memory;
@@ -392,46 +531,39 @@ void Initialize(memory::Memory* memory) {
   if (const char* n = std::getenv("REX_TRACE_WRITE_DUMPS")) {
     g_dumps_left = uint32_t(std::strtoul(n, nullptr, 10));
   }
+  if (const char* span = std::getenv("REX_TRACE_WRITE_FOLLOW_SPAN")) {
+    g_follow_span = uint32_t(std::strtoul(span, nullptr, 16));
+  }
   if (const char* dir = std::getenv("REX_TRACE_WRITE_DIR")) {
     g_dir = dir;
     g_log = std::fopen((g_dir + "/events.log").c_str(), "a");
   }
-  size_t total = 0;
-  for (size_t i = 0; i < g_range_count; ++i) {
-    total += (g_ranges[i].end - g_ranges[i].start) / 4096;
-  }
-  g_pages = new Page[total];
-  for (size_t i = 0; i < g_range_count; ++i) {
-    for (uint32_t p = g_ranges[i].start; p < g_ranges[i].end; p += 4096) {
-      Page& page = g_pages[g_page_count++];
-      page.phys = p;
-      page.hash = XXH3_64bits(memory->TranslatePhysical(p), 4096);
-      page.touched.store(0);
-    }
-    for (uint32_t view : kViews) {
-      // The E view starts at physical 0x1000 (ToPhysical).
-      if (view == 0xE0000000u && g_ranges[i].start < 0x1000u) {
-        continue;
-      }
-      const uint32_t guest = view + g_ranges[i].start - (view == 0xE0000000u ? 0x1000u : 0u);
-      const uintptr_t host = reinterpret_cast<uintptr_t>(memory->TranslateVirtual(guest));
-      g_views[g_view_count++] = {host, host + (g_ranges[i].end - g_ranges[i].start), g_ranges[i].start};
-    }
-  }
-  g_enabled.store(true, std::memory_order_release);
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    std::string text = fmt::format("t={:.3f} start ranges=", NowMs());
-    for (size_t i = 0; i < g_range_count; ++i) {
-      text += fmt::format("{}{:08X}-{:08X}", i ? "," : "", g_ranges[i].start, g_ranges[i].end);
+    if (ranges && *ranges && !ParseRanges(ranges)) {
+      REXSYS_ERROR("[write-trace] bad REX_TRACE_WRITE_PAGES '{}'", ranges);
+      return;
     }
-    text += fmt::format(" pages={} fault_mode={} host_page={} views=", g_page_count, g_fault_mode, g_host_page);
-    for (size_t i = 0; i < g_view_count; ++i) {
-      text += fmt::format("{}{:X}-{:X}", i ? "," : "", g_views[i].host_start, g_views[i].host_end);
+    if (follow && *follow) {
+      LoadFollow(follow);
+    }
+    std::string text = fmt::format("t={:.3f} start ranges=", NowMs());
+    const size_t n = g_range_count.load();
+    size_t pages = 0;
+    for (size_t i = 0; i < n; ++i) {
+      text += fmt::format("{}{:08X}-{:08X}", i ? "," : "", g_ranges[i].start, g_ranges[i].end);
+      pages += g_ranges[i].page_count;
+    }
+    text += fmt::format(" pages={} fault_mode={} host_page={} follow_blocks={} follow_span=0x{:X}", pages,
+                        g_fault_mode, g_host_page, g_follow_index.size(), g_follow_span);
+    for (const FollowBlob& b : g_follow_blobs) {
+      text += fmt::format(" [{} {} B]", b.name, b.length);
     }
     Line(text);
   }
-  REXSYS_WARN("[write-trace] on: {} (dir '{}')", ranges, g_dir);
+  g_enabled.store(true, std::memory_order_release);
+  REXSYS_WARN("[write-trace] on: pages '{}' follow '{}' (dir '{}')", ranges ? ranges : "", follow ? follow : "",
+              g_dir);
   std::thread(Watcher).detach();
 }
 

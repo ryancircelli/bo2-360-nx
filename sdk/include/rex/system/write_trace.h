@@ -50,8 +50,12 @@ bool OverlapsPhysical(uint32_t physical, uint32_t length);
 void NotePhysicalSlow(const char* source, uint32_t physical, uint32_t length, uint32_t guest_lr,
                       const std::string& detail);
 
+// REX_TRACE_WRITE_FOLLOW is set: writes of 512 bytes or more are checked for followed contents.
+bool FollowEnabled();
+
 inline bool Wanted(uint32_t physical, uint32_t length) {
-  return g_enabled.load(std::memory_order_relaxed) && OverlapsPhysical(physical, length);
+  return g_enabled.load(std::memory_order_relaxed) &&
+         ((length >= 512 && FollowEnabled()) || OverlapsPhysical(physical, length));
 }
 
 // Guest-address form: only the physical views are of interest.

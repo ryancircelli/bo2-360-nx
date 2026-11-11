@@ -5701,6 +5701,22 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           DrawMaterializationSource::kMemexport, base_bytes,
           memexport_range.size_bytes);
     }
+    for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
+      const uint32_t base_bytes = memexport_range.base_address_dwords << 2;
+      if (rex::write_trace::g_enabled.load(std::memory_order_relaxed) &&
+          rex::write_trace::OverlapsPhysical(base_bytes, memexport_range.size_bytes)) [[unlikely]] {
+        std::string fetches;
+        for (uint32_t i = 0; i < vertex_fetch_range_count; ++i) {
+          fetches += fmt::format(" {:08X}+{:X}", vertex_fetch_ranges[i].start, vertex_fetch_ranges[i].length);
+        }
+        rex::write_trace::NotePhysicalSlow(
+            "gpu-memexport-prep", base_bytes, memexport_range.size_bytes, 0,
+            fmt::format("export range valid-in-gpu-buffer={} vs={:016X} ps={:016X} vfetch:{}",
+                        shared_memory_->IsRangeValid(base_bytes, memexport_range.size_bytes) ? 1 : 0,
+                        vertex_shader->ucode_data_hash(), pixel_shader ? pixel_shader->ucode_data_hash() : 0,
+                        fetches));
+      }
+    }
 
     auto add_guest_index_range = [&](uint64_t index_base, uint32_t index_count,
                                      xenos::IndexFormat index_format,
