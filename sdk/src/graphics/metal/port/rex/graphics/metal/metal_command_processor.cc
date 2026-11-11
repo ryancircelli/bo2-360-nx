@@ -5729,12 +5729,19 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           fetches += fmt::format("[gpu!=guest {} +{:X}..+{:X}]", d, d_first, d_last);
         }
         const double dst_cpu = rex::write_trace::LastCpuWriteMs(base_bytes, memexport_range.size_bytes, &dst_lr);
+        const uint32_t rp = __atomic_load_n(&read_ptr_index_, __ATOMIC_ACQUIRE);
+        double issue_first = -1.0, issue_latest = -1.0;
+        uint32_t issue_count = 0;
+        if (!rex::write_trace::WptrWindow(rp, &issue_first, &issue_latest, &issue_count)) {
+          issue_first = issue_latest = -1.0;
+        }
         rex::write_trace::Aux(fmt::format(
             "memexport dst={:08X}+{:X} valid={} submission={} vs={:016X} vfetch:{} src_valid={} src_cpu={:.2f}/{:08X} "
-            "dst_cpu={:.2f}/{:08X}",
+            "dst_cpu={:.2f}/{:08X} batch_rp={:X} issued_from={:.2f} wptr_latest={:.2f} wptr_writes_since={}",
             base_bytes, memexport_range.size_bytes,
             shared_memory_->IsRangeValid(base_bytes, memexport_range.size_bytes) ? 1 : 0, submission_current_,
-            vertex_shader->ucode_data_hash(), fetches, src_valid ? 1 : 0, src_cpu, src_lr, dst_cpu, dst_lr));
+            vertex_shader->ucode_data_hash(), fetches, src_valid ? 1 : 0, src_cpu, src_lr, dst_cpu, dst_lr, rp,
+            issue_first, issue_latest, issue_count));
       }
       if (rex::write_trace::g_enabled.load(std::memory_order_relaxed) &&
           rex::write_trace::OverlapsPhysical(base_bytes, memexport_range.size_bytes)) [[unlikely]] {

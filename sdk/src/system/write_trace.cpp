@@ -624,4 +624,36 @@ void Initialize(memory::Memory* memory) {
   std::thread(Watcher).detach();
 }
 
+
+namespace {
+struct WptrEntry { uint32_t value; double ms; };
+constexpr uint32_t kWptrRing = 4096;
+WptrEntry g_wptr[kWptrRing];
+uint64_t g_wptr_n = 0;
+std::mutex g_wptr_mutex;
+}  // namespace
+
+void NoteWptr(uint32_t value) {
+  if (!g_enabled.load(std::memory_order_relaxed)) return;
+  std::lock_guard<std::mutex> lock(g_wptr_mutex);
+  g_wptr[g_wptr_n % kWptrRing] = {value, ElapsedMs()};
+  ++g_wptr_n;
+}
+
+bool WptrWindow(uint32_t rp, double* first_ms, double* latest_ms, uint32_t* count) {
+  std::lock_guard<std::mutex> lock(g_wptr_mutex);
+  if (!g_wptr_n) return false;
+  const uint64_t lo = g_wptr_n > kWptrRing ? g_wptr_n - kWptrRing : 0;
+  *latest_ms = g_wptr[(g_wptr_n - 1) % kWptrRing].ms;
+  for (uint64_t i = g_wptr_n; i-- > lo;) {
+    if (g_wptr[i % kWptrRing].value == rp) {
+      if (i + 1 >= g_wptr_n) return false;  // nothing issued after rp yet
+      *first_ms = g_wptr[(i + 1) % kWptrRing].ms;
+      *count = uint32_t(g_wptr_n - 1 - i);
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace rex::write_trace

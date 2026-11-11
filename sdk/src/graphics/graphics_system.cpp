@@ -30,6 +30,7 @@
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
+#include <rex/system/write_trace.h>
 
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, fxaa, fxaa_extreme")
     .allowed({"none", "fxaa", "fxaa_extreme"})
@@ -267,6 +268,7 @@ void GraphicsSystem::WriteRegister(uint32_t addr, uint32_t value) {
 
   switch (r) {
     case 0x01C5:  // CP_RB_WPTR
+      rex::write_trace::NoteWptr(value);
       command_processor_->UpdateWritePointer(value);
       break;
     case 0x1844:  // AVIVO_D1GRPH_PRIMARY_SURFACE_ADDRESS

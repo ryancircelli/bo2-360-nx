@@ -95,5 +95,11 @@ inline void StampGuest(uint32_t guest, uint32_t length, uint32_t guest_lr) {
 // The newest stamp over a range: ms (negative when never) and its lr.
 double LastCpuWriteMs(uint32_t physical, uint32_t length, uint32_t* guest_lr);
 double ElapsedMs();
+// Guest CP_RB_WPTR writes: when the game handed each ring-buffer batch to the GPU.
+void NoteWptr(uint32_t value);
+// For a batch the CP started at read index rp: time of the first WPTR write after the
+// one that set rp (earliest a packet in the batch could have been issued), the latest
+// WPTR write time, and how many WPTR writes followed rp. Returns false if unknown.
+bool WptrWindow(uint32_t rp, double* first_ms, double* latest_ms, uint32_t* count);
 
 }  // namespace rex::write_trace
