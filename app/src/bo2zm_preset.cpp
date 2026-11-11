@@ -17,8 +17,8 @@
 // bo2zm_preset_ui (0-5, kept in sync from here) and changes the preset with the console command "bo2zm_preset N"
 // (bo2zm_commands.cpp); each option shows bo2zm_gfx_<option>_ui and changes with "bo2zm_gfx_<option> N". The chosen
 // preset is saved in <user folder>/bo2zm_settings.txt (bo2zm_settings.cpp) and loaded at start-up, unless bo2zm.toml,
-// the environment or the command line set bo2zm_preset (any value: a test toml's preset always wins). Very low is the
-// default.
+// the environment or the command line set bo2zm_preset (any value: a test toml's preset always wins). High is the
+// Mac default; very low is the Switch default.
 //
 // In menus or in game: hold Back (Minus on the Switch) and press Up for the next higher preset or Down for the next
 // lower one (lowest to high, wrapping around; from custom, Up goes to lowest and Down to high).
@@ -99,14 +99,13 @@ REXCVAR_DEFINE_STRING(bo2zm_diag_model_detail, "", "Graphics",
                       "most once a second each. Empty = off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // Default quality. The Switch keeps its own (very_low, split screen capped at lowest, model scale 2); every other
-// build (the Mac) defaults to kDefaultPreset: change this ONE line to "high" for the high default. The 4p Town matrix
-// held 60 fps at both.
+// build (the Mac) uses high, no split-screen cap and model scale 1. The 4p Town matrix held 60 fps at both.
 #if defined(__SWITCH__)
 inline constexpr const char* kDefaultPreset = "very_low";
 inline constexpr const char* kDefaultSplitscreenPreset = "lowest";
 inline constexpr double kDefaultSplitscreenModelScale = 2.0;
 #else
-inline constexpr const char* kDefaultPreset = "medium";  // "medium" or "high"
+inline constexpr const char* kDefaultPreset = "high";
 inline constexpr const char* kDefaultSplitscreenPreset = "same";
 inline constexpr double kDefaultSplitscreenModelScale = 1.0;
 #endif
@@ -1086,6 +1085,9 @@ void EveryFrame(PPCContext& ctx, uint8_t* base) {
     // The notification arrives with the registry lock held (SetFlagFromSource): only atomics are touched.
     rex::cvar::RegisterChangeCallback("bo2zm_preset", [](std::string_view, std::string_view value) {
       g_index.store(IndexOf(value), std::memory_order_relaxed);
+      g_pending.store(true, std::memory_order_relaxed);
+    });
+    rex::cvar::RegisterChangeCallback("bo2zm_splitscreen_preset", [](std::string_view, std::string_view) {
       g_pending.store(true, std::memory_order_relaxed);
     });
     REXLOG_INFO("[preset] {} (applied when a map loads)", kNames[g_index.load()]);

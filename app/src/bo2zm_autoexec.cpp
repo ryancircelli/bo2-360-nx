@@ -65,7 +65,7 @@ REXCVAR_DEFINE_INT32(bo2zm_volume, 100, "BO2",
 #if defined(__SWITCH__)
 inline constexpr int32_t kDefaultIpakInMatch = 4;
 #else
-inline constexpr int32_t kDefaultIpakInMatch = 0;  // Mac: unthrottled (the 4p matrix held 60 fps without a limit)
+inline constexpr int32_t kDefaultIpakInMatch = 16;  // Mac: unlimited was worse on the gump texture check
 #endif
 REXCVAR_DEFINE_INT32(bo2zm_ipak_mb_s_in_match, kDefaultIpakInMatch, "BO2",
                      "The .ipak read rate limit (the SDK's switch_io_ipak_mb_s) while player 0 is in a match; menus and "
@@ -238,21 +238,22 @@ namespace {
 // bo2zm_ipak_mb_s_in_match: the SDK's .ipak rate follows whether player 0 is in a match (the benchmark's A/B factor,
 // when it is set, drives the same rate and wins).
 void ApplyStreamingRate() {
-  static const int32_t in_match = REXCVAR_GET(bo2zm_ipak_mb_s_in_match);
+  const int32_t in_match = REXCVAR_GET(bo2zm_ipak_mb_s_in_match);
   static const bool ab = REXCVAR_GET(bo2zm_benchmark_ipak_mb_s_b) >= 0;
-  if (in_match <= 0 || ab) {
+  if (ab) {
     return;
   }
   static const int32_t usual = rex::cvar::Query<int32_t>("switch_io_ipak_mb_s");
   static int applied = -1;
   const int playing = bo2zm::cheats::InMatch() ? 1 : 0;
-  if (playing == applied) {
+  const int32_t desired = playing && in_match > 0 ? in_match : usual;
+  if (desired == applied) {
     return;
   }
-  applied = playing;
-  rex::cvar::SetFlagByName("switch_io_ipak_mb_s", std::to_string(playing ? in_match : usual));
-  REXLOG_INFO("[io] .ipak reads at most {} MB/s ({})", playing ? in_match : usual,
-              playing ? "in a match, bo2zm_ipak_mb_s_in_match" : "menus and loading");
+  applied = desired;
+  rex::cvar::SetFlagByName("switch_io_ipak_mb_s", std::to_string(desired));
+  REXLOG_INFO("[io] .ipak reads at most {} MB/s ({})", desired,
+              playing && in_match > 0 ? "in a match, bo2zm_ipak_mb_s_in_match" : "menus, loading or unlimited");
 }
 
 // The benchmark's route starts once a match is loaded (player 0 has a client).

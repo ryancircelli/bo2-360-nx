@@ -20,10 +20,10 @@ bo2zm_renderer = "xenos"
 # Window or full screen.
 # fullscreen = true
 
-# Graphics preset: "lowest", "very_low", "low", "medium" (the default), "high" (the game's own settings, as the Xbox
+# Graphics preset: "lowest", "very_low", "low", "medium", "high" (the Mac default, the game's own settings, as the Xbox
 # 360 runs it) or "custom" (the settings picked one by one in Options > Graphics). A preset set here wins at every
 # start and applies to every map.
-# bo2zm_preset = "medium"
+# bo2zm_preset = "high"
 
 # Frames per second in the top-left corner.
 bo2zm_show_fps = false

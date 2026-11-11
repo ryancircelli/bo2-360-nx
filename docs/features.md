@@ -65,7 +65,11 @@ selected in the Script Loader ([script mods](script-mods.md#zombies-bots)).
 | **MAP PROFILE** (menus) | GLOBAL, TOWN, FARM, BUS DEPOT, TRANZIT, DINER, NUKETOWN, DIE RISE, MOB OF THE DEAD, BURIED, ORIGINS | Which profile the settings below show and change |
 | **ENABLE PROFILE** | OFF, ON | ON: that map keeps its own settings (starting as a copy of GLOBAL) |
 | **PROFILE IN USE** (in a match) | — | The profile this map is using |
-| **GRAPHICS PRESET** | LOWEST, VERY LOW, LOW, MEDIUM, HIGH, CUSTOM | Sets every option below; changing one makes it CUSTOM. VERY LOW is the default |
+| **GRAPHICS PRESET** | LOWEST, VERY LOW, LOW, MEDIUM, HIGH, CUSTOM | Sets every option below; changing one makes it CUSTOM. HIGH is the Mac default; VERY LOW is the Switch default |
+| **SPLIT-SCREEN QUALITY** | SAME, LOWEST, VERY LOW, LOW, MEDIUM, HIGH | The highest preset split-screen views use; SAME applies no extra cap |
+| **TEXTURE STREAMING** | 4 MB/S, 16 MB/S, UNLIMITED | The in-match texture read-rate limit |
+| **SPLIT-SCREEN MODEL SCALE** | 1X, 1.5X, 2X, 3X, 4X | How much sooner models simplify in split screen; 1X matches one player's detail |
+| **TEXTURE MEMORY** | 384 / 768 MB, 768 / 1536 MB, 1536 / 3072 MB, 3072 / 6144 MB | Soft and hard texture-cache limits, applied immediately |
 | **TEXTURE DETAIL** | LOWEST, LOW, MEDIUM, HIGH | Texture sharpness |
 | **MODEL DETAIL** | LOW, MEDIUM, HIGH, ULTRA | How soon models switch to simpler versions |
 | **DRAW DISTANCE** | SHORTEST, SHORT, MEDIUM, FAR, FULL | How far the world is drawn |

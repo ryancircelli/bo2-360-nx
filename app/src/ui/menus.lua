@@ -579,8 +579,20 @@ local PresetItem = {
   setting = "preset", choices = {"LOWEST", "VERY LOW", "LOW", "MEDIUM", "HIGH", "CUSTOM"},
 }
 
--- Options > Graphics: each option of the presets (bo2zm_preset.cpp), in the program's order.
+-- Options > Graphics: port-wide runtime controls, then each option of the presets (bo2zm_preset.cpp), in its order.
 local GraphicsItems = {
+  {label = "SPLIT-SCREEN QUALITY", hint = "The highest graphics level used with more than one local player. SAME "
+     .. "uses the preset above; lower choices reduce detail for every split-screen view.",
+   setting = "split_quality", choices = {"SAME", "LOWEST", "VERY LOW", "LOW", "MEDIUM", "HIGH"}},
+  {label = "TEXTURE STREAMING", hint = "Maximum in-match .ipak read rate. 4 MB/s matches the Switch limit; "
+     .. "UNLIMITED lets the game stream at full speed.",
+   setting = "ipak_rate", choices = {"4 MB/S", "16 MB/S", "UNLIMITED"}},
+  {label = "SPLIT-SCREEN MODEL SCALE", hint = "How much sooner distant models simplify with 3 or 4 players. 1 keeps "
+     .. "the same screen-size detail as one player.",
+   setting = "split_model", choices = {"1X", "1.5X", "2X", "3X", "4X"}},
+  {label = "TEXTURE MEMORY", hint = "The texture cache's soft and hard limits. Larger caches keep more textures "
+     .. "ready instead of loading them again. Changes apply right away.",
+   setting = "texture_memory", choices = {"384 / 768 MB", "768 / 1536 MB", "1536 / 3072 MB", "3072 / 6144 MB"}},
   {label = "TEXTURE DETAIL", hint = "How sharp textures are. Lower uses smaller copies of them.",
    setting = "gfx_texture", choices = {"LOWEST", "LOW", "MEDIUM", "HIGH"}},
   {label = "MODEL DETAIL", hint = "How soon models switch to simpler versions with distance.",

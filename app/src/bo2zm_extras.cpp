@@ -61,6 +61,10 @@
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/runtime.h>
+
+REXCVAR_DECLARE(std::string, bo2zm_splitscreen_preset);
+REXCVAR_DECLARE(double, bo2zm_splitscreen_model_scale);
+REXCVAR_DECLARE(int32_t, bo2zm_ipak_mb_s_in_match);
 #if REX_PLATFORM_WIN32
 #include <windows.h>
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
@@ -164,6 +168,49 @@ void SetFpsCounter(int on) {
 }
 int LoadingVideo() {
   return REXCVAR_GET(bo2zm_loading_video);
+}
+constexpr const char* kSplitQuality[] = {"same", "lowest", "very_low", "low", "medium", "high"};
+constexpr const char* kIpakRates[] = {"4", "16", "0"};
+constexpr const char* kSplitModels[] = {"1", "1.5", "2", "3", "4"};
+int SplitQuality() {
+  const auto& value = REXCVAR_GET(bo2zm_splitscreen_preset);
+  for (int i = 0; i < int(std::size(kSplitQuality)); ++i) {
+    if (value == kSplitQuality[i]) return i;
+  }
+  return 0;
+}
+void SetSplitQuality(int value) {
+  rex::cvar::SetFlagByName("bo2zm_splitscreen_preset", kSplitQuality[value]);
+}
+int IpakRate() {
+  const int value = REXCVAR_GET(bo2zm_ipak_mb_s_in_match);
+  return value == 4 ? 0 : value == 16 ? 1 : 2;
+}
+void SetIpakRate(int value) {
+  rex::cvar::SetFlagByName("bo2zm_ipak_mb_s_in_match", kIpakRates[value]);
+}
+int SplitModel() {
+  const double value = REXCVAR_GET(bo2zm_splitscreen_model_scale);
+  for (int i = 0; i < int(std::size(kSplitModels)); ++i) {
+    if (value == std::atof(kSplitModels[i])) return i;
+  }
+  return 0;
+}
+void SetSplitModel(int value) {
+  rex::cvar::SetFlagByName("bo2zm_splitscreen_model_scale", kSplitModels[value]);
+}
+constexpr const char* kTextureMemory[] = {"384", "768", "1536", "3072"};
+int TextureMemory() {
+  const int value = rex::cvar::Query<int32_t>("texture_cache_memory_limit_soft");
+  for (int i = 0; i < int(std::size(kTextureMemory)); ++i) {
+    if (value == std::atoi(kTextureMemory[i])) return i;
+  }
+  return 2;
+}
+void SetTextureMemory(int value) {
+  const int soft = std::atoi(kTextureMemory[value]);
+  rex::cvar::SetFlagByName("texture_cache_memory_limit_soft", kTextureMemory[value]);
+  rex::cvar::SetFlagByName("texture_cache_memory_limit_hard", std::to_string(soft * 2));
 }
 void SetLoadingVideo(int on) {
   rex::cvar::SetFlagByName("bo2zm_loading_video", on ? "true" : "false");
@@ -483,6 +530,10 @@ struct Option {
 };
 
 constexpr Option kOptions[] = {
+    {"split_quality", "split_quality", kSplitQuality, 6, SplitQuality, SetSplitQuality},
+    {"ipak_rate", "ipak_rate", kIpakRates, 3, IpakRate, SetIpakRate},
+    {"split_model", "split_model", kSplitModels, 5, SplitModel, SetSplitModel},
+    {"texture_memory", "texture_memory", kTextureMemory, 4, TextureMemory, SetTextureMemory},
     {"default_mode", nullptr, kDefaultModes, 3, DefaultMode, SetDefaultMode},
     {"fps", "fps_counter", kOffOn, 2, FpsCounter, SetFpsCounter},
     {"loading_video", "loading_video", kOffOn, 2, LoadingVideo, SetLoadingVideo},
