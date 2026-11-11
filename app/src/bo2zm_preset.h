@@ -1,4 +1,4 @@
-// Graphics presets (bo2zm_preset: lowest, very_low, low, medium or custom). See bo2zm_preset.cpp.
+// Graphics presets (bo2zm_preset: lowest, very_low, low, medium, high or custom). See bo2zm_preset.cpp.
 
 #pragma once
 

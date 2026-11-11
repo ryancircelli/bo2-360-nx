@@ -175,9 +175,24 @@ local function run(mode, inGame, testSpec, focusField, campaignInstalled, instal
             SetDvar = function(name, value) dvars[name] = value end,
             PartyHostToggleStart = function() starts = starts + 1 end,
             PartyGetPlayerCount = function() return partyPlayers end,
-            Localize = function(text) return text end}
+            Localize = function(text) return text == "ZMUI_MAP_CAPS" and "MAP" or text end}
   UIExpression = {IsInGame = function() return inGame and 1 or 0 end,
                   SessionMode_IsSystemlinkGame = function() return systemLink and 1 or 0 end,
+                  GetCurrentMapTableName = function() return "maps.csv" end,
+                  ToUpper = function(controller, text) return string.upper(text) end,
+                  TableLookup = function(controller, tableName, ...)
+                    local columns = {...}
+                    if tableName == "maps.csv" then
+                      assert(columns[1] == 0 and columns[3] == 3, "the map name lookup changed")
+                      return columns[2] == "zm_transit" and "GREEN RUN" or ""
+                    end
+                    if tableName == "gametypes.csv" then
+                      assert(#columns == 5 and columns[1] == 0 and columns[2] == 5 and columns[3] == 3
+                          and columns[5] == 4, "the start location lookup changed")
+                      return string.upper(columns[4])
+                    end
+                    return ""
+                  end,
                   DvarInt = function(controller, name) return tonumber(dvars[name]) or 0 end,
                   DvarString = function(controller, name)
                     assert(not string.match(name, "bo2zm_scripts_[a-z]+_32_ui"), "read past the manager's 32-row limit")
@@ -187,6 +202,7 @@ local function run(mode, inGame, testSpec, focusField, campaignInstalled, instal
   CoD = {
     LeftRightSelector = {SetCurrentChoice = function(selector, value) selector.m_currentChoice = value end},
     isSinglePlayer = mode == "campaign", isZombie = mode == "zombies", fonts = {Condensed = "font"},
+    gametypesTable = "gametypes.csv",
     textSize = {Default = 20}, DefaultTextColor = {r = 1, g = 1, b = 1},
     trueOrange = {r = 1, g = 0.5, b = 0}, CoD9Button = {Height = 30, TextHeight = 25},
     Options = {Width = 400}, HintText = {Height = 21}, ButtonPrompt = {Height = 30},
@@ -350,6 +366,11 @@ local function run(mode, inGame, testSpec, focusField, campaignInstalled, instal
         pane.body.startMatchButton = button
       end
     end
+    if mode == "zombies" then
+      pane.body.changeMapButton = pane.body.buttonList:addButton("MAP")
+      pane.body.changeMapButton:registerEventHandler("start_game", pane.body.changeMapButton.disable)
+      pane.body.changeMapButton:registerEventHandler("cancel_start_game", pane.body.changeMapButton.enable)
+    end
     -- A stock rebuild may have established fallback focus before the override restores its previous row.
     if pane.fixtureFocusStart then pane.body.startMatchButton:processEvent({name = "gain_focus", controller = 0}) end
   end
@@ -417,7 +438,26 @@ local function run(mode, inGame, testSpec, focusField, campaignInstalled, instal
       assert(#selector.m_choices == 1 and selector.m_choices[1].label == "NOT INSTALLED")
       assert(not selector:isFocusable() and selector.disabled, "missing bots selector is editable")
       assert(current["START MATCH"].focused and not selector.focused, "bots stole lobby focus")
+      assert(lobby.buttonPane.body.changeMapButton.label == "MAP: GREEN RUN / TOWN",
+          "Zombies lobby did not show its selected map and location")
       local function refresh() lobby:processEvent({name = "bo2zm_refresh_bots", controller = 0}) end
+      dvars.ui_zm_mapstartlocation = "farm"
+      refresh()
+      assert(lobby.buttonPane.body.changeMapButton.label == "MAP: GREEN RUN / FARM",
+          "lobby map text did not follow the selected location")
+      dvars.ui_zm_mapstartlocation = "town"
+      refresh()
+      dvars.ui_zm_mapstartlocation = ""
+      refresh()
+      assert(lobby.buttonPane.body.changeMapButton.label == "MAP: GREEN RUN",
+          "lobby map text invented a start location")
+      dvars.ui_mapname = "zm_frontend"
+      refresh()
+      assert(lobby.buttonPane.body.changeMapButton.label == "MAP", "front-end lobby kept a stale map")
+      dvars.ui_mapname, dvars.ui_zm_mapstartlocation = "zm_transit", "town"
+      refresh()
+      assert(lobby.buttonPane.body.changeMapButton.label == "MAP: GREEN RUN / TOWN",
+          "lobby map text did not return to the selected map")
       dvars.bo2zm_bots_available_ui = 1
       refresh()
       assert(selector:isFocusable() and not selector.disabled, "installed bots remained locked")

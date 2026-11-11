@@ -128,7 +128,12 @@ REXCVAR_DEFINE_INT32(switch_io_cache_mb, 0, "Filesystem",
  * ~105 -> ~84 ms/s of CPU, the Backend ~118 -> ~91, Main ~142 -> ~121, frame times and level load time unchanged.
  * 0 = no limit.
  */
-REXCVAR_DEFINE_INT32(switch_io_ipak_mb_s, 32, "Filesystem",
+#if defined(__SWITCH__)
+inline constexpr int32_t kDefaultIpakMbS = 32;
+#else
+inline constexpr int32_t kDefaultIpakMbS = 0;  // Mac/PC: unthrottled
+#endif
+REXCVAR_DEFINE_INT32(switch_io_ipak_mb_s, kDefaultIpakMbS, "Filesystem",
                      "Reads of the game's streamed image packs (.ipak files) are delivered at most this many MB/s, "
                      "about what the 360's disk allowed (0 = no limit). Without it the game's image streaming "
                      "rereads the same images as fast as the CPU allows");

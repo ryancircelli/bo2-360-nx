@@ -579,8 +579,20 @@ local PresetItem = {
   setting = "preset", choices = {"LOWEST", "VERY LOW", "LOW", "MEDIUM", "HIGH", "CUSTOM"},
 }
 
--- Options > Graphics: each option of the presets (bo2zm_preset.cpp), in the program's order.
+-- Options > Graphics: port-wide runtime controls, then each option of the presets (bo2zm_preset.cpp), in its order.
 local GraphicsItems = {
+  {label = "SPLIT-SCREEN QUALITY", hint = "The highest graphics level used with more than one local player. SAME "
+     .. "uses the preset above; lower choices reduce detail for every split-screen view.",
+   setting = "split_quality", choices = {"SAME", "LOWEST", "VERY LOW", "LOW", "MEDIUM", "HIGH"}},
+  {label = "TEXTURE STREAMING", hint = "Maximum in-match .ipak read rate. 4 MB/s matches the Switch limit; "
+     .. "UNLIMITED lets the game stream at full speed.",
+   setting = "ipak_rate", choices = {"4 MB/S", "16 MB/S", "UNLIMITED"}},
+  {label = "SPLIT-SCREEN MODEL SCALE", hint = "How much sooner distant models simplify with 3 or 4 players. 1 keeps "
+     .. "the same screen-size detail as one player.",
+   setting = "split_model", choices = {"1X", "1.5X", "2X", "3X", "4X"}},
+  {label = "TEXTURE MEMORY", hint = "The texture cache's soft and hard limits. Larger caches keep more textures "
+     .. "ready instead of loading them again. Changes apply right away.",
+   setting = "texture_memory", choices = {"384 / 768 MB", "768 / 1536 MB", "1536 / 3072 MB", "3072 / 6144 MB"}},
   {label = "TEXTURE DETAIL", hint = "How sharp textures are. Lower uses smaller copies of them.",
    setting = "gfx_texture", choices = {"LOWEST", "LOW", "MEDIUM", "HIGH"}},
   {label = "MODEL DETAIL", hint = "How soon models switch to simpler versions with distance.",
@@ -2292,6 +2304,28 @@ local PatchBotsLobby
     return map .. " " .. gametype .. " " .. (start == "" and "-" or start)
   end
 
+  -- The stock PopulateButtons_Project_Zombie (ui/t6/menus/privategamelobby.lua) creates the MAP row with its name and
+  -- never fills in a value. The value is the same pair the lobby's map card shows (ui/t6/menus/mapinfoimage.lua): the
+  -- map table's name column for the map and the game type table's name column for the start location, upper-cased.
+  -- Before a map is picked (ui_mapname "zm_frontend", no row) the row keeps its own name, as the stock lobby leaves it.
+  local function ShowMapChoice(body)
+    local button = body and body.changeMapButton
+    if not button then return end
+    local label = Engine.Localize("ZMUI_MAP_CAPS")
+    local map = UIExpression.DvarString(nil, "ui_mapname") or ""
+    local maps = UIExpression.GetCurrentMapTableName()
+    local key = type(maps) == "string" and map ~= "" and UIExpression.TableLookup(nil, maps, 0, map, 3) or nil
+    if type(key) == "string" and key ~= "" then
+      label = label .. ": " .. UIExpression.ToUpper(nil, Engine.Localize(key))
+      local start = UIExpression.DvarString(nil, "ui_zm_mapstartlocation") or ""
+      local location = start ~= "" and UIExpression.TableLookup(nil, CoD.gametypesTable, 0, 5, 3, start, 4) or nil
+      if type(location) == "string" and location ~= "" then
+        label = label .. " / " .. UIExpression.ToUpper(nil, Engine.Localize(location))
+      end
+    end
+    if button.label ~= label then button:setLabel(label) end
+  end
+
   -- CoD.PrivateGameLobby.IsHost (ui/t6/menus/privategamelobby.lua): out of a lobby, or its host.
   local function Hosting(menu, controller)
     local lobby = CoD.PrivateGameLobby
@@ -2315,6 +2349,7 @@ local PatchBotsLobby
     if not state.zombies() or InGame() then return end
     local pane = menu.buttonPane
     local body = pane and pane.body
+    Safely(ShowMapChoice, body)
     local list = body and body.buttonList
     if not list or not list.addDvarLeftRightSelector then return end
     if menu.bo2zmSystemLink then
