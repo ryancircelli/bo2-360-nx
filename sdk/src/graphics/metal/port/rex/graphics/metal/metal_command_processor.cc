@@ -1333,19 +1333,7 @@ MetalCommandProcessor::MetalCommandProcessor(
       kMaxPendingSharedMemoryWriteCapacity);
 }
 
-void MetalCommandProcessor::LogMemexportWriteOrderSummary() {
-  if (memexport_order_summary_logged_) return;
-  memexport_order_summary_logged_ = true;
-  REXLOG_INFO(
-      "[memexport-write-order] summary overlap-draws {} barrier-encoded {} "
-      "barrier-skipped-dedup {} barrier-nothing {} extra-passes {}",
-      memexport_order_overlap_draws_, memexport_order_barrier_encoded_,
-      memexport_order_barrier_skipped_, memexport_order_barrier_nothing_,
-      memexport_order_extra_passes_);
-}
-
 MetalCommandProcessor::~MetalCommandProcessor() {
-  LogMemexportWriteOrderSummary();
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
   // End any active render encoder before releasing
@@ -3536,13 +3524,7 @@ bool MetalCommandProcessor::EncodeSharedMemoryRenderReadDependencies(
         (render_barrier_producers_ & producers) == producers &&
         (render_barrier_consumers_ & consumers) == consumers) {
       ++gpu_time_trace::n_barrier_skipped;
-      if (memexport_order_overlap_pending_) {
-        ++memexport_order_barrier_skipped_;
-      }
     } else {
-      if (memexport_order_overlap_pending_) {
-        ++memexport_order_barrier_encoded_;
-      }
       current_render_encoder_->memoryBarrier(
           MTL::BarrierScopeBuffers, active_producer_stages, consumer_stages);
       pass_trace::NoteBarrier(current_render_pass_trace_);
@@ -3573,15 +3555,6 @@ bool MetalCommandProcessor::EncodeSharedMemoryRenderReadDependencies(
       }
     }
     RetireFenceWaitedSharedMemoryWrites(ranges, range_count);
-  }
-  if (memexport_order_overlap_pending_) {
-    if (!NS::UInteger(active_producer_stages)) {
-      ++memexport_order_barrier_nothing_;
-    }
-    memexport_order_overlap_pending_ = false;
-    if (memexport_order_overlap_draws_ == 2000) {
-      LogMemexportWriteOrderSummary();
-    }
   }
   return true;
 }
@@ -8494,17 +8467,13 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
       if (active_memexport_overlap) break;
     }
   }
-  if (active_memexport_overlap) {
-    ++memexport_order_overlap_draws_;
-    memexport_order_overlap_pending_ = true;
-    if (memexport_write_order && current_render_encoder_) {
-      ++memexport_order_extra_passes_;
-      // Update the shared-memory fence for the earlier move before closing
-      // its encoder. The later move's normal hazard path waits on that fence
-      // in the next encoder rather than relying on vertex-to-vertex ordering
-      // within the same render pass.
-      EndRenderEncoder(RenderEncoderEndReason::kSharedMemoryReadDependency);
-    }
+  if (active_memexport_overlap && memexport_write_order &&
+      current_render_encoder_) {
+    // Update the shared-memory fence for the earlier move before closing
+    // its encoder. The later move's normal hazard path waits on that fence
+    // in the next encoder rather than relying on vertex-to-vertex ordering
+    // within the same render pass.
+    EndRenderEncoder(RenderEncoderEndReason::kSharedMemoryReadDependency);
   }
   pass_open_need_bottom_ = need_y1;
   const bool draw_pass_transfers =

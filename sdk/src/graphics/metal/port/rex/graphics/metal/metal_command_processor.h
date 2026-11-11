@@ -1782,14 +1782,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool submission_has_draws_ = false;
 
   std::vector<PendingSharedMemoryWrite> pending_shared_memory_writes_;
-  uint64_t memexport_order_overlap_draws_ = 0;
-  uint64_t memexport_order_barrier_encoded_ = 0;
-  uint64_t memexport_order_barrier_skipped_ = 0;
-  uint64_t memexport_order_barrier_nothing_ = 0;
-  uint64_t memexport_order_extra_passes_ = 0;
-  bool memexport_order_overlap_pending_ = false;
-  bool memexport_order_summary_logged_ = false;
-  void LogMemexportWriteOrderSummary();
   // [draw-prep-lite2] RetireFenceWaitedSharedMemoryWrites builds the retained list here and
   // swaps it in (no 64-entry stack array fill, no copy back).
   std::vector<PendingSharedMemoryWrite> pending_shared_memory_writes_scratch_;
