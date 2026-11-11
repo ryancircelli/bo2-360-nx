@@ -39,6 +39,38 @@ std::once_flag g_boot;
 
 uint64_t Take(std::atomic<uint64_t>& a) { return a.exchange(0, std::memory_order_relaxed); }
 
+GroupStats* FindGroupStats(uint32_t key, bool create) {
+  if (!key) {
+    return nullptr;
+  }
+  // Open addressing keeps notifications lock-free and bounded. This path is active only with the report enabled.
+  const uint32_t start = (key * 2654435761u) & (kMaxTrackedGroups - 1);
+  for (uint32_t i = 0; i < kMaxTrackedGroups; ++i) {
+    GroupStats& stats = g_group_stats[(start + i) & (kMaxTrackedGroups - 1)];
+    uint32_t found = stats.key.load(std::memory_order_acquire);
+    if (found == key) {
+      return &stats;
+    }
+    if (found == 0) {
+      if (!create) {
+        return nullptr;
+      }
+      uint32_t empty = 0;
+      if (stats.key.compare_exchange_strong(empty, key, std::memory_order_release, std::memory_order_relaxed) ||
+          empty == key) {
+        return &stats;
+      }
+    }
+  }
+  return nullptr;
+}
+
+void Max(std::atomic<uint64_t>& value, uint32_t candidate) {
+  uint64_t old = value.load(std::memory_order_relaxed);
+  while (old < candidate && !value.compare_exchange_weak(old, candidate, std::memory_order_relaxed)) {
+  }
+}
+
 std::string DescribeQueue(const uint8_t* base, uint32_t queue) {
   return fmt::format("{:08X} jobs {} mask {:02X} dest {:08X} open {} pending {}", queue,
                      Read32(base, queue + kQueueCount), Read32(base, queue + kQueueMask),
@@ -173,6 +205,66 @@ void Report(const uint8_t* base, double seconds) {
                 uint32_t(key), ps(v.first), ms(v.second));
   }
   g_waits.clear();
+
+  // Group keys are captured at the wait site. The table is bounded and uses atomics because keyed notifications
+  // are hot; print only the 16 keys with the most total time in the game's group-wait wrapper.
+  struct GroupRow {
+    uint64_t ns;
+    uint32_t key;
+    uint64_t waits, wait_ns, entry_queued, entry_running, max_entry_queued, max_entry_running;
+    uint64_t exit_nonzero, max_exit_queued, max_exit_running;
+    uint64_t sleeps, sleep_ns, matched_notifications, condition_only, timed_out, job_notifications, end_notifications,
+        pushes, putbacks;
+  };
+  std::vector<GroupRow> groups;
+  for (GroupStats& s : g_group_stats) {
+    const uint32_t key = s.key.load(std::memory_order_acquire);
+    if (!key) {
+      continue;
+    }
+    GroupRow row{Take(s.wait_ns), key, Take(s.waits), 0};
+    row.wait_ns = row.ns;
+    row.entry_queued = Take(s.entry_queued);
+    row.entry_running = Take(s.entry_running);
+    row.max_entry_queued = Take(s.max_entry_queued);
+    row.max_entry_running = Take(s.max_entry_running);
+    row.exit_nonzero = Take(s.exit_nonzero);
+    row.max_exit_queued = Take(s.max_exit_queued);
+    row.max_exit_running = Take(s.max_exit_running);
+    row.sleeps = Take(s.sleeps);
+    row.sleep_ns = Take(s.sleep_ns);
+    row.matched_notifications = Take(s.matched_notifications);
+    row.condition_only = Take(s.condition_only);
+    row.timed_out = Take(s.timed_out);
+    row.job_notifications = Take(s.job_notifications);
+    row.end_notifications = Take(s.end_notifications);
+    row.pushes = Take(s.pushes);
+    row.putbacks = Take(s.putbacks);
+    if (row.waits || row.sleeps || row.job_notifications || row.end_notifications || row.pushes || row.putbacks) {
+      groups.push_back(row);
+    }
+  }
+  std::sort(groups.begin(), groups.end(), [](const GroupRow& a, const GroupRow& b) { return a.ns > b.ns; });
+  if (!groups.empty()) {
+    REXLOG_INFO("[jobs]   group diagnostics: entry/exit q/r are snapshots; condition-only uses global changes; a "
+                "matched notification does not mean the game's group condition completed");
+  }
+  for (size_t i = 0; i < groups.size() && i < 16; ++i) {
+    const GroupRow& g = groups[i];
+    REXLOG_INFO("[jobs]   group {:08X}: waits {:.0f}/s {:.2f} ms/s; entry q/r avg {:.2f}/{:.2f} max {}/{}; "
+                "exit nonzero {:.0f}/s max q/r {}/{}; host sleeps {:.0f}/s {:.2f} ms/s "
+                "(matched notif {}, condition-only {}, timeout {}); "
+                "notifications job/end {:.0f}/{:.0f}/s; pushes/putbacks {:.0f}/{:.0f}/s",
+                g.key, ps(g.waits), ms(g.wait_ns), g.waits ? double(g.entry_queued) / g.waits : 0.0,
+                g.waits ? double(g.entry_running) / g.waits : 0.0, g.max_entry_queued, g.max_entry_running,
+                ps(g.exit_nonzero), g.max_exit_queued, g.max_exit_running, ps(g.sleeps), ms(g.sleep_ns),
+                g.matched_notifications, g.condition_only, g.timed_out, ps(g.job_notifications),
+                ps(g.end_notifications), ps(g.pushes), ps(g.putbacks));
+  }
+  const uint64_t group_overflow = Take(g_group_stats_overflow);
+  if (group_overflow) {
+    REXLOG_INFO("[jobs]   group-key tracking misses: {:.0f}/s", ps(group_overflow));
+  }
 }
 
 }  // namespace
@@ -237,18 +329,27 @@ int ClassifyEmpty(const uint8_t* base, uint32_t slot) {
 
 void AnnotateQueued(const uint8_t* base, uint32_t job, uint32_t queue) {
   const uint32_t type = Read32(base, job + kJobType);
+  const uint32_t group = Read32(base, job + kJobGroup);
   const char* label = JobThread().label;  // before the lock: JobThread() takes it on a thread's first call
   std::lock_guard lock(g_mutex);
   ++g_queues[queue];
   ++g_types[type];
+  if (GroupStats* stats = FindGroupStats(group, false)) {
+    stats->pushes.fetch_add(1, std::memory_order_relaxed);
+  }
   if (!g_queue_names.count(queue)) {
     g_queue_names[queue] = label;
   }
 }
 
-void AnnotateReturned(uint32_t type) {
+void AnnotateReturned(const uint8_t* base, uint32_t job) {
+  const uint32_t type = Read32(base, job + kJobType);
+  const uint32_t group = Read32(base, job + kJobGroup);
   std::lock_guard lock(g_mutex);
   ++g_returned[type];
+  if (GroupStats* stats = FindGroupStats(group, false)) {
+    stats->putbacks.fetch_add(1, std::memory_order_relaxed);
+  }
 }
 
 void AnnotateDependency(uint32_t counter, uint32_t type) {
@@ -261,6 +362,55 @@ void AnnotateWait(uint32_t who, uint32_t lr, uint64_t ns) {
   auto& v = g_waits[uint64_t(who) << 32 | lr];
   v.first += 1;
   v.second += ns;
+}
+
+void BeginGroupWait(uint32_t key) {
+  if (key && !FindGroupStats(key, true)) {
+    g_group_stats_overflow.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void AnnotateGroupWait(uint32_t key, uint64_t ns, uint32_t entry_queued, uint32_t entry_running,
+                       uint32_t exit_queued, uint32_t exit_running) {
+  GroupStats* stats = FindGroupStats(key, false);
+  if (!stats) {
+    return;
+  }
+  stats->waits.fetch_add(1, std::memory_order_relaxed);
+  stats->wait_ns.fetch_add(ns, std::memory_order_relaxed);
+  stats->entry_queued.fetch_add(entry_queued, std::memory_order_relaxed);
+  stats->entry_running.fetch_add(entry_running, std::memory_order_relaxed);
+  Max(stats->max_entry_queued, entry_queued);
+  Max(stats->max_entry_running, entry_running);
+  if (exit_queued || exit_running) {
+    stats->exit_nonzero.fetch_add(1, std::memory_order_relaxed);
+  }
+  Max(stats->max_exit_queued, exit_queued);
+  Max(stats->max_exit_running, exit_running);
+}
+
+void AnnotateGroupSleep(uint32_t key, uint64_t ns, bool condition_return, bool matched_notification) {
+  if (GroupStats* stats = FindGroupStats(key, false)) {
+    stats->sleeps.fetch_add(1, std::memory_order_relaxed);
+    stats->sleep_ns.fetch_add(ns, std::memory_order_relaxed);
+    if (!condition_return) {
+      stats->timed_out.fetch_add(1, std::memory_order_relaxed);
+    } else if (matched_notification) {
+      stats->matched_notifications.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      stats->condition_only.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+}
+
+void AnnotateKeyNotification(Reason reason, uint32_t key) {
+  if (GroupStats* stats = FindGroupStats(key, false)) {
+    if (reason == kWarningJob) {
+      stats->job_notifications.fetch_add(1, std::memory_order_relaxed);
+    } else if (reason == kWarningEnded) {
+      stats->end_notifications.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
 }
 
 }  // namespace bo2zm::jobs

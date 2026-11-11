@@ -320,6 +320,7 @@ void Warn(tr::Reason m, uint32_t key = 0) {
   g_changes[m].fetch_add(1, std::memory_order_seq_cst);
   if (tr::ReportActive()) {
     tr::g_warnings[m].fetch_add(1, std::memory_order_relaxed);
+    tr::AnnotateKeyNotification(m, key);
   }
   if (g_interested[m].load(std::memory_order_seq_cst) == 0) {
     return;
@@ -429,6 +430,7 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
   const bool report = tr::ReportActive();
   const uint64_t t0 = report ? NowNs() : 0;
   bool warned;
+  bool matched_notification = false;
   const int slot = OwnLocks() ? MySlot() : -1;
   if (slot >= 0) {
     // A lock of its own (see "Sleepers with a lock of their own").
@@ -457,6 +459,9 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
         }
         WaitWord(s.word, kSleeping, int64_t(deadline - now));
       }
+      if (report) {
+        matched_notification = s.word.load(std::memory_order_seq_cst) == kWarned;
+      }
       s.word.store(kIdle, std::memory_order_seq_cst);
     }
 #else
@@ -465,6 +470,9 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
       s.warned = false;
       s.active.store(true, std::memory_order_seq_cst);
       warned = s.cv.wait_for(lock, limit, [&] { return s.warned || Change(seen, interests); });
+      if (report) {
+        matched_notification = s.warned;
+      }
       s.active.store(false, std::memory_order_relaxed);
     }
 #endif
@@ -490,6 +498,9 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
     yo.warned = false;
     g_sleeping.push_back(&yo);
     warned = yo.cv.wait_for(lock, limit, [&] { return yo.warned || Change(seen, interests); });
+    if (report) {
+      matched_notification = yo.warned;
+    }
     g_sleeping.erase(std::find(g_sleeping.begin(), g_sleeping.end(), &yo));
     for (int m = 0; m < tr::kNumWarnings; ++m) {
       if (interests & (1u << m)) {
@@ -515,6 +526,9 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
       h.stalls_warned.fetch_add(1, std::memory_order_relaxed);
     } else {
       s.exhausted.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (room == tr::kRoomGroup) {
+      tr::AnnotateGroupSleep(key, ns, warned, matched_notification);
     }
   }
   return warned;
@@ -751,7 +765,7 @@ REX_HOOK_RAW(sub_8284C3B8) {
   const bool put_back = lr == kPutBack1 || lr == kPutBack2 || lr == kPutBack3;
   if (put_back && tr::ReportActive()) {
     tr::JobThread().returned.fetch_add(1, std::memory_order_relaxed);
-    tr::AnnotateReturned(tr::Read32(base, ctx.r4.u32 + tr::kJobType));
+    tr::AnnotateReturned(base, ctx.r4.u32);
   }
   __imp__sub_8284C3B8(ctx, base);
   if (!put_back) {
@@ -870,7 +884,22 @@ REX_HOOK_RAW(sub_827D4BD8) { Measure(0x827D4BD8, ctx, base, __imp__sub_827D4BD8)
 REX_HOOK_RAW(sub_82493690) {
   const uint32_t earlier = t.group;
   t.group = ctx.r3.u32;
-  Measure(0x82493690, ctx, base, __imp__sub_82493690);
+  if (!tr::ReportActive()) {
+    __imp__sub_82493690(ctx, base);
+  } else {
+    const uint32_t group = ctx.r3.u32;
+    const uint32_t lr = uint32_t(ctx.lr);
+    tr::BeginGroupWait(group);
+    const uint32_t entry_queued = group ? tr::Read32(base, group) : 0;
+    const uint32_t entry_running = group ? tr::Read32(base, group + 4) : 0;
+    const uint64_t t0 = NowNs();
+    __imp__sub_82493690(ctx, base);
+    const uint64_t ns = NowNs() - t0;
+    const uint32_t exit_queued = group ? tr::Read32(base, group) : 0;
+    const uint32_t exit_running = group ? tr::Read32(base, group + 4) : 0;
+    tr::AnnotateWait(0x82493690, lr, ns);
+    tr::AnnotateGroupWait(group, ns, entry_queued, entry_running, exit_queued, exit_running);
+  }
   t.group = earlier;
 }
 REX_HOOK_RAW(sub_82493240) { Measure(0x82493240, ctx, base, __imp__sub_82493240); }  // help once with a job type

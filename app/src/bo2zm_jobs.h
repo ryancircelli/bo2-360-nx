@@ -122,6 +122,22 @@ enum Reason : int {
 };
 inline std::atomic<uint64_t> g_warnings[kNumWarnings] = {};
 
+// Bounded per-key diagnostics for group waits. Keys are guest group-counter addresses; entries remain stable for
+// the process lifetime so the hot notification path can update them without taking g_mutex.
+constexpr uint32_t kMaxTrackedGroups = 256;
+static_assert((kMaxTrackedGroups & (kMaxTrackedGroups - 1)) == 0);
+struct GroupStats {
+  std::atomic<uint32_t> key{0};
+  std::atomic<uint64_t> waits{0}, wait_ns{0};
+  std::atomic<uint64_t> entry_queued{0}, entry_running{0}, max_entry_queued{0}, max_entry_running{0};
+  std::atomic<uint64_t> exit_nonzero{0}, max_exit_queued{0}, max_exit_running{0};
+  std::atomic<uint64_t> sleeps{0}, sleep_ns{0}, matched_notifications{0}, condition_only{0}, timed_out{0};
+  std::atomic<uint64_t> job_notifications{0}, end_notifications{0};
+  std::atomic<uint64_t> pushes{0}, putbacks{0};
+};
+inline GroupStats g_group_stats[kMaxTrackedGroups];
+inline std::atomic<uint64_t> g_group_stats_overflow{0};
+
 // Where bo2zm_waits.cpp sleeps (for the report): sleeps, those ended by the timeout, and time asleep.
 enum Room : int {
   kRoomPollFrame, kRoomPollDone, kRoomPollRing, kRoomAfterRelease, kRoomWorker, kRoomType,
@@ -144,10 +160,15 @@ int ClassifyEmpty(const uint8_t* base, uint32_t slot);
 void AnnotateQueued(const uint8_t* base, uint32_t job, uint32_t queue);
 // A job put back on its queue after a run that returned nonzero (or a dependency check that held it back): the
 // loops' own pushes (sub_8284C3B8 from 0x8284B20C, 0x8284B480, 0x8284B9C0).
-void AnnotateReturned(uint32_t type);
+void AnnotateReturned(const uint8_t* base, uint32_t job);
 // A picked job whose dependency counter had not reached its target.
 void AnnotateDependency(uint32_t counter, uint32_t type);
 // A wait of the game (who: the hooked function's address, lr: its caller) and its duration.
 void AnnotateWait(uint32_t who, uint32_t lr, uint64_t ns);
+void BeginGroupWait(uint32_t key);
+void AnnotateGroupWait(uint32_t key, uint64_t ns, uint32_t entry_queued, uint32_t entry_running,
+                       uint32_t exit_queued, uint32_t exit_running);
+void AnnotateGroupSleep(uint32_t key, uint64_t ns, bool condition_return, bool matched_notification);
+void AnnotateKeyNotification(Reason reason, uint32_t key);
 
 }  // namespace bo2zm::jobs
