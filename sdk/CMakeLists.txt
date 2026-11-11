@@ -313,6 +313,10 @@ if(REXGLUE_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+option(REXGLUE_BUILD_GPUTEST "Build the GPU frame capture and replay tools" OFF)
+if(REXGLUE_BUILD_GPUTEST)
+  add_subdirectory(tools/gputest/replay)
+endif()
 include(cmake/rexglue_link_audit.cmake)
 
 # Print configuration summary

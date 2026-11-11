@@ -28,11 +28,31 @@ DEFINE_bool(metal_fetch_constants_shared, true,
             "of packing and comparing a per-stage copy. Disable for the old "
             "per-stage path.",
             "Metal");
+DEFINE_bool(metal_3d_as_2d_refresh, true,
+            "Reload the 2D copy of a 3D texture sampled as 2D "
+            "(gpu_3d_to_2d_texture) when its guest data was written. Off "
+            "keeps the copy's first contents (the old behaviour).",
+            "Metal");
+DEFINE_bool(metal_register_write_fast_path, true,
+            "Single register writes outside the scratch, coherency and gamma "
+            "ramp registers store the value directly instead of going "
+            "through the generic register write handler. Disable to send "
+            "every write through the generic handler.",
+            "Metal");
+DEFINE_bool(metal_bindless_index_memo, false,
+            "Remember the bindless texture and sampler index tables per shader "
+            "binding layout and fetch constant generation, and skip the "
+            "per-draw sampler parameter checks while no fetch constant, "
+            "texture or binding changed. Needs metal_fetch_constants_shared. "
+            "Off by default: it reuses most tables but costs as much command "
+            "processor time as it saves. REX_METAL_BINDLESS_MEMO_VERIFY=1 "
+            "rebuilds on every reuse and counts mismatches.",
+            "Metal");
 DEFINE_bool(metal_tile_resolve_half_bits, true,
             "Let integer 64bpp resolves of RGBA16Float render targets run "
             "inside the open draw pass (tile resolve) instead of ending it.",
             "Metal");
-DEFINE_bool(metal_encode_thread, false,
+DEFINE_bool(metal_encode_thread, true,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",
             "Metal");

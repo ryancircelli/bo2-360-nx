@@ -5894,7 +5894,7 @@ index 9ae30ab..7d209af 100644
  #include <rex/system/kernel_state.h>
  #include <rex/system/user_module.h>
  
-+REXCVAR_DEFINE_BOOL(metal_type0_register_batching, false, "Metal",
++REXCVAR_DEFINE_BOOL(metal_type0_register_batching, true, "Metal",
 +                    "Experimental: route sequential type-0 register writes through the backend range writer.");
 +
  REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
