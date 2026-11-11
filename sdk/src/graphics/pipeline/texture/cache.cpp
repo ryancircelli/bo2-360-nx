@@ -296,6 +296,7 @@ void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_inde
     assert_true(found_texture_it != textures_.end());
     if (found_texture_it != textures_.end()) {
       assert_true(found_texture_it->second.get() == texture);
+      SharedMemory::NoteTextureDestroyed(SharedMemory::TextureDestroyPath::kMemoryTrim);
       textures_.erase(found_texture_it);
       // `texture` is invalid now.
     }
@@ -663,11 +664,24 @@ TextureCache::Texture::Texture(TextureCache& texture_cache, const TextureKey& ke
 }
 
 TextureCache::Texture::~Texture() {
-  if (mips_watch_handle_) {
-    texture_cache().shared_memory().UnwatchMemoryRange(mips_watch_handle_);
-  }
-  if (base_watch_handle_) {
-    texture_cache().shared_memory().UnwatchMemoryRange(base_watch_handle_);
+  SharedMemory& shared_memory = texture_cache().shared_memory();
+  if (SharedMemory::TexWatchUnlinkFixEnabled()) {
+    auto global_lock = texture_cache().global_critical_region_.Acquire();
+    if (mips_watch_handle_) {
+      shared_memory.UnwatchMemoryRange(mips_watch_handle_);
+      mips_watch_handle_ = nullptr;
+    }
+    if (base_watch_handle_) {
+      shared_memory.UnwatchMemoryRange(base_watch_handle_);
+      base_watch_handle_ = nullptr;
+    }
+  } else {
+    if (mips_watch_handle_) {
+      texture_cache().shared_memory().UnwatchMemoryRange(mips_watch_handle_);
+    }
+    if (base_watch_handle_) {
+      texture_cache().shared_memory().UnwatchMemoryRange(base_watch_handle_);
+    }
   }
 
   if (in_usage_list_) {
@@ -757,6 +771,8 @@ void TextureCache::WatchCallback(const std::unique_lock<std::recursive_mutex>& g
 
 void TextureCache::DestroyAllTextures(bool from_destructor) {
   ResetTextureBindings(from_destructor);
+  SharedMemory::NoteTextureDestroyed(SharedMemory::TextureDestroyPath::kDestroyAll,
+                                     static_cast<uint64_t>(textures_.size()));
   textures_.clear();
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }

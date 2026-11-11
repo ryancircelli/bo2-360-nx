@@ -156,9 +156,10 @@ diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/tex
 index fb32c92..a75860e 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
-@@ -246,6 +246,8 @@ void TextureCache::CompletedSubmissionUpdated(
+@@ -246,7 +246,9 @@ void TextureCache::CompletedSubmissionUpdated(
      if (found_texture_it != textures_.end()) {
        assert_true(found_texture_it->second.get() == texture);
+       SharedMemory::NoteTextureDestroyed(SharedMemory::TextureDestroyPath::kMemoryTrim);
        textures_.erase(found_texture_it);
 +      ++textures_generation_;
 +      BumpLoadCheckEpoch();  // [draw-prep-lite2] find memo invalid
@@ -279,7 +280,7 @@ index fb32c92..a75860e 100644
      }
      if (!new_key.is_valid) {
        continue;
-@@ -838,11 +889,19 @@ void TextureCache::WatchCallback(const global_unique_lock_type& global_lock,
+@@ -838,13 +889,21 @@ void TextureCache::WatchCallback(const global_unique_lock_type& global_lock,
    texture.WatchCallback(global_lock, argument != 0);
    texture.texture_cache().texture_became_outdated_.store(
        true, std::memory_order_release);
@@ -293,15 +294,18 @@ index fb32c92..a75860e 100644
  
  void TextureCache::DestroyAllTextures(bool from_destructor) {
    ResetTextureBindings(from_destructor);
+   SharedMemory::NoteTextureDestroyed(SharedMemory::TextureDestroyPath::kDestroyAll,
+                                      static_cast<uint64_t>(textures_.size()));
    textures_.clear();
 +  ++textures_generation_;
 +  BumpLoadCheckEpoch();  // [draw-prep-lite2] find memo invalid
    COUNT_profile_set("gpu/texture_cache/textures", 0);
  }
  
-@@ -861,11 +920,206 @@ bool TextureCache::DestroyOldestTextureIfUnused(
+@@ -861,12 +920,207 @@ bool TextureCache::DestroyOldestTextureIfUnused(
    }
    assert_true(found_texture_it->second.get() == texture);
+   SharedMemory::NoteTextureDestroyed(SharedMemory::TextureDestroyPath::kBindlessPressure);
    textures_.erase(found_texture_it);
 +  ++textures_generation_;
 +  BumpLoadCheckEpoch();  // [draw-prep-lite2] find memo invalid

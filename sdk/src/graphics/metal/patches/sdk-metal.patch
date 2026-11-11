@@ -4861,7 +4861,7 @@ index 4d85a2b..0d8cf9a 100644
                                  void* context, void* data, uint64_t argument,
                                  bool invalidated_by_gpu);
    typedef void* WatchHandle;
-@@ -67,24 +68,61 @@ class SharedMemory {
+@@ -67,33 +68,70 @@ class SharedMemory {
    // Called with the global critical region locked. Do NOT watch or unwatch
    // ranges from within it! The watch for the callback is cancelled after the
    // callback - the handle becomes invalid.
@@ -4873,6 +4873,15 @@ index 4d85a2b..0d8cf9a 100644
 +                               void* callback_data, uint64_t callback_argument);
    // Unregisters previously registered watched memory range.
    void UnwatchMemoryRange(WatchHandle handle);
+ 
+   enum class TextureDestroyPath {
+     kMemoryTrim,
+     kBindlessPressure,
+     kDestroyAll,
+   };
+   static bool TexWatchUnlinkFixEnabled();
+   static void NoteTextureDestroyed(TextureDestroyPath path, uint64_t count = 1);
+   void LogWatchStats() const;
  
    // Checks if the range has been updated, uploads new data if needed and
    // ensures the host GPU memory backing the range are resident. Returns true if
@@ -5081,7 +5090,7 @@ index 4d85a2b..0d8cf9a 100644
 +                   bool invalidated_by_gpu);
    // Unlinks and frees the range and its nodes. Call this in the global critical
    // region.
-   void UnlinkWatchRange(WatchRange* range);
+   void UnlinkWatchRange(WatchRange* range, bool from_fire_watches);
  };
  
 -}  // namespace rex::graphics
@@ -20558,7 +20567,7 @@ index 76f5600..0c09104 100644
  }
  
  void TextureCache::DestroyAllTextures(bool from_destructor) {
-@@ -761,99 +822,65 @@ void TextureCache::DestroyAllTextures(bool from_destructor) {
+@@ -761,99 +822,66 @@ void TextureCache::DestroyAllTextures(bool from_destructor) {
    COUNT_profile_set("gpu/texture_cache/textures", 0);
  }
  
@@ -20577,6 +20586,7 @@ index 76f5600..0c09104 100644
 +    return false;
 +  }
 +  assert_true(found_texture_it->second.get() == texture);
++  SharedMemory::NoteTextureDestroyed(SharedMemory::TextureDestroyPath::kBindlessPressure);
 +  textures_.erase(found_texture_it);
 +  COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
 +  return true;
@@ -22930,13 +22940,15 @@ diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
 index ec0df7c..7ac9cdd 100644
 --- a/src/graphics/shared_memory.cpp
 +++ b/src/graphics/shared_memory.cpp
-@@ -9,34 +9,62 @@
+@@ -9,46 +9,74 @@
   * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
   */
  
 +#include "rex/graphics/shared_memory.h"
 +
  #include <algorithm>
+ #include <atomic>
+ #include <cstdlib>
 -#include <cstring>
 -#include <utility>
  
@@ -22944,6 +22956,7 @@ index ec0df7c..7ac9cdd 100644
 -#include <rex/bit.h>
 -#include <rex/dbg.h>
 -#include <rex/graphics/shared_memory.h>
+ #include <rex/logging.h>
 -#include <rex/math.h>
 -#include <rex/memory.h>
 +#include "rex/assert.h"
@@ -22954,6 +22967,15 @@ index ec0df7c..7ac9cdd 100644
 -namespace rex::graphics {
 +namespace rex {
 +namespace graphics {
+ 
+ namespace {
+ 
+ std::atomic<uint64_t> watch_ranges_watched{0};
+ std::atomic<uint64_t> watch_ranges_unlinked{0};
+ std::atomic<uint64_t> watch_double_unlinks{0};
+ std::atomic<uint64_t> texture_destroys[3] = {};
+ 
+ }  // namespace
  
 -SharedMemory::SharedMemory(memory::Memory& memory) : memory_(memory) {
 +SharedMemory::SharedMemory(rex::memory::Memory& memory) : memory_(memory) {
@@ -23211,7 +23233,7 @@ index ec0df7c..7ac9cdd 100644
          watch_node_current_pool_allocated_ = 0;
        }
 @@ -223,9 +322,11 @@ void SharedMemory::UnwatchMemoryRange(WatchHandle handle) {
-   UnlinkWatchRange(reinterpret_cast<WatchRange*>(handle));
+   UnlinkWatchRange(reinterpret_cast<WatchRange*>(handle), false);
  }
  
 -void SharedMemory::FireWatches(uint32_t page_first, uint32_t page_last, bool invalidated_by_gpu) {
@@ -23260,7 +23282,7 @@ index ec0df7c..7ac9cdd 100644
 +        if (node && node->range) {
 +          swcache::PrefetchL1(node->range);
 +        }
-         UnlinkWatchRange(range);
+         UnlinkWatchRange(range, true);
        }
      }
 @@ -272,15 +386,16 @@ void SharedMemory::RangeWrittenByGpu(uint32_t start, uint32_t length) {
@@ -23283,7 +23305,7 @@ index ec0df7c..7ac9cdd 100644
    if (length == 0 || start >= kBufferSize) {
      return;
    }
-@@ -302,21 +417,36 @@ void SharedMemory::MakeRangeValid(uint32_t start, uint32_t length, bool written_
+@@ -302,37 +417,52 @@ void SharedMemory::MakeRangeValid(uint32_t start, uint32_t length, bool written_
        if (i == valid_block_last && (valid_page_last & 63) != 63) {
          valid_bits &= (uint64_t(1) << ((valid_page_last & 63) + 1)) - 1;
        }
@@ -23318,7 +23340,23 @@ index ec0df7c..7ac9cdd 100644
    }
  }
  
- void SharedMemory::UnlinkWatchRange(WatchRange* range) {
+ void SharedMemory::UnlinkWatchRange(WatchRange* range, bool from_fire_watches) {
+   if (!range->linked) {
+     const uint64_t count = watch_double_unlinks.fetch_add(1, std::memory_order_relaxed) + 1;
+     if (count <= 32 || (count & (count - 1)) == 0) {
+       REXLOG_WARN("[watch-double-unlink] #{} page_first {} page_last {} source {} fix {}",
+                   count, range->page_first, range->page_last,
+                   from_fire_watches ? "FireWatches" : "UnwatchMemoryRange",
+                   TexWatchUnlinkFixEnabled() ? "on" : "off");
+       LogWatchStats();
+     }
+     if (TexWatchUnlinkFixEnabled()) {
+       return;
+     }
+   } else {
+     range->linked = false;
+     watch_ranges_unlinked.fetch_add(1, std::memory_order_relaxed);
+   }
 -  uint32_t bucket = range->page_first << page_size_log2_ >> kWatchBucketSizeLog2;
 +  uint32_t bucket =
 +      range->page_first << page_size_log2_ >> kWatchBucketSizeLog2;

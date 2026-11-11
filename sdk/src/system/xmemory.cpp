@@ -10,6 +10,8 @@
  */
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -555,6 +557,25 @@ runtime::MMIORange* Memory::LookupVirtualMappedRange(uint32_t virtual_address) {
   return mmio_handler_->LookupRange(virtual_address);
 }
 
+// Write faults that fired a watch, by physical view (0xA0000000, 0xC0000000,
+// 0xE0000000), and how many of them came through a view with no allocation
+// at the address.
+static std::atomic<uint64_t> g_watch_faults[3][2];
+
+static void CountWatchFault(uint32_t virtual_address, BaseHeap* heap) {
+  if (virtual_address < 0xA0000000u) {
+    return;
+  }
+  HeapAllocationInfo info{};
+  const bool allocated = heap->QueryRegionInfo(virtual_address, &info) &&
+                         (info.state & memory::kMemoryAllocationCommit);
+  const uint32_t view = (virtual_address - 0xA0000000u) >> 29;
+  g_watch_faults[view][0].fetch_add(1, std::memory_order_relaxed);
+  if (!allocated) {
+    g_watch_faults[view][1].fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> global_lock_locked_once,
                                      void* host_address, bool is_write) {
   // Access via physical_membase_ is special, when need to bypass everything
@@ -582,6 +603,7 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
   auto physical_heap = static_cast<PhysicalHeap*>(heap);
   if (physical_heap->TriggerCallbacks(std::move(global_lock_locked_once), virtual_address, 1,
                                       is_write, false)) {
+    CountWatchFault(virtual_address, heap);
     return true;
   }
 
@@ -1983,6 +2005,7 @@ bool PhysicalHeap::Alloc(uint32_t size, uint32_t alignment, uint32_t allocation_
     // TODO(benvanik): don't leak parent memory.
     return false;
   }
+  KeepWriteWatches(address, size);
   *out_address = address;
   return true;
 }
@@ -2016,6 +2039,7 @@ bool PhysicalHeap::AllocFixed(uint32_t base_address, uint32_t size, uint32_t ali
     // TODO(benvanik): don't leak parent memory.
     return false;
   }
+  KeepWriteWatches(address, size);
 
   return true;
 }
@@ -2054,6 +2078,7 @@ bool PhysicalHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint3
     // TODO(benvanik): don't leak parent memory.
     return false;
   }
+  KeepWriteWatches(address, size);
   *out_address = address;
   return true;
 }
@@ -2119,6 +2144,142 @@ bool PhysicalHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
   }
 
   return BaseHeap::Protect(address, size, protect);
+}
+
+// Test switch: REX_WATCH_ALIASES=0 goes back to watching a physical view only
+// where it has an allocation.
+static bool WatchAliases() {
+  static const bool on = [] {
+    const char* v = std::getenv("REX_WATCH_ALIASES");
+    return !(v && v[0] == '0');
+  }();
+  return on;
+}
+
+void PhysicalHeap::KeepWriteWatches(uint32_t address, uint32_t size) {
+  if (!WatchAliases()) {
+    return;
+  }
+  // A heap whose pages are at least a host page gets the allocation's own
+  // protection from BaseHeap::AllocFixed. A write watch armed while the range
+  // was an unallocated alias would be dropped with its flag still set, and
+  // EnableAccessCallbacks skips flagged pages, so the watch would never come
+  // back. Smaller pages are reconciled by SyncHostPageAccess instead.
+  if (page_size_ < system_page_size_ || !size || address < heap_base_) {
+    return;
+  }
+  uint32_t heap_relative_address = address - heap_base_;
+  if (heap_relative_address >= heap_size_) {
+    return;
+  }
+  size = std::min(size, heap_size_ - heap_relative_address);
+  auto global_lock = global_critical_region_.Acquire();
+  uint32_t system_page_first = (heap_relative_address + host_address_offset()) / system_page_size_;
+  uint32_t system_page_last = std::min(
+      (heap_relative_address + size - 1 + host_address_offset()) / system_page_size_,
+      system_page_count_ - 1);
+  uint8_t* protect_base = membase_ + heap_base_;
+  uint32_t run_first = UINT32_MAX;
+  for (uint32_t i = system_page_first; i <= system_page_last + 1; ++i) {
+    const bool watched = i <= system_page_last && IsHostPageWriteWatched(i) &&
+                         GetHostPageGuestAccess(i) == rex::memory::PageAccess::kReadWrite;
+    if (watched) {
+      if (run_first == UINT32_MAX) {
+        run_first = i;
+      }
+    } else if (run_first != UINT32_MAX) {
+      rex::memory::Protect(protect_base + run_first * system_page_size_,
+                           (i - run_first) * system_page_size_,
+                           rex::memory::PageAccess::kReadOnly);
+      run_first = UINT32_MAX;
+    }
+  }
+}
+
+std::string Memory::DescribeWatchFaults() {
+  static const char* const kNames[3] = {"A0", "C0", "E0"};
+  std::string out;
+  for (uint32_t i = 0; i < 3; ++i) {
+    out += fmt::format("{}{} {} (unallocated alias {})", i ? ", " : "", kNames[i],
+                       g_watch_faults[i][0].load(std::memory_order_relaxed),
+                       g_watch_faults[i][1].load(std::memory_order_relaxed));
+  }
+  return out;
+}
+
+std::string Memory::DescribePhysicalWatchState(uint32_t physical_address, uint32_t length) {
+  std::string out;
+  auto global_lock = global_critical_region_.Acquire();
+  out += "A0[";
+  heaps_.vA0000000.DescribeWatchState(physical_address, length, out);
+  out += "] C0[";
+  heaps_.vC0000000.DescribeWatchState(physical_address, length, out);
+  out += "] E0[";
+  heaps_.vE0000000.DescribeWatchState(physical_address, length, out);
+  out += "]";
+  return out;
+}
+
+void PhysicalHeap::DescribeWatchState(uint32_t physical_address, uint32_t length,
+                                      std::string& out) const {
+  uint32_t physical_address_offset = GetPhysicalAddress(heap_base_);
+  if (physical_address < physical_address_offset || !length) {
+    out += "out of view";
+    return;
+  }
+  uint32_t heap_relative_address = physical_address - physical_address_offset;
+  if (heap_relative_address >= heap_size_) {
+    out += "out of view";
+    return;
+  }
+  length = std::min(length, heap_size_ - heap_relative_address);
+  uint32_t system_page_first = (heap_relative_address + host_address_offset()) / system_page_size_;
+  uint32_t system_page_last =
+      (heap_relative_address + length - 1 + host_address_offset()) / system_page_size_;
+  system_page_last = std::min(system_page_last, system_page_count_ - 1);
+  // Enough for the small streamed images this is for.
+  system_page_last = std::min(system_page_last, system_page_first + 11);
+  uint8_t* protect_base = membase_ + heap_base_;
+  for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
+    const bool watched =
+        (system_page_flags_[i >> 6].notify_on_invalidation & (uint64_t(1) << (i & 63))) != 0;
+    size_t query_length = system_page_size_;
+    rex::memory::PageAccess host_access = rex::memory::PageAccess::kNoAccess;
+    const bool queried =
+        rex::memory::QueryProtect(protect_base + size_t(i) * system_page_size_, query_length,
+                                  host_access);
+    out += watched ? 'w' : '-';
+    out += !queried                                             ? '?'
+           : host_access == rex::memory::PageAccess::kReadWrite ? 'W'
+           : host_access == rex::memory::PageAccess::kReadOnly  ? 'R'
+           : host_access == rex::memory::PageAccess::kNoAccess  ? 'N'
+                                                                : 'X';
+    out += ':';
+    // Guest pages of this host page: W/R/N by guest protection, '.' when not
+    // committed.
+    const uint64_t host_start = uint64_t(i) * system_page_size_;
+    const uint64_t host_end = host_start + system_page_size_;
+    const uint64_t relative_start = host_start > host_address_offset()
+                                        ? host_start - host_address_offset()
+                                        : 0;
+    const uint64_t relative_end = host_end - host_address_offset();
+    const uint32_t guest_first = uint32_t(relative_start >> page_size_shift_);
+    const uint32_t guest_last = uint32_t((relative_end - 1) >> page_size_shift_);
+    for (uint32_t g = guest_first; g <= guest_last && g < page_table_.size(); ++g) {
+      const auto& entry = page_table_[g];
+      if (!(entry.state & memory::kMemoryAllocationCommit)) {
+        out += '.';
+        continue;
+      }
+      const rex::memory::PageAccess guest_access = ToPageAccess(entry.current_protect);
+      out += guest_access == rex::memory::PageAccess::kReadWrite  ? 'W'
+             : guest_access == rex::memory::PageAccess::kReadOnly ? 'R'
+                                                                  : 'N';
+    }
+    if (i != system_page_last) {
+      out += ' ';
+    }
+  }
 }
 
 void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t length,
@@ -2192,9 +2353,12 @@ void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t len
       assert_always();
       continue;
     }
-    // A host page larger than a guest page takes the access of every guest page in it.
+    // The host page takes the access of every guest page in it. A page with
+    // no allocation in this view is still mapped writable on the host, and the
+    // guest reaches memory allocated through one view by its address in
+    // another, so such a page is watched like a writable one.
     rex::memory::PageAccess current_page_access =
-        page_size_ < system_page_size_
+        WatchAliases() || page_size_ < system_page_size_
             ? GetHostPageAccess(i)
             : ToPageAccess(page_table_[guest_page_number].current_protect);
     bool protect_system_page = false;
@@ -2349,14 +2513,15 @@ bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> globa
       bool unprotect_page =
           (system_page_flags_[i >> 6].notify_on_invalidation & (uint64_t(1) << (i & 63))) != 0;
       if (unprotect_page) {
-        uint32_t guest_page_number =
-            rex::sat_sub(i * system_page_size_, host_address_offset()) >> page_size_shift_;
-        // A host page larger than a guest page is unprotected by the access of
-        // every guest page in it.
+        // The host page is unprotected by the access of every guest page in
+        // it, with the same rule for unallocated aliases as the arming.
         const rex::memory::PageAccess guest_access =
-            page_size_ < system_page_size_
+            WatchAliases() || page_size_ < system_page_size_
                 ? GetHostPageGuestAccess(i)
-                : ToPageAccess(page_table_[guest_page_number].current_protect);
+                : ToPageAccess(
+                      page_table_[rex::sat_sub(i * system_page_size_, host_address_offset()) >>
+                                  page_size_shift_]
+                          .current_protect);
         if (guest_access != rex::memory::PageAccess::kReadWrite) {
           unprotect_page = false;
         }

@@ -73,6 +73,15 @@ class SharedMemory {
   // Unregisters previously registered watched memory range.
   void UnwatchMemoryRange(WatchHandle handle);
 
+  enum class TextureDestroyPath {
+    kMemoryTrim,
+    kBindlessPressure,
+    kDestroyAll,
+  };
+  static bool TexWatchUnlinkFixEnabled();
+  static void NoteTextureDestroyed(TextureDestroyPath path, uint64_t count = 1);
+  void LogWatchStats() const;
+
   // Checks if the range has been updated, uploads new data if needed and
   // ensures the host GPU memory backing the range are resident. Returns true if
   // the range has been fully updated and is usable.
@@ -205,6 +214,7 @@ class SharedMemory {
       };
       WatchRange* next_free;
     };
+    bool linked = false;
   };
   // Node for faster checking of watches when pages have been written to - all
   // 512 MB are split into smaller equally sized buckets, and then ranges are
@@ -241,7 +251,7 @@ class SharedMemory {
   void FireWatches(uint32_t page_first, uint32_t page_last, bool invalidated_by_gpu);
   // Unlinks and frees the range and its nodes. Call this in the global critical
   // region.
-  void UnlinkWatchRange(WatchRange* range);
+  void UnlinkWatchRange(WatchRange* range, bool from_fire_watches);
 };
 
 }  // namespace rex::graphics

@@ -683,6 +683,9 @@ class MetalTextureCache : public TextureCache {
     bool cc_have_[2] = {};
     bool cc_stale_at_load_[2] = {};
     uint64_t cc_window_ = UINT64_MAX;
+    // [tex-garbage] last scan window and the bad chunk count logged for it.
+    uint64_t gs_window_ = UINT64_MAX;
+    uint32_t gs_logged_bad_ = 0;
     // [resident-load-window] set when a resident load read the range from
     // the shared memory buffer; consumed by LoadedRangeStillCurrent.
     bool resident_load_pending_[2] = {};
@@ -918,12 +921,27 @@ class MetalTextureCache : public TextureCache {
   static uint32_t TexContentCheckInterval();
   // Called by the command processor after each draw's texture request.
   void TexContentCheck(uint32_t used_texture_mask);
+  // [tex-garbage] REX_METAL_TEX_GARBAGE_SCAN=<N>: every N submissions, scan
+  // the guest bytes of each bound DXT texture for blocks that look like
+  // random data (no lock taken).
+  static uint32_t TexGarbageScanInterval();
+  void TexGarbageScan(uint32_t used_texture_mask);
 
  private:
   uint64_t cc_checked_ = 0;
   uint64_t cc_mismatch_[3] = {};
   uint64_t cc_stale_loads_ = 0;
+  uint64_t cc_gpu_differs_ = 0;
+  uint64_t cc_gpu_differs_unique_ = 0;
   uint64_t cc_last_summary_ = 0;
+  uint64_t gs_scanned_ = 0;
+  uint64_t gs_flag_events_ = 0;
+  uint64_t gs_flag_unique_ = 0;
+  uint64_t gs_last_summary_ = 0;
+  uint32_t gs_window_flagged_ = 0;
+  uint32_t gs_window_flagged_max_ = 0;
+  uint64_t gs_window_flagged_sum_ = 0;
+  uint64_t gs_window_current_ = UINT64_MAX;
   static void CpuSourceWatchThunk(const global_unique_lock_type& global_lock,
                                   void* context, void* data, uint64_t argument,
                                   bool invalidated_by_gpu);

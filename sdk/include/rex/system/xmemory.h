@@ -341,6 +341,13 @@ class PhysicalHeap : public BaseHeap {
 
   uint32_t GetPhysicalAddress(uint32_t address) const;
 
+  // Diagnostic: appends the write-watch state of this view for a physical
+  // range, one entry per host page: watch flag, host protection, guest page
+  // protections. The caller holds the global critical region.
+  void DescribeWatchState(uint32_t physical_address, uint32_t length, std::string& out) const;
+  // Puts write-watched host pages of a new allocation back to read-only.
+  void KeepWriteWatches(uint32_t address, uint32_t size);
+
  protected:
   bool IsHostPageWriteWatched(uint32_t host_page_number) const override;
 
@@ -519,6 +526,12 @@ class Memory {
   void EnablePhysicalMemoryAccessCallbacks(uint32_t physical_address, uint32_t length,
                                            bool enable_invalidation_notifications,
                                            bool enable_data_providers);
+
+  // Diagnostic: the write-watch state of a physical range in each physical
+  // view (see PhysicalHeap::DescribeWatchState).
+  std::string DescribePhysicalWatchState(uint32_t physical_address, uint32_t length);
+  // Counts of write faults that fired a watch, per physical view.
+  static std::string DescribeWatchFaults();
 
   // Forces triggering of watch callbacks for a virtual address range if pages
   // are watched there and unwatching them. Returns whether any page was
