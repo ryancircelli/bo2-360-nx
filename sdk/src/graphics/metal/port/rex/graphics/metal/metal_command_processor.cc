@@ -1333,15 +1333,19 @@ MetalCommandProcessor::MetalCommandProcessor(
       kMaxPendingSharedMemoryWriteCapacity);
 }
 
+void MetalCommandProcessor::LogMemexportWriteOrderSummary() {
+  if (memexport_order_summary_logged_) return;
+  memexport_order_summary_logged_ = true;
+  REXLOG_INFO(
+      "[memexport-write-order] summary overlap-draws {} barrier-encoded {} "
+      "barrier-skipped-dedup {} barrier-nothing {} extra-passes {}",
+      memexport_order_overlap_draws_, memexport_order_barrier_encoded_,
+      memexport_order_barrier_skipped_, memexport_order_barrier_nothing_,
+      memexport_order_extra_passes_);
+}
+
 MetalCommandProcessor::~MetalCommandProcessor() {
-  if (memexport_order_overlap_draws_) {
-    REXLOG_INFO(
-        "[memexport-write-order] summary overlap-draws {} barrier-encoded {} "
-        "barrier-skipped-dedup {} barrier-nothing {} extra-passes {}",
-        memexport_order_overlap_draws_, memexport_order_barrier_encoded_,
-        memexport_order_barrier_skipped_, memexport_order_barrier_nothing_,
-        memexport_order_extra_passes_);
-  }
+  LogMemexportWriteOrderSummary();
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
   // End any active render encoder before releasing
@@ -3575,6 +3579,9 @@ bool MetalCommandProcessor::EncodeSharedMemoryRenderReadDependencies(
       ++memexport_order_barrier_nothing_;
     }
     memexport_order_overlap_pending_ = false;
+    if (memexport_order_overlap_draws_ == 2000) {
+      LogMemexportWriteOrderSummary();
+    }
   }
   return true;
 }
