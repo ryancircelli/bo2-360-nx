@@ -62,7 +62,12 @@ REXCVAR_DEFINE_INT32(bo2zm_volume, 100, "BO2",
 // and reads them back (99 % of its .ipak reads are re-reads), and each image it brings back is a new texture for the
 // renderer. Limiting .ipak reads to 4 MB/s in a match, instead of the SDK's 32 (the game read about 6.4 MB/s), gave
 // 4.3 % more frames per second on the console in an A/B comparison. Menus and loading keep the SDK's rate.
-REXCVAR_DEFINE_INT32(bo2zm_ipak_mb_s_in_match, 4, "BO2",
+#if defined(__SWITCH__)
+inline constexpr int32_t kDefaultIpakInMatch = 4;
+#else
+inline constexpr int32_t kDefaultIpakInMatch = 0;  // Mac: unthrottled (the 4p matrix held 60 fps without a limit)
+#endif
+REXCVAR_DEFINE_INT32(bo2zm_ipak_mb_s_in_match, kDefaultIpakInMatch, "BO2",
                      "The .ipak read rate limit (the SDK's switch_io_ipak_mb_s) while player 0 is in a match; menus and "
                      "loading keep the SDK's own value. 0 = always the SDK's")
     .range(0, 1024);

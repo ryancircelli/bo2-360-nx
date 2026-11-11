@@ -98,7 +98,19 @@ REXCVAR_DEFINE_STRING(bo2zm_diag_model_detail, "", "Graphics",
                       "distances, their versions' limits, the game's own pick and the preset's) when it changes, at "
                       "most once a second each. Empty = off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_preset, "very_low", "Graphics",
+// Default quality. The Switch keeps its own (very_low, split screen capped at lowest, model scale 2); every other
+// build (the Mac) defaults to kDefaultPreset: change this ONE line to "high" for the high default. The 4p Town matrix
+// held 60 fps at both.
+#if defined(__SWITCH__)
+inline constexpr const char* kDefaultPreset = "very_low";
+inline constexpr const char* kDefaultSplitscreenPreset = "lowest";
+inline constexpr double kDefaultSplitscreenModelScale = 2.0;
+#else
+inline constexpr const char* kDefaultPreset = "medium";  // "medium" or "high"
+inline constexpr const char* kDefaultSplitscreenPreset = "same";
+inline constexpr double kDefaultSplitscreenModelScale = 1.0;
+#endif
+REXCVAR_DEFINE_STRING(bo2zm_preset, kDefaultPreset, "Graphics",
                       "Graphics preset: lowest, very_low, low, medium, high or custom (high = the game's own "
                       "settings, as the Xbox 360 runs it; custom = the options picked one by one in Options > "
                       "Graphics). Lower presets trade model detail, draw distance, shadows, screen "
@@ -166,11 +178,11 @@ REXCVAR_DEFINE_INT32(bo2zm_front_end_test_s, 0, "Graphics",
 //    half as wide and half as tall, so a model at twice the distance covers the pixels it did in one view) and by its
 //    square root with two (half as tall only). The version a model gets therefore matches its size on screen, as in
 //    one view.
-REXCVAR_DEFINE_STRING(bo2zm_splitscreen_preset, "lowest", "Graphics",
+REXCVAR_DEFINE_STRING(bo2zm_splitscreen_preset, kDefaultSplitscreenPreset, "Graphics",
                       "Split screen: the highest level each option gets while more than one player plays on this "
                       "machine, as this preset's (the player's applies when it is lower). \"same\" = no cap")
     .allowed({"same", "lowest", "very_low", "low", "medium", "high"});
-REXCVAR_DEFINE_DOUBLE(bo2zm_splitscreen_model_scale, 2.0, "Graphics",
+REXCVAR_DEFINE_DOUBLE(bo2zm_splitscreen_model_scale, kDefaultSplitscreenModelScale, "Graphics",
                       "Split screen: the model detail factor is multiplied by this with three or four views and by "
                       "its square root with two, so models get the version their size on screen calls for. 1 = as "
                       "with one view")
