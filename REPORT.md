@@ -31,6 +31,12 @@ Job/end notifications continued during these waits (about 9.7–10.1k/11.7–12.
 
 The sampled `sub_827D4BD8` calls are a separate Windows-style event wait and should not be mistaken for the group completion wait.
 
+## Interleaved FPS A/B (in progress)
+
+The owner app at `/Users/ryanc/Games/Launchers/BO2 Zombies.app` is verified as `mac-arm64-20261111-owner-update-2`. Baseline arm A1 is running as runq job `1111-140704-5460`, class 4 / solo / quiet-machine / measured, using the same `/tools/mac/routes/splitscreen4.route` file as the completed staged template and an explicit `run_dir` at `/tmp/bo2/hitch/ab/4p-A1/run`. No FPS result is available yet. The fixed arm must use the same route and settings; further A/B arms will be scheduled after the fix worker identifies and builds a safe change. No baseline or fixed result is claimed here.
+
+The delegated worker's source review found that `sub_82161DC0` can call `sub_82161700` when its input equals the process boundary at `+11036`; `sub_82161700` calls `sub_82161200`, which calls `sub_821610C0`. That final routine advances the boundary and may update the `+11024` range pointer (`bo2zm_recomp.18.cpp:92-96`, `bo2zm_recomp.15.cpp:155-191`, `bo2zm_recomp.14.cpp:188-201`). This is a promising producer path, but the current evidence still does not prove the exact callback-safe transition or a wake condition. The worker made no behavioral change and has requested runtime predicate/boundary trace evidence before patching.
+
 ## Handoff
 
 The diagnostic-only instrumentation is committed on branch `codex/hitch-group-diagnostics` at `c9c99c92`. It adds bounded keyed group counts, queue snapshots, notification counts, and wake-reason classification without changing wake behavior. The final report is also committed on that branch. The behavior change for the callback retry churn remains with the separate `job-requeue-churn` backlog worker.
