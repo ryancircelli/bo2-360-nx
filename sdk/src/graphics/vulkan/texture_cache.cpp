@@ -25,6 +25,9 @@
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/vulkan/command_processor.h>
+#if REX_GPU_TRACE
+#include <rex/graphics/trace/texture_probe.h>
+#endif
 #include <rex/graphics/vulkan/deferred_command_buffer.h>
 #include <rex/graphics/vulkan/texture_cache.h>
 #include <rex/logging.h>
@@ -1806,6 +1809,11 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     copy_region.imageExtent.depth = std::max(depth >> level, UINT32_C(1));
   }
 
+#if REX_GPU_TRACE
+  // GPU trace replay: the copy is recorded, the caller marks the texture up
+  // to date (and watches it) afterwards.
+  trace::NotifyTextureLoadWindow(texture, load_base, load_mips, 0);
+#endif
   return true;
 }
 

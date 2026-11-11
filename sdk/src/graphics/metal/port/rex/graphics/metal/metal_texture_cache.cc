@@ -10,6 +10,9 @@
 
 #include "rex/graphics/metal/metal_hitch.h"
 #include "rex/graphics/metal/metal_texture_cache.h"
+#if REX_GPU_TRACE
+#include <rex/graphics/trace/texture_probe.h>
+#endif
 #include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_encoder_trim.h"
 #include "rex/graphics/metal/metal_pass_merge.h"
@@ -1243,6 +1246,27 @@ bool MetalTextureCache::PrepareTextureMaterialization(
   auto append_texture = [&](TextureKey key) {
     ++plan.request_count;
     Texture* texture = FindOrCreateTexture(key);
+    if (texture && REXCVAR_GET(metal_3d_as_2d_refresh)) {
+      // A 3D texture sampled as 2D: its 2D wrapper is not in the texture map,
+      // so reload it here, with the draw's other loads, when a write to its
+      // guest range (the first slice) marked it outdated.
+      MetalTexture* wrapper =
+          static_cast<MetalTexture*>(texture)->texture_3d_as_2d();
+      if (wrapper && wrapper->base_outdated_lockless()) {
+        bool planned = false;
+        for (const TextureMaterializationPlan::TextureLoad& planned_load :
+             plan.texture_loads_) {
+          planned |= planned_load.texture == wrapper;
+        }
+        if (!planned) {
+          plan.source_ranges.push_back(
+              {uint32_t(wrapper->key().base_page) << 12,
+               rex::align(wrapper->GetGuestBaseSize(), UINT32_C(16))});
+          plan.texture_loads_.push_back({wrapper, true, false, false, false});
+          ++plan.planned_load_count;
+        }
+      }
+    }
     bool base_outdated = texture ? texture->base_outdated_lockless() : false;
     bool mips_outdated = texture ? texture->mips_outdated_lockless() : false;
     if (!texture || (!base_outdated && !mips_outdated)) {
@@ -4740,9 +4764,48 @@ void MetalTextureCache::WriteActiveTextureSRVKeys(
   }
 }
 
+MetalTextureCache::Texture* MetalTextureCache::SelectBindlessTexture(
+    uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed,
+    const TextureBinding** binding_out) const {
+  const TextureBinding* binding = GetValidTextureBinding(fetch_constant);
+  if (binding_out) {
+    *binding_out = binding;
+  }
+  if (!binding || !AreDimensionsCompatible(dimension, binding->key.dimension)) {
+    return nullptr;
+  }
+  if (is_signed) {
+    if (texture_util::IsAnySignSigned(binding->swizzled_signs)) {
+      return IsSignedVersionSeparateForFormat(binding->key)
+                 ? binding->texture_signed
+                 : binding->texture;
+    }
+  } else if (texture_util::IsAnySignNotSigned(binding->swizzled_signs)) {
+    return binding->texture;
+  }
+  return nullptr;
+}
+
+bool MetalTextureCache::AreBindlessTexturesCurrent(
+    const DxbcShader::TextureBinding* bindings, size_t count,
+    Texture* const* used_textures) const {
+  for (size_t i = 0; i < count; ++i) {
+    const DxbcShader::TextureBinding& b = bindings[i];
+    if (SelectBindlessTexture(b.fetch_constant, b.dimension, b.is_signed,
+                              nullptr) != used_textures[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
     uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed,
-    MTL::Texture** texture_for_encoder_out, uint32_t view_levels) {
+    MTL::Texture** texture_for_encoder_out, uint32_t view_levels,
+    Texture** used_texture_out) {
+  if (used_texture_out) {
+    *used_texture_out = nullptr;
+  }
   auto get_null_texture_for_dimension = [&]() -> MTL::Texture* {
     switch (dimension) {
       case xenos::FetchOpDimension::k1D:
@@ -4776,25 +4839,9 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
     return get_null_index_for_dimension();
   };
 
-  const TextureBinding* binding = GetValidTextureBinding(fetch_constant);
-  if (!binding) {
-    return return_null_index_for_dimension();
-  }
-  if (!AreDimensionsCompatible(dimension, binding->key.dimension)) {
-    return return_null_index_for_dimension();
-  }
-
-  Texture* texture = nullptr;
-  if (is_signed) {
-    if (texture_util::IsAnySignSigned(binding->swizzled_signs)) {
-      texture = IsSignedVersionSeparateForFormat(binding->key)
-                    ? binding->texture_signed
-                    : binding->texture;
-    }
-  } else if (texture_util::IsAnySignNotSigned(binding->swizzled_signs)) {
-    texture = binding->texture;
-  }
-
+  const TextureBinding* binding = nullptr;
+  Texture* texture =
+      SelectBindlessTexture(fetch_constant, dimension, is_signed, &binding);
   if (!texture) {
     return return_null_index_for_dimension();
   }
@@ -4805,6 +4852,9 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
     return return_null_index_for_dimension();
   }
   metal_texture->tres_bind_serial_ = ++tres_bind_serial_counter_;
+  if (used_texture_out) {
+    *used_texture_out = texture;
+  }
   MTL::Texture* texture_for_encoder = nullptr;
   uint32_t srv_index = metal_texture->GetOrCreateBindlessSRVIndexAndView(
       binding->host_swizzle, dimension, is_signed,
@@ -4818,6 +4868,24 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
                                    : get_null_texture_for_dimension();
   }
   return srv_index;
+}
+
+void MetalTextureCache::MarkBindlessTexturesUsed(Texture* const* textures,
+                                                 size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    Texture* texture = textures[i];
+    if (!texture) {
+      continue;
+    }
+    texture->MarkAsUsed();
+    static_cast<MetalTexture*>(texture)->tres_bind_serial_ =
+        ++tres_bind_serial_counter_;
+  }
+}
+
+uint64_t MetalTextureCache::BindlessBindingGeneration() const {
+  return (bindless_binding_generation_ << 8) ^
+         uint64_t(uint8_t(int32_t(REXCVAR_GET(anisotropic_override))));
 }
 
 uint32_t MetalTextureCache::GetBindlessSamplerIndexForBinding(
@@ -5735,6 +5803,7 @@ uint32_t MetalTextureCache::GetMaxHostTextureDepthOrArraySize(
 std::unique_ptr<TextureCache::Texture> MetalTextureCache::CreateTexture(
     TextureKey key) {
   SCOPE_profile_cpu_f("gpu");
+  ++bindless_binding_generation_;  // [bindless-memo]
 
   MTL::PixelFormat metal_format = GetPixelFormatForKey(key);
   if (metal_format == MTL::PixelFormatInvalid) {
@@ -5929,6 +5998,11 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     if (load_base) metal_texture->resident_load_pending_[0] = true;
     if (load_mips) metal_texture->resident_load_pending_[1] = true;
   }
+#if REX_GPU_TRACE
+  // GPU trace replay: the copy is encoded, the texture is marked up to date
+  // (and watched) only later by the caller under the global lock.
+  trace::NotifyTextureLoadWindow(texture, load_base, load_mips, 0);
+#endif
   if (command_processor_) {
     const TextureKey& texture_key = texture.key();
     const uint64_t upload_bytes =
@@ -6060,6 +6134,11 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
     }
     TexRenameClearPending(*metal_texture, base_outdated, mips_outdated);
     metal_texture->set_loaded_once();
+#if REX_GPU_TRACE
+    // GPU trace replay: the guest bytes are copied, the watch is checked and
+    // the texture marked up to date below under the global lock.
+    trace::NotifyTextureLoadWindow(texture, base_outdated, mips_outdated, 1);
+#endif
 
     auto global_lock = AcquireGlobalLock();
     if (watch_first) {
@@ -6328,6 +6407,7 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateDirectWriteView(
 }
 
 MetalTextureCache::MetalTexture::~MetalTexture() {
+  ++texture_cache_.bindless_binding_generation_;  // [bindless-memo]
   if (!is_3d_as_2d_wrapper_) {
     texture_cache_.RttUnregister(this);
   }
@@ -6634,6 +6714,16 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreate3DAs2DView(
     if (!texture_cache_.LoadTextureData(*texture_3d_as_2d_)) {
       REXLOG_ERROR("MetalTexture: Failed to load 3D-as-2D texture data");
       texture_3d_as_2d_.reset();
+      return nullptr;
+    }
+  } else if (REXCVAR_GET(metal_3d_as_2d_refresh)) {
+    // The wrapper is not in the texture map or the usage list. It watches its
+    // own guest range (the first slice), and PrepareTextureMaterialization
+    // reloads it with the draw's loads once a write marked it outdated; this
+    // catches a request outside materialization. LoadTextureData returns at
+    // once when nothing is outdated.
+    if (!texture_cache_.LoadTextureData(*texture_3d_as_2d_)) {
+      REXLOG_ERROR("MetalTexture: Failed to reload 3D-as-2D texture data");
       return nullptr;
     }
   }
