@@ -60,7 +60,7 @@ config, on the command line (`--metal_retina=false`) or through the environment 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `metal_title_quirks` | empty | Per-title workarounds, comma separated. Only `fable2` exists (see below). |
-| `metal_encode_thread` | false | Record render encoder calls and replay them into Metal on a second thread. |
+| `metal_encode_thread` | true | Record render encoder calls and replay them into Metal on a second thread. |
 | `metal_dedupe_gpu_access` | true | Skip re-marking a shared memory range as GPU-accessed within the same submission. |
 | `metal_tile_resolve_half_bits` | true | Run integer 64bpp resolves of RGBA16Float targets in the open draw pass (tile resolve). Bit-exact: see `tools/half_bits_tile_test.mm`. |
 | `metal_fetch_constants_shared` | true | Upload fetch constants only after a fetch register actually changes, and share that one upload across shader stages and draws until the next change. Set false for the old per-draw upload. |

@@ -52,7 +52,7 @@ DEFINE_bool(metal_tile_resolve_half_bits, true,
             "Let integer 64bpp resolves of RGBA16Float render targets run "
             "inside the open draw pass (tile resolve) instead of ending it.",
             "Metal");
-DEFINE_bool(metal_encode_thread, false,
+DEFINE_bool(metal_encode_thread, true,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",
             "Metal");
