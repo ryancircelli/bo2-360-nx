@@ -87,6 +87,9 @@ extern "C" uint32_t RexSwitchPerfTakeDequeueWaitUs(void);
 #endif
 
 REXCVAR_DECLARE(bool, bo2zm_show_fps);
+REXCVAR_DECLARE(bool, fullscreen);
+REXCVAR_DECLARE(bool, mnk_mode);
+REXCVAR_DECLARE(bool, mnk_mouse);
 REXCVAR_DEFINE_BOOL(bo2zm_vsync_drain, true, "Graphics",
                     "VSYNC: when the presenter had to wait for a free buffer (two finished frames already queued for "
                     "the screen), the next frame starts one refresh later, so finished frames stop waiting in the "
@@ -369,6 +372,58 @@ void SetVsync(int on) {
   ApplyVsync();
 }
 
+// Options > Graphics DISPLAY (Mac/PC only): full screen or a window. The fullscreen cvar's change callback
+// (sdk/src/ui/rex_app.cpp) resizes the window at once.
+int WindowMode() {
+  return REXCVAR_GET(fullscreen) ? 0 : 1;
+}
+void SetWindowMode(int window) {
+  rex::cvar::SetFlagByName("fullscreen", window ? "false" : "true");
+}
+
+// Options KEYBOARD AND MOUSE (Mac/PC only): the SDK's keyboard/mouse driver (sdk/src/input/mnk) acts as player 1's
+// controller; the mouse turns the camera while the game window has focus.
+int KeyboardMouse() {
+  return REXCVAR_GET(mnk_mode) ? 1 : 0;
+}
+void SetKeyboardMouse(int on) {
+  // PC-style keys on top of the SDK's defaults: mouse buttons fire and aim, R reload, C crouch, G grenade, V melee,
+  // 2 weapon swap. A bind changed in bo2zm.toml (no longer the SDK default) is left alone.
+  struct Bind {
+    const char* cvar;
+    const char* sdk_default;
+    const char* pc;
+  };
+  static constexpr Bind kPcBinds[] = {
+      {"keybind_right_trigger", "E,O", "LMB,E,O"},
+      {"keybind_left_trigger", "Q,I", "RMB,Q,I"},
+      {"keybind_x", "L", "R,L"},
+      {"keybind_b", "Quote,Backspace", "C,Quote,Backspace"},
+      {"keybind_right_shoulder", "3", "G,3"},
+      {"keybind_rstick_press", "K", "V,K"},
+      {"keybind_y", "P", "2,P"},
+  };
+  if (on) {
+    for (const Bind& bind : kPcBinds) {
+      if (rex::cvar::GetFlagByName(bind.cvar) == bind.sdk_default) {
+        rex::cvar::SetFlagByName(bind.cvar, bind.pc);
+      }
+    }
+  }
+  rex::cvar::SetFlagByName("mnk_mode", on ? "true" : "false");
+  rex::cvar::SetFlagByName("mnk_mouse", on ? "true" : "false");
+}
+
+// Which rows the menu shows: the Switch-only ones (CPU CORES) or the Mac/PC-only ones (DISPLAY, KEYBOARD AND MOUSE).
+int Platform() {
+#if defined(__SWITCH__)
+  return 0;
+#else
+  return 1;
+#endif
+}
+void SetPlatform(int) {}
+
 // Waits until when (see the top of the file). Main thread.
 void WaitUntil(std::chrono::steady_clock::time_point when) {
 #if REX_PLATFORM_WIN32
@@ -466,6 +521,8 @@ void SetDefaultMode(int mode) {
   (void)bo2zm::launch::SetDefaultModeIndex(mode);
 }
 constexpr const char* kCoreCounts[] = {"3", "4"};
+constexpr const char* kWindowModes[] = {"fullscreen", "window"};
+constexpr const char* kPlatforms[] = {"switch", "pc"};
 constexpr const char* kCoresInUse[] = {"3", "4", "3 (not a 4-core launch)", "3 (switched off by the failsafe)"};
 constexpr const char* kFastFull[] = {"fast", "full"};
 constexpr const char* kCachesOnOff[] = {"on", "off"};
@@ -558,6 +615,9 @@ constexpr Option kOptions[] = {
     {"keep_perks", nullptr, kOffOn, 2, KeepPerks, SetKeepPerks},
     {"fps_cap", "fps_cap", kFpsCaps, 2, FpsCap, SetFpsCap},
     {"vsync", "vsync", kOffOn, 2, Vsync, SetVsync},
+    {"window_mode", "window_mode", kWindowModes, 2, WindowMode, SetWindowMode},
+    {"keyboard", "keyboard", kOffOn, 2, KeyboardMouse, SetKeyboardMouse},
+    {"platform", nullptr, kPlatforms, 2, Platform, SetPlatform},
     // The DEBUG options' own picks are CUSTOM's, saved by bo2zm_debug_options.cpp (LoadCustom).
     {"dbg_textures", nullptr, kFastFull, 2, bo2zm::debug::TextureChecks,
      bo2zm::debug::SetTextureChecks},
