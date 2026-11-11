@@ -8443,6 +8443,38 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
     EndRenderEncoder(
         RenderEncoderEndReason::kBeginRenderEncoderDescriptorChanged);
   }
+  static const bool memexport_write_order = [] {
+    const char* value = MetalDebugEnv("MEMEXPORT_WRITE_ORDER");
+    const bool enabled = !(value && value[0] == '0');
+    REXLOG_INFO("[memexport-write-order] {} (REX_METAL_MEMEXPORT_WRITE_ORDER={})",
+                enabled ? "on" : "off", value ? value : "unset");
+    return enabled;
+  }();
+  bool active_memexport_overlap = false;
+  if (NS::UInteger(draw.memexport_write_stages) &&
+      !draw.memexport_ranges.empty()) {
+    for (const PendingSharedMemoryWrite& pending :
+         pending_shared_memory_writes_) {
+      if (!pending.active_render_encoder) continue;
+      for (const draw_util::MemExportRange& range : draw.memexport_ranges) {
+        SharedMemoryRange shared_range = {range.base_address_dwords << 2,
+                                          range.size_bytes};
+        if (PendingSharedMemoryWriteOverlapsRanges(pending, &shared_range, 1)) {
+          active_memexport_overlap = true;
+          break;
+        }
+      }
+      if (active_memexport_overlap) break;
+    }
+  }
+  if (active_memexport_overlap && memexport_write_order &&
+      current_render_encoder_) {
+    // Update the shared-memory fence for the earlier move before closing
+    // its encoder. The later move's normal hazard path waits on that fence
+    // in the next encoder rather than relying on vertex-to-vertex ordering
+    // within the same render pass.
+    EndRenderEncoder(RenderEncoderEndReason::kSharedMemoryReadDependency);
+  }
   pass_open_need_bottom_ = need_y1;
   const bool draw_pass_transfers =
       render_target_cache_ && render_target_cache_->HasPendingDrawPassTransfers();
