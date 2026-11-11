@@ -8,6 +8,8 @@
  ******************************************************************************
  */
 
+#include <rex/system/write_trace.h>
+#include <fmt/format.h>
 #include "rex/graphics/metal/metal_shared_memory.h"
 
 #include <algorithm>
@@ -309,6 +311,10 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
     std::memcpy(guest + e.start, gpu + e.start, len);
+    if (rex::write_trace::Wanted(uint32_t(e.start), uint32_t(len))) [[unlikely]] {
+      rex::write_trace::NotePhysicalSlow("gpu-memexport-readback", uint32_t(e.start), uint32_t(len), 0,
+                                         fmt::format("submission {}", e.submission));
+    }
     const uint64_t new_hash = XXH3_64bits(guest + e.start, len);
     for (size_t j : rebase_pending) {
       PendingReadback& l = pending_readbacks_[j];

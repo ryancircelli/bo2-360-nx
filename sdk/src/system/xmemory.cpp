@@ -28,6 +28,7 @@
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/mmio_handler.h>
 #include <rex/system/xmemory.h>
+#include <rex/system/write_trace.h>
 #include <rex/thread.h>
 
 // TODO(benvanik): move xbox.h out
@@ -272,6 +273,9 @@ bool Memory::Initialize() {
 
   uint32_t value_to_write = rex::byte_swap(uint32_t(0x2a6e3f38));
   std::memcpy(TranslateVirtual(0x80000000 + 0x1C), &value_to_write, sizeof(uint32_t));
+
+  // Diagnostics, off unless REX_TRACE_WRITE_PAGES is set (rex/system/write_trace.h).
+  write_trace::Initialize(this);
 
   return true;
 }
@@ -633,6 +637,9 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
           reinterpret_cast<uintptr_t>(host_address) & ~(uintptr_t(host_page_size - 1));
       if (rex::memory::Protect(reinterpret_cast<void*>(page_base), host_page_size,
                                rex::memory::PageAccess::kReadWrite, nullptr)) {
+        if (write_trace::IsArmedHostPage(page_base)) {
+          return true;  // the write trace's own protection, not a stale one
+        }
         REXSYS_WARN(
             "Recovered stale physical page protection for guest {:08X} (host {:016X}, "
             "guest_protect {:08X})",

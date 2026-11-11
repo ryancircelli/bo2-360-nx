@@ -66,6 +66,8 @@ set(BO2ZM_SOURCES
     src/bo2zm_jobs.cpp
     # BO2's memcpy/memmove/memset as native code ([rexcrt] in overrides.toml)
     src/bo2zm_crt.cpp
+    # REX_TRACE_WRITE_PAGES: the streaming pool context for the SDK write trace
+    src/bo2zm_write_trace.cpp
     src/bo2zm_test_pad.cpp
       src/bo2zm_party_probe.cpp
     src/bo2zm_d3d_trace.cpp

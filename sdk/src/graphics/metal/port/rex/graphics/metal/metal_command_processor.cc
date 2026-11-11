@@ -1,3 +1,5 @@
+#include <rex/system/write_trace.h>
+#include <fmt/format.h>
 #include <rex/graphics/swap_hook.h>
 #include "rex/graphics/metal/metal_frame_log.h"
 #include "rex/graphics/metal/metal_readiness.h"
@@ -9943,6 +9945,12 @@ bool MetalCommandProcessor::DispatchDraw(
       }
       shared_memory_->RangeWrittenByGpu(
           memexport_range.base_address_dwords << 2, memexport_range.size_bytes);
+      if (rex::write_trace::Wanted(memexport_range.base_address_dwords << 2,
+                                   memexport_range.size_bytes)) [[unlikely]] {
+        rex::write_trace::NotePhysicalSlow(
+            "gpu-memexport", memexport_range.base_address_dwords << 2, memexport_range.size_bytes, 0,
+            "memexport draw (GPU-side; guest RAM only via readback)");
+      }
       // [texture-precommit] record the write even when no stage is known
       // (no pending entry is made then): a texture load of these pages must
       // stay behind this draw in the current command buffer.

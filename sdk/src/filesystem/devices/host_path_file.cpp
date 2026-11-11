@@ -155,6 +155,13 @@ REXCVAR_DEFINE_INT32(switch_io_ranges_max_mb, 12, "Filesystem",
 namespace rex::filesystem {
 
 namespace {
+thread_local const char* t_last_read_kind = "none";
+}  // namespace
+
+const char* LastReadKind() { return t_last_read_kind; }
+void ResetLastReadKind() { t_last_read_kind = "not-host-file"; }
+
+namespace {
 std::atomic<uint64_t> g_hits{0};
 std::atomic<uint64_t> g_fills{0};
 std::atomic<uint64_t> g_direct{0};
@@ -800,6 +807,7 @@ X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
   }
 
   const size_t requested = buffer.size();
+  t_last_read_kind = "other";
   if (REXCVAR_GET(switch_io_report_files)) {
     AnnotateFileRead(entry(), requested);
   }
@@ -810,6 +818,7 @@ X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
         byte_offset + requested <= window_start_ + window_bytes_) {
       std::memcpy(buffer.data(), window_.data() + (byte_offset - window_start_), requested);
       *out_bytes_read = requested;
+      t_last_read_kind = "window";
       ++window_hits_;
       g_hits.fetch_add(1, std::memory_order_relaxed);
       g_bytes_ram.fetch_add(requested, std::memory_order_relaxed);
@@ -818,6 +827,9 @@ X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
 
     X_STATUS state = X_STATUS_SUCCESS;
     const bool served = FillWindow(byte_offset, requested, buffer, out_bytes_read, &state);
+    if (served) {
+      t_last_read_kind = "window-fill";
+    }
 
     /*
      * Audit. Each fill is a 256 KB read from the SD that only pays off if hits follow. If after
@@ -854,6 +866,7 @@ X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
       std::memcpy(buffer.data(), data->data(), n);
       *out_bytes_read = n;
       g_ranges_hits.fetch_add(1, std::memory_order_relaxed);
+      t_last_read_kind = "range-hit";
       g_ranges_bytes_ram.fetch_add(n, std::memory_order_relaxed);
       return X_STATUS_SUCCESS;
     }
@@ -864,12 +877,14 @@ X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
     size_t read_count = 0;
     if (ReadWithCache(file_handle_.get(), cache_id_, buffer, byte_offset, &read_count)) {
       *out_bytes_read = read_count;
+      t_last_read_kind = "block-cache";
       return X_STATUS_SUCCESS;
     }
   }
 
   g_direct.fetch_add(1, std::memory_order_relaxed);
   const X_STATUS state = ReadDirect(buffer, byte_offset, out_bytes_read);
+  t_last_read_kind = "disk";
 
   /*
    * And here what just arrived is stored. None of this happens with a shared lock held: the read
@@ -880,6 +895,7 @@ X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
     g_ranges_misses.fetch_add(1, std::memory_order_relaxed);
     g_ranges_bytes_disk.fetch_add(*out_bytes_read, std::memory_order_relaxed);
     SaveRange(cache_id_, byte_offset, uint32_t(requested), buffer.data(), *out_bytes_read);
+    t_last_read_kind = "disk+range-saved";
   }
   return state;
 }

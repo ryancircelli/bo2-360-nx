@@ -22,6 +22,9 @@
 
 #include <rex/hook.h>
 #include <rex/system/xmemory.h>
+#include <rex/system/write_trace.h>
+
+#include <fmt/format.h>
 
 #include "bo2zm_page_writes.h"
 #if !defined(BO2_GAME_CAMPAIGN)
@@ -37,7 +40,7 @@ inline uint8_t* Host(uint8_t* base, uint32_t guest) {
 // r3 = dst, r4 = src, r5 = byte count; returns dst in r3 (untouched).
 // Copies and fills into physical memory are stamped for the renderer's vertex reuse (bo2zm_page_writes.h): the
 // asset loader and the UP draws write vertex data this way.
-inline void Move(PPCContext& ctx, uint8_t* base) {
+inline void Move(PPCContext& ctx, uint8_t* base, const char* tag) {
   const uint32_t n = ctx.r5.u32;
   if (n != 0) [[likely]] {
 #if !defined(BO2_GAME_CAMPAIGN)
@@ -52,24 +55,33 @@ inline void Move(PPCContext& ctx, uint8_t* base) {
       bo2zm::mod_hud_fit::AfterCopy(ctx, base);
 #endif
     bo2zm::page_writes::MarkGuest(ctx.r3.u32, n);
+    if (rex::write_trace::WantedGuest(ctx.r3.u32, n)) [[unlikely]] {
+      rex::write_trace::NotePhysicalSlow(tag, rex::write_trace::ToPhysical(ctx.r3.u32), n, uint32_t(ctx.lr),
+                                         fmt::format("dst {:08X} src {:08X} (src phys {:08X})", ctx.r3.u32,
+                                                     ctx.r4.u32, rex::write_trace::ToPhysical(ctx.r4.u32)));
+    }
   }
 }
 
 // r3 = dst, r4 = value (its low byte), r5 = byte count; returns dst in r3 (untouched).
-inline void Fill(PPCContext& ctx, uint8_t* base) {
+inline void Fill(PPCContext& ctx, uint8_t* base, const char* tag) {
   const uint32_t n = ctx.r5.u32;
   if (n != 0) [[likely]] {
     std::memset(Host(base, ctx.r3.u32), int(ctx.r4.u32 & 0xFF), n);
     bo2zm::page_writes::MarkGuest(ctx.r3.u32, n);
+    if (rex::write_trace::WantedGuest(ctx.r3.u32, n)) [[unlikely]] {
+      rex::write_trace::NotePhysicalSlow(tag, rex::write_trace::ToPhysical(ctx.r3.u32), n, uint32_t(ctx.lr),
+                                         fmt::format("dst {:08X} value {:02X}", ctx.r3.u32, ctx.r4.u32 & 0xFF));
+    }
   }
 }
 
 }  // namespace
 
-extern "C" REX_FUNC(rexcrt_bo2zm_memcpy) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_memmove) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_xmemcpy) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_bigcopy) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_bigcopy2) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_memset) { Fill(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_xmemset) { Fill(ctx, base); }
+extern "C" REX_FUNC(rexcrt_bo2zm_memcpy) { Move(ctx, base, "crt-memcpy"); }
+extern "C" REX_FUNC(rexcrt_bo2zm_memmove) { Move(ctx, base, "crt-memmove"); }
+extern "C" REX_FUNC(rexcrt_bo2zm_xmemcpy) { Move(ctx, base, "crt-xmemcpy"); }
+extern "C" REX_FUNC(rexcrt_bo2zm_bigcopy) { Move(ctx, base, "crt-bigcopy"); }
+extern "C" REX_FUNC(rexcrt_bo2zm_bigcopy2) { Move(ctx, base, "crt-bigcopy2"); }
+extern "C" REX_FUNC(rexcrt_bo2zm_memset) { Fill(ctx, base, "crt-memset"); }
+extern "C" REX_FUNC(rexcrt_bo2zm_xmemset) { Fill(ctx, base, "crt-xmemset"); }

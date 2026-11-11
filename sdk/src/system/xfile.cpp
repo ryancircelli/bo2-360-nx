@@ -17,6 +17,10 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xevent.h>
 #include <rex/system/xfile.h>
+#include <rex/system/write_trace.h>
+#include <rex/system/thread_state.h>
+#include <fmt/format.h>
+#include <rex/filesystem/devices/host_path_file.h>
 #include <rex/thread/mutex.h>
 
 #include <span>
@@ -155,6 +159,10 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_leng
                                         memory::PageAccess::kReadWrite) {
           result = X_STATUS_ACCESS_VIOLATION;
         } else {
+          const bool trace_writes = rex::write_trace::g_enabled.load(std::memory_order_relaxed);
+          if (trace_writes) {
+            rex::filesystem::ResetLastReadKind();
+          }
           result = file_->ReadSync(
               std::span<uint8_t>(
                   buffer_physical_heap
@@ -163,6 +171,21 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_leng
                       : memory()->TranslateVirtual(buffer_guest_address),
                   buffer_length),
               size_t(byte_offset), &bytes_read);
+          if (trace_writes && XSUCCEEDED(result) && buffer_physical_heap) {
+            const uint32_t physical =
+                buffer_physical_heap->GetPhysicalAddress(buffer_guest_address);
+            if (rex::write_trace::OverlapsPhysical(physical, uint32_t(bytes_read))) {
+              uint32_t guest_lr = 0;
+              if (auto* ts = rex::runtime::ThreadState::Get()) {
+                guest_lr = uint32_t(ts->context()->lr);
+              }
+              rex::write_trace::NotePhysicalSlow(
+                  "file", physical, uint32_t(bytes_read), guest_lr,
+                  fmt::format("{} @0x{:X} len 0x{:X} (asked 0x{:X}) via {} guest_buf {:08X}", path(),
+                              byte_offset, bytes_read, buffer_length,
+                              rex::filesystem::LastReadKind(), buffer_guest_address));
+            }
+          }
           if (XSUCCEEDED(result)) {
             if (buffer_physical_heap) {
               buffer_physical_heap->TriggerCallbacks(

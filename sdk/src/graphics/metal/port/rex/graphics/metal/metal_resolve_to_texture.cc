@@ -14,6 +14,8 @@
  *   5 no match (pitch, bits per block, base, tiling, dimension, mips)
  */
 
+#include <rex/system/write_trace.h>
+#include <fmt/format.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -1270,6 +1272,10 @@ bool MetalTextureCache::RttPrepareFused(
 
 void MetalTextureCache::MarkRangeAsResolvedUnscaledRtt(
     uint32_t written_address, uint32_t written_length) {
+  if (rex::write_trace::Wanted(written_address & 0x1FFFFFFF, written_length)) [[unlikely]] {
+    rex::write_trace::NotePhysicalSlow("gpu-resolve", written_address & 0x1FFFFFFF, written_length, 0,
+                                       "MarkRangeAsResolvedUnscaledRtt (GPU-side copy into shared memory, not guest RAM)");
+  }
   if (IsDrawResolutionScaled()) ++UploadTrace().rtt_rsv;
   rtt_in_resolve_ = true;
   rtt_resolve_first_ = written_address & 0x1FFFFFFF;
@@ -1282,6 +1288,10 @@ void MetalTextureCache::MarkRangeAsResolvedUnscaledRtt(
 void MetalTextureCache::MarkRangeAsResolvedRttFused(
     const draw_util::ResolveInfo& resolve_info, uint32_t written_address,
     uint32_t written_length, const RttFusedPlan* plan) {
+  if (rex::write_trace::Wanted(written_address & 0x1FFFFFFF, written_length)) [[unlikely]] {
+    rex::write_trace::NotePhysicalSlow("gpu-resolve", written_address & 0x1FFFFFFF, written_length, 0,
+                                       "MarkRangeAsResolvedRttFused (GPU-side copy into shared memory, not guest RAM)");
+  }
   const uint32_t mode = RttDiagMode();
   if (RttTraceBase() && written_length &&
       (written_address & 0x1FFFFFFF) <= RttTraceBase() + 0x3FFFFF &&

@@ -19,6 +19,7 @@
 #include <rex/memory.h>
 #include <rex/platform.h>
 #include <rex/system/mmio_handler.h>
+#include <rex/system/write_trace.h>
 #include <rex/types.h>
 
 #if REX_PLATFORM_WIN32
@@ -422,6 +423,14 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
       ex->fault_address() > uint64_t(memory_end_)) {
     // Quick kill anything outside our mapping.
     return false;
+  }
+  if (is_write && write_trace::g_enabled.load(std::memory_order_relaxed)) [[unlikely]] {
+    // Records only; the fault is handled below as usual (REX_TRACE_WRITE_PAGES).
+    uint64_t host_lr = 0;
+#if REX_ARCH_ARM64
+    host_lr = ex->thread_context()->x[30];
+#endif
+    write_trace::OnWriteFault(uintptr_t(ex->fault_address()), ex->pc(), host_lr);
   }
   void* fault_host_address = reinterpret_cast<void*>(ex->fault_address());
 

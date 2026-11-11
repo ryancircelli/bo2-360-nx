@@ -78,6 +78,12 @@ RangeStats ReadRangeStats();
 // line ("name: reads, MB; ..."), at most 'top' of them. Empty when the cvar is off or nothing was read.
 std::string TakeFilesReport(size_t top);
 
+// Diagnostics (REX_TRACE_WRITE_PAGES, rex/system/write_trace.h): which path served the calling thread's latest
+// HostPathFile read: "window", "range-hit", "block-cache" or "disk" ("disk+range-saved" when the exact-range cache
+// stored it). Set on every read; a constant string.
+const char* LastReadKind();
+void ResetLastReadKind();  // "not a host file" until the next HostPathFile read
+
 class HostPathFile : public File {
  public:
   HostPathFile(uint32_t file_access, HostPathEntry* entry,

@@ -6,6 +6,7 @@ set(REXSYSTEM_SOURCES
     kernel_state.cpp
     graphics_swap_hook.cpp
     xmemory.cpp
+    write_trace.cpp
     kernel_module.cpp
     user_module.cpp
     xthread.cpp

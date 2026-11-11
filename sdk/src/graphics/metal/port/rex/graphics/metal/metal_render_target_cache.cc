@@ -8,6 +8,7 @@
  ******************************************************************************
  */
 
+#include <rex/system/write_trace.h>
 #include "rex/graphics/metal/metal_hitch.h"
 #include "rex/graphics/metal/metal_xfer_keys_default.h"
 #include "rex/graphics/metal/metal_startup_parallel.h"
@@ -7213,6 +7214,11 @@ bool MetalRenderTargetCache::Resolve(rex::memory::Memory& memory, uint32_t& writ
 
                 written_address = resolve_plan.written_address;
                 written_length = resolve_plan.written_length;
+                if (rex::write_trace::Wanted(written_address & 0x1FFFFFFF, written_length)) [[unlikely]] {
+                  rex::write_trace::NotePhysicalSlow(
+                      "gpu-resolve", written_address & 0x1FFFFFFF, written_length, 0,
+                      "render-target resolve (GPU-side copy into shared memory, not guest RAM)");
+                }
 
                 // Mark the range as resolved in the texture cache so that any
                 // textures overlapping this range will be reloaded from the

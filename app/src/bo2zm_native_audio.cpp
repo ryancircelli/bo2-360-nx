@@ -57,6 +57,7 @@
 #include "bo2zm_native_lzx.h"
 #include "bo2zm_native_skin.h"
 #include "bo2zm_page_writes.h"
+#include <rex/system/write_trace.h>
 
 #if defined(BO2ZM_HAS_LOCALS) && __has_include("bo2zm_locals.h")
 #include "bo2zm_locals.h"  // tools/localize.py: generated copies with the ctx registers as locals
@@ -1429,7 +1430,24 @@ void LzxCompare(PPCContext& ctx, uint8_t* base) {
 }
 }  // namespace
 
+static void LzxBody(PPCContext& ctx, uint8_t* base);
+
+// REX_TRACE_WRITE_PAGES: the decoder writes its window from position r4 for r5 bytes (RegionsLzx).
 REX_HOOK_RAW(sub_827E7058) {
+  if (rex::write_trace::g_enabled.load(std::memory_order_relaxed)) [[unlikely]] {
+    const uint32_t s = ctx.r3.u32, pos = ctx.r4.u32, end = ctx.r4.u32 + ctx.r5.u32, lr = uint32_t(ctx.lr);
+    const uint32_t window = int32_t(pos) < int32_t(end) ? Load32(Host(base, s)) + pos : 0;
+    LzxBody(ctx, base);
+    if (window && rex::write_trace::WantedGuest(window, end - pos + 272)) {
+      rex::write_trace::NotePhysicalSlow("lzx", rex::write_trace::ToPhysical(window), end - pos, lr,
+                                         fmt::format("state {:08X} window+{:X} len {:X}", s, pos, end - pos));
+    }
+    return;
+  }
+  LzxBody(ctx, base);
+}
+
+static void LzxBody(PPCContext& ctx, uint8_t* base) {
   if (LzxOffInThisArm()) {
     __imp__sub_827E7058(ctx, base);
     return;
