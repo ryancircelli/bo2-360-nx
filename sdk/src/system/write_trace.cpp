@@ -67,6 +67,9 @@ bool g_fault_mode = true;
 
 memory::Memory* g_memory = nullptr;
 std::atomic<Describer> g_describer{nullptr};
+std::atomic<Ticker> g_ticker{nullptr};
+FILE* g_aux = nullptr;
+std::mutex g_aux_mutex;
 
 // REX_TRACE_WRITE_FOLLOW: 512-byte blocks of known contents (hash -> blob, offset). A noted write that lands one of
 // them in guest RAM adds a watched range around it.
@@ -276,6 +279,9 @@ void Watcher() {
     Arm();
     std::this_thread::sleep_for(std::chrono::microseconds(500));
     Scan();
+    if (Ticker t = g_ticker.load(std::memory_order_acquire)) {
+      t();
+    }
     if (std::chrono::steady_clock::now() >= next_status) {
       next_status += std::chrono::seconds(10);
       std::lock_guard<std::mutex> lock(g_mutex);
@@ -517,6 +523,18 @@ bool IsArmedHostPage(uintptr_t host_address) {
 
 void SetDescriber(Describer describer) { g_describer.store(describer, std::memory_order_release); }
 
+void SetTicker(Ticker ticker) { g_ticker.store(ticker, std::memory_order_release); }
+
+void Aux(const std::string& text) {
+  std::lock_guard<std::mutex> lock(g_aux_mutex);
+  if (g_aux) {
+    std::fprintf(g_aux, "t=%.3f %s\n", NowMs(), text.c_str());
+    std::fflush(g_aux);
+  }
+}
+
+double ElapsedMs() { return NowMs(); }
+
 void Initialize(memory::Memory* memory) {
   const char* ranges = std::getenv("REX_TRACE_WRITE_PAGES");
   const char* follow = std::getenv("REX_TRACE_WRITE_FOLLOW");
@@ -537,6 +555,8 @@ void Initialize(memory::Memory* memory) {
   if (const char* dir = std::getenv("REX_TRACE_WRITE_DIR")) {
     g_dir = dir;
     g_log = std::fopen((g_dir + "/events.log").c_str(), "a");
+    g_aux = std::fopen((g_dir + "/aux.log").c_str(), "a");
+
   }
   {
     std::lock_guard<std::mutex> lock(g_mutex);

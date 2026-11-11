@@ -76,4 +76,13 @@ bool IsArmedHostPage(uintptr_t host_address);
 using Describer = void (*)(uint32_t physical, uint32_t length, std::string& out);
 void SetDescriber(Describer describer);
 
+// An optional ticker the app registers: called on the watcher thread every loop (~0.5 ms), e.g. to diff app tables.
+using Ticker = void (*)();
+void SetTicker(Ticker ticker);
+
+// A line in <REX_TRACE_WRITE_DIR>/aux.log (timestamped like events.log): app-wide context that is not about a watched
+// range (pool allocations, every memexport). Thread-safe.
+void Aux(const std::string& text);
+double ElapsedMs();
+
 }  // namespace rex::write_trace

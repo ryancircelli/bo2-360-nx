@@ -287,6 +287,10 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       // The CPU wrote into the export range after the export: its data wins
       // (that write also invalidated the page, so it gets re-uploaded).
       cpu_skip_bytes += len;
+      if (rex::write_trace::g_enabled.load(std::memory_order_relaxed)) [[unlikely]] {
+        rex::write_trace::Aux(fmt::format("readback-skipped-cpu-wrote {:08X}+{:X} submission={}", uint32_t(e.start),
+                                          uint32_t(len), e.submission));
+      }
       continue;
     }
     // Hashes taken by later exports / fix A that still describe the guest
@@ -325,6 +329,10 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
           "gpu-memexport-readback-pre", uint32_t(e.start), uint32_t(len), 0,
           fmt::format("submission {} guest bytes before the copy; gpu!=guest {} bytes (+{:X}..+{:X}) hash@export {:016X} now {:016X}",
                       e.submission, differ, differ ? first : 0, differ ? last + 1 : 0, e.guest_hash, guest_hash_now));
+    }
+    if (rex::write_trace::g_enabled.load(std::memory_order_relaxed)) [[unlikely]] {
+      rex::write_trace::Aux(fmt::format("readback {:08X}+{:X} submission={}", uint32_t(e.start), uint32_t(len),
+                                        e.submission));
     }
     std::memcpy(guest + e.start, gpu + e.start, len);
     if (rex::write_trace::Wanted(uint32_t(e.start), uint32_t(len))) [[unlikely]] {

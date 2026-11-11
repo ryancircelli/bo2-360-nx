@@ -5703,6 +5703,17 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     }
     for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
       const uint32_t base_bytes = memexport_range.base_address_dwords << 2;
+      if (rex::write_trace::g_enabled.load(std::memory_order_relaxed)) [[unlikely]] {
+        std::string fetches;
+        for (uint32_t i = 0; i < vertex_fetch_range_count; ++i) {
+          fetches += fmt::format(" {:08X}+{:X}", vertex_fetch_ranges[i].start, vertex_fetch_ranges[i].length);
+        }
+        rex::write_trace::Aux(fmt::format(
+            "memexport dst={:08X}+{:X} valid={} submission={} vs={:016X} vfetch:{}", base_bytes,
+            memexport_range.size_bytes,
+            shared_memory_->IsRangeValid(base_bytes, memexport_range.size_bytes) ? 1 : 0, submission_current_,
+            vertex_shader->ucode_data_hash(), fetches));
+      }
       if (rex::write_trace::g_enabled.load(std::memory_order_relaxed) &&
           rex::write_trace::OverlapsPhysical(base_bytes, memexport_range.size_bytes)) [[unlikely]] {
         std::string fetches;
