@@ -11,10 +11,11 @@
 // per-frame hook watches that byte and, each time a profile finishes loading, runs "setprofile unlock_crumbs_zm
 // 16777215" for that controller with the game's own text runner.
 //
-// DLC map packs: Nuketown Zombies (content bit 8) and Nuketown 2025 (content bit 1).
+// DLC map packs: Nuketown Zombies (content bit 8) and Nuketown 2025 MP (content bit 4 in the map availability table).
 //
-// The game keeps one 76-byte record per mounted DLC package at 0x83880EF8 (8 records): +0 the content bit its id file
-// names (dlczm0.id: 8), +64 the license mask XamContentCreateEx returned for it, +69 a byte set once it is mounted.
+// The game keeps one 76-byte record per mounted DLC package at 0x83880EF8 (8 records): +0 the availability content
+// bit (Nuketown 2025 MP requests 4; Nuketown Zombies uses 8), +64 the license mask XamContentCreateEx returned for it,
+// +69 a byte set once it is mounted.
 // sub_82412840(record) says whether a record may be used: it must be mounted, and when its license mask is exactly 1 it
 // also needs the online bit (0x4) of the session mode flags at 0x837F8CB4 (sub_82406460). The game treats mask 1 as a
 // trial or promotional license: it is honoured when the online service supplies content_trialcontentpackbits, but an
@@ -46,13 +47,26 @@ namespace {
 constexpr uint32_t kDlcRecords = 0x83880EF8;
 constexpr uint32_t kDlcRecordSize = 76;
 constexpr uint32_t kDlcRecordCount = 8;
-constexpr uint32_t kDlcContentBit = 0;  // uint32, big-endian; dlc0.id names bit 1, dlczm0.id names bit 8
+constexpr uint32_t kDlcContentBit = 0;  // uint32, big-endian
 constexpr uint32_t kDlcLicenseMask = 64;  // uint32, big-endian
 constexpr uint32_t kDlcMounted = 69;      // byte
+
+uint32_t DlcRecordBit(const uint8_t* entry) {
+  uint32_t bit;
+  std::memcpy(&bit, entry + kDlcContentBit, sizeof(bit));
+  return __builtin_bswap32(bit);
+}
+
+uint32_t DlcRecordLicense(const uint8_t* entry) {
+  uint32_t mask;
+  std::memcpy(&mask, entry + kDlcLicenseMask, sizeof(mask));
+  return __builtin_bswap32(mask);
+}
 
 }  // namespace
 
 REX_EXTERN(__imp__sub_82412840);
+
 REX_HOOK_RAW(sub_82412840) {
   const uint32_t record = ctx.r3.u32;
   __imp__sub_82412840(ctx, base);
@@ -60,17 +74,14 @@ REX_HOOK_RAW(sub_82412840) {
     return;
   }
   const uint8_t* entry = base + kDlcRecords + record * kDlcRecordSize;
-  uint32_t mask;
-  std::memcpy(&mask, entry + kDlcLicenseMask, sizeof(mask));
-  uint32_t content_bit;
-  std::memcpy(&content_bit, entry + kDlcContentBit, sizeof(content_bit));
+  const uint32_t bit = DlcRecordBit(entry);
   // The app's online link state is authoritative for this port: preserve the server's license check while the app is
   // preparing for or hosting/joining an online session, and allow these two maps while the link is idle/failed.
   const auto online_state = rex::system::online::Current().state;
   const bool app_online = online_state == rex::system::online::State::kPreparing ||
                           online_state == rex::system::online::State::kReady;
-  const uint32_t bit = __builtin_bswap32(content_bit);
-  if (entry[kDlcMounted] == 0 || (bit != 1 && bit != 8) || __builtin_bswap32(mask) != 1 || app_online) {
+  // Preserve the original bit-1 allowance, and include the traced MP map bit 4 alongside Zombies bit 8.
+  if (entry[kDlcMounted] == 0 || (bit != 1 && bit != 4 && bit != 8) || DlcRecordLicense(entry) != 1 || app_online) {
     return;
   }
   static bool logged[kDlcRecordCount] = {};
