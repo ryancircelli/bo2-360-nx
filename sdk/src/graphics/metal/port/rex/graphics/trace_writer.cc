@@ -28,6 +28,11 @@
 #include <rex/logging.h>
 #include <rex/string.h>
 
+// The header defines an inline no-op TraceWriter when the instrumentation is
+// off (NDEBUG, i.e. Release); the out-of-line definitions are only for the
+// instrumented build.
+#if XE_ENABLE_TRACE_WRITER_INSTRUMENTATION == 1
+
 namespace rex::graphics {
 
 TraceWriter::TraceWriter(uint8_t* membase) : membase_(membase), file_(nullptr) {}
@@ -366,3 +371,5 @@ void TraceWriter::WriteGammaRamp(const reg::DC_LUT_30_COLOR* gamma_ramp_256_entr
 }
 
 }  // namespace rex::graphics
+
+#endif  // XE_ENABLE_TRACE_WRITER_INSTRUMENTATION == 1
