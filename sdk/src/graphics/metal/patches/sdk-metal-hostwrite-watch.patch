@@ -1,0 +1,34 @@
+--- a/include/rex/graphics/shared_memory.h
++++ b/include/rex/graphics/shared_memory.h
+@@ -133,6 +133,13 @@
+   // regions in those pages.
+   void RangeWrittenByGpu(uint32_t start, uint32_t length);
+ 
++  // [host-write-watch] A host-side write into guest RAM that does not fault
++  // (the memexport readback copying GPU results back): fires the range
++  // watches, so anything built from the old guest bytes (a texture loaded
++  // straight from guest RAM) is reloaded. The valid bits are left alone: the
++  // shared memory copy already holds the bytes that were written.
++  void FireWatchesForHostWrite(uint32_t start, uint32_t length);
++
+  protected:
+   SharedMemory(rex::memory::Memory& memory);
+   // Call in implementation-specific initialization.
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -344,6 +344,15 @@
+   UnlinkWatchRange(reinterpret_cast<WatchRange*>(handle));
+ }
+ 
++void SharedMemory::FireWatchesForHostWrite(uint32_t start, uint32_t length) {
++  if (!length || start >= kBufferSize) {
++    return;
++  }
++  length = std::min(length, kBufferSize - start);
++  FireWatches(start >> page_size_log2_, (start + length - 1) >> page_size_log2_,
++              false);
++}
++
+ void SharedMemory::FireWatches(uint32_t page_first, uint32_t page_last,
+                                bool invalidated_by_gpu) {
+   uint32_t address_first = page_first << page_size_log2_;
