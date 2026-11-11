@@ -183,7 +183,7 @@ void Arm() {
     return;
   }
   for (size_t i = 0; i < g_view_count; ++i) {
-    for (uintptr_t a = g_views[i].host_start; a < g_views[i].host_end; a += g_host_page) {
+    for (uintptr_t a = g_views[i].host_start & ~(g_host_page - 1); a < g_views[i].host_end; a += g_host_page) {
       size_t len = g_host_page;
       memory::PageAccess access = memory::PageAccess::kNoAccess;
       if (memory::QueryProtect(reinterpret_cast<void*>(a), len, access) &&
