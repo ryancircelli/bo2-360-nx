@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <charconv>
+#include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 #include <rex/cvar.h>
@@ -34,6 +38,72 @@
 #include "native/render/bo2zm_native_video.h"
 #include "native/render/bo2zm_native_precompile.h"
 
+namespace {
+
+std::optional<int> Bo2InstanceIndex() {
+  const char* value = std::getenv("BO2_INSTANCE");
+  if (!value) {
+    return std::nullopt;
+  }
+  const std::string text(value);
+  int index = -1;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), index);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || index < 0 || index > 15) {
+    throw std::runtime_error("BO2_INSTANCE must be an integer from 0 to 15");
+  }
+  return index;
+}
+
+std::optional<int> Bo2InstanceCount() {
+  const char* value = std::getenv("BO2_INSTANCE_COUNT");
+  if (!value) {
+    return std::nullopt;
+  }
+  const std::string text(value);
+  int count = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), count);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || count < 2 || count > 4) {
+    throw std::runtime_error("BO2_INSTANCE_COUNT must be an integer from 2 to 4");
+  }
+  return count;
+}
+
+void ConfigureInstancePaths(rex::PathConfig& paths) {
+  const auto instance = Bo2InstanceIndex();
+  if (!instance) {
+    return;
+  }
+  const auto default_config_path = paths.config_path;
+  const auto previous_user_root = paths.user_data_root;
+  const auto isolated = std::filesystem::path("instances") / std::to_string(*instance);
+  paths.user_data_root /= isolated;
+  if (paths.cache_root == previous_user_root / "cache") {
+    paths.cache_root = paths.user_data_root / "cache";
+  } else {
+    paths.cache_root /= isolated;
+  }
+  paths.config_path = paths.user_data_root / "bo2zm.toml";
+
+  // Seed a new instance with the app's bundled defaults, then let its config
+  // evolve independently. Without this copy, per-instance configs would skip
+  // renderer and other required launch settings on the first run.
+  std::error_code ec;
+  if (!std::filesystem::exists(paths.config_path, ec) && !ec &&
+      std::filesystem::exists(default_config_path, ec) && !ec) {
+    std::filesystem::create_directories(paths.config_path.parent_path(), ec);
+    if (ec) {
+      throw std::runtime_error("Could not create the BO2 instance settings directory: " + ec.message());
+    }
+    std::filesystem::copy_file(default_config_path, paths.config_path,
+                               std::filesystem::copy_options::none, ec);
+    if (ec) {
+      throw std::runtime_error("Could not seed BO2 instance settings: " + ec.message());
+    }
+  }
+}
+
+}  // namespace
+
 class Bo2zmApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -57,6 +127,18 @@ class Bo2zmApp : public rex::ReXApp {
   // (native/bo2zm_native_system.cpp); ReXApp only loads the Xenos plugin when
   // config.graphics is empty.
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    if (const auto instance = Bo2InstanceIndex()) {
+      rex::cvar::SetFlagByName("net_system_port_offset", std::to_string(30000 + 16 * *instance));
+    }
+    if (const auto count = Bo2InstanceCount()) {
+      const auto instance = Bo2InstanceIndex();
+      if (!instance || *instance >= *count) {
+        throw std::runtime_error("BO2_INSTANCE must be less than BO2_INSTANCE_COUNT");
+      }
+      // WindowSDL tiles this instance as it creates its own window. Disable
+      // the default fullscreen mode so SDL can size and place the window.
+      rex::cvar::SetFlagByName("fullscreen", "false");
+    }
     if (!bo2zm::lifecycle::Prepare()) {
       throw std::runtime_error("Could not disable automated diagnostics after a fatal restart");
     }
@@ -123,6 +205,10 @@ class Bo2zmApp : public rex::ReXApp {
   void OnConfigurePaths(rex::PathConfig& paths) override {
     std::error_code ec;
     auto dir = rex::filesystem::GetExecutableFolder();
+    if (dir.empty()) {
+      ConfigureInstancePaths(paths);
+      return;
+    }
 #if REX_PLATFORM_SWITCH
     // Emulators (Ryujinx) may run the NRO from a temporary copy, away from
     // its folder: fall back to the standard install folder.
@@ -132,9 +218,6 @@ class Bo2zmApp : public rex::ReXApp {
       paths.config_path = dir / "bo2zm.toml";
     }
 #endif
-    if (dir.empty()) {
-      return;
-    }
     if (paths.game_data_root.empty() && std::filesystem::is_directory(dir / "game", ec)) {
       paths.game_data_root = dir / "game";
     }
@@ -155,6 +238,7 @@ class Bo2zmApp : public rex::ReXApp {
       paths.user_data_root = dir / "user";
     }
 #endif
+    ConfigureInstancePaths(paths);
   }
 
   // The log's level and the profiler's report, from the toml and the saved DEBUG, before logging starts (the quiet

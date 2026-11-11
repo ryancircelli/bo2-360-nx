@@ -14,7 +14,9 @@
 #include <rex/ui/window_sdl.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 
@@ -78,6 +80,50 @@ uint32_t ResolveWindowHeight(uint32_t requested_height) {
     }
   }
   return requested_height;
+}
+
+bool TileInstanceWindow(SDL_Window* window) {
+  const char* instance_value = std::getenv("BO2_INSTANCE");
+  const char* count_value = std::getenv("BO2_INSTANCE_COUNT");
+  if (!instance_value || !count_value) {
+    return false;
+  }
+  int instance = -1;
+  int count = 0;
+  const std::string_view instance_text(instance_value);
+  const std::string_view count_text(count_value);
+  const auto parsed_instance = std::from_chars(instance_text.data(), instance_text.data() + instance_text.size(), instance);
+  const auto parsed_count = std::from_chars(count_text.data(), count_text.data() + count_text.size(), count);
+  if (parsed_instance.ec != std::errc{} || parsed_instance.ptr != instance_text.data() + instance_text.size() ||
+      parsed_count.ec != std::errc{} || parsed_count.ptr != count_text.data() + count_text.size() ||
+      count < 2 || count > 4 || instance < 0 || instance >= count) {
+    REXLOG_WARN("Ignoring invalid BO2 instance window tile ({}/{})", instance_value, count_value);
+    return false;
+  }
+
+  const SDL_DisplayID display = SDL_GetPrimaryDisplay();
+  SDL_Rect bounds{};
+  if (!display || !SDL_GetDisplayBounds(display, &bounds) || bounds.w <= 0 || bounds.h <= 0) {
+    REXLOG_WARN("Could not read the main display bounds for BO2 instance tiling: {}", SDL_GetError());
+    return false;
+  }
+
+  int columns = 1;
+  while (columns * columns < count) {
+    ++columns;
+  }
+  const int rows = (count + columns - 1) / columns;
+  const int column = instance % columns;
+  const int row = instance / columns;
+  const int left = bounds.x + column * bounds.w / columns;
+  const int top = bounds.y + row * bounds.h / rows;
+  const int right = bounds.x + (column + 1) * bounds.w / columns;
+  const int bottom = bounds.y + (row + 1) * bounds.h / rows;
+  SDL_SetWindowSize(window, right - left, bottom - top);
+  SDL_SetWindowPosition(window, left, top);
+  REXLOG_INFO("Tiled BO2 instance {}/{} at {},{} {}x{} on the main display", instance, count, left, top,
+              right - left, bottom - top);
+  return true;
 }
 
 // SDL timer callback (runs on SDL's timer thread): defer the actual hide to
@@ -177,7 +223,8 @@ bool WindowSDL::OpenImpl() {
     }
   }
 
-  if (IsFullscreen()) {
+  const bool tiled = TileInstanceWindow(sdl_window_);
+  if (IsFullscreen() && !tiled) {
     // Borderless desktop fullscreen (a NULL display mode is SDL3's default).
     SDL_SetWindowFullscreen(sdl_window_, true);
   }

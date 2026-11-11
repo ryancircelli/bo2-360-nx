@@ -34,9 +34,13 @@ target_include_directories(rexinput PUBLIC
 if(REXGLUE_PLATFORM_SWITCH)
     target_sources(rexinput PRIVATE switch/switch_input_driver.cpp)
 elseif(WIN32)
-    target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp xinput/xinput_input_driver.cpp)
+    target_sources(rexinput PRIVATE
+        sdl/sdl_input_driver.cpp
+        sdl/pad_ownership.cpp
+        xinput/xinput_input_driver.cpp
+    )
 else()
-    target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp)
+    target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp sdl/pad_ownership.cpp)
 endif()
 # Scripted virtual pads and Steam Input detection (mac-input): desktop only.
 if(NOT REXGLUE_PLATFORM_SWITCH)

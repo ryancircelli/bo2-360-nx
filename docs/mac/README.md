@@ -25,7 +25,26 @@ from `Contents/MacOS` (codesign refuses plain data files there). Rpaths are `@lo
 read from an external path (`data_path.txt` in Application Support, `BO2_DATA`, or `BO2DataPath` in Info.plist).
 Saves go to `~/Library/Application Support/bo2-360-nx`, logs to `~/Library/Logs/bo2-360-nx` (newest 20 kept).
 Extra command-line options for every launch go in `Application Support/bo2-360-nx/args.txt` (`name = value`).
-Tested only on a dummy binary so far.
+
+## Multiple local instances
+
+`tools/mac/launch_instances.py K [--wait] [APP.app ...]` starts 2–4 native Mac app instances and assigns
+`BO2_INSTANCE=0..K-1` plus `BO2_INSTANCE_COUNT=K`. Each process sizes and positions its own SDL window in a main-display
+tile, without Accessibility access. The environment also enables in-game PNG captures in an instance-specific
+directory under `/tmp/bo2/syslink/captures/<time>/instance-N/captures`. Each process has isolated user data, caches,
+settings, logs, and network ports. Provide K app paths or set `BO2_MAC_APP` to the app bundle produced by
+`tools/mac/pack_app.py`. For example:
+
+    BO2_MAC_APP="$HOME/Games/Black Ops II.app" tools/mac/launch_instances.py 4
+    tools/mac/launch_instances.py 2 "$HOME/Games/BO2 copy A.app" "$HOME/Games/BO2 copy B.app"
+
+For scripted menu control, set `BO2_INSTANCE_BUTTONS_0`, `BO2_INSTANCE_BUTTONS_1` (and so on) to the standard
+`bo2zm_test_buttons` time/button sequences; `_P2` through `_P4` suffixes address local split-screen users.
+
+The launcher refuses to start if runq state cannot be read or a measured FPS job is active. It reads running-job
+records under `~/Games/Xbox360/bo2-build/runq/running`; queued proof work does not block launch. Use `--wait` when
+running it as a runq job so that runq continues to track the copies until they exit. Run the job in a non-measured
+class and wait for measured FPS jobs to finish before starting an interactive System Link session.
 
 ## Testing
 
