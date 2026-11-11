@@ -1,0 +1,36 @@
+VERDICT: The jobs are being put back by their game callbacks returning “try again” from a sequence/counter-range gate, not by an unmet scheduler dependency, lock-6 contention, or demonstrated affinity rejection. Main is waiting for game job groups to reach their completion counters while helping runnable work; keyed counters and matching notifications show no lost-wake or stalled-queue evidence. This is a diagnosis, not the behavior fix, which belongs to the separate job-requeue-churn backlog row.
+
+# BO2 hitch diagnosis
+
+## Captures
+
+Diagnostic build `mac-arm64-20261111-hitch-group-diag`, source commit `c9c99c92` (`codex/hitch-group-diagnostics`), was run with the official staged routes plus `BO2ZM_JOBS_REPORT_S=5`. Both solo, class-4 routes completed with runq exit 0 and `route_end`:
+
+- 1p job `1111-134959-4033`: 51.9 FPS average, 23.3 1% low, p50/p90/p99 17.36/30.33/38.86 ms, zero sync compile frames. Output: `/tmp/bo2/hitch/runs/town1-group-diag`.
+- 4p job `1111-135004-4146`: 43.7 FPS average, 17.6 1% low, p50/p90/p99 21.17/36.67/51.13 ms, zero sync compile frames; route summary labels it CPU-limited. Output: `/tmp/bo2/hitch/runs/town4-group-diag`.
+
+These are diagnostic-build runs, so compare them with each other only as context, not as a clean before/after against the owner-build benchmarks. Earlier aligned owner-build 4p snapshots recorded about 475k returns/s for types `82A99958`, `82A99980`, and `82A999A8` combined.
+
+## Why callbacks put the jobs back
+
+The picker checks the scheduler dependency fields (`record +20` counter against `record +24` goal) and increments “dependency not met” only when that counter is below the goal: [`bo2zm_waits.cpp:655-675`](/tmp/bo2/hitch/profiler-diag-worktree/app/src/bo2zm_waits.cpp:655). Every 5-second 1p and 4p report showed **0 dependency-not-met picks on every listed thread**. The 4p reports still had very high returns, so the scheduler dependency test does not account for this churn.
+
+The put-back hook classifies the game's three return callsites and counts the returned record without marking it ended; after repeated returns it uses the existing bounded sleep: [`bo2zm_waits.cpp:761-787`](/tmp/bo2/hitch/profiler-diag-worktree/app/src/bo2zm_waits.cpp:761). The three hot job types dispatch through wrappers `82A99958 → sub_828DF6E8` ([generated:45:36392](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.45.cpp:36392)), `82A99980 → sub_828DF738` ([generated:50:34359](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.50.cpp:34359)), and `82A999A8 → sub_828DF788` ([generated:75:35310](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.75.cpp:35310)). Their inner callbacks call `sub_828AA590`; if it returns nonzero, each callback returns `1` immediately ([generated:40:36677-36695](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.40.cpp:36677), [generated:83:35337-35355](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.83.cpp:35337), [generated:69:34860-34878](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.69.cpp:34860)). `sub_828AA590` passes a game-side value to `sub_82161DC0`, and returns 1 when that predicate is true ([generated:24:36567-36608](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.24.cpp:36567)). That predicate compares the value with per-process counter boundaries at offsets `11024` and `11036` ([generated:26:52-83](/tmp/bo2/hitch/profiler-diag-worktree/app/generated/default_mp/bo2zm_recomp.26.cpp:52)). This supports a game-side sequence/range readiness gate returning “again”; the raw predicate itself was not separately counted, so that final semantic label is a source-based inference.
+
+A representative 4p window at 14:01:26 counted `10,975/s` puts of `82A99958`, `4,137/s` of `82A99980`, and `4,718/s` of `82A999A8` (**19,830/s combined**). Earlier warmed windows reached about 201k/s combined, and the older aligned snapshot reached about 475k/s. The 1p final windows showed roughly 0.2–2.0k/s per type. These rates support the callback-retry mechanism in both modes, with much more churn in 4p.
+
+Lock-6 sleep was just `6/s` / `0.1 ms/s` in that 4p window (other warmed windows stayed below `1 ms/s`); 1p windows were at most `0.4 ms/s`. The picker reports no unmet dependencies. Some slots report ordinary “elsewhere” picks, but the three callback paths above explicitly return “again” through their game gate; there is no measured affinity-rejection count tying affinity to these returns. The evidence therefore points away from dependency readiness, lock contention, and affinity as the reason for these specific requeues.
+
+## What Main waits for
+
+The game’s `sub_82493690(group)` helper waits until its group’s queued and running counters are clear. The instrumentation snapshots those counters at entry and exit: [`bo2zm_waits.cpp:883-903`](/tmp/bo2/hitch/profiler-diag-worktree/app/src/bo2zm_waits.cpp:883). When its helper callback finds no takeable work while the group remains incomplete, `sub_8284BB48` sleeps on job/end notifications and loops back to check the game condition: [`bo2zm_waits.cpp:829-845`](/tmp/bo2/hitch/profiler-diag-worktree/app/src/bo2zm_waits.cpp:829).
+
+The Main XThread callsite (`from 828ABCCC`) spent about **389–412 ms/s across 51–52 calls/s** in the 1p windows, and **582–637 ms/s across 155–168 calls/s** in the 4p windows. Overall group waits were about **393–424 ms/s** in 1p and **673–726 ms/s** in 4p. For tracked keys, entry snapshots commonly had one running job (one 4p group reached 3); the reported exit snapshots were zero queued/running. For example, 4p group `84B274E0` at 14:01:21 had entry averages `0.03 queued / 0.01 running`, max `1/1`, and exited zero; it accumulated `7.34 ms/s` of group-wait duration. A 1p tracked key `84A1F070` at 13:55:45 had entry averages `0.00/0.41`, max `1/1`, exited zero, and accumulated `2.37 ms/s`.
+
+Job/end notifications continued during these waits (about 9.7–10.1k/11.7–12.2k per second in 1p; 24.9–27.3k/30.4–33.3k per second in 4p). Tracked group rows show matched notification returns and zero tracked-key timeout counts. The global bounded group sleep did time out occasionally (0–1/s in 1p; 2–4/s in 4p), which is expected with the configured short sleep and is not evidence of a lost wake. The group tracker also reported 2.4–2.5k misses/s in 1p and 6.9–8.2k/s in 4p because it is capped at 256 active keys; this limits conclusions about untracked groups. Within those limits, the data shows Main waiting for group work to finish while group counters drain, not a scheduler dependency stall or demonstrated notification mismatch.
+
+The sampled `sub_827D4BD8` calls are a separate Windows-style event wait and should not be mistaken for the group completion wait.
+
+## Handoff
+
+The diagnostic-only instrumentation is committed on branch `codex/hitch-group-diagnostics` at `c9c99c92`. It adds bounded keyed group counts, queue snapshots, notification counts, and wake-reason classification without changing wake behavior. The final report is also committed on that branch. The behavior change for the callback retry churn remains with the separate `job-requeue-churn` backlog worker.
