@@ -16,8 +16,11 @@
 
 #include <array>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -254,6 +257,10 @@ class MetalSharedMemory : public SharedMemory {
   const uint8_t* GetXboxRamBase() const {
     return static_cast<const uint8_t*>(memory().TranslatePhysical(0));
   }
+  // Diagnostic: write-watch state of a physical range in every guest view.
+  std::string DescribeWatchState(uint32_t start, uint32_t length) const {
+    return memory().DescribePhysicalWatchState(start, length);
+  }
   void MarkGpuAccess(uint32_t start, uint32_t length,
                      uint64_t submission_index);
   void TrackStandaloneGpuAccess(MTL::CommandBuffer* command_buffer,
@@ -344,7 +351,86 @@ class MetalSharedMemory : public SharedMemory {
   static bool ShmemValidFirstEnabled();
   void NoteMemexportReadback(uint32_t start, uint32_t length,
                              uint64_t submission);
+  // [memexport-shadow] REX_METAL_MEMEXPORT_CPU=4 (diagnostic): the GPU still
+  // does the block copy; the bytes the copy should produce are worked out on
+  // the CPU from guest memory at draw time and compared with the GPU buffer
+  // once the draw's submission has completed.
+  struct MemexportShadow {
+    uint32_t start = 0;  // destination span
+    uint32_t end = 0;
+    uint32_t src_start = 0;  // source range read through the vertex fetch
+    uint32_t src_end = 0;
+    uint64_t submission = 0;
+    uint64_t seq_first = 0;  // the draw's own readback entries
+    uint64_t seq_last = 0;
+    bool src_pending = false;  // source overlapped a pending export
+    bool src_invalid = false;  // source was not valid in the buffer
+    uint32_t src_div_words = 0;  // settled source words: buffer != guest
+    // Source at draw time (before the draw's own source request).
+    std::vector<uint8_t> src_snap;  // guest bytes the model read
+    uint32_t src_pages = 0;
+    uint32_t src_pages_invalid = 0;
+    uint32_t src_pages_gpu_write = 0;  // GPU write not completed
+    uint32_t src_pages_staged = 0;  // staged upload not completed
+    uint32_t src_pages_precommit = 0;  // precommit upload not completed
+    uint32_t src_pages_standalone = 0;
+    uint32_t src_readbacks_pending = 0;
+    // Destination words written again with a different value by a later
+    // vertex of the same draw: (byte offset, value that lost).
+    std::vector<std::pair<uint32_t, uint32_t>> losers;
+    uint32_t rewritten_words = 0;  // written more than once, any value
+    // Destination at model time (before the draw).
+    std::vector<uint8_t> dst_buf_before;  // GPU buffer bytes of the span
+    std::vector<uint8_t> dst_page_invalid;
+    uint32_t dst_pages = 0;
+    uint32_t dst_pages_invalid = 0;
+    uint32_t dst_pages_gpu_write = 0;
+    uint32_t dst_pages_staged = 0;
+    uint32_t dst_pages_precommit = 0;
+    uint32_t dst_readbacks_pending = 0;
+    // Runs the copy model against another source image, into a copy of
+    // `before`.
+    std::function<void(const uint8_t*, std::vector<uint8_t>&)> rerun;
+    std::vector<uint8_t> expected;
+    std::vector<uint8_t> before;
+    std::vector<uint8_t> written;  // 1 per byte the copy writes
+  };
+  void NoteMemexportShadow(MemexportShadow&& shadow, uint64_t submission,
+                           uint32_t own_ranges);
+  void NoteMemexportSourceState(MemexportShadow& shadow);
+  void NoteMemexportDestinationState(MemexportShadow& shadow);
+  // [shmem-diverge] Compares the GPU buffer with guest memory over a copy's
+  // source range, only on pages that are valid and have no GPU write, staged
+  // copy or export readback outstanding. Such a page must be identical on
+  // both sides; returns the number of words that are not.
+  uint32_t CheckMemexportSourceDivergence(uint32_t start, uint32_t length,
+                                          uint32_t destination);
+  // REX_METAL_MEMEXPORT_GUARD (default on; =0 disables). A memexport range is
+  // uploaded before its draw and marked valid again after it. A CPU write in
+  // between (a streamed image landing in memory the range still names)
+  // invalidates its pages; marking them valid again would leave the buffer
+  // with the bytes from before that write, and the readback would then copy
+  // those old bytes over the new guest data. With the guard such pages stay
+  // invalid, and the readback leaves out every page that is invalid when it
+  // runs: the CPU wrote there after the export, so its data wins.
+  static bool MemexportGuardEnabled();
+  // REX_METAL_MEMEXPORT_MERGE (default on; =0 keeps the old behaviour and only
+  // counts). A streamed BO2 block can hold two images interleaved inside the
+  // same pages: one written by the CPU loader, the other by a GPU block move
+  // (memexport). The export declares the whole stream range but writes only
+  // its own image's bytes. When the CPU changes any byte of the range between
+  // the export draw and its readback, the old code dropped the whole export.
+  // With the merge, the readback copies back exactly the words the export
+  // changed and the CPU did not.
+  static bool MemexportMergeEnabled();
+  // RangeWrittenByGpu for a memexport range, with the guard above.
+  void MemexportRangeWritten(uint32_t start, uint32_t length);
   void ApplyCompletedMemexportReadbacks(uint64_t completed_submission);
+  // True while a memexport draw's data has not been copied back to guest
+  // memory yet (its submission has not completed, or completed unprocessed).
+  bool HasPendingMemexportReadbacks() const {
+    return !pending_readbacks_.empty();
+  }
   // [upload-precommit] trace-only check (FABLE2_UPLOAD_VERIFY=1): once the
   // submission of a staged copy (in-pass or pre-commit) has completed, the
   // GPU buffer must hold the copied bytes wherever guest RAM still holds
@@ -359,8 +445,128 @@ class MetalSharedMemory : public SharedMemory {
     uint64_t submission;
     uint64_t guest_hash;
     uint64_t export_frame;
+    // Guest bytes of the range when the export was drawn (empty for a range
+    // above the snapshot limit). Tells apart what the export wrote from what
+    // the CPU wrote afterwards.
+    std::vector<uint8_t> before;
+    // [memexport-hole] wall clock of the export draw, and whether an upload
+    // of guest memory went over this range while it was still pending.
+    uint64_t export_us = 0;
+    bool hole = false;
+    uint64_t seq = 0;
   };
   std::deque<PendingReadback> pending_readbacks_;
+  // [memexport-shadow]
+  void CheckCompletedMemexportShadows(uint64_t completed_submission);
+  std::deque<MemexportShadow> memexport_shadows_;
+  uint64_t readback_seq_ = 0;
+  uint64_t shadow_draws_ = 0;
+  uint64_t shadow_draws_bad_ = 0;       // any missing or wrong word
+  uint64_t shadow_words_ok_ = 0;
+  uint64_t shadow_words_later_export_ = 0;  // a later export overlaps
+  uint64_t shadow_words_cpu_later_ = 0;     // buffer holds a later CPU write
+  uint64_t shadow_words_missing_ = 0;       // buffer holds pre-copy bytes
+  uint64_t shadow_words_wrong_ = 0;         // buffer holds something else
+  uint64_t shadow_words_wrong_src_ = 0;     // ... source pending or invalid
+  uint64_t shadow_draws_src_pending_ = 0;
+  uint64_t shadow_draws_src_invalid_ = 0;
+  uint64_t shadow_draws_hole_ = 0;
+  uint64_t shadow_dropped_ = 0;
+  uint32_t shadow_logged_ = 0;
+  uint64_t shadow_draws_bad_nopend_ = 0;       // bad, source not pending
+  uint64_t shadow_draws_bad_div_ = 0;          // bad, source diverged
+  uint64_t shadow_draws_bad_unexplained_ = 0;  // bad, neither
+  uint64_t shadow_words_bad_unexplained_ = 0;
+  // Bad copies whose source was not pending, by what the source did.
+  uint64_t shadow_bad_src_guest_changed_ = 0;
+  uint64_t shadow_bad_src_buffer_only_ = 0;
+  uint64_t shadow_bad_src_same_ = 0;
+  uint64_t shadow_bad_src_unknown_ = 0;
+  uint64_t shadow_bad_words_as_buffer_ = 0;
+  uint64_t shadow_bad_words_as_guest_ = 0;
+  uint64_t shadow_bad_words_as_neither_ = 0;
+  uint64_t shadow_bad_src_not_settled_ = 0;
+  uint32_t shadow_src_logged_ = 0;
+  uint64_t shadow_dup_copies_ = 0;  // copies with a contested word
+  uint64_t shadow_dup_rewritten_words_ = 0;
+  uint64_t shadow_dup_contested_words_ = 0;
+  uint64_t shadow_dup_bad_copies_ = 0;  // bad copies with a loser match
+  uint64_t shadow_dup_bad_words_ = 0;  // bad words equal to a loser
+  uint64_t shadow_dup_bad_words_not_pending_ = 0;
+  uint64_t shadow_bad_words_all_ = 0;
+  uint64_t shadow_bad_words_not_pending_ = 0;
+  uint32_t shadow_dup_logged_ = 0;
+  uint32_t shadow_dst_logged_ = 0;
+  // Checked copies kept for a while: who else wrote the same words.
+  std::deque<MemexportShadow> shadow_history_;
+  uint64_t shadow_history_bytes_ = 0;
+  uint32_t shadow_prev_logged_ = 0;
+  uint64_t shadow_prev_copies_ = 0;        // share a written word with an earlier copy
+  uint64_t shadow_prev_copies_same_sub_ = 0;
+  uint64_t shadow_prev_copies_bad_ = 0;
+  uint64_t shadow_prev_shared_words_ = 0;
+  uint64_t shadow_prev_shared_diff_words_ = 0;  // the two copies write different values
+  uint64_t shadow_prev_bad_words_ = 0;     // bad words (all copies)
+  uint64_t shadow_prev_bad_as_earlier_ = 0;
+  uint64_t shadow_prev_bad_earlier_other_ = 0;
+  uint64_t shadow_prev_bad_no_earlier_ = 0;
+  uint64_t shadow_prev_np_bad_words_ = 0;  // source not pending only
+  uint64_t shadow_prev_np_bad_as_earlier_ = 0;
+  uint64_t shadow_prev_np_bad_earlier_other_ = 0;
+  uint64_t shadow_prev_np_bad_no_earlier_ = 0;
+  uint64_t shadow_dst_copies_ = 0;
+  uint64_t shadow_dst_bad_words_ = 0;
+  uint64_t shadow_dst_as_buf_before_ = 0;
+  uint64_t shadow_dst_on_invalid_page_ = 0;
+  uint64_t shadow_dst_runs_ = 0;
+  uint64_t shadow_dst_runs_page_start_ = 0;
+  uint64_t shadow_dst_found_expected_ = 0;
+  uint64_t shadow_dst_found_source_ = 0;
+  uint64_t shadow_dst_found_nowhere_ = 0;
+  uint64_t src_div_checks_ = 0;
+  uint64_t src_div_settled_bytes_ = 0;
+  uint64_t src_div_pages_ = 0;
+  uint64_t src_div_words_ = 0;
+  uint64_t src_div_words_guest_zero_ = 0;
+  uint64_t src_div_words_buffer_zero_ = 0;
+  uint32_t src_div_logged_ = 0;
+  // [memexport-hole] uploads of guest memory over a pending export range
+  // that no preserve entry protects.
+  uint64_t hole_events_ = 0;
+  uint64_t hole_bytes_ = 0;
+  uint64_t hole_events_guest_same_ = 0;  // guest unchanged since the export
+  uint64_t hole_events_expired_ = 0;     // older than the preserve lifetime
+  uint64_t hole_kept_bytes_ = 0;         // REX_METAL_MEMEXPORT_PENDING_KEEP=1
+  uint64_t hole_readbacks_ = 0;          // readbacks that land after a hole
+  uint64_t hole_readbacks_wiped_ = 0;    // ... buffer equals pre-export bytes
+  uint32_t hole_logged_ = 0;
+  // [memexport-merge] counters.
+  uint64_t merge_ranges_ = 0;        // readbacks whose guest bytes changed
+  uint64_t merge_ranges_lost_ = 0;   // ... dropped whole (merge off / no snapshot)
+  uint64_t merge_words_cpu_ = 0;     // words only the CPU changed
+  uint64_t merge_words_gpu_ = 0;     // words only the export changed
+  uint64_t merge_words_both_ = 0;    // words both changed
+  uint64_t merge_words_applied_ = 0;
+  uint32_t merge_logged_ = 0;
+  uint64_t preserve_dropped_ = 0;          // re-upload over a changed export range
+  uint64_t preserve_dropped_pending_ = 0;  // ... whose readback is still pending
+  uint64_t preserve_dropped_gpu_words_ = 0;
+  uint32_t preserve_dropped_logged_ = 0;
+  // Memexport guard counters, logged as [memexport-guard].
+  uint64_t guard_draw_ranges_ = 0;
+  uint64_t guard_draw_ranges_hit_ = 0;
+  uint64_t guard_draw_pages_invalid_ = 0;
+  uint64_t guard_readback_ranges_hit_ = 0;
+  uint64_t guard_readback_pages_invalid_ = 0;
+  uint64_t guard_readback_pages_stale_ = 0;
+  uint64_t guard_last_summary_ = 0;
+  struct ReadbackRegionStats {
+    uint64_t ranges = 0;
+    uint64_t bytes = 0;
+    uint64_t changed_chunks = 0;
+  };
+  std::map<uint32_t, ReadbackRegionStats> readback_regions_;
+  uint32_t readback_region_logged_ = 0;
   struct PendingVerify {
     uint32_t start;
     uint32_t size;

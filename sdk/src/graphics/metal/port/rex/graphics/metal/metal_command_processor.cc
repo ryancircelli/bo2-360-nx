@@ -88,6 +88,7 @@ DEFINE_int32(metal_probe_capture_interval, 0,
 #include "rex/graphics/metal/metal_graphics_system.h"
 #include "rex/graphics/metal/metal_encoder_trim.h"
 #include "rex/graphics/packet_disassembler.h"
+#include "rex/graphics/pipeline/shader/interpreter.h"
 #include "rex/graphics/registers.h"
 #include "rex/graphics/pipeline/texture/util.h"
 #include "rex/graphics/xenos.h"
@@ -1333,7 +1334,19 @@ MetalCommandProcessor::MetalCommandProcessor(
       kMaxPendingSharedMemoryWriteCapacity);
 }
 
+void MetalCommandProcessor::LogMemexportWriteOrderSummary() {
+  if (memexport_order_summary_logged_) return;
+  memexport_order_summary_logged_ = true;
+  REXLOG_INFO(
+      "[memexport-write-order] summary overlap-draws {} barrier-encoded {} "
+      "barrier-skipped-dedup {} barrier-nothing {} extra-passes {}",
+      memexport_order_overlap_draws_, memexport_order_barrier_encoded_,
+      memexport_order_barrier_skipped_, memexport_order_barrier_nothing_,
+      memexport_order_split_passes_);
+}
+
 MetalCommandProcessor::~MetalCommandProcessor() {
+  LogMemexportWriteOrderSummary();
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
   // End any active render encoder before releasing
@@ -1399,6 +1412,563 @@ MetalCommandProcessor::~MetalCommandProcessor() {
   render_encoder_bindless_table_bind_mesh_path_ = false;
   render_encoder_bindless_table_bind_tessellation_ = false;
   current_bindless_stage_root_arguments_ = {};
+}
+
+
+// ---------------------------------------------------------------------------
+// REX_METAL_MEMEXPORT_CPU: memexport copy draws executed on the CPU.
+//
+// BO2 moves streamed texture blocks with two vertex shaders that read 8-byte
+// elements through vertex fetch constant 95 and export them to memory. With
+// this switch such a draw is done on the CPU at the point the guest issued
+// it: the bytes are read from and written to guest memory, and the written
+// range is then treated as any other CPU write (shared memory pages
+// invalidated, texture watches fired). No GPU export, no readback.
+//   1 = the direct copy for the two shaders, 2 = the shader interpreter,
+//   3 = the direct copy with every draw compared against the interpreter.
+namespace {
+
+struct MemexportCpuWrite {
+  uint32_t address;
+  uint32_t size;
+  uint32_t d[4];
+  bool operator==(const MemexportCpuWrite& o) const {
+    return address == o.address && size == o.size &&
+           std::memcmp(d, o.d, size) == 0;
+  }
+};
+
+// The rules of the memexport translation (ExportToMemory): eA carries the
+// stream constant's fixed bits; red/blue swap; packing by color format and
+// number format; endian swap; eM# goes to element index + #, if below the
+// stream's index count.
+class MemexportCpuSink final : public ShaderInterpreter::ExportSink {
+ public:
+  MemexportCpuSink(uint8_t* physical, std::vector<MemexportCpuWrite>* capture)
+      : physical_(physical), capture_(capture) {}
+
+  void AllocExport(ucode::AllocType, uint32_t) override { Dump(); }
+
+  void Export(ucode::ExportRegister reg_index, const float* value,
+              uint32_t mask) override {
+    const uint32_t r = uint32_t(reg_index);
+    float* target = r == 32 ? ea_ : (r >= 33 && r <= 37) ? em_[r - 33] : nullptr;
+    if (!target) {
+      return;
+    }
+    for (uint32_t i = 0; i < 4; ++i) {
+      if (mask & (1u << i)) {
+        target[i] = value[i];
+      }
+    }
+    if (r != 32) {
+      written_ |= 1u << (r - 33);
+    }
+  }
+
+  void End() { Dump(); }
+
+  // Four eM# that already are 16-bit unsigned integers (a vfetch of the same
+  // format), written without going through float.
+  bool Integers16(const uint32_t a[4], const uint16_t v[4][4]) {
+    if ((a[0] >> 30) != 0x1 || (a[1] >> 23) != 0x96 || (a[2] >> 23) != 0x96 ||
+        (a[3] >> 23) != 0x96) {
+      return false;
+    }
+    const uint32_t z = a[2];
+    if (((z >> 8) & 0x3F) != 26 || ((z >> 16) & 0x1) || !((z >> 17) & 0x1)) {
+      return false;
+    }
+    const bool red_blue = (z >> 19) & 0x1;
+    for (uint32_t e = 0; e < 4; ++e) {
+      const uint32_t x = v[e][red_blue ? 2 : 0], y = v[e][1],
+                     zz = v[e][red_blue ? 0 : 2], w = v[e][3];
+      uint32_t d[4] = {x | (y << 16), zz | (w << 16), 0, 0};
+      Write(a, e, d, 3);
+    }
+    return true;
+  }
+
+  uint64_t elements = 0;
+  uint64_t outside = 0;
+  uint64_t rejected = 0;
+  uint32_t format_odd = 0;
+  uint32_t dir_min = UINT32_MAX, dir_max = 0;
+
+ private:
+  static uint32_t Whole(float v, uint32_t bits, bool with_sign, bool whole) {
+    if (v != v) {
+      v = 0.0f;
+    }
+    if (with_sign) {
+      const float max = float((1u << (bits - 1)) - 1);
+      v = whole ? std::clamp(v, -max - 1.0f, max)
+                : std::clamp(v, -1.0f, 1.0f) * max;
+      return uint32_t(int32_t(v + (v < 0.0f ? -0.5f : 0.5f))) &
+             ((bits == 32) ? ~0u : ((1u << bits) - 1));
+    }
+    const float max =
+        float(bits == 32 ? 4294967295.0 : double((1u << bits) - 1));
+    v = whole ? std::clamp(v, 0.0f, max) : std::clamp(v, 0.0f, 1.0f) * max;
+    return uint32_t(v + 0.5f);
+  }
+
+  static int32_t Pack(uint32_t format, bool with_sign, bool whole,
+                      const float* v, uint32_t* d) {
+    auto bits = [](float f) {
+      uint32_t u;
+      std::memcpy(&u, &f, sizeof(u));
+      return u;
+    };
+    switch (format) {
+      case 6:
+        d[0] = Whole(v[0], 8, with_sign, whole) |
+               (Whole(v[1], 8, with_sign, whole) << 8) |
+               (Whole(v[2], 8, with_sign, whole) << 16) |
+               (Whole(v[3], 8, with_sign, whole) << 24);
+        return 2;
+      case 24:
+        d[0] = Whole(v[0], 16, with_sign, whole);
+        return 1;
+      case 25:
+        d[0] = Whole(v[0], 16, with_sign, whole) |
+               (Whole(v[1], 16, with_sign, whole) << 16);
+        return 2;
+      case 26:
+        d[0] = Whole(v[0], 16, with_sign, whole) |
+               (Whole(v[1], 16, with_sign, whole) << 16);
+        d[1] = Whole(v[2], 16, with_sign, whole) |
+               (Whole(v[3], 16, with_sign, whole) << 16);
+        return 3;
+      case 36:
+        d[0] = bits(v[0]);
+        return 2;
+      case 37:
+        d[0] = bits(v[0]);
+        d[1] = bits(v[1]);
+        return 3;
+      case 38:
+        for (uint32_t i = 0; i < 4; ++i) {
+          d[i] = bits(v[i]);
+        }
+        return 4;
+      default:
+        return -1;
+    }
+  }
+
+  void Dump() {
+    if (!written_) {
+      return;
+    }
+    const uint32_t written = written_;
+    written_ = 0;
+    uint32_t a[4];
+    std::memcpy(a, ea_, sizeof(a));
+    if ((a[0] >> 30) != 0x1 || (a[1] >> 23) != 0x96 || (a[2] >> 23) != 0x96 ||
+        (a[3] >> 23) != 0x96) {
+      ++rejected;
+      return;
+    }
+    const uint32_t z = a[2];
+    const uint32_t format = (z >> 8) & 0x3F;
+    const bool with_sign = (z >> 16) & 0x1;
+    const bool whole = (z >> 17) & 0x1;
+    const bool red_blue = (z >> 19) & 0x1;
+    for (uint32_t e = 0; e < 5; ++e) {
+      if (!(written & (1u << e))) {
+        continue;
+      }
+      float v[4] = {em_[e][0], em_[e][1], em_[e][2], em_[e][3]};
+      if (red_blue) {
+        std::swap(v[0], v[2]);
+      }
+      uint32_t d[4] = {};
+      const int32_t log2_sz = Pack(format, with_sign, whole, v, d);
+      if (log2_sz < 0) {
+        format_odd = format;
+        continue;
+      }
+      Write(a, e, d, uint32_t(log2_sz));
+    }
+  }
+
+  void Write(const uint32_t a[4], uint32_t e, uint32_t (&d)[4],
+             uint32_t log2_sz) {
+    const uint32_t endian = a[2] & 0x7;
+    const uint32_t index = a[1] & 0x7FFFFF;
+    const uint32_t count = a[3] & 0x7FFFFF;
+    const uint32_t base = a[0] << 2;
+    uint32_t endian_e = endian;
+    if (endian_e == 4) {  // k8in64
+      std::swap(d[0], d[1]);
+      std::swap(d[2], d[3]);
+      endian_e = 2;
+    } else if (endian_e == 5) {  // k8in128
+      std::swap(d[0], d[3]);
+      std::swap(d[1], d[2]);
+      endian_e = 2;
+    }
+    for (uint32_t& w : d) {
+      if (endian_e == 1 || endian_e == 2) {
+        w = ((w & 0x00FF00FFu) << 8) | ((w >> 8) & 0x00FF00FFu);
+      }
+      if (endian_e == 2 || endian_e == 3) {
+        w = (w << 16) | (w >> 16);
+      }
+    }
+    if (index + e >= count) {
+      ++outside;
+      return;
+    }
+    const uint32_t sz = 1u << log2_sz;
+    const uint32_t address = (base + ((index + e) << log2_sz)) & 0x1FFFFFFF;
+    if (address + sz > 0x20000000u) {
+      ++outside;
+      return;
+    }
+    if (capture_) {
+      MemexportCpuWrite w{address, sz, {d[0], d[1], d[2], d[3]}};
+      capture_->push_back(w);
+    } else {
+      std::memcpy(physical_ + address, d, sz);
+    }
+    ++elements;
+    dir_min = std::min(dir_min, address);
+    dir_max = std::max(dir_max, address + sz);
+  }
+
+  uint8_t* physical_;
+  std::vector<MemexportCpuWrite>* capture_;
+  float ea_[4] = {};
+  float em_[5][4] = {};
+  uint32_t written_ = 0;
+};
+
+// One vertex of BO2's copy shaders without the interpreter: 8 or 16 eight-byte
+// blocks read through vertex fetch constant 95 (16_16_16_16 unsigned integer,
+// swizzle yxwz, stride 16 or 64 dwords), exported in groups of four to element
+// indices made from c254/c255, eA = index * c255.xyxx + c0.
+void MemexportCpuCopyVertex(const RegisterFile& regs, const uint32_t* guest,
+                            bool of_128, uint32_t index,
+                            MemexportCpuSink& sink) {
+  xenos::xe_gpu_vertex_fetch_t vf;
+  vf.dword_0 = regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95];
+  vf.dword_1 = regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95 + 1];
+  const auto constant = [&regs](uint32_t c, uint32_t k) {
+    const uint32_t bits = regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X + c * 4 + k];
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+  };
+  const uint32_t blocks = of_128 ? 16 : 8;
+  const uint32_t first = (of_128 ? 64 : 16) * index + vf.address;
+  const uint32_t end = vf.address + vf.size;
+  uint16_t r[16][4];
+  for (uint32_t k = 0; k < blocks; ++k) {
+    uint32_t d[2];
+    for (uint32_t j = 0; j < 2; ++j) {
+      const uint32_t a = first + 2 * k + j;
+      d[j] = a >= vf.address && a < end ? xenos::GpuSwap(guest[a], vf.endian) : 0;
+    }
+    r[k][0] = uint16_t(d[0] >> 16);
+    r[k][1] = uint16_t(d[0]);
+    r[k][2] = uint16_t(d[1] >> 16);
+    r[k][3] = uint16_t(d[1]);
+  }
+  const float vertex = float(index);
+  float groups[4];
+  uint32_t n = 2;
+  if (of_128) {
+    const float base = vertex * constant(254, 0);
+    groups[0] = base;
+    groups[1] = constant(255, 2) + base;
+    groups[2] = constant(255, 3) + base;
+    groups[3] = constant(254, 1) + base;
+    n = 4;
+  } else {
+    groups[0] = constant(255, 3) * vertex;
+    groups[1] = constant(255, 2) + groups[0];
+  }
+  const float scale[4] = {constant(255, 0), constant(255, 1), constant(255, 0),
+                          constant(255, 0)};
+  const float c0[4] = {constant(0, 0), constant(0, 1), constant(0, 2),
+                       constant(0, 3)};
+  for (uint32_t group = 0; group < n; ++group) {
+    sink.AllocExport(ucode::AllocType::kMemory, 2);
+    float ea[4];
+    for (uint32_t i = 0; i < 4; ++i) {
+      ea[i] = groups[group] * scale[i] + c0[i];
+    }
+    uint32_t a[4];
+    std::memcpy(a, ea, sizeof(a));
+    if (sink.Integers16(a, &r[group * 4])) {
+      continue;
+    }
+    sink.Export(ucode::ExportRegister(32), ea, 0xF);
+    for (uint32_t e = 0; e < 4; ++e) {
+      const uint16_t* b = r[group * 4 + e];
+      const float values[4] = {float(b[0]), float(b[1]), float(b[2]),
+                               float(b[3])};
+      sink.Export(ucode::ExportRegister(33 + e), values, 0xF);
+    }
+  }
+  sink.End();
+}
+
+int MemexportCpuMode() {
+  static const int mode = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_CPU");
+    const int m = (v && v[0] >= '1' && v[0] <= '4') ? v[0] - '0' : 0;
+    REXLOG_INFO("[memexport-cpu] mode {} (REX_METAL_MEMEXPORT_CPU={}): {}", m,
+                v ? v : "unset",
+                m == 0   ? "off, copy draws export on the GPU"
+                : m == 1 ? "copy draws done on the CPU (direct copy)"
+                : m == 2 ? "copy draws done on the CPU (shader interpreter)"
+                : m == 4 ? "copy draws stay on the GPU; each is compared "
+                           "against the CPU result when it completes"
+                         : "copy draws done on the CPU, each compared against "
+                           "the shader interpreter");
+    return m;
+  }();
+  return mode;
+}
+
+}  // namespace
+
+bool MetalCommandProcessor::ExecuteMemexportCopyOnCpu(
+    const Shader& vertex_shader, uint32_t index_count,
+    const IndexBufferInfo* index_buffer_info) {
+  static constexpr uint64_t kCopyVsA = UINT64_C(0xA4827826E2589916);
+  static constexpr uint64_t kCopyVsB = UINT64_C(0x5B9B7484417FB9B6);
+  const int mode = MemexportCpuMode();
+  memexport_shadow_ready_ = false;
+  if (!mode || !memory_ || !register_file_) {
+    return false;
+  }
+  const uint64_t hash = vertex_shader.ucode_data_hash();
+  if (hash != kCopyVsA && hash != kCopyVsB) {
+    return false;
+  }
+  // 81 microcode words: 64 bytes per vertex; 150 words: 128 bytes per vertex.
+  const size_t words = vertex_shader.ucode_dword_count();
+  if (words != 81 && words != 150) {
+    return false;
+  }
+  const bool of_128 = words == 150;
+  const RegisterFile& regs = *register_file_;
+  const uint32_t displacement = regs.values[XE_GPU_REG_VGT_INDX_OFFSET] & 0xFFFFFF;
+  const uint32_t vmin = regs.values[XE_GPU_REG_VGT_MIN_VTX_INDX] & 0xFFFFFF;
+  const uint32_t vmax = regs.values[XE_GPU_REG_VGT_MAX_VTX_INDX] & 0xFFFFFF;
+  const bool indices32 = index_buffer_info &&
+                         index_buffer_info->format == xenos::IndexFormat::kInt32;
+  xenos::Endian endian_indices =
+      index_buffer_info ? index_buffer_info->endianness : xenos::Endian::kNone;
+  if (index_buffer_info && !indices32) {
+    endian_indices = endian_indices == xenos::Endian::k8in32    ? xenos::Endian::k8in16
+                     : endian_indices == xenos::Endian::k16in32 ? xenos::Endian::kNone
+                                                                 : endian_indices;
+  }
+  const uint8_t* indices =
+      index_buffer_info
+          ? memory_->TranslatePhysical(index_buffer_info->guest_base & 0x1FFFFFFF)
+          : nullptr;
+  const auto index_of = [&](uint32_t i) {
+    uint32_t index = i;
+    if (indices) {
+      if (indices32) {
+        uint32_t v;
+        std::memcpy(&v, indices + size_t(i) * 4, 4);
+        index = xenos::GpuSwap(v, endian_indices) & 0xFFFFFF;
+      } else {
+        uint16_t v;
+        std::memcpy(&v, indices + size_t(i) * 2, 2);
+        index = xenos::GpuSwap(uint32_t(v), endian_indices) & 0xFFFF;
+      }
+    }
+    return std::min(vmax, std::max(vmin, (index + displacement) & 0xFFFFFF));
+  };
+  uint8_t* physical = memory_->TranslatePhysical(0);
+  const uint32_t* guest = reinterpret_cast<const uint32_t*>(physical);
+  const auto t0 = std::chrono::steady_clock::now();
+  const auto interpret = [&](MemexportCpuSink& target) {
+    if (!memexport_cpu_interpreter_) {
+      memexport_cpu_interpreter_ =
+          std::make_unique<ShaderInterpreter>(regs, *memory_);
+    }
+    memexport_cpu_interpreter_->SetShader(vertex_shader);
+    memexport_cpu_interpreter_->SetExportSink(&target);
+    for (uint32_t i = 0; i < index_count; ++i) {
+      memexport_cpu_interpreter_->temp_registers()[0] = float(index_of(i));
+      memexport_cpu_interpreter_->Execute();
+      target.End();
+    }
+    memexport_cpu_interpreter_->SetExportSink(nullptr);
+  };
+  if (mode == 4) {
+    // The GPU does the copy; record what it should produce.
+    std::vector<MemexportCpuWrite> direct;
+    MemexportCpuSink sink_direct(physical, &direct);
+    for (uint32_t i = 0; i < index_count; ++i) {
+      MemexportCpuCopyVertex(regs, guest, of_128, index_of(i), sink_direct);
+    }
+    uint32_t lo = UINT32_MAX, hi = 0;
+    for (const MemexportCpuWrite& w : direct) {
+      lo = std::min(lo, w.address);
+      hi = std::max(hi, w.address + w.size);
+    }
+    if (lo < hi && hi - lo <= (4u << 20) &&
+        hi <= SharedMemory::kBufferSize) {
+      MetalSharedMemory::MemexportShadow& s = memexport_shadow_;
+      s = MetalSharedMemory::MemexportShadow();
+      s.start = lo;
+      s.end = hi;
+      s.before.assign(physical + lo, physical + hi);
+      s.expected = s.before;
+      s.written.assign(hi - lo, 0);
+      for (const MemexportCpuWrite& w : direct) {
+        for (uint32_t b = 0; b + 4 <= w.size; b += 4) {
+          const uint32_t off = w.address - lo + b;
+          if (!s.written[off]) {
+            continue;
+          }
+          ++s.rewritten_words;
+          uint32_t old;
+          std::memcpy(&old, s.expected.data() + off, 4);
+          if (old != w.d[b / 4]) {
+            s.losers.emplace_back(off, old);
+          }
+        }
+        std::memcpy(s.expected.data() + (w.address - lo), w.d, w.size);
+        std::memset(s.written.data() + (w.address - lo), 1, w.size);
+      }
+      std::sort(s.losers.begin(), s.losers.end());
+      xenos::xe_gpu_vertex_fetch_t vf;
+      vf.dword_0 = regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95];
+      vf.dword_1 =
+          regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95 + 1];
+      s.src_start = (uint32_t(vf.address) << 2) & 0x1FFFFFFF;
+      s.src_end = s.src_start + (uint32_t(vf.size) << 2);
+      s.src_div_words = shared_memory_->CheckMemexportSourceDivergence(
+          s.src_start, s.src_end - s.src_start, lo);
+      if (s.src_end > s.src_start &&
+          s.src_end <= SharedMemory::kBufferSize &&
+          s.src_end - s.src_start <= (4u << 20)) {
+        s.src_snap.assign(physical + s.src_start, physical + s.src_end);
+      }
+      shared_memory_->NoteMemexportSourceState(s);
+      shared_memory_->NoteMemexportDestinationState(s);
+      {
+        std::vector<uint32_t> vertices(index_count);
+        for (uint32_t i = 0; i < index_count; ++i) {
+          vertices[i] = index_of(i);
+        }
+        std::array<uint32_t, 14> k;
+        k[0] = vf.dword_0;
+        k[1] = vf.dword_1;
+        static constexpr uint32_t kConstants[3] = {0, 254, 255};
+        for (uint32_t c = 0; c < 3; ++c) {
+          for (uint32_t j = 0; j < 4; ++j) {
+            k[2 + c * 4 + j] = regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X +
+                                           kConstants[c] * 4 + j];
+          }
+        }
+        s.rerun = [k, of_128, lo, hi, vertices = std::move(vertices)](
+                      const uint8_t* source, std::vector<uint8_t>& out) {
+          static const std::unique_ptr<RegisterFile> scratch =
+              std::make_unique<RegisterFile>();
+          RegisterFile& r = *scratch;
+          r.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95] = k[0];
+          r.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95 + 1] = k[1];
+          for (uint32_t c = 0; c < 3; ++c) {
+            for (uint32_t j = 0; j < 4; ++j) {
+              r.values[XE_GPU_REG_SHADER_CONSTANT_000_X + kConstants[c] * 4 +
+                       j] = k[2 + c * 4 + j];
+            }
+          }
+          std::vector<MemexportCpuWrite> writes;
+          MemexportCpuSink again(nullptr, &writes);
+          for (uint32_t vertex : vertices) {
+            MemexportCpuCopyVertex(r,
+                                   reinterpret_cast<const uint32_t*>(source),
+                                   of_128, vertex, again);
+          }
+          for (const MemexportCpuWrite& w : writes) {
+            if (w.address >= lo && w.address + w.size <= hi &&
+                w.address - lo + w.size <= out.size()) {
+              std::memcpy(out.data() + (w.address - lo), w.d, w.size);
+            }
+          }
+        };
+      }
+      memexport_shadow_ready_ = true;
+      ++memexport_shadow_made_;
+    }
+    return false;
+  }
+  MemexportCpuSink sink(physical, nullptr);
+  if (mode == 3) {
+    // Both ways into lists, compared, then the direct copy is applied.
+    std::vector<MemexportCpuWrite> direct, reference;
+    MemexportCpuSink sink_direct(physical, &direct);
+    for (uint32_t i = 0; i < index_count; ++i) {
+      MemexportCpuCopyVertex(regs, guest, of_128, index_of(i), sink_direct);
+    }
+    MemexportCpuSink sink_reference(physical, &reference);
+    interpret(sink_reference);
+    ++memexport_cpu_verified_;
+    if (direct != reference) {
+      ++memexport_cpu_different_;
+      if (memexport_cpu_different_ <= 16) {
+        REXLOG_WARN(
+            "[memexport-cpu] VERIFY MISMATCH on draw {}: VS {:016X}, {} "
+            "vertices: direct copy {} writes, interpreter {} writes",
+            memexport_cpu_draws_ + 1, hash, index_count, direct.size(),
+            reference.size());
+      }
+    }
+    for (const MemexportCpuWrite& w : reference) {
+      std::memcpy(physical + w.address, w.d, w.size);
+    }
+    sink.elements = sink_reference.elements;
+    sink.outside = sink_reference.outside;
+    sink.rejected = sink_reference.rejected;
+    sink.format_odd = sink_reference.format_odd;
+    sink.dir_min = sink_reference.dir_min;
+    sink.dir_max = sink_reference.dir_max;
+  } else if (mode == 2) {
+    interpret(sink);
+  } else {
+    for (uint32_t i = 0; i < index_count; ++i) {
+      MemexportCpuCopyVertex(regs, guest, of_128, index_of(i), sink);
+    }
+  }
+  ++memexport_cpu_draws_;
+  memexport_cpu_elements_ += sink.elements;
+  if (sink.dir_min < sink.dir_max) {
+    // Guest memory changed under the GPU's copy: an ordinary CPU write.
+    TracePlaybackWroteMemory(sink.dir_min, sink.dir_max - sink.dir_min);
+  }
+  memexport_cpu_ns_ += uint64_t(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - t0)
+          .count());
+  if (memexport_cpu_draws_ <= 8 ||
+      (memexport_cpu_draws_ & (memexport_cpu_draws_ - 1)) == 0 ||
+      sink.rejected || sink.format_odd) {
+    REXLOG_INFO(
+        "[memexport-cpu] draw {}: VS {:016X} ({} bytes per vertex), {} "
+        "vertices, indices {}: {} elements at {:08X}-{:08X}, {} outside the "
+        "count, {} eA rejected, format not handled {}; total {} elements, "
+        "{:.1f} ms; verified {}, different {}",
+        memexport_cpu_draws_, hash, of_128 ? 128 : 64, index_count,
+        index_buffer_info ? (indices32 ? "32-bit" : "16-bit") : "auto",
+        sink.elements, sink.dir_min == UINT32_MAX ? 0 : sink.dir_min,
+        sink.dir_max, sink.outside, sink.rejected, sink.format_odd,
+        memexport_cpu_elements_, double(memexport_cpu_ns_) / 1e6,
+        memexport_cpu_verified_, memexport_cpu_different_);
+  }
+  return true;
 }
 
 void MetalCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
@@ -2723,6 +3293,7 @@ void MetalCommandProcessor::MaybeLogMemReport() {
   if (shared_memory_ && shared_memory_->GetBuffer()) {
     shared_bytes = uint64_t(shared_memory_->GetBuffer()->allocatedSize());
   }
+  if (shared_memory_) shared_memory_->LogWatchStats();
   REXLOG_INFO(
       "[mem-report] f{} footprint {:.0f}MB device {:.0f}MB | RT {} = {:.0f}MB "
       "(full-height {:.0f}MB) heaps {} = {:.0f}MB used {:.0f}MB | edram "
@@ -3524,7 +4095,13 @@ bool MetalCommandProcessor::EncodeSharedMemoryRenderReadDependencies(
         (render_barrier_producers_ & producers) == producers &&
         (render_barrier_consumers_ & consumers) == consumers) {
       ++gpu_time_trace::n_barrier_skipped;
+      if (memexport_order_overlap_pending_) {
+        ++memexport_order_barrier_skipped_;
+      }
     } else {
+      if (memexport_order_overlap_pending_) {
+        ++memexport_order_barrier_encoded_;
+      }
       current_render_encoder_->memoryBarrier(
           MTL::BarrierScopeBuffers, active_producer_stages, consumer_stages);
       pass_trace::NoteBarrier(current_render_pass_trace_);
@@ -3555,6 +4132,15 @@ bool MetalCommandProcessor::EncodeSharedMemoryRenderReadDependencies(
       }
     }
     RetireFenceWaitedSharedMemoryWrites(ranges, range_count);
+  }
+  if (memexport_order_overlap_pending_) {
+    if (!NS::UInteger(active_producer_stages)) {
+      ++memexport_order_barrier_nothing_;
+    }
+    memexport_order_overlap_pending_ = false;
+    if (memexport_order_overlap_draws_ == 2000) {
+      LogMemexportWriteOrderSummary();
+    }
   }
   return true;
 }
@@ -4223,6 +4809,15 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   }
   if (memexport_used_pixel) {
     draw_util::AddMemExportRanges(regs, *pixel_shader, memexport_ranges_);
+  }
+  // REX_METAL_MEMEXPORT_CPU: BO2's streamed-texture block copies done on the
+  // CPU at this point instead of as a GPU export with a later readback.
+  if (memexport_used_vertex && !memexport_used_pixel &&
+      ExecuteMemexportCopyOnCpu(*vertex_shader, index_count,
+                                index_buffer_info)) {
+    memexport_ranges_.clear();
+    draw_skip_reason_ = "ds_memexport_cpu";
+    return true;
   }
   // Primitive/index processing (like D3D12/Vulkan).
   PrimitiveProcessor::ProcessingResult primitive_processing_result;
@@ -5603,6 +6198,9 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     }
     if (MetalTextureCache::TexContentCheckInterval()) {
       texture_cache_->TexContentCheck(used_texture_mask);
+    }
+    if (MetalTextureCache::TexGarbageScanInterval()) {
+      texture_cache_->TexGarbageScan(used_texture_mask);
     }
     textures_requested_for_draw = true;
     ++telemetry_counter;
@@ -8443,6 +9041,42 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
     EndRenderEncoder(
         RenderEncoderEndReason::kBeginRenderEncoderDescriptorChanged);
   }
+  // A buffer memory barrier inside one render encoder is not sufficient for
+  // BO2's overlapping vertex-stage block moves on Apple GPUs. Close the
+  // encoder after the earlier move, which updates the shared-memory fence;
+  // the normal dependency path below then waits on that fence in a new pass.
+  static const bool memexport_write_order = [] {
+    const char* value = MetalDebugEnv("MEMEXPORT_WRITE_ORDER");
+    const bool enabled = !(value && value[0] == '0');
+    REXLOG_INFO("[memexport-write-order] {} (REX_METAL_MEMEXPORT_WRITE_ORDER={})",
+                enabled ? "on" : "off", value ? value : "unset");
+    return enabled;
+  }();
+  bool active_memexport_overlap = false;
+  if (NS::UInteger(draw.memexport_write_stages) &&
+      !draw.memexport_ranges.empty()) {
+    for (const PendingSharedMemoryWrite& pending :
+         pending_shared_memory_writes_) {
+      if (!pending.active_render_encoder) continue;
+      for (const draw_util::MemExportRange& range : draw.memexport_ranges) {
+        SharedMemoryRange shared_range = {range.base_address_dwords << 2,
+                                          range.size_bytes};
+        if (PendingSharedMemoryWriteOverlapsRanges(pending, &shared_range, 1)) {
+          active_memexport_overlap = true;
+          break;
+        }
+      }
+      if (active_memexport_overlap) break;
+    }
+  }
+  if (active_memexport_overlap) {
+    ++memexport_order_overlap_draws_;
+    memexport_order_overlap_pending_ = true;
+    if (memexport_write_order && current_render_encoder_) {
+      ++memexport_order_split_passes_;
+      EndRenderEncoder(RenderEncoderEndReason::kSharedMemoryReadDependency);
+    }
+  }
   pass_open_need_bottom_ = need_y1;
   const bool draw_pass_transfers =
       render_target_cache_ && render_target_cache_->HasPendingDrawPassTransfers();
@@ -9941,7 +10575,7 @@ bool MetalCommandProcessor::DispatchDraw(
             memexport_range.base_address_dwords << 2, memexport_range.size_bytes,
             submission_current_);
       }
-      shared_memory_->RangeWrittenByGpu(
+      shared_memory_->MemexportRangeWritten(
           memexport_range.base_address_dwords << 2, memexport_range.size_bytes);
       // [texture-precommit] record the write even when no stage is known
       // (no pending entry is made then): a texture load of these pages must
@@ -9958,6 +10592,16 @@ bool MetalCommandProcessor::DispatchDraw(
                                      memexport_range.size_bytes,
                                      memexport_write_stages, true, false);
       }
+    }
+    if (memexport_shadow_ready_) {
+      // [memexport-shadow] the copy draw this was made for is the one being
+      // dispatched (copy draws are never queued).
+      memexport_shadow_ready_ = false;
+      shared_memory_->NoteMemexportShadow(
+          std::move(memexport_shadow_), submission_current_,
+          MetalSharedMemory::MemexportReadbackEnabled()
+              ? uint32_t(memexport_ranges.size())
+              : 0);
     }
   }
 
@@ -10675,11 +11319,63 @@ void MetalCommandProcessor::DirtyFetchConstantDwords(
   }
 }
 
+void MetalCommandProcessor::LandMemexportReadbacksBeforeGuestFence(
+    uint32_t index, uint32_t value) {
+  if (!shared_memory_ || !MetalSharedMemory::MemexportReadbackEnabled() ||
+      !shared_memory_->HasPendingMemexportReadbacks()) {
+    return;
+  }
+  static const bool enabled = [] {
+    const char* v = std::getenv("REX_METAL_FENCE_READBACK");
+    const bool on = !(v && v[0] == '0');
+    REXLOG_INFO(
+        "[fence-readback] {}: a guest fence written while memexport data is "
+        "still on the GPU {}",
+        on ? "on" : "off (REX_METAL_FENCE_READBACK=0)",
+        on ? "waits for it and copies it back first" : "does not wait");
+    return on;
+  }();
+  static uint64_t fences = 0, left_pending = 0, wait_us = 0;
+  ++fences;
+  if (enabled) {
+    const auto start = std::chrono::steady_clock::now();
+    if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kManual)) {
+      REXLOG_ERROR("[fence-readback] failed to flush the prepared draw queue");
+    }
+    EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
+    FlushCommandBufferAndWait(/*timeout_ns=*/5000000000ULL,
+                              "guest fence readback");
+    // The completion handlers count a submission as completed; they can run
+    // after the wait above returns.
+    WaitForPendingCompletionHandlers();
+    ProcessCompletedSubmissions();
+    wait_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count());
+    if (shared_memory_->HasPendingMemexportReadbacks()) {
+      ++left_pending;
+    }
+  }
+  if (fences <= 8 || (fences & (fences - 1)) == 0) {
+    REXLOG_INFO(
+        "[fence-readback] fence #{} (reg {} value {:08X}) with memexport "
+        "data outstanding at submission {}: {}; total wait {} ms, still "
+        "outstanding after the wait {}",
+        fences, index - XE_GPU_REG_SCRATCH_REG0, value, submission_current_,
+        enabled ? "waited" : "not waited", wait_us / 1000, left_pending);
+  }
+}
+
 void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   uint32_t old_value = 0;
   bool valid_register = index < RegisterFile::kRegisterCount;
   if (valid_register) {
     old_value = register_file_->values[index];
+  }
+  if (index >= XE_GPU_REG_SCRATCH_REG0 && index <= XE_GPU_REG_SCRATCH_REG7 &&
+      ((1u << (index - XE_GPU_REG_SCRATCH_REG0)) &
+       register_file_->values[XE_GPU_REG_SCRATCH_UMSK])) [[unlikely]] {
+    LandMemexportReadbacksBeforeGuestFence(index, value);
   }
   CommandProcessor::WriteRegister(index, value);
   if (!valid_register) {
