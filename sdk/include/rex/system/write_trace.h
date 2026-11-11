@@ -83,6 +83,17 @@ void SetTicker(Ticker ticker);
 // A line in <REX_TRACE_WRITE_DIR>/aux.log (timestamped like events.log): app-wide context that is not about a watched
 // range (pool allocations, every memexport). Thread-safe.
 void Aux(const std::string& text);
+
+// The last CPU write to each 4 KB physical page (any hooked writer: CRT copies/fills, file reads, LZX), for every
+// page while the trace is on: time in 1/4 ms since start (0 = never) and the writer's guest lr.
+void StampPhysicalSlow(uint32_t physical, uint32_t length, uint32_t guest_lr);
+inline void StampGuest(uint32_t guest, uint32_t length, uint32_t guest_lr) {
+  if (guest >= 0xA0000000u && g_enabled.load(std::memory_order_relaxed)) [[unlikely]] {
+    StampPhysicalSlow(ToPhysical(guest), length, guest_lr);
+  }
+}
+// The newest stamp over a range: ms (negative when never) and its lr.
+double LastCpuWriteMs(uint32_t physical, uint32_t length, uint32_t* guest_lr);
 double ElapsedMs();
 
 }  // namespace rex::write_trace

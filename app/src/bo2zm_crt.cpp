@@ -55,6 +55,7 @@ inline void Move(PPCContext& ctx, uint8_t* base, const char* tag) {
       bo2zm::mod_hud_fit::AfterCopy(ctx, base);
 #endif
     bo2zm::page_writes::MarkGuest(ctx.r3.u32, n);
+    rex::write_trace::StampGuest(ctx.r3.u32, n, uint32_t(ctx.lr));
     if (rex::write_trace::WantedGuest(ctx.r3.u32, n)) [[unlikely]] {
       rex::write_trace::NotePhysicalSlow(tag, rex::write_trace::ToPhysical(ctx.r3.u32), n, uint32_t(ctx.lr),
                                          fmt::format("dst {:08X} src {:08X} (src phys {:08X})", ctx.r3.u32,
@@ -69,6 +70,7 @@ inline void Fill(PPCContext& ctx, uint8_t* base, const char* tag) {
   if (n != 0) [[likely]] {
     std::memset(Host(base, ctx.r3.u32), int(ctx.r4.u32 & 0xFF), n);
     bo2zm::page_writes::MarkGuest(ctx.r3.u32, n);
+    rex::write_trace::StampGuest(ctx.r3.u32, n, uint32_t(ctx.lr));
     if (rex::write_trace::WantedGuest(ctx.r3.u32, n)) [[unlikely]] {
       rex::write_trace::NotePhysicalSlow(tag, rex::write_trace::ToPhysical(ctx.r3.u32), n, uint32_t(ctx.lr),
                                          fmt::format("dst {:08X} value {:02X}", ctx.r3.u32, ctx.r4.u32 & 0xFF));

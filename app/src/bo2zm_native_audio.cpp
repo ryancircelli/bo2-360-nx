@@ -1438,6 +1438,9 @@ REX_HOOK_RAW(sub_827E7058) {
     const uint32_t s = ctx.r3.u32, pos = ctx.r4.u32, end = ctx.r4.u32 + ctx.r5.u32, lr = uint32_t(ctx.lr);
     const uint32_t window = int32_t(pos) < int32_t(end) ? Load32(Host(base, s)) + pos : 0;
     LzxBody(ctx, base);
+    if (window) {
+      rex::write_trace::StampGuest(window, end - pos, lr);
+    }
     if (window && rex::write_trace::WantedGuest(window, end - pos + 272)) {
       rex::write_trace::NotePhysicalSlow("lzx", rex::write_trace::ToPhysical(window), end - pos, lr,
                                          fmt::format("state {:08X} window+{:X} len {:X}", s, pos, end - pos));

@@ -174,11 +174,12 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_leng
           if (trace_writes && XSUCCEEDED(result) && buffer_physical_heap) {
             const uint32_t physical =
                 buffer_physical_heap->GetPhysicalAddress(buffer_guest_address);
+            uint32_t guest_lr = 0;
+            if (auto* ts = rex::runtime::ThreadState::Get()) {
+              guest_lr = uint32_t(ts->context()->lr);
+            }
+            rex::write_trace::StampPhysicalSlow(physical, uint32_t(bytes_read), guest_lr);
             if (rex::write_trace::OverlapsPhysical(physical, uint32_t(bytes_read))) {
-              uint32_t guest_lr = 0;
-              if (auto* ts = rex::runtime::ThreadState::Get()) {
-                guest_lr = uint32_t(ts->context()->lr);
-              }
               rex::write_trace::NotePhysicalSlow(
                   "file", physical, uint32_t(bytes_read), guest_lr,
                   fmt::format("{} @0x{:X} len 0x{:X} (asked 0x{:X}) via {} guest_buf {:08X}", path(),

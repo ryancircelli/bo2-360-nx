@@ -5708,11 +5708,27 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
         for (uint32_t i = 0; i < vertex_fetch_range_count; ++i) {
           fetches += fmt::format(" {:08X}+{:X}", vertex_fetch_ranges[i].start, vertex_fetch_ranges[i].length);
         }
+        uint32_t src_lr = 0, dst_lr = 0;
+        double src_cpu = -1.0;
+        bool src_valid = true;
+        for (uint32_t i = 0; i < vertex_fetch_range_count; ++i) {
+          uint32_t lr = 0;
+          const double t = rex::write_trace::LastCpuWriteMs(vertex_fetch_ranges[i].start,
+                                                            vertex_fetch_ranges[i].length, &lr);
+          if (t > src_cpu) {
+            src_cpu = t;
+            src_lr = lr;
+          }
+          src_valid = src_valid && shared_memory_->IsRangeValid(vertex_fetch_ranges[i].start,
+                                                                vertex_fetch_ranges[i].length);
+        }
+        const double dst_cpu = rex::write_trace::LastCpuWriteMs(base_bytes, memexport_range.size_bytes, &dst_lr);
         rex::write_trace::Aux(fmt::format(
-            "memexport dst={:08X}+{:X} valid={} submission={} vs={:016X} vfetch:{}", base_bytes,
-            memexport_range.size_bytes,
+            "memexport dst={:08X}+{:X} valid={} submission={} vs={:016X} vfetch:{} src_valid={} src_cpu={:.2f}/{:08X} "
+            "dst_cpu={:.2f}/{:08X}",
+            base_bytes, memexport_range.size_bytes,
             shared_memory_->IsRangeValid(base_bytes, memexport_range.size_bytes) ? 1 : 0, submission_current_,
-            vertex_shader->ucode_data_hash(), fetches));
+            vertex_shader->ucode_data_hash(), fetches, src_valid ? 1 : 0, src_cpu, src_lr, dst_cpu, dst_lr));
       }
       if (rex::write_trace::g_enabled.load(std::memory_order_relaxed) &&
           rex::write_trace::OverlapsPhysical(base_bytes, memexport_range.size_bytes)) [[unlikely]] {

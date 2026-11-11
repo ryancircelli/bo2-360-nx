@@ -535,6 +535,43 @@ void Aux(const std::string& text) {
 
 double ElapsedMs() { return NowMs(); }
 
+namespace {
+std::atomic<uint32_t> g_cpu_stamp[1u << 17];
+std::atomic<uint32_t> g_cpu_lr[1u << 17];
+}  // namespace
+
+void StampPhysicalSlow(uint32_t physical, uint32_t length, uint32_t guest_lr) {
+  if (length == 0) {
+    return;
+  }
+  const uint32_t t = uint32_t(NowMs() * 4.0) + 1;
+  const uint32_t first = (physical & 0x1FFFFFFFu) >> 12;
+  const uint32_t last = std::min<uint32_t>(((physical & 0x1FFFFFFFu) + length - 1) >> 12, (1u << 17) - 1);
+  for (uint32_t i = first; i <= last; ++i) {
+    g_cpu_stamp[i].store(t, std::memory_order_relaxed);
+    g_cpu_lr[i].store(guest_lr, std::memory_order_relaxed);
+  }
+}
+
+double LastCpuWriteMs(uint32_t physical, uint32_t length, uint32_t* guest_lr) {
+  uint32_t best = 0, lr = 0;
+  if (length) {
+    const uint32_t first = (physical & 0x1FFFFFFFu) >> 12;
+    const uint32_t last = std::min<uint32_t>(((physical & 0x1FFFFFFFu) + length - 1) >> 12, (1u << 17) - 1);
+    for (uint32_t i = first; i <= last; ++i) {
+      const uint32_t t = g_cpu_stamp[i].load(std::memory_order_relaxed);
+      if (t > best) {
+        best = t;
+        lr = g_cpu_lr[i].load(std::memory_order_relaxed);
+      }
+    }
+  }
+  if (guest_lr) {
+    *guest_lr = lr;
+  }
+  return best ? (best - 1) / 4.0 : -1.0;
+}
+
 void Initialize(memory::Memory* memory) {
   const char* ranges = std::getenv("REX_TRACE_WRITE_PAGES");
   const char* follow = std::getenv("REX_TRACE_WRITE_FOLLOW");
