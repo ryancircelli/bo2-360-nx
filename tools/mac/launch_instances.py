@@ -123,6 +123,8 @@ def main(argv):
             print("launch: stopping; measured proof job became active: " + ", ".join(jobs), file=sys.stderr)
             return 3
         env = os.environ.copy()
+        if os.environ.get("RUNQ_JOB"):
+            env.setdefault("REX_AUDIO_MUTE", "true")  # test runs stay silent; owner launches keep sound
         env["BO2_INSTANCE"] = str(instance)
         env["BO2_INSTANCE_COUNT"] = str(count)
         env["BO2_LOG_DIR"] = str(capture_root / f"instance-{instance}")
