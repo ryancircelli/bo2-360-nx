@@ -30,4 +30,12 @@ void NotifySwap(uint32_t width, uint32_t height) {
   }
 }
 
+namespace {
+std::atomic<GuestWriteHook> g_guest_write_hook{nullptr};
+}
+void SetGuestWriteHook(GuestWriteHook hook) { g_guest_write_hook.store(hook, std::memory_order_release); }
+void NotifyGuestWrite() {
+  if (GuestWriteHook hook = g_guest_write_hook.load(std::memory_order_acquire)) hook();
+}
+
 }  // namespace rex::graphics
