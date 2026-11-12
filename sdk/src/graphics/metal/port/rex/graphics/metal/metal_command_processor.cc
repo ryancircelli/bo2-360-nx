@@ -18,6 +18,7 @@
  */
 
 #include "rex/graphics/metal/metal_command_processor.h"
+#include <rex/graphics/metal_runtime.h>
 #include "rex/graphics/metal/metal_emu_draw_stats.h"
 #include "rex/graphics/metal/metal_ref_tessellator.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_downscale_cs.h"
@@ -1328,6 +1329,7 @@ void MergeFetchConstantDwordMask(
 MetalCommandProcessor::MetalCommandProcessor(
     MetalGraphicsSystem* graphics_system, system::KernelState* kernel_state)
     : CommandProcessor(graphics_system, kernel_state) {
+  encode_thread_active_ = EncodeThreadRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
       kMaxPendingSharedMemoryWriteCapacity);
@@ -2807,6 +2809,15 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   }
   DrainCommandBufferAutoreleasePool();
 
+  // EndRenderEncoder above drains the replay queue and releases the real encoder;
+  // the old command buffer has been committed. Only future encoders see this mode.
+  // GPU work may still be in flight, but it has no CPU encoder/recorder state left.
+  assert_true(!current_render_encoder_ && !current_command_buffer_);
+  const bool encode_thread_requested = EncodeThreadRequested();
+  if (encode_thread_active_ != encode_thread_requested) {
+    encode_thread_active_ = encode_thread_requested;
+    REXLOG_INFO("Metal encode thread: {} at drained frame boundary", encode_thread_active_ ? "on" : "off");
+  }
   CloseFrameLifetime();
   // Proactive descriptor-pressure trimming: at frame boundaries the GPU has
   // likely completed prior submissions, so retired descriptor indices can be
@@ -13143,7 +13154,7 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
               current_command_buffer_->renderCommandEncoder(pass_descriptor)) {
         real_encoder->retain();
         current_render_encoder_ = render_encoder_recorder_.Open(
-            real_encoder, REXCVAR_GET(metal_encode_thread));
+            real_encoder, encode_thread_active_);
       } else {
         current_render_encoder_ = nullptr;
       }
