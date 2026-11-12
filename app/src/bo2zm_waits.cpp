@@ -87,6 +87,7 @@
 #include "bo2zm_benchmark.h"
 #include "bo2zm_critpath.h"
 #include "bo2zm_critpath_light.h"
+#include "bo2zm_waits.h"
 #include "bo2zm_jobs.h"
 #include "native/render/bo2zm_native_render.h"
 
@@ -388,10 +389,11 @@ bool AnyActive() {
   return active;
 }
 
-bool FenceWake() {
-  static const bool on = REXCVAR_GET(bo2zm_waits_fence_wake);
+std::atomic<bool>& FenceWakeSwitch() {
+  static std::atomic<bool> on{REXCVAR_GET(bo2zm_waits_fence_wake)};
   return on;
 }
+bool FenceWake() { return FenceWakeSwitch().load(std::memory_order_relaxed); }
 
 std::chrono::microseconds Limit() {
   static const auto limit = std::chrono::microseconds(REXCVAR_GET(bo2zm_waits_max_us));
@@ -648,6 +650,11 @@ void WarnProgressRing() {
   Warn(tr::kWarningRing);
 }
 }  // namespace bo2zm::native
+
+namespace bo2zm::waits {
+bool FenceWake() { return ::FenceWake(); }
+void SetFenceWake(bool on) { FenceWakeSwitch().store(on, std::memory_order_relaxed); }
+}  // namespace bo2zm::waits
 
 // --- Fence writes from the SDK command processor (the Metal and Vulkan renderers) ---------------------------------
 // The SDK writes a D3D fence (EVENT_WRITE_SHD) as it reads the ring; the native renderer warns on its own above. Told

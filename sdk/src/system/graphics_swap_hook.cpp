@@ -1,6 +1,8 @@
 #include <atomic>
 
 #include <rex/graphics/swap_hook.h>
+#include <rex/graphics/metal_runtime.h>
+#include <rex/cvar.h>
 
 namespace rex::graphics {
 
@@ -45,3 +47,26 @@ void NotifyGuestWrite() {
 }
 
 }  // namespace rex::graphics
+
+
+#if defined(__APPLE__)
+namespace rex::graphics::metal {
+namespace {
+std::atomic<bool>& EncodeThreadSwitch() {
+  // First read by the Metal CP after its plugin cvars have been registered/configured.
+  static std::atomic<bool> requested{rex::cvar::Query<bool>("metal_encode_thread")};
+  return requested;
+}
+}
+bool EncodeThreadRequested() { return EncodeThreadSwitch().load(std::memory_order_relaxed); }
+void RequestEncodeThread(bool on) { EncodeThreadSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& Type0BatchingSwitch() {
+  static std::atomic<bool> requested{rex::cvar::Query<bool>("metal_type0_register_batching")};
+  return requested;
+}
+}
+bool Type0BatchingRequested() { return Type0BatchingSwitch().load(std::memory_order_relaxed); }
+void RequestType0Batching(bool on) { Type0BatchingSwitch().store(on, std::memory_order_relaxed); }
+}  // namespace rex::graphics::metal
+#endif
