@@ -1286,6 +1286,8 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
   data_value = GpuSwap(data_value, endianness);
   memory::store(memory_->TranslatePhysical(address), data_value);
   NotifyGuestFenceWrite(address, logical_value);
+  // Guest threads polling this word (D3D fences) can wake now.
+  NotifyGuestWrite();
   return true;
 }
 
