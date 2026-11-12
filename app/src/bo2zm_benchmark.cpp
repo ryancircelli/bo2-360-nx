@@ -1,9 +1,6 @@
 // See bo2zm_benchmark.h.
 
 #include "bo2zm_benchmark.h"
-#include "bo2zm_waits.h"
-#include <rex/graphics/metal_runtime.h>
-#include <stdexcept>
 
 #include <algorithm>
 #include <atomic>
@@ -16,6 +13,7 @@
 #include <ctime>
 #include <map>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -25,6 +23,7 @@
 #include <string_view>
 
 #include <rex/cvar.h>
+#include <rex/graphics/metal_runtime.h>
 #include <rex/logging.h>
 #include <rex/system/xthread.h>
 
@@ -32,6 +31,7 @@
 #include "bo2zm_lifecycle.h"
 #include "bo2zm_perf_log.h"
 #include "bo2zm_preset.h"
+#include "bo2zm_waits.h"
 #include "native/render/bo2zm_native_capture.h"
 
 #if defined(__SWITCH__)
@@ -43,7 +43,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "summary in the log ('[benchmark]'). Use with bo2zm_test_god")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(bo2zm_benchmark_ab_factors, "", "BO2",
-                      "Up to two comma-separated runtime A/B switches: waits_fence_wake,metal_encode_thread")
+                      "Up to two named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_settle_s, 3, "BO2",
                      "Seconds excluded after each A/B arm change (also recorded in perf abarm events)")
@@ -191,6 +191,7 @@ const Factor kFactors[] = {
     {"waits_fence_wake", &bo2zm::waits::FenceWake, &bo2zm::waits::SetFenceWake},
 #if defined(__APPLE__)
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
+    {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };

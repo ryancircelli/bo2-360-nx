@@ -1330,6 +1330,7 @@ MetalCommandProcessor::MetalCommandProcessor(
     MetalGraphicsSystem* graphics_system, system::KernelState* kernel_state)
     : CommandProcessor(graphics_system, kernel_state) {
   encode_thread_active_ = EncodeThreadRequested();
+  type0_register_batching_active_ = Type0BatchingRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
       kMaxPendingSharedMemoryWriteCapacity);
@@ -2817,6 +2818,12 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   if (encode_thread_active_ != encode_thread_requested) {
     encode_thread_active_ = encode_thread_requested;
     REXLOG_INFO("Metal encode thread: {} at drained frame boundary", encode_thread_active_ ? "on" : "off");
+  }
+  const bool type0_requested = Type0BatchingRequested();
+  if (type0_register_batching_active_ != type0_requested) {
+    type0_register_batching_active_ = type0_requested;
+    REXLOG_INFO("Metal type0 register batching: {} at drained frame boundary",
+                type0_requested ? "on" : "off");
   }
   CloseFrameLifetime();
   // Proactive descriptor-pressure trimming: at frame boundaries the GPU has

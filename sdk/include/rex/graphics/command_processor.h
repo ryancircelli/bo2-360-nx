@@ -145,6 +145,9 @@ class CommandProcessor {
   virtual bool SetupContext() = 0;
   virtual void ShutdownContext() = 0;
 
+  // Metal CP-owned mode, changed only at a drained frame boundary. Type-0 packets
+  // finish their synchronous range/per-register writes before the next packet.
+  bool type0_register_batching_active_ = false;
   virtual void WriteRegister(uint32_t index, uint32_t value);
   uint32_t ReadRegisterValue(uint32_t index) const;
   virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base, uint32_t num_registers);

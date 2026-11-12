@@ -6042,7 +6042,7 @@ index 9ae30ab..7d209af 100644
  
    uint32_t base_index = (packet & 0x7FFF);
    uint32_t write_one_reg = (packet >> 15) & 0x1;
-+  if (!write_one_reg && REXCVAR_GET(metal_type0_register_batching)) {
++  if (!write_one_reg && type0_register_batching_active_) {
 +    // The backend range writer retains side-effecting/invalid-range fallbacks.
 +    // Repeated writes to one register must retain their individual ordering.
 +    WriteRegisterRangeFromRing(reader, base_index, count);
