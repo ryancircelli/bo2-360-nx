@@ -133,6 +133,11 @@ REXCVAR_DEFINE_INT32(bo2zm_wait_sites, 0xFFF, "BO2",
                      "jobs")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(bo2zm_waits_group_own, true, "BO2",
+                    "In sub_82493690's second loop (the group's jobs all taken, some still running elsewhere) help only "
+                    "with that group's jobs instead of any job. The game helps with any job there; in 4-player split "
+                    "screen Main took a long unrelated job and returned 11-17 ms after its group was done (critpath "
+                    "LIGHT trace). With nothing of the group to take, the thread sleeps until a job of it ends");
 REXCVAR_DEFINE_BOOL(bo2zm_waits_fence_wake, true, "BO2",
                     "Wake threads sleeping on put-back jobs when the SDK command processor writes a fence "
                     "(EVENT_WRITE_SHD), and let JQ workers wait for that too. The three put-back job types wait for a "
@@ -389,6 +394,12 @@ std::atomic<bool>& FenceWakeSwitch() {
 bool FenceWake() {
   return FenceWakeSwitch().load(std::memory_order_relaxed);
 }
+
+std::atomic<bool>& GroupOwnSwitch() {
+  static std::atomic<bool> on{REXCVAR_GET(bo2zm_waits_group_own)};
+  return on;
+}
+bool GroupOwn() { return GroupOwnSwitch().load(std::memory_order_relaxed); }
 
 std::chrono::microseconds Limit() {
   static const auto limit = std::chrono::microseconds(REXCVAR_GET(bo2zm_waits_max_us));
@@ -649,6 +660,8 @@ void WarnProgressRing() {
 namespace bo2zm::waits {
 bool FenceWake() { return ::FenceWake(); }
 void SetFenceWake(bool on) { FenceWakeSwitch().store(on, std::memory_order_relaxed); }
+bool GroupOwn() { return ::GroupOwn(); }
+void SetGroupOwn(bool on) { GroupOwnSwitch().store(on, std::memory_order_relaxed); }
 }  // namespace bo2zm::waits
 
 // --- Fence writes from the SDK command processor (the Metal and Vulkan renderers) ---------------------------------
@@ -859,6 +872,11 @@ REX_HOOK_RAW(sub_8284BB48) {
   const uint32_t lr = uint32_t(ctx.lr);
   const bool report = tr::ReportActive();
   const uint64_t t0 = report ? NowNs() : 0;
+  // The second loop passes no filter (r5 = 0): any job. Give it the group's, as the first loop does.
+  const bool own = lr == kHelpInGroup2 && t.group != 0 && ctx.r5.u32 == 0 && GroupOwn();
+  if (own) {
+    ctx.r5.u64 = t.group;
+  }
   __imp__sub_8284BB48(ctx, base);
   WarnYesEnded();
   if (report) {
@@ -866,7 +884,9 @@ REX_HOOK_RAW(sub_8284BB48) {
     h.helps.fetch_add(1, std::memory_order_relaxed);
     h.ns_helps.fetch_add(NowNs() - t0, std::memory_order_relaxed);
   }
-  if (AnyActive() && t.last_empty && (lr == kHelpInGroup1 || lr == kHelpInGroup2) && !HasTakeableHelp(base)) {
+  // Other jobs in the queues do not keep a thread that only takes its group's awake.
+  if (AnyActive() && t.last_empty && (lr == kHelpInGroup1 || lr == kHelpInGroup2) &&
+      (own || !HasTakeableHelp(base))) {
     Sleep(tr::kRoomGroup, t.seen_choice, kInterestsHelp | Bit(tr::kWarningEnded), t.group, Limit());
   }
 }
