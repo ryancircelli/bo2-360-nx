@@ -5037,15 +5037,14 @@ static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
   }
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;
+  parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
 
   if (aniso_filter != xenos::AnisoFilter::kDisabled) {
     parameters.mag_linear = 1;
     parameters.min_linear = 1;
-    parameters.mip_linear = 1;
   } else {
     parameters.mag_linear = mag_filter == xenos::TextureFilter::kLinear;
     parameters.min_linear = min_filter == xenos::TextureFilter::kLinear;
-    parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
   }
 
   parameters.mip_base_map = mip_base_map ? 1 : 0;
@@ -5125,7 +5124,8 @@ MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(
   if (parameters.aniso_filter != xenos::AnisoFilter::kDisabled) {
     desc->setMinFilter(MTL::SamplerMinMagFilterLinear);
     desc->setMagFilter(MTL::SamplerMinMagFilterLinear);
-    desc->setMipFilter(MTL::SamplerMipFilterLinear);
+    desc->setMipFilter(parameters.mip_linear ? MTL::SamplerMipFilterLinear
+                                             : MTL::SamplerMipFilterNearest);
     desc->setMaxAnisotropy(1u << (uint32_t(parameters.aniso_filter) - 1));
   } else {
     desc->setMinFilter(parameters.min_linear ? MTL::SamplerMinMagFilterLinear
