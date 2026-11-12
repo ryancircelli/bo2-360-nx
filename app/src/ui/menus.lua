@@ -178,7 +178,10 @@ local ExtrasPages = {
      choices = {"DISABLED", "ENABLED"}},
     {label = "EDIT USERNAME", hint = "Change your player name.", action = "edit_name",
      where = "home", nameHint = true},
-    {label = "EXPERIMENTAL", hint = "Features still being tested.", page = "experimental"},
+    {label = "KEYBOARD AND MOUSE", hint = "ON: the keyboard and mouse play as player 1: WASD move, mouse looks, left click fires, right click "
+       .. "aims, Space jump, C crouch, R reload/use, 2 weapon swap, G grenade, 1 special grenade, V melee, F sprint, "
+       .. "Return pause, Tab scores. Controllers keep working.", setting = "keyboard", choices = OnOff, platform = "pc"},
+    {label = "EXPERIMENTAL", hint = "Features still being tested.", page = "experimental", platform = "switch"},
     {zm = true, section = "CHEATS"},
     {zm = true, label = "CHEATS", hint = "ON: the cheats work. OFF: normal play; your cheat picks are kept and come back when "
        .. "you turn CHEATS on.", setting = "cheats", choices = OnOff},
@@ -662,6 +665,13 @@ local VsyncItem = {
   setting = "vsync", choices = OnOff,
 }
 
+-- Options > Graphics (Mac/PC): full screen or a window (bo2zm_extras.cpp).
+local WindowItem = {
+  label = "DISPLAY",
+  hint = "FULL SCREEN fills the screen. WINDOW plays in a window you can move and resize. Applies at once.",
+  setting = "window_mode", choices = {"FULL SCREEN", "WINDOW"},
+}
+
 -- Options > Graphics: whether the preset stays in the top-right corner, added after the cap.
 local ShowPresetItem = {
   label = "SHOW PRESET",
@@ -1065,6 +1075,8 @@ local function CreatePage(controller, page)
       -- not on this menu
     elseif item.zm and not state.zombies() then
       -- Zombies only
+    elseif item.platform and item.platform ~= UIExpression.DvarString(nil, "bo2zm_platform_ui") then
+      -- Switch-only or Mac/PC-only
     elseif not label then
       -- not on this map
     elseif item.section then
@@ -2524,6 +2536,7 @@ local function PatchGraphicsSettings(menu, controller)
       AddHeading(list, "DISPLAY")
       Add(FpsCapItem)
       Add(VsyncItem)
+      if UIExpression.DvarString(nil, "bo2zm_platform_ui") == "pc" then Add(WindowItem) end
       Add(ShowPresetItem)
       Add(FpsCounterItem)
       -- The map profile's two selectors go above everything else (Zombies' maps only).
