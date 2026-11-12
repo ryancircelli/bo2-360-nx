@@ -1135,6 +1135,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                                    sizeof(shaders::guest_output_triangle_strip_rect_vs), vs_)) {
       return false;
     }
+    // The Metal mirror (bo2zm_native_metal_mirror) has MSL for this one and for the resolve copy below.
+    BO2ZM_MIRROR(ShaderOwn(vs_, true, gpu::metal::OwnShader::kRectVertex));
     if (!gpu::vulkan::CreateShader(dfn_, device_, shaders::guest_output_bilinear_ps,
                                    sizeof(shaders::guest_output_bilinear_ps), fs_)) {
       return false;
@@ -3535,6 +3537,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       bool ok = gpu::vulkan::CreateShader(dfn_, device_, shaders::kSpirvBo2zmCopyResolve,
                                            sizeof(shaders::kSpirvBo2zmCopyResolve), conv_fs_) &&
                 gpu::vulkan::CreatePool(dfn_, device_, counts, conv_pool_);
+      if (ok) {
+        BO2ZM_MIRROR(ShaderOwn(conv_fs_, false, gpu::metal::OwnShader::kResolveCopy));
+      }
       for (uint32_t i = 0; ok && i < kConvSets; ++i) {
         ok = gpu::vulkan::AllocateSets(dfn_, device_, conv_pool_, 1, &layout_descriptors_, &conv_sets_[i]);
       }

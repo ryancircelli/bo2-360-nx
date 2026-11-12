@@ -8,6 +8,7 @@
 #include "bo2zm_gpu_metal_mirror.h"
 
 #include "bo2zm_gpu_metal.h"
+#include "../shaders/bo2zm_resolve_copy_msl.h"
 
 #include <rex/logging.h>
 
@@ -184,12 +185,16 @@ struct SetM {
   };
   std::array<Uniform, 4> uniforms{};
   uint32_t n_uniforms = 0;
+  // A set whose binding 0 is one sampled image (no heap): the view written there, bound as texture 0 by the
+  // renderer's own pipelines.
+  ImageView view = nullptr;
 };
 
 struct ShaderTag {
   bool vertex = false;
   uint64_t hash = 0;
   bool early_z = false;
+  OwnShader own = OwnShader::kNone;  // not a pack shader: one of the renderer's own, built from MSL
 };
 
 struct PipelineM {
@@ -198,6 +203,7 @@ struct PipelineM {
   bool has_ps = false;
   ShaderTag vs;
   ShaderTag ps;
+  bool own = false;  // both shaders are the renderer's own with MSL: the pipeline is built from it
   uint32_t constant = 0;
   std::vector<uint32_t> strides;
   std::vector<VertexAttribute> attributes;
@@ -212,6 +218,7 @@ struct PipelineM {
 
 struct Bound {
   Pipeline pipeline = nullptr;
+  std::array<uint8_t, 128> push{};  // the push constants (the limit every Vulkan device guarantees)
   std::array<Set, 8> sets{};
   std::array<uint32_t, 8> dynamic_offsets{};  // set 4: the offsets given with the set, in binding order
   uint32_t n_vertex = 0;
@@ -278,6 +285,9 @@ struct Mirror::State {
   uint32_t shown_height = 0;
   uint64_t draws = 0;
   uint64_t draws_skipped = 0;
+  uint64_t draws_own = 0;  // of `draws`, those of the renderer's own pipelines (the converted copy of resolves)
+  id<MTLLibrary> own_library = nil;
+  bool own_failed = false;
   uint64_t fans = 0;  // triangle fans, drawn as lists
   uint64_t clears_part = 0;  // clears of part of an attachment, drawn as rectangles
   uint64_t frames = 0;
@@ -434,6 +444,74 @@ struct Mirror::State {
     return l.render != nil;
   }
 
+  // The pipeline of the renderer's own shaders (OwnShader): the MSL library is built once, the pipeline for the
+  // formats of the pass. They draw a strip of four vertices with no vertex buffers and no depth.
+  id<MTLRenderPipelineState> OwnPipeline(PipelineM& p, const PassDesc& desc) {
+    const char* vertex_name = p.vs.own == OwnShader::kRectVertex ? "bo2zm_rect_vertex" : nullptr;
+    const char* fragment_name = p.ps.own == OwnShader::kResolveCopy ? "bo2zm_resolve_copy" : nullptr;
+    if (!vertex_name || !fragment_name) {
+      Refuse("pipeline of own shaders the mirror has no MSL pair for");
+      p.why = why;
+      return nil;
+    }
+    NSError* error = nil;
+    if (!own_library && !own_failed) {
+      own_library = [mtl newLibraryWithSource:[NSString stringWithUTF8String:kMslBo2zmResolveCopy]
+                                      options:nil
+                                        error:&error];
+      if (!own_library) {
+        own_failed = true;
+        REXLOG_ERROR("[native] Metal mirror: the own shaders do not compile: {}",
+                     error ? error.localizedDescription.UTF8String : "?");
+      }
+    }
+    if (!own_library) {
+      Refuse("the MSL of the renderer's own shaders does not compile");
+      p.why = why;
+      return nil;
+    }
+    id<MTLFunction> vs = [own_library newFunctionWithName:[NSString stringWithUTF8String:vertex_name]];
+    id<MTLFunction> ps = [own_library newFunctionWithName:[NSString stringWithUTF8String:fragment_name]];
+    if (!vs || !ps) {
+      Refuse("a function of the renderer's own shaders is missing from their MSL");
+      p.why = why;
+      return nil;
+    }
+    MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
+    d.vertexFunction = vs;
+    d.fragmentFunction = ps;
+    for (uint32_t i = 0; i < desc.color_count; ++i) {
+      MTLRenderPipelineColorAttachmentDescriptor* c = d.colorAttachments[i];
+      c.pixelFormat = MTLPixelFormat(PixelFormat(desc.colors[i].format));
+      if (i < p.state.n_colors) {
+        const BlendTarget& b = p.state.blends[i];
+        c.blendingEnabled = b.enable != 0;
+        c.sourceRGBBlendFactor = BlendFactor(b.equation.src_color);
+        c.destinationRGBBlendFactor = BlendFactor(b.equation.dst_color);
+        c.rgbBlendOperation = MTLBlendOperation(b.equation.color_op);
+        c.sourceAlphaBlendFactor = BlendFactor(b.equation.src_alpha);
+        c.destinationAlphaBlendFactor = BlendFactor(b.equation.dst_alpha);
+        c.alphaBlendOperation = MTLBlendOperation(b.equation.alpha_op);
+        c.writeMask = WriteMask(b.mask);
+      } else {
+        c.writeMask = MTLColorWriteMaskNone;
+      }
+    }
+    if (desc.has_depth) {
+      const MTLPixelFormat depth = MTLPixelFormat(PixelFormat(desc.depth.format));
+      d.depthAttachmentPixelFormat = depth;
+      if (HasStencil(depth)) d.stencilAttachmentPixelFormat = depth;
+    }
+    p.made = [mtl newRenderPipelineStateWithDescriptor:d error:&error];
+    if (!p.made) {
+      Once(std::string("own pipeline not made: ") + (error ? [[error localizedDescription] UTF8String] : "?"));
+      why = p.why = "pipeline not made";
+      return nil;
+    }
+    p.failed = false;
+    return p.made;
+  }
+
   // The pipeline for the pass being recorded; nil (logged once) if it cannot be made.
   id<MTLRenderPipelineState> Pipeline(ListM& l, PipelineM& p) {
     auto pass = passes.find(l.pass);
@@ -453,7 +531,11 @@ struct Mirror::State {
     p.key = key;
     p.made = nil;
     p.failed = true;
-    if (!p.vs_tagged || (p.has_ps && !p.ps_tagged)) {
+    if (p.own) {
+      return OwnPipeline(p, desc);
+    }
+    if (!p.vs_tagged || (p.has_ps && !p.ps_tagged) || p.vs.own != OwnShader::kNone ||
+        (p.has_ps && p.ps.own != OwnShader::kNone)) {
       Refuse("pipeline with one of the renderer's own shaders (not in the pack): its draws are skipped");
       p.why = why;
       return nil;
@@ -636,6 +718,20 @@ struct Mirror::State {
           [e setFragmentBuffer:buffer->second.buffer offset:offset atIndex:4 + u];
         }
       }
+    }
+    if (p.own) {
+      // The renderer's own shaders: push constants as bytes at buffer 0 (the vertex shader's rectangle is bytes 0
+      // to 15; the fragment shader's block has 16 bytes of padding then its constants, so it takes bytes 0 to 31),
+      // and the one sampled image of set 0 as texture 0, read without a sampler.
+      [e setVertexBytes:b.push.data() length:16 atIndex:0];
+      [e setFragmentBytes:b.push.data() length:32 atIndex:0];
+      auto set = sets.find(b.sets[0]);
+      auto view = set == sets.end() ? views.end() : views.find(set->second.view);
+      if (view == views.end() || !view->second.texture) {
+        return Refuse("own pipeline with no image bound at set 0");
+      }
+      [e setFragmentTexture:view->second.texture atIndex:0];
+      ++draws_own;
     }
     for (uint32_t i = 0; i < b.n_vertex; ++i) {
       auto buffer = buffers.find(b.vertex[i]);
@@ -1041,6 +1137,15 @@ void Mirror::ShaderTagged(Shader shader, bool vertex, uint64_t hash, bool early_
   s.shaders[shader] = ShaderTag{vertex, hash, early_z};
 }
 
+void Mirror::ShaderOwn(Shader shader, bool vertex, OwnShader own) {
+  State& s = *state_;
+  std::lock_guard guard(s.lock);
+  ShaderTag tag;
+  tag.vertex = vertex;
+  tag.own = own;
+  s.shaders[shader] = tag;
+}
+
 void Mirror::ShaderDestroyed(Shader shader) {
   State& s = *state_;
   std::lock_guard guard(s.lock);
@@ -1081,6 +1186,10 @@ void Mirror::WriteSampledImage(Set set, uint32_t binding, uint32_t element, Imag
   State& s = *state_;
   std::lock_guard guard(s.lock);
   auto found = s.sets.find(set);
+  if (found != s.sets.end() && !found->second.heap && binding == 0 && element == 0) {
+    found->second.view = view;  // one image, not a heap
+    return;
+  }
   if (found == s.sets.end() || !found->second.heap || binding != 0 || element >= found->second.capacity) return;
   auto v = s.views.find(view);
   uint64_t id = 0;
@@ -1148,6 +1257,7 @@ void Mirror::PipelineCreated(Pipeline pipeline, const GraphicsPipelineDesc& desc
       p.ps = ps->second;
     }
   }
+  p.own = p.vs_tagged && p.has_ps && p.ps_tagged && p.vs.own != OwnShader::kNone && p.ps.own != OwnShader::kNone;
   p.constant = desc.n_constants > 0 && desc.constants ? desc.constants[0] : 0;
   if (desc.strides) p.strides.assign(desc.strides, desc.strides + desc.n_bindings);
   if (desc.attributes) p.attributes.assign(desc.attributes, desc.attributes + desc.n_attributes);
@@ -1257,6 +1367,15 @@ void Mirror::BindPipeline(CommandList list, Pipeline pipeline) {
   State& s = *state_;
   std::lock_guard guard(s.lock);
   s.List(list).bound.pipeline = pipeline;
+}
+
+void Mirror::PushConstants(CommandList list, uint32_t stages, uint32_t offset, uint32_t size, const void* data) {
+  if (!(stages & (kStageVertex | kStageFragment)) || !data) return;
+  State& s = *state_;
+  std::lock_guard guard(s.lock);
+  Bound& b = s.List(list).bound;
+  if (offset >= b.push.size()) return;
+  std::memcpy(b.push.data() + offset, data, std::min<size_t>(size, b.push.size() - offset));
 }
 
 void Mirror::BindSets(CommandList list, uint32_t first, uint32_t count, const Set* sets, uint32_t n_offsets,
@@ -1578,8 +1697,8 @@ void Mirror::Showed(ImageView view, uint32_t width, uint32_t height) {
   s.shown_height =
       s.shown ? std::min<uint32_t>(height ? height : uint32_t(s.shown.height), uint32_t(s.shown.height)) : 0;
   if (++s.frames % 600 == 1) {
-    REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made, {} skipped, {} fans, {} part clears, shown {}x{} "
-                "of a {}x{} image, encode {:.2f} us per draw made", s.frames, s.draws, s.draws_skipped, s.fans,
+    REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made ({} own), {} skipped, {} fans, {} part clears, shown {}x{} "
+                "of a {}x{} image, encode {:.2f} us per draw made", s.frames, s.draws, s.draws_own, s.draws_skipped, s.fans,
                 s.clears_part, s.shown_width, s.shown_height, s.shown ? s.shown.width : 0,
                 s.shown ? s.shown.height : 0, s.draws ? double(s.draw_ns) / 1000.0 / double(s.draws) : 0.0);
     for (const auto& [reason, count] : s.skips) {

@@ -241,6 +241,7 @@ class Recorder {
   void PushConstants(VkCommandBuffer c, VkPipelineLayout layout, uint32_t stages, uint32_t offset, uint32_t size,
                      const void* data) const {
     dfn_.vkCmdPushConstants(c, layout, VkShaderStageFlags(stages), offset, size, data);
+    BO2ZM_MIRROR(PushConstants(c, stages, offset, size, data));
   }
   void BindVertexBuffers(VkCommandBuffer c, uint32_t count, const VkBuffer* buffers,
                          const VkDeviceSize* offsets) const {
