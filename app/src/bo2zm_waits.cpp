@@ -84,6 +84,7 @@
 #include <rex/platform.h>
 
 #include "bo2zm_benchmark.h"
+#include "bo2zm_critpath.h"
 #include "bo2zm_jobs.h"
 #include "native/render/bo2zm_native_render.h"
 
@@ -156,6 +157,11 @@ REX_EXTERN(__imp__sub_82429748);
 REX_EXTERN(__imp__sub_82429708);
 REX_EXTERN(__imp__sub_828EFC68);
 REX_EXTERN(__imp__sub_824A0BC0);
+
+#if !defined(BO2_GAME_CAMPAIGN)
+REX_EXTERN(__imp__sub_82161DC0);
+REX_EXTERN(__imp__sub_821610C0);
+#endif
 
 namespace tr = bo2zm::jobs;
 
@@ -868,10 +874,13 @@ REX_HOOK_RAW(sub_82493190) { Measure(0x82493190, ctx, base, __imp__sub_82493190)
 REX_HOOK_RAW(sub_827D4BD8) { Measure(0x827D4BD8, ctx, base, __imp__sub_827D4BD8); }
 // Help until a group (r3) is done: its sleeps (in sub_8284BB48's hook) wait for that group's jobs.
 REX_HOOK_RAW(sub_82493690) {
+  const bool critical = bo2zm::critpath::Enabled() && bo2zm::critpath::IsMain();
+  if (critical) bo2zm::critpath::BeginWait();
   const uint32_t earlier = t.group;
   t.group = ctx.r3.u32;
   Measure(0x82493690, ctx, base, __imp__sub_82493690);
   t.group = earlier;
+  if (critical) bo2zm::critpath::EndWait();
 }
 REX_HOOK_RAW(sub_82493240) { Measure(0x82493240, ctx, base, __imp__sub_82493240); }  // help once with a job type
 // Help once. From the Server's wait for its client jobs, with nothing to take: sleep until one of those jobs ends
@@ -1076,3 +1085,21 @@ REX_HOOK_RAW(sub_82428468) {
   }
   __imp__sub_82428468(ctx, base);
 }
+
+#if !defined(BO2_GAME_CAMPAIGN)
+// Filter by the exact call site in sub_828AA590: its early return can skip the predicate entirely.
+REX_HOOK_RAW(sub_82161DC0) {
+  if (!bo2zm::critpath::Enabled()) { __imp__sub_82161DC0(ctx, base); return; }
+  const bool tested = uint32_t(ctx.lr) == 0x828AA5D4;
+  const uint32_t fence = ctx.r3.u32;
+  __imp__sub_82161DC0(ctx, base);
+  if (tested) bo2zm::critpath::Test(fence, ctx.r3.u32 != 0);
+}
+REX_HOOK_RAW(sub_821610C0) {
+  if (!bo2zm::critpath::Enabled()) { __imp__sub_821610C0(ctx, base); return; }
+  // Capture before packet emission, so CP cannot complete the packet before its issue record exists.
+  const uint32_t dev = ctx.r3.u32;
+  bo2zm::critpath::Issue(tr::Read32(base, dev + 11036), tr::Read32(base, dev + 11024));
+  __imp__sub_821610C0(ctx, base);
+}
+#endif

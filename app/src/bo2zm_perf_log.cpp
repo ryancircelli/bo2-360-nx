@@ -14,6 +14,7 @@
 //                    not wait for them).
 //   draws            draws read from the ring.
 #include "bo2zm_perf_log.h"
+#include "bo2zm_critpath.h"
 #include <rex/graphics/swap_hook.h>
 
 #include "bo2zm_cheats.h"
@@ -100,6 +101,7 @@ class Log {
     }
     Row row;
     row.frame = frames_++;
+    bo2zm::critpath::Present(row.frame);
     row.t_ms = t;
     const double ns_compile = double(compile_ns_);
     compile_ns_ = 0;
@@ -381,6 +383,7 @@ void OnPresent(const Counters& counters) {
 }
 
 void InstallSwapHook(std::string_view renderer) {
+  bo2zm::critpath::Install();
   if (!Enabled()) {
     return;
   }
@@ -427,6 +430,7 @@ void SetMeta(std::string_view key, std::string_view value) {
 }
 
 void Close() {
+  bo2zm::critpath::Close();
   if (Enabled()) {
     TheLog().Close();
   }

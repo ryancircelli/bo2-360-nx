@@ -8,6 +8,11 @@
 
 namespace rex::graphics {
 
+// Logical EVENT_WRITE_SHD address/value, after the memory store. Null by default.
+using GuestFenceWriteHook = void (*)(uint32_t address, uint32_t value);
+void SetGuestFenceWriteHook(GuestFenceWriteHook hook);
+void NotifyGuestFenceWrite(uint32_t address, uint32_t value);
+
 using SwapHook = void (*)(uint32_t width, uint32_t height);
 
 void SetSwapHook(SwapHook hook);

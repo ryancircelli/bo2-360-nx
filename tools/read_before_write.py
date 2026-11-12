@@ -95,6 +95,9 @@ def analyze(body):
         s = raw.strip()
         if not s or s.startswith("//"):
             continue
+        # setjmp_locals.py's compound restore is bookkeeping, not guest register reads.
+        if s.startswith("const auto sj_") or s.startswith("if (temp.s64 != 0) { ctx = env;"):
+            continue
         ml = LABEL.match(s)
         if ml:
             if blocks[-1] or labels:

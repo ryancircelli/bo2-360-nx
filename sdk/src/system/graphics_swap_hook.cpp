@@ -6,6 +6,12 @@ namespace rex::graphics {
 
 namespace {
 std::atomic<SwapHook> g_hook{nullptr};
+std::atomic<GuestFenceWriteHook> g_fence_hook{nullptr};
+}
+
+void SetGuestFenceWriteHook(GuestFenceWriteHook hook) { g_fence_hook.store(hook, std::memory_order_release); }
+void NotifyGuestFenceWrite(uint32_t address, uint32_t value) {
+  if (auto hook = g_fence_hook.load(std::memory_order_acquire)) hook(address, value);
 }
 
 void SetSwapHook(SwapHook hook) {

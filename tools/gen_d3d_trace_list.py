@@ -20,7 +20,10 @@ LO, HI, RESERVE = 0x82160000, 0x82190000, "82161700"
 IMAGE, IMAGE_BASE = os.path.join(ROOT, "work", "dump_tu18", "default_mp.image.bin"), 0x82000000
 SETTER_TABLES = [(0x82A9F618, 101), (0x82A9FAD8, 20)]  # (address, entries)
 NO_OP_SETTER = "82685BF8"  # render states 0-36
-HOOKED_ELSEWHERE = {"82174F38", "82175178", "821752D0", "82175420", "82169BF8", "821698D8"}
+HOOKED_ELSEWHERE = {
+    "82174F38", "82175178", "821752D0", "82175420", "82169BF8", "821698D8",
+    "82161DC0",  # critical-path predicate hook in bo2zm_waits.cpp
+}
 inside = lambda n: LO <= int(n, 16) < HI
 reserve_callers = set(fns[RESERVE]["callers"])
 image = open(IMAGE, "rb").read()
