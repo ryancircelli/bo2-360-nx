@@ -17,6 +17,8 @@
 #include <vulkan/vulkan_core.h>
 
 #include <algorithm>
+#include <chrono>
+#include <map>
 #include <array>
 #include <cstring>
 #include <mutex>
@@ -202,6 +204,7 @@ struct PipelineM {
   PipelineState state{};
   // Made at the first draw, for the formats of the pass it draws in (the key); `failed` keeps a failure from
   // being retried every draw.
+  std::string why;  // the reason it failed, counted again for each draw it refuses
   std::string key;
   id<MTLRenderPipelineState> made = nil;
   bool failed = false;
@@ -278,6 +281,21 @@ struct Mirror::State {
   uint64_t fans = 0;  // triangle fans, drawn as lists
   uint64_t clears_part = 0;  // clears of part of an attachment, drawn as rectangles
   uint64_t frames = 0;
+  // Why draws were refused, counted per reason (the reason of the refusal now being counted is `why`).
+  std::string why;
+  std::map<std::string, uint64_t> skips;
+  // Time spent encoding the draws that were made (state setting plus the draw call), for the cost per draw.
+  uint64_t draw_ns = 0;
+  bool Refuse(const std::string& what) {
+    Once(what);
+    why = what;
+    return false;
+  }
+  void CountSkip() {
+    ++draws_skipped;
+    ++skips[why.empty() ? std::string("unknown") : why];
+    why.clear();
+  }
 
   void Once(const std::string& what) {
     if (logged.insert(what).second) {
@@ -419,18 +437,25 @@ struct Mirror::State {
   // The pipeline for the pass being recorded; nil (logged once) if it cannot be made.
   id<MTLRenderPipelineState> Pipeline(ListM& l, PipelineM& p) {
     auto pass = passes.find(l.pass);
-    if (pass == passes.end()) return nil;
+    if (pass == passes.end()) {
+      why = "pass the mirror did not see created";
+      return nil;
+    }
     const PassDesc& desc = pass->second.desc;
     std::string key;
     for (uint32_t i = 0; i < desc.color_count; ++i) key += std::to_string(desc.colors[i].format) + ",";
     key += desc.has_depth ? std::to_string(desc.depth.format) : "-";
     if (p.made && p.key == key) return p.made;
-    if (p.failed && p.key == key) return nil;
+    if (p.failed && p.key == key) {
+      why = p.why;
+      return nil;
+    }
     p.key = key;
     p.made = nil;
     p.failed = true;
     if (!p.vs_tagged || (p.has_ps && !p.ps_tagged)) {
-      Once("pipeline with one of the renderer's own shaders (not in the pack): its draws are skipped");
+      Refuse("pipeline with one of the renderer's own shaders (not in the pack): its draws are skipped");
+      p.why = why;
       return nil;
     }
     id<MTLFunction> vs = (__bridge id<MTLFunction>)device->SpecializedFunction(
@@ -441,7 +466,8 @@ struct Mirror::State {
           Device::FunctionName(false, p.ps.hash, p.ps.early_z), p.constant);
     }
     if (!vs || (p.has_ps && !ps)) {
-      Once("a pack shader is missing from the Metal libraries (see the specialization warning)");
+      Refuse("a pack shader is missing from the Metal libraries (see the specialization warning)");
+      p.why = why;
       return nil;
     }
     MTLRenderPipelineDescriptor* d = [[MTLRenderPipelineDescriptor alloc] init];
@@ -451,7 +477,8 @@ struct Mirror::State {
     for (const VertexAttribute& a : p.attributes) {
       const MTLVertexFormat format = MTLVertexFormat(VertexFormat(a.format));
       if (format == MTLVertexFormatInvalid) {
-        Once("vertex format without a Metal one: " + std::to_string(a.format));
+        Refuse("vertex format without a Metal one: " + std::to_string(a.format));
+        p.why = why;
         return nil;
       }
       vd.attributes[a.location].format = format;
@@ -496,6 +523,7 @@ struct Mirror::State {
     p.made = [mtl newRenderPipelineStateWithDescriptor:d error:&error];
     if (!p.made) {
       Once(std::string("pipeline not made: ") + (error ? [[error localizedDescription] UTF8String] : "?"));
+      why = p.why = "pipeline not made";
       return nil;
     }
     p.failed = false;
@@ -542,18 +570,15 @@ struct Mirror::State {
   // Everything a draw needs, set on the encoder before it. False (counted) if the draw cannot be made.
   bool Prepare(ListM& l, MTLPrimitiveType& primitive) {
     if (!l.render) {
-      Once("draw outside a pass");
-      return false;
+      return Refuse("draw outside a pass");
     }
     auto pi = pipelines.find(l.bound.pipeline);
     if (pi == pipelines.end()) {
-      Once("draw with a pipeline the mirror did not see created");
-      return false;
+      return Refuse("draw with a pipeline the mirror did not see created");
     }
     PipelineM& p = pi->second;
     if (p.state.topology > VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
-      Once("primitive topology " + std::to_string(p.state.topology) + " is not drawn");
-      return false;
+      return Refuse("primitive topology " + std::to_string(p.state.topology) + " is not drawn");
     }
     id<MTLRenderPipelineState> made = Pipeline(l, p);
     if (!made) return false;
@@ -586,7 +611,10 @@ struct Mirror::State {
     const int64_t y0 = std::clamp<int64_t>(b.scissor.y, 0, l.height);
     const int64_t x1 = std::clamp<int64_t>(int64_t(b.scissor.x) + b.scissor.width, 0, l.width);
     const int64_t y1 = std::clamp<int64_t>(int64_t(b.scissor.y) + b.scissor.height, 0, l.height);
-    if (x1 <= x0 || y1 <= y0) return false;
+    if (x1 <= x0 || y1 <= y0) {
+      why = "empty scissor (nothing to draw)";
+      return false;
+    }
     [e setScissorRect:MTLScissorRect{NSUInteger(x0), NSUInteger(y0), NSUInteger(x1 - x0), NSUInteger(y1 - y0)}];
     [e setBlendColorRed:b.blend[0] green:b.blend[1] blue:b.blend[2] alpha:b.blend[3]];
     // Sets 0 to 3: the heaps' argument buffers at buffers 0 to 3; set 4: the uniform buffers at 4 to 6.
@@ -612,8 +640,7 @@ struct Mirror::State {
     for (uint32_t i = 0; i < b.n_vertex; ++i) {
       auto buffer = buffers.find(b.vertex[i]);
       if (buffer == buffers.end()) {
-        Once("vertex buffer the mirror did not see created");
-        return false;
+        return Refuse("vertex buffer the mirror did not see created");
       }
       [e setVertexBuffer:buffer->second.buffer offset:buffer->second.offset + b.vertex_offsets[i] atIndex:8 + i];
     }
@@ -1272,10 +1299,19 @@ void Mirror::Draw(CommandList list, uint32_t count, uint32_t first_vertex) {
   std::lock_guard guard(s.lock);
   ListM& l = s.List(list);
   MTLPrimitiveType primitive;
+  const auto t0 = std::chrono::steady_clock::now();
   if (!s.Prepare(l, primitive)) {
-    ++s.draws_skipped;
+    s.CountSkip();
     return;
   }
+  struct Timed {
+    State& s;
+    std::chrono::steady_clock::time_point t0;
+    ~Timed() {
+      s.draw_ns += uint64_t(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+    }
+  } timed{s, t0};
   if (s.Fan(l)) {
     uint32_t triangles = 0;
     id<MTLBuffer> list_indices = s.FanIndices(nullptr, false, count, 0, triangles);
@@ -1304,14 +1340,23 @@ void Mirror::DrawIndexed(CommandList list, uint32_t count, uint32_t first_index,
   MTLPrimitiveType primitive;
   auto index = s.buffers.find(l.bound.index);
   if (index == s.buffers.end()) {
-    s.Once("index buffer the mirror did not see created");
-    ++s.draws_skipped;
+    s.Refuse("index buffer the mirror did not see created");
+    s.CountSkip();
     return;
   }
+  const auto t0 = std::chrono::steady_clock::now();
   if (!s.Prepare(l, primitive)) {
-    ++s.draws_skipped;
+    s.CountSkip();
     return;
   }
+  struct Timed {
+    State& s;
+    std::chrono::steady_clock::time_point t0;
+    ~Timed() {
+      s.draw_ns += uint64_t(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+    }
+  } timed{s, t0};
   const Size size = l.bound.indices_16 ? 2 : 4;
   if (s.Fan(l)) {
     // The indices are read on the CPU: the buffer wraps host memory the renderer wrote before recording.
@@ -1534,8 +1579,12 @@ void Mirror::Showed(ImageView view, uint32_t width, uint32_t height) {
       s.shown ? std::min<uint32_t>(height ? height : uint32_t(s.shown.height), uint32_t(s.shown.height)) : 0;
   if (++s.frames % 600 == 1) {
     REXLOG_INFO("[native] Metal mirror: frame {}, {} draws made, {} skipped, {} fans, {} part clears, shown {}x{} "
-                "of a {}x{} image", s.frames, s.draws, s.draws_skipped, s.fans, s.clears_part, s.shown_width,
-                s.shown_height, s.shown ? s.shown.width : 0, s.shown ? s.shown.height : 0);
+                "of a {}x{} image, encode {:.2f} us per draw made", s.frames, s.draws, s.draws_skipped, s.fans,
+                s.clears_part, s.shown_width, s.shown_height, s.shown ? s.shown.width : 0,
+                s.shown ? s.shown.height : 0, s.draws ? double(s.draw_ns) / 1000.0 / double(s.draws) : 0.0);
+    for (const auto& [reason, count] : s.skips) {
+      REXLOG_INFO("[native] Metal mirror:   skipped {} draws: {}", count, reason);
+    }
   }
 }
 
