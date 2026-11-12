@@ -189,6 +189,7 @@ struct Factor {
 };
 const Factor kFactors[] = {
     {"waits_fence_wake", &bo2zm::waits::FenceWake, &bo2zm::waits::SetFenceWake},
+    {"waits_group_own", &bo2zm::waits::GroupOwn, &bo2zm::waits::SetGroupOwn},
 #if defined(__APPLE__)
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
     {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
