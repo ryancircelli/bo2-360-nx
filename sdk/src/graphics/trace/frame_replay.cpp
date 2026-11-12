@@ -214,7 +214,9 @@ bool WriteNpy(const std::filesystem::path& path, const char* descr, uint32_t hei
 class ReplayHooks : public TraceHooks {
  public:
   bool is_replaying() const override { return true; }
-  bool is_recording() const override { return chain && !suppress && chain->is_recording(); }
+  bool is_recording() const override {
+    return timeline || (chain && !suppress && chain->is_recording());
+  }
   void OnPrimaryBufferStart(uint32_t base_ptr, uint32_t count) override {
     if (forward())
       chain->OnPrimaryBufferStart(base_ptr, count);
