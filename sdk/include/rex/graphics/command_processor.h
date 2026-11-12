@@ -23,6 +23,7 @@
 
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
+#include <rex/graphics/trace/trace_hooks.h>
 #include <rex/graphics/xenos.h>
 #include <rex/memory.h>
 #include <rex/memory/ring_buffer.h>
@@ -38,6 +39,10 @@ namespace rex::graphics {
 
 class GraphicsSystem;
 class Shader;
+
+namespace trace {
+class TraceAccess;
+}  // namespace trace
 
 enum class ReadbackResolveMode {
   kDisabled,
@@ -93,6 +98,9 @@ class CommandProcessor {
   Shader* active_vertex_shader() const { return active_vertex_shader_; }
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
 
+  trace::TraceHooks* trace_hooks() const { return trace_hooks_; }
+  void set_trace_hooks(trace::TraceHooks* hooks) { trace_hooks_ = hooks; }
+
   virtual bool Initialize();
   virtual void Shutdown();
 
@@ -117,6 +125,13 @@ class CommandProcessor {
   // awaited.
   virtual void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                        bool blocking);
+
+  // GPU trace replay: called after the replayer resolves a render target to
+  // guest memory, to make the guest copy of the range current. Backends that
+  // write resolves to guest memory synchronously (Vulkan and D3D12 with
+  // readback_resolve = full) need nothing; backends that keep resolve output
+  // on the GPU (Metal) override it.
+  virtual void TraceReadbackGuestMemory(uint32_t /*physical_address*/, uint32_t /*length*/) {}
 
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
@@ -179,6 +194,7 @@ class CommandProcessor {
   virtual void OnPrimaryBufferEnd() {}
   void ExecuteIndirectBuffer(uint32_t ptr, uint32_t length);
   bool ExecutePacket(memory::RingBuffer* reader);
+  bool ExecutePacketUntraced(memory::RingBuffer* reader);
   bool ExecutePacketType0(memory::RingBuffer* reader, uint32_t packet);
   bool ExecutePacketType1(memory::RingBuffer* reader, uint32_t packet);
   bool ExecutePacketType2(memory::RingBuffer* reader, uint32_t packet);
@@ -273,6 +289,9 @@ class CommandProcessor {
   Shader* active_vertex_shader_ = nullptr;
   Shader* active_pixel_shader_ = nullptr;
 
+  trace::TraceHooks* trace_hooks_ = nullptr;
+  std::unique_ptr<trace::TraceHooks> owned_trace_hooks_;
+
   bool paused_ = false;
 
   // By default (such as for tools), post-processing is disabled.
@@ -285,6 +304,8 @@ class CommandProcessor {
   const char* legacy_readback_memexport_cvar_name_ = nullptr;
 
  private:
+  friend class trace::TraceAccess;
+
   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};
   reg::DC_LUT_PWL_DATA gamma_ramp_pwl_rgb_[128][3] = {};
   uint32_t gamma_ramp_rw_component_ = 0;

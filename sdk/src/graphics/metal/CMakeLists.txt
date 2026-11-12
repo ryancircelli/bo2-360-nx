@@ -99,8 +99,8 @@ set(_sdk_private ${_metal_work}/sdk-private)
 
 file(GLOB_RECURSE _sdk_graphics_inputs CONFIGURE_DEPENDS
     ${REXGLUE_ROOT}/include/rex/graphics/*
-    ${REXGLUE_ROOT}/src/graphics/*.cpp
-    ${REXGLUE_ROOT}/src/graphics/*.h
+    ${REXGLUE_ROOT}/src/graphics/**/*.cpp
+    ${REXGLUE_ROOT}/src/graphics/**/*.h
     ${REXGLUE_ROOT}/thirdparty/dxbc/*)
 list(FILTER _sdk_graphics_inputs EXCLUDE REGEX "/src/graphics/metal/")
 set(_sdk_fingerprint "")
@@ -224,6 +224,22 @@ target_compile_definitions(rexgpu-metal PRIVATE
     REXGLUE_BUILD_CONFIG="$<CONFIG>"
     FABLE2_NO_CONVERTER=1
 )
+
+# GPU frame capture and offline replay (tools/gputest/replay in the SDK). The
+# trace sources come from the private SDK copy, so capture and replay run the
+# same command processor code the plugin uses.
+if(REXGLUE_BUILD_GPUTEST AND EXISTS ${_sdk_private}/src/graphics/trace/frame_replay.cpp)
+    target_sources(rexgpu-metal PRIVATE
+        ${_sdk_private}/src/graphics/trace/trace_writer.cpp
+        ${_sdk_private}/src/graphics/trace/frame_capture.cpp
+        ${_sdk_private}/src/graphics/trace/frame_replay.cpp
+        ${_sdk_private}/src/graphics/trace/replay_export.cpp
+        ${_sdk_private}/src/graphics/trace/texture_check.cpp
+    )
+    target_compile_definitions(rexgpu-metal PRIVATE REX_GPU_TRACE=1)
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(rexgpu-metal PRIVATE ZLIB::ZLIB)
+endif()
 
 target_compile_options(rexgpu-metal PRIVATE
     -include ${_metal_dir}/compat.h

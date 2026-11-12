@@ -341,3 +341,8 @@ else()
     set(REXGLUE_SHARE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rexglue_helpers.cmake)
 endif()
+
+option(REXGLUE_BUILD_GPUTEST "Build offline GPU trace replay tools" OFF)
+if(REXGLUE_BUILD_GPUTEST)
+ add_subdirectory(tools/gputest/replay)
+endif()

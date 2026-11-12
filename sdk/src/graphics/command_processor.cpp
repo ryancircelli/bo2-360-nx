@@ -27,6 +27,7 @@
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/sampler_info.h>
 #include <rex/graphics/swap_hook.h>
+#include <rex/graphics/trace/trace_hooks.h>
 #include <rex/graphics/xenos.h>
 #include <rex/logging.h>
 #include <rex/math.h>
@@ -35,6 +36,10 @@
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
+
+#if REX_GPU_TRACE
+#include "trace/frame_capture.h"
+#endif
 
 REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
 
@@ -142,6 +147,13 @@ bool CommandProcessor::Initialize() {
       gamma_ramp_pwl_rgb_[i][j] = gamma_ramp_entry;
     }
   }
+
+#if REX_GPU_TRACE
+  if (!trace_hooks_) {
+    owned_trace_hooks_ = trace::FrameCapture::CreateFromEnvironment(memory_);
+    trace_hooks_ = owned_trace_hooks_.get();
+  }
+#endif
 
   worker_running_ = true;
   worker_thread_ = system::object_ref<system::XHostThread>(
@@ -639,6 +651,7 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
   memory::RingBuffer reader(memory_->TranslatePhysical(primary_buffer_ptr_), primary_buffer_size_);
   reader.set_read_offset(read_index * sizeof(uint32_t));
   reader.set_write_offset(write_index * sizeof(uint32_t));
+  if (trace_hooks_) { trace_hooks_->OnPrimaryBufferStart(primary_buffer_ptr_ + read_index * sizeof(uint32_t), 0); }
 
   /*
    * Publish the read pointer while executing, not only at the end
@@ -696,6 +709,7 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
     }
   } while (reader.read_count());
 
+  if (trace_hooks_) { trace_hooks_->OnPrimaryBufferEnd(); }
   OnPrimaryBufferEnd();
 
   return write_index;
@@ -707,6 +721,9 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
   // Execute commands!
   memory::RingBuffer reader(memory_->TranslatePhysical(ptr), count * sizeof(uint32_t));
   reader.set_write_offset(count * sizeof(uint32_t));
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnIndirectBufferStart(ptr, count);
+  }
   do {
     if (!ExecutePacket(&reader)) {
       // Return up a level if we encounter a bad packet.
@@ -715,6 +732,9 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
       break;
     }
   } while (reader.read_count());
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnIndirectBufferEnd();
+  }
 }
 
 void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
@@ -731,6 +751,35 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+  if (trace_hooks_ && trace_hooks_->is_recording()) [[unlikely]] {
+    // Report the whole packet (header + payload) before it executes.
+    uint32_t header =
+        memory::load_and_swap<uint32_t>(reinterpret_cast<const void*>(reader->read_ptr()));
+    uint32_t dword_count = 1;
+    switch (header >> 30) {
+      case 0x00:
+      case 0x03:
+        dword_count += ((header >> 16) & 0x3FFF) + 1;
+        break;
+      case 0x01:
+        dword_count += 2;
+        break;
+      default:
+        break;
+    }
+    // read_count() is 0 for a completely full buffer (ExecutePacket(ptr, count)).
+    size_t available = reader->read_count() ? reader->read_count() : reader->capacity();
+    dword_count = std::min<uint32_t>(dword_count, uint32_t(available / sizeof(uint32_t)));
+    trace_hooks_->OnPacketStart(reader->buffer(), uint32_t(reader->capacity()),
+                                uint32_t(reader->read_offset()), dword_count);
+    bool result = ExecutePacketUntraced(reader);
+    trace_hooks_->OnPacketEnd();
+    return result;
+  }
+  return ExecutePacketUntraced(reader);
+}
+
+bool CommandProcessor::ExecutePacketUntraced(memory::RingBuffer* reader) {
   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
   const uint32_t packet_type = packet >> 30;
   if (packet == 0) {
@@ -1030,6 +1079,7 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
 
   ++counter_;
   swap_count_.fetch_add(1, std::memory_order_relaxed);
+  if (trace_hooks_) { trace_hooks_->OnSwap(*this, frontbuffer_ptr, frontbuffer_width, frontbuffer_height); }
   return true;
 }
 
@@ -1057,6 +1107,13 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
   uint32_t wait = reader->ReadAndSwap<uint32_t>();
 
   bool is_memory = (wait_info & 0x10) != 0;
+
+  if (trace_hooks_) [[unlikely]] {
+    if (trace_hooks_->is_replaying()) {
+      // The recorded stream already satisfied this wait.
+      return true;
+    }
+  }
 
   bool matched = false;
   do {
@@ -1121,7 +1178,36 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
     }
   } while (!matched);
 
+  if (trace_hooks_ && is_memory) [[unlikely]] {
+    trace_hooks_->OnMemoryRead(poll_reg_addr & 0x1FFFFFFC, sizeof(uint32_t));
+  }
+
   return true;
+}
+
+bool CommandProcessor::ExecutePacketType3_DRAW_INDX(memory::RingBuffer* reader, uint32_t packet,
+                                                    uint32_t count) {
+  // "initiate fetch of index buffer and draw"
+  // Generally used by Xbox 360 Direct3D 9 for kDMA and kAutoIndex sources.
+  // With a viz query token as the first one.
+  uint32_t count_remaining = count;
+  assert_not_zero(count_remaining);
+  if (!count_remaining) {
+    REXGPU_ERROR("PM4_DRAW_INDX: Packet too small, can't read the viz query token");
+    return false;
+  }
+  uint32_t viz_query_condition = reader->ReadAndSwap<uint32_t>();
+  --count_remaining;
+  return ExecutePacketType3Draw(reader, packet, "PM4_DRAW_INDX", viz_query_condition,
+                                count_remaining);
+}
+
+bool CommandProcessor::ExecutePacketType3_DRAW_INDX_2(memory::RingBuffer* reader, uint32_t packet,
+                                                      uint32_t count) {
+  // "draw using supplied indices in packet"
+  // Generally used by Xbox 360 Direct3D 9 for kAutoIndex source.
+  // No viz query token.
+  return ExecutePacketType3Draw(reader, packet, "PM4_DRAW_INDX_2", 0, count);
 }
 
 bool CommandProcessor::ExecutePacketType3_REG_RMW(memory::RingBuffer* reader, uint32_t packet,
@@ -1467,36 +1553,26 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
     }
   }
 
+  // Trace hook for draw end.
+  if (trace_hooks_) [[unlikely]] {
+    trace::DrawEvent draw_event;
+    draw_event.prim_type = vgt_draw_initiator.prim_type;
+    draw_event.source_select = vgt_draw_initiator.source_select;
+    draw_event.index_count = vgt_draw_initiator.num_indices;
+    draw_event.is_indexed = is_indexed;
+    draw_event.index_format = vgt_draw_initiator.index_size;
+    draw_event.index_endianness = index_buffer_info.endianness;
+    draw_event.index_guest_base = index_buffer_info.guest_base;
+    draw_event.index_length_bytes = index_buffer_info.length;
+    draw_event.succeeded = draw_succeeded;
+    trace_hooks_->OnDrawEnd(*this, draw_event);
+  }
+
   // If read the packed correctly, but merely couldn't execute it (because of,
   // for instance, features not supported by the host), don't terminate command
   // buffer processing as that would leave rendering in a way more inconsistent
   // state than just a single dropped draw command.
   return true;
-}
-
-bool CommandProcessor::ExecutePacketType3_DRAW_INDX(memory::RingBuffer* reader, uint32_t packet,
-                                                    uint32_t count) {
-  // "initiate fetch of index buffer and draw"
-  // Generally used by Xbox 360 Direct3D 9 for kDMA and kAutoIndex sources.
-  // With a viz query token as the first one.
-  uint32_t count_remaining = count;
-  assert_not_zero(count_remaining);
-  if (!count_remaining) {
-    REXGPU_ERROR("PM4_DRAW_INDX: Packet too small, can't read the viz query token");
-    return false;
-  }
-  uint32_t viz_query_condition = reader->ReadAndSwap<uint32_t>();
-  --count_remaining;
-  return ExecutePacketType3Draw(reader, packet, "PM4_DRAW_INDX", viz_query_condition,
-                                count_remaining);
-}
-
-bool CommandProcessor::ExecutePacketType3_DRAW_INDX_2(memory::RingBuffer* reader, uint32_t packet,
-                                                      uint32_t count) {
-  // "draw using supplied indices in packet"
-  // Generally used by Xbox 360 Direct3D 9 for kAutoIndex source.
-  // No viz query token.
-  return ExecutePacketType3Draw(reader, packet, "PM4_DRAW_INDX_2", 0, count);
 }
 
 bool CommandProcessor::ExecutePacketType3_SET_CONSTANT(memory::RingBuffer* reader, uint32_t packet,

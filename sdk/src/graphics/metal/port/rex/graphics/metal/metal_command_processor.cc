@@ -10089,6 +10089,23 @@ bool MetalCommandProcessor::FootprintVariantNeeded(const Shader& shader) {
 }
 
 
+#if defined(REX_GPU_TRACE)
+void MetalCommandProcessor::TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) {
+  physical_address &= 0x1FFFFFFF;
+  if (!length || !shared_memory_ || !shared_memory_->GetBuffer()) {
+    return;
+  }
+  FlushCommandBufferAndWait(5000000000ULL, "gputest trace readback");
+  const uint8_t* gpu = static_cast<const uint8_t*>(shared_memory_->GetBuffer()->contents());
+  if (!gpu) {
+    return;
+  }
+  std::atomic_thread_fence(std::memory_order_acquire);
+  std::memcpy(memory_->TranslatePhysical(physical_address), gpu + physical_address, length);
+}
+
+#endif
+
 bool MetalCommandProcessor::IssueCopy() {
   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kIssueCopy)) {
     return false;
