@@ -483,6 +483,9 @@ class MetalCommandProcessor final : public CommandProcessor {
   const char* draw_skip_reason_ = nullptr;
   int census_draw_site_ = -1;  // [hle-census] site of the draw being issued
   bool IssueCopy() override;
+#if defined(REX_GPU_TRACE)
+  void TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) override;
+#endif
 
   void WriteRegister(uint32_t index, uint32_t value) override;
   void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,
