@@ -249,6 +249,13 @@ class MetalSharedMemory : public SharedMemory {
   bool Initialize();
   void Shutdown();
   void ClearCache() override;
+  // upload stats state (GPU Commands thread only)
+  std::vector<uint32_t> stats_page_epoch_;
+  uint32_t stats_epoch_ = 1;
+  uint64_t stats_calls_ = 0, stats_ranges_ = 0;
+  uint64_t stats_bytes_[3] = {0, 0, 0};      // never / after-frame-clear / same-epoch
+  uint64_t stats_unchanged_bytes_ = 0;       // bytes identical to shared buffer
+  uint64_t stats_bucket_[512] = {};          // by 1 MB of guest address
 
   MTL::Buffer* GetBuffer() const { return buffer_; }
   const uint8_t* GetXboxRamBase() const {
@@ -322,6 +329,12 @@ class MetalSharedMemory : public SharedMemory {
   // Override pure virtual function from SharedMemory
   bool UploadRanges(const std::pair<uint32_t, uint32_t>* upload_page_ranges,
                     uint32_t num_upload_ranges) override;
+  // REX_SHMEM_UPLOAD_STATS=1: per-frame upload statistics, printed (warn) and
+  // reset at each frame end; also advances the frame-clear epoch.
+  static bool UploadStatsEnabled();
+  void UploadStatsFrameEnd();
+  void UploadStatsAccumulate(const std::pair<uint32_t, uint32_t>* ranges,
+                             uint32_t count);
 
   // FABLE2_MEMEXPORT_PRESERVE (default on; =0 disables): remember memexport-written
   // ranges with a hash of their guest bytes at export time, so a later

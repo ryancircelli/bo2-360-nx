@@ -2841,7 +2841,20 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     }
   }
 
-  if (shared_memory_ && REXCVAR_GET(clear_memory_page_state)) {
+  if (shared_memory_ && MetalSharedMemory::UploadStatsEnabled()) {
+    shared_memory_->UploadStatsFrameEnd();
+  }
+  // REX_SHMEM_UPLOAD_FIX=1 (default off): do not drop the valid bit of
+  // CPU-uploaded pages at frame end. They stay valid while their guest write
+  // watch is armed, so unchanged pages are not re-copied every frame. GPU-
+  // written pages (resolve/memexport) are unaffected either way. Risk: a CPU
+  // write that bypasses the watch is no longer repaired by the frame refresh.
+  static const bool shmem_upload_fix = [] {
+    const char* v = std::getenv("REX_SHMEM_UPLOAD_FIX");
+    return v && v[0] == '1';
+  }();
+  if (shared_memory_ && REXCVAR_GET(clear_memory_page_state) &&
+      !shmem_upload_fix) {
     shared_memory_->SetSystemPageBlocksValidWithGpuDataWritten();
   }
 

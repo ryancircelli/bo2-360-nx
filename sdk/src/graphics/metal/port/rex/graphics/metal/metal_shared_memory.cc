@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -731,6 +732,61 @@ MetalSharedMemory::UploadRouteInfo MetalSharedMemory::GetUploadRouteInfo(
   return info;
 }
 
+bool MetalSharedMemory::UploadStatsEnabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("REX_SHMEM_UPLOAD_STATS");
+    return v && v[0] == '1';
+  }();
+  return on;
+}
+
+void MetalSharedMemory::UploadStatsAccumulate(
+    const std::pair<uint32_t, uint32_t>* ranges, uint32_t count) {
+  if (stats_page_epoch_.empty()) {
+    stats_page_epoch_.assign(kBufferSize >> page_size_log2(), 0);
+  }
+  const uint32_t ps = 1u << page_size_log2();
+  const uint8_t* xr = static_cast<const uint8_t*>(memory().TranslatePhysical(0));
+  const uint8_t* sb = buffer_ ? static_cast<const uint8_t*>(buffer_->contents())
+                              : nullptr;
+  ++stats_calls_;
+  stats_ranges_ += count;
+  for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t p = ranges[i].first; p < ranges[i].first + ranges[i].second;
+         ++p) {
+      if ((uint64_t(p) << page_size_log2()) >= kBufferSize) break;
+      uint32_t& e = stats_page_epoch_[p];
+      int r = e == 0 ? 0 : (e < stats_epoch_ ? 1 : 2);
+      stats_bytes_[r] += ps;
+      stats_bucket_[(uint64_t(p) * ps) >> 20] += ps;
+      if (sb && std::memcmp(sb + uint64_t(p) * ps, xr + uint64_t(p) * ps, ps) == 0)
+        stats_unchanged_bytes_ += ps;
+      e = stats_epoch_;
+    }
+  }
+}
+
+void MetalSharedMemory::UploadStatsFrameEnd() {
+  uint64_t total = stats_bytes_[0] + stats_bytes_[1] + stats_bytes_[2];
+  std::vector<std::pair<uint64_t, uint32_t>> top;
+  for (uint32_t b = 0; b < 512; ++b)
+    if (stats_bucket_[b]) top.emplace_back(stats_bucket_[b], b);
+  std::sort(top.rbegin(), top.rend());
+  std::string t;
+  for (size_t i = 0; i < std::min<size_t>(6, top.size()); ++i)
+    t += fmt::format(" 0x{:08X}+1MB:{}KB", top[i].second << 20, top[i].first >> 10);
+  REXLOG_WARN(
+      "[upload-stats] frame epoch {}: calls={} ranges={} bytes={}KB (never-uploaded={}KB, "
+      "invalid-after-frame-clear={}KB, invalid-same-frame={}KB) identical-to-buffer={}KB top:{}",
+      stats_epoch_, stats_calls_, stats_ranges_, total >> 10, stats_bytes_[0] >> 10,
+      stats_bytes_[1] >> 10, stats_bytes_[2] >> 10, stats_unchanged_bytes_ >> 10, t);
+  stats_calls_ = stats_ranges_ = 0;
+  stats_bytes_[0] = stats_bytes_[1] = stats_bytes_[2] = 0;
+  stats_unchanged_bytes_ = 0;
+  std::fill(std::begin(stats_bucket_), std::end(stats_bucket_), 0);
+  ++stats_epoch_;
+}
+
 bool MetalSharedMemory::UploadRanges(
     const std::pair<uint32_t, uint32_t>* upload_page_ranges,
     uint32_t num_upload_ranges) {
@@ -751,6 +807,9 @@ bool MetalSharedMemory::UploadRanges(
 
   if (!buffer_ || num_upload_ranges == 0) {
     return true;
+  }
+  if (UploadStatsEnabled()) {
+    UploadStatsAccumulate(upload_page_ranges, num_upload_ranges);
   }
 
   void* xbox_ram = memory().TranslatePhysical(0);
