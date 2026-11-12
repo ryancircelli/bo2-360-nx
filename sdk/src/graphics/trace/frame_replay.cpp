@@ -233,13 +233,31 @@ class ReplayHooks : public TraceHooks {
   }
   void OnPacketStart(const uint8_t* ring_base, uint32_t ring_capacity, uint32_t read_offset,
                      uint32_t dword_count) override {
+    if (timeline) {
+      uint32_t header;
+      std::memcpy(&header, ring_base + read_offset, sizeof(header));
+      timeline_open.push_back(uint32_t(timeline->size()));
+      timeline->push_back({mach_absolute_time(), 0, __builtin_bswap32(header),
+                           uint32_t(draw_count), uint32_t(timeline_open.size())});
+    }
     if (forward())
       chain->OnPacketStart(ring_base, ring_capacity, read_offset, dword_count);
   }
   void OnPacketEnd() override {
     if (forward())
       chain->OnPacketEnd();
+    if (timeline && !timeline_open.empty()) {
+      (*timeline)[timeline_open.back()].t_end = mach_absolute_time();
+      timeline_open.pop_back();
+    }
   }
+  // Bench timeline (REX_REPLAY_BENCH_TIMELINE): one record per PM4 packet.
+  struct TimelineEvent {
+    uint64_t t_start, t_end;
+    uint32_t header, draws_before, depth;
+  };
+  std::vector<TimelineEvent>* timeline = nullptr;
+  std::vector<uint32_t> timeline_open;
   void OnMemoryRead(uint32_t physical_address, uint32_t length) override {
     if (forward())
       chain->OnMemoryRead(physical_address, length);
@@ -269,6 +287,9 @@ class ReplayHooks : public TraceHooks {
   uint64_t draw_count = 0;
   std::vector<DrawEvent> pending_draws;
 };
+
+// Set by BenchTrace for the last pass when REX_REPLAY_BENCH_TIMELINE is given.
+std::vector<ReplayHooks::TimelineEvent>* g_bench_timeline = nullptr;
 
 // Bench clocks. Thread CPU time does not advance while the thread is
 // preempted or blocked (GPU waits), so it holds up on a loaded machine; it
@@ -771,6 +792,7 @@ void Replayer::RunBench(const std::vector<uint8_t>& trace, BenchPass& pass,
   trace_data_ = trace.data();
   hooks_.chain = cp_.trace_hooks();
   hooks_.count_only = true;
+  hooks_.timeline = g_bench_timeline;
   cp_.set_trace_hooks(&hooks_);
   const uint64_t cpu0 = ThreadCpuNs(), wall0 = WallNs();
   pass.ok = ExecuteCommands(trace);
@@ -1382,7 +1404,13 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
   if (const char* mb = std::getenv("REX_REPLAY_BENCH_CACHE_MB")) {
     cache.budget = std::strtoull(mb, nullptr, 10) << 20;
   }
+  const char* timeline_path = std::getenv("REX_REPLAY_BENCH_TIMELINE");
+  std::vector<ReplayHooks::TimelineEvent> timeline;
   for (uint32_t i = 0; i < passes; ++i) {
+    if (timeline_path && i + 1 == passes) {
+      timeline.reserve(1u << 20);
+      g_bench_timeline = &timeline;
+    }
     std::promise<void> done;
     auto finished = done.get_future();
     graphics_system->command_processor()->CallInThread([&, i]() {
@@ -1391,6 +1419,24 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
       done.set_value();
     });
     finished.get();
+    g_bench_timeline = nullptr;
+    if (timeline_path && i + 1 == passes) {
+      mach_timebase_info_data_t tb;
+      mach_timebase_info(&tb);
+      if (FILE* f = std::fopen(timeline_path, "w")) {
+        std::fprintf(f, "idx,start_ns,end_ns,depth,type,opcode,draws_before\n");
+        const uint64_t t0 = timeline.empty() ? 0 : timeline.front().t_start;
+        for (size_t k = 0; k < timeline.size(); ++k) {
+          const auto& e = timeline[k];
+          std::fprintf(f, "%zu,%llu,%llu,%u,%u,%u,%u\n", k,
+                       (unsigned long long)((e.t_start - t0) * tb.numer / tb.denom),
+                       (unsigned long long)(e.t_end ? (e.t_end - t0) * tb.numer / tb.denom : 0),
+                       e.depth, e.header >> 30, (e.header >> 30) == 3 ? (e.header >> 8) & 0x7F : 0,
+                       e.draws_before);
+        }
+        std::fclose(f);
+      }
+    }
     const BenchPass& p = results[i];
     std::printf(
         "bench pass %u: cp_cpu %.2f ms, cp_wall %.2f ms, pass_cpu %.2f ms, pass_wall %.2f ms, "
