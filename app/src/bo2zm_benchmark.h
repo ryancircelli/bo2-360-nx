@@ -12,6 +12,9 @@
 
 namespace bo2zm::benchmark {
 
+// Parse and validate named runtime factors during startup, before guest threads start.
+void InitializeFactors();
+
 // bo2zm_benchmark is on.
 bool IsActive();
 // No benchmark in this start whatever the settings say (after a watchdog restart). Before the match.
