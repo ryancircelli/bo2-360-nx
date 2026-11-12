@@ -35,3 +35,5 @@ void main() {
     color = v;
   }
 }
+//
+// Its MSL for the Metal mirror (render/shaders/bo2zm_resolve_copy_msl.h) with the commands in that header.
