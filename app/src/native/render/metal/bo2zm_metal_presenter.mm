@@ -1,5 +1,8 @@
 #include "bo2zm_metal_presenter.h"
 
+#include "../bo2zm_output_crosshairs.h"
+#include "../shaders/bo2zm_output_gamma_ramp_msl.h"
+
 #include <rex/logging.h>
 #include <rex/ui/surface_mac.h>
 
@@ -10,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 namespace bo2zm::native::gpu::metal {
 
@@ -30,7 +34,75 @@ struct Presenter::State {
   // Copies a frame drawn on Metal into the guest output, converting its format. Used from the refreshing
   // thread only.
   MPSImageBilinearScale* copy = nil;
+  // The output pass (bo2zm_output_gamma_ramp.frag in MSL): one pipeline per variant (FXAA 4, grading 2, exact
+  // 1), made on first use. Used from the refreshing thread only.
+  id<MTLLibrary> output_library = nil;
+  std::array<id<MTLRenderPipelineState>, 8> output_pipelines{};
+  id<MTLSamplerState> output_sampler = nil;
+  bool output_failed = false;
+
+  id<MTLRenderPipelineState> OutputPipeline(const bo2zm::native::output::Pass& pass);
 };
+
+// A rectangle over the whole target from four vertices (a strip); the fragment shader only reads its position.
+static const char kMslOutputVertex[] = R"msl(
+#include <metal_stdlib>
+using namespace metal;
+vertex float4 bo2zm_output_vertex(uint id [[vertex_id]]) {
+  return float4((id & 1u) != 0u ? 1.0 : -1.0, (id & 2u) != 0u ? -1.0 : 1.0, 0.0, 1.0);
+}
+)msl";
+
+id<MTLRenderPipelineState> Presenter::State::OutputPipeline(const bo2zm::native::output::Pass& pass) {
+  const uint32_t variant = (pass.fxaa ? 4u : 0u) | (pass.grading ? 2u : 0u) | (pass.exact ? 1u : 0u);
+  if (output_pipelines[variant] || output_failed) {
+    return output_pipelines[variant];
+  }
+  NSError* error = nil;
+  if (!output_library) {
+    const std::string source = std::string(kMslOutputVertex) + kMslBo2zmOutputRamp;
+    output_library = [device newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()]
+                                          options:nil
+                                            error:&error];
+    if (!output_library) {
+      REXLOG_ERROR("[native] Metal presenter: the output pass does not compile: {}",
+                   error ? error.localizedDescription.UTF8String : "?");
+      output_failed = true;
+      return nil;
+    }
+    MTLSamplerDescriptor* sampler = [MTLSamplerDescriptor new];
+    sampler.minFilter = MTLSamplerMinMagFilterLinear;
+    sampler.magFilter = MTLSamplerMinMagFilterLinear;
+    sampler.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    sampler.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    output_sampler = [device newSamplerStateWithDescriptor:sampler];
+  }
+  MTLFunctionConstantValues* constants = [MTLFunctionConstantValues new];
+  const bool values[3] = {pass.exact, pass.grading, pass.fxaa};
+  for (NSUInteger i = 0; i < 3; ++i) {
+    [constants setConstantValue:&values[i] type:MTLDataTypeBool atIndex:i];
+  }
+  id<MTLFunction> fragment = [output_library newFunctionWithName:@"bo2zm_output_ramp"
+                                                  constantValues:constants
+                                                           error:&error];
+  MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];
+  desc.label = @"bo2zm output pass";
+  desc.vertexFunction = [output_library newFunctionWithName:@"bo2zm_output_vertex"];
+  desc.fragmentFunction = fragment;
+  desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+  id<MTLRenderPipelineState> pipeline =
+      fragment ? [device newRenderPipelineStateWithDescriptor:desc error:&error] : nil;
+  if (!pipeline) {
+    REXLOG_ERROR("[native] Metal presenter: no output pipeline for variant {}: {}", variant,
+                 error ? error.localizedDescription.UTF8String : "?");
+    output_failed = true;
+    return nil;
+  }
+  REXLOG_INFO("[native] Metal presenter: output pass variant {} (FXAA {}, grading {}, exact {})", variant,
+              pass.fxaa, pass.grading, pass.exact);
+  output_pipelines[variant] = pipeline;
+  return pipeline;
+}
 
 Presenter::Presenter(Device& device, HostGpuLossCallback host_gpu_loss_callback)
     : rex::ui::Presenter(host_gpu_loss_callback), device_(device), state_(std::make_unique<State>()) {
@@ -153,18 +225,46 @@ bool Presenter::RefreshWithClear(uint32_t width, uint32_t height, const float rg
   });
 }
 
-bool Presenter::RefreshWithImage(void* image, uint32_t width, uint32_t height) {
+bool Presenter::RefreshWithImage(void* image, uint32_t width, uint32_t height,
+                                 const bo2zm::native::output::Pass* pass) {
   State& s = *state_;
   if (!image || !s.copy) {
     return false;
   }
-  return RefreshGuestOutput(width, height, width, height, [&s, image](GuestOutputRefreshContext& base) {
+  return RefreshGuestOutput(width, height, width, height, [&s, image, pass](GuestOutputRefreshContext& base) {
     auto& context = static_cast<RefreshContext&>(base);
     @autoreleasepool {
       id<MTLTexture> source = (__bridge id<MTLTexture>)image;
       id<MTLTexture> target = (__bridge id<MTLTexture>)context.texture();
       id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)context.queue();
       id<MTLCommandBuffer> commands = [queue commandBuffer];
+      // With the gamma ramp: the output pass the Vulkan presenter draws (table, grading, FXAA, overlays).
+      id<MTLRenderPipelineState> pipeline = pass && pass->ramp ? s.OutputPipeline(*pass) : nil;
+      if (pipeline) {
+        MTLRenderPassDescriptor* desc = [MTLRenderPassDescriptor renderPassDescriptor];
+        desc.colorAttachments[0].texture = target;
+        desc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        desc.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:desc];
+        [encoder setRenderPipelineState:pipeline];
+        uint32_t constants[4 + sizeof(bo2zm::native::output::Pass::constants) / 4] = {};
+        std::memcpy(constants + 4, pass->constants, sizeof(pass->constants));
+        [encoder setFragmentBytes:constants length:sizeof(constants) atIndex:0];
+        // The Ramp block (std140): the table, then the crosshairs. Over the 4 KB setFragmentBytes takes.
+        const size_t kRamp = sizeof(pass->table) + sizeof(pass->crosshairs);
+        id<MTLBuffer> ramp = [s.device newBufferWithLength:kRamp options:MTLResourceStorageModeShared];
+        std::memcpy(ramp.contents, pass->table, sizeof(pass->table));
+        std::memcpy(static_cast<uint8_t*>(ramp.contents) + sizeof(pass->table), &pass->crosshairs,
+                    sizeof(pass->crosshairs));
+        [encoder setFragmentBuffer:ramp offset:0 atIndex:2];
+        [encoder setFragmentTexture:source atIndex:0];
+        [encoder setFragmentSamplerState:s.output_sampler atIndex:1];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [encoder endEncoding];
+        [commands commit];
+        context.SetIs8bpc(true);
+        return true;
+      }
       // The frame is the top-left width x height of the image and the output has that size: the scale is 1,
       // only the format changes, and the rest of the image falls outside the output.
       MPSScaleTransform transform{1.0, 1.0, 0.0, 0.0};

@@ -2136,6 +2136,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     ResolvedWritten(base & 0x1FFFFFFF, uint64_t(width) * height);
   }
 
+  const bo2zm::native::output::Pass* OutputPass() const override { return &output_pass_; }
+
   void RampGamma(const std::array<std::array<uint16_t, 3>, 256>& ramp) override {
     ramp_game_ = ramp;
     RecomputeRamp();
@@ -2391,8 +2393,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         return false;
       }
       // The output pass's size: the frame is the top-left of the image (see the Vulkan path below).
-      mirror->Showed(shown->view, std::min(width ? width : shown->width, shown->width),
-                     std::min(height ? height : shown->height, shown->height));
+      const uint32_t w = std::min(width ? width : shown->width, shown->width);
+      const uint32_t h = std::min(height ? height : shown->height, shown->height);
+      mirror->Showed(shown->view, w, h);
+      FillOutputPass(*shown, w, h, source_front != nullptr, output_pass_);
       ++presented_;
       return true;
     }
@@ -6735,6 +6739,103 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     return fps_tenths_;
   }
 
+  // The menu post-processing settings, if they changed (an atomic counter; the cvars are only read then).
+  void UpdatePostprocess() {
+    const uint64_t version_postprocess = bo2zm::settings::VersionPostprocess();
+    if (version_postprocess == version_postprocess_) {
+      return;
+    }
+    version_postprocess_ = version_postprocess;
+    postprocess_ = bo2zm::settings::ReadPostprocess();
+    RecomputeRamp();
+    const auto& p = postprocess_;
+    REXLOG_INFO("[native] C2: postprocess {}: brightness {:.2f}, contrast {:.2f}, saturation {:.2f}, vibrance "
+                "{:.2f}, temperature {:.2f}, gamma {:.2f}, tint {:.2f}/{:.2f}/{:.2f} at {:.2f}, vignette {:.2f}, "
+                "lines {:.2f}; {}",
+                p.active ? "on" : "off", p.brightness, p.contrast, p.saturation, p.vibrance,
+                p.temperature, p.gamma, p.tint_r, p.tint_g, p.tint_b, p.tint, p.vignette, p.lines,
+                grading_ ? "with per-pixel work (saturation, vibrance, vignette or lines)"
+                            : "everything in the table, no per-pixel work");
+  }
+
+  // The per-view third person crosshairs (none without the ramp).
+  bo2zm::native::output::Crosshairs OutputCrosshairs() const {
+    bo2zm::native::output::Crosshairs crosshairs;
+    if (ramp_gamma_) {
+      bo2zm::cheats::CrosshairOverlay records[4]{};
+      const int count = bo2zm::cheats::GetCrosshairOverlays(records, 4);
+      crosshairs = bo2zm::native::output::PackCrosshairs(records, count);
+    }
+    return crosshairs;
+  }
+
+  // The ramp variant: with an output the size of the source (the normal case), the exact texel, unfiltered.
+  // From a render target, the output has the front buffer's size, not the image's, and has no FXAA
+  // (FrontOnPresent only requests it that way): texelFetch of the pixel, the same texel the texture would hold.
+  void OutputVariant(const OwnedImage& source, uint32_t width, uint32_t height, bool since_target, bool& exact,
+                     bool& fxaa) {
+    exact = since_target || (width == source.width && height == source.height);
+    fxaa = !since_target && bo2zm::settings::AntialiasingFxaa();
+    if (fxaa != fxaa_annotated_) {
+      fxaa_annotated_ = fxaa;
+      REXLOG_INFO("[native] C2: antialiasing at the output: {}", fxaa ? "FXAA" : "none");
+    }
+    if (!exact && !warned_ramp_bilinear_) {
+      warned_ramp_bilinear_ = true;
+      REXLOG_INFO("[native] C2: {}x{} output from a {}x{} source: ramp with bilinear sampling", width,
+                  height, source.width, source.height);
+    }
+  }
+
+  // The output pass's fragment push constants (from byte 16; see bo2zm_output_gamma_ramp.frag).
+  struct OutputConstants {
+    int32_t displacement[2];
+    float inverse[2];
+    uint32_t counter[4];  // bo2zm_show_fps and the preset note (see bo2zm_output_gamma_ramp.frag)
+    uint32_t note[4];      // The preset note's text (bo2zm_preset.cpp)
+    uint32_t banner[8];    // The top banner's text (bo2zm_preset.cpp OnScreenBanner)
+    uint32_t banner_info[4];  // x = screen pixels per font dot, 0 = no banner
+  };
+  static_assert(sizeof(OutputConstants) == sizeof(bo2zm::native::output::Pass::constants));
+
+  OutputConstants MakeOutputConstants(uint32_t width, uint32_t height,
+                                      const bo2zm::native::output::Crosshairs& crosshairs) {
+    OutputConstants bilinear = {{0, 0}, {1.0f / float(width), 1.0f / float(height)}, {}, {}, {}, {}};
+    // counter[2]: bit 0 the shared FPS counter, bit 1 per-view crosshairs in the UBO.
+    const uint32_t overlays = (ramp_gamma_ && REXCVAR_GET(bo2zm_show_fps) ? 1u : 0u) |
+                              (ramp_gamma_ && crosshairs.Any() ? 2u : 0u);
+    if (overlays) {
+      bilinear.counter[0] = (overlays & 1u) ? TenthsFps() : 0;
+      bilinear.counter[1] = std::max<uint32_t>(2, height / 240);  // 3 pixels per dot at 720p, 4 at 1080p
+      bilinear.counter[2] = overlays;
+    }
+    if (ramp_gamma_ && bo2zm::preset::OnScreenNote(bilinear.note)) {
+      bilinear.counter[3] = std::max<uint32_t>(2, height / 240);  // the same dots as the counter, below it
+    }
+    if (ramp_gamma_ && bo2zm::preset::OnScreenBanner(bilinear.banner)) {
+      bilinear.banner_info[0] = std::max<uint32_t>(3, height / 180);  // a size larger than the note's
+    }
+    return bilinear;
+  }
+
+  // The output pass for a presenter that records it itself (the Metal mirror's): the same table, variant and
+  // constants PaintOutput uses.
+  void FillOutputPass(const OwnedImage& source, uint32_t width, uint32_t height, bool since_target,
+                      bo2zm::native::output::Pass& pass) {
+    pass.ramp = ramp_gamma_;
+    if (!ramp_gamma_) {
+      return;
+    }
+    UpdatePostprocess();
+    pass.crosshairs = OutputCrosshairs();
+    OutputVariant(source, width, height, since_target, pass.exact, pass.fxaa);
+    pass.grading = grading_;
+    static_assert(sizeof(pass.table) == sizeof(ramp_values_));
+    std::memcpy(pass.table, ramp_values_.data(), sizeof(pass.table));
+    const OutputConstants constants = MakeOutputConstants(width, height, pass.crosshairs);
+    std::memcpy(pass.constants, &constants, sizeof(constants));
+  }
+
   bool PaintOutput(VulkanPresenter::VulkanGuestOutputRefreshContext& context, OwnedImage& source,
                     uint32_t width, uint32_t height, bool since_target = false) {
     // With bo2zm_native_output_without_wait, the next of 3 slots, and it only waits if that one is still pending.
@@ -6749,29 +6850,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       outputs_pending_[s] = false;
     }
     output_current_ = s;
-    // The menu post-processing settings, if they changed (an atomic counter; the cvars are only read then).
     if (ramp_gamma_) {
-      const uint64_t version_postprocess = bo2zm::settings::VersionPostprocess();
-      if (version_postprocess != version_postprocess_) {
-        version_postprocess_ = version_postprocess;
-        postprocess_ = bo2zm::settings::ReadPostprocess();
-        RecomputeRamp();
-        const auto& p = postprocess_;
-        REXLOG_INFO("[native] C2: postprocess {}: brightness {:.2f}, contrast {:.2f}, saturation {:.2f}, vibrance "
-                    "{:.2f}, temperature {:.2f}, gamma {:.2f}, tint {:.2f}/{:.2f}/{:.2f} at {:.2f}, vignette {:.2f}, "
-                    "lines {:.2f}; {}",
-                    p.active ? "on" : "off", p.brightness, p.contrast, p.saturation, p.vibrance,
-                    p.temperature, p.gamma, p.tint_r, p.tint_g, p.tint_b, p.tint, p.vignette, p.lines,
-                    grading_ ? "with per-pixel work (saturation, vibrance, vignette or lines)"
-                                : "everything in the table, no per-pixel work");
-      }
+      UpdatePostprocess();
     }
-    bo2zm::native::output::Crosshairs crosshairs;
-    if (ramp_gamma_) {
-      bo2zm::cheats::CrosshairOverlay records[4]{};
-      const int count = bo2zm::cheats::GetCrosshairOverlays(records, 4);
-      crosshairs = bo2zm::native::output::PackCrosshairs(records, count);
-    }
+    const bo2zm::native::output::Crosshairs crosshairs = OutputCrosshairs();
     // This slot's fence has completed, so its table and overlay data are idle.
     if (ramp_gamma_) {
       OutputRamp& ramp = ramps_output_[s];
@@ -6837,24 +6919,12 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     gpu_.SetScissor(commands_output_[s], gpu::Rect{0, 0, width, height});
     gpu::Pipeline pipeline = pipeline_;
     if (ramp_gamma_) {
-      // With an output the size of the source (the normal case), the exact texel, unfiltered.
-      // From a render target, the output has the front buffer's size, not the image's, and has no FXAA
-      // (FrontOnPresent only requests it that way): texelFetch of the pixel, the same texel the texture
-      // would hold.
-      const bool exact = since_target || (width == source.width && height == source.height);
-      const bool fxaa = !since_target && bo2zm::settings::AntialiasingFxaa();
-      if (fxaa != fxaa_annotated_) {
-        fxaa_annotated_ = fxaa;
-        REXLOG_INFO("[native] C2: antialiasing at the output: {}", fxaa ? "FXAA" : "none");
-      }
+      bool exact = false;
+      bool fxaa = false;
+      OutputVariant(source, width, height, since_target, exact, fxaa);
       pipeline = PipelineRamp((fxaa ? 4 : 0) + (grading_ ? 2 : 0) + (exact ? 1 : 0));
       if (pipeline == nullptr) {
         pipeline = pipelines_ramp_[exact ? 1 : 0];  // requested variant missing: the usual one
-      }
-      if (!exact && !warned_ramp_bilinear_) {
-        warned_ramp_bilinear_ = true;
-        REXLOG_INFO("[native] C2: {}x{} output from a {}x{} source: ramp with bilinear sampling", width,
-                    height, source.width, source.height);
       }
     }
     gpu_.BindGraphicsPipeline(commands_output_[s], pipeline);
@@ -6862,28 +6932,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const float rectangle[4] = {-1.0f, -1.0f, 2.0f, 2.0f};  // x, y, width, height in NDC
     gpu_.PushConstants(commands_output_[s], layout_pipeline_, VK_SHADER_STAGE_VERTEX_BIT, 0,
                             sizeof(rectangle), rectangle);
-    struct {
-      int32_t displacement[2];
-      float inverse[2];
-      uint32_t counter[4];  // bo2zm_show_fps and the preset note (see bo2zm_output_gamma_ramp.frag)
-      uint32_t note[4];      // The preset note's text (bo2zm_preset.cpp)
-      uint32_t banner[8];    // The top banner's text (bo2zm_preset.cpp OnScreenBanner)
-      uint32_t banner_info[4];  // x = screen pixels per font dot, 0 = no banner
-    } bilinear = {{0, 0}, {1.0f / float(width), 1.0f / float(height)}, {}, {}, {}, {}};
-    // counter[2]: bit 0 the shared FPS counter, bit 1 per-view crosshairs in the UBO.
-    const uint32_t overlays = (ramp_gamma_ && REXCVAR_GET(bo2zm_show_fps) ? 1u : 0u) |
-                              (ramp_gamma_ && crosshairs.Any() ? 2u : 0u);
-    if (overlays) {
-      bilinear.counter[0] = (overlays & 1u) ? TenthsFps() : 0;
-      bilinear.counter[1] = std::max<uint32_t>(2, height / 240);  // 3 pixels per dot at 720p, 4 at 1080p
-      bilinear.counter[2] = overlays;
-    }
-    if (ramp_gamma_ && bo2zm::preset::OnScreenNote(bilinear.note)) {
-      bilinear.counter[3] = std::max<uint32_t>(2, height / 240);  // the same dots as the counter, below it
-    }
-    if (ramp_gamma_ && bo2zm::preset::OnScreenBanner(bilinear.banner)) {
-      bilinear.banner_info[0] = std::max<uint32_t>(3, height / 180);  // a size larger than the note's
-    }
+    const OutputConstants bilinear = MakeOutputConstants(width, height, crosshairs);
     gpu_.PushConstants(commands_output_[s], layout_pipeline_, VK_SHADER_STAGE_FRAGMENT_BIT, 16,
                             sizeof(bilinear), &bilinear);
     gpu_.Draw(commands_output_[s], 4, 0);
@@ -7176,6 +7225,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   // scanlines). Filled by RecomputeRamp.
   static constexpr size_t kFloatsRamp = 256 * 4 + 8;
   std::array<float, kFloatsRamp> ramp_values_{};
+  bo2zm::native::output::Pass output_pass_;  // the last frame's output pass, for the Metal presenter
   uint64_t version_ramp_ = 0;
   // Post-processing in effect and the settings version it was computed from.
   bo2zm::settings::Postprocess postprocess_{};

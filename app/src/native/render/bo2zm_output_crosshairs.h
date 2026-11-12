@@ -16,6 +16,20 @@ struct Crosshairs {
 };
 static_assert(sizeof(Crosshairs) == 128 && offsetof(Crosshairs, styles) == 64);
 
+// Everything the output pass (bo2zm_output_gamma_ramp.frag) draws with, for a presenter that records it itself
+// (the Metal one; the Vulkan path records it in bo2zm_native_targets.cpp PaintOutput).
+struct Pass {
+  static constexpr size_t kFloatsTable = 256 * 4 + 8;  // the Ramp block before its crosshairs
+  bool ramp = false;  // false: the image as is (no table, no overlays)
+  bool exact = false;    // specialization constant 0
+  bool grading = false;  // 1
+  bool fxaa = false;     // 2
+  float table[kFloatsTable]{};
+  Crosshairs crosshairs;
+  // The push constants from byte 16: displacement, inverse size, counter, note, banner, banner_info.
+  uint32_t constants[24]{};
+};
+
 template<class Overlay> Crosshairs PackCrosshairs(const Overlay* records, int count) {
   Crosshairs result;
   if (!records) return result;

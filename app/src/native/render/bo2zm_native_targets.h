@@ -28,6 +28,10 @@ class VulkanDevice;
 
 namespace bo2zm::native {
 
+namespace output {
+struct Pass;
+}
+
 // Registers a copy needs, taken from the ring sink's register mirror.
 struct CopyRegisters {
   uint32_t rb_surface_info = 0;
@@ -99,6 +103,9 @@ class NativeTargets {
   // 256-entry gamma ramp loaded by the game, 10 bits per channel (red, green, blue). Subsequent outputs
   // apply it the way the Xbox 360 display does. Called from the same thread as Present.
   virtual void RampGamma(const std::array<std::array<uint16_t, 3>, 256>& ramp) = 0;
+
+  // The output pass of the last Present without a presenter (the Metal one draws it), or null.
+  virtual const output::Pass* OutputPass() const { return nullptr; }
 
   // The game's occlusion queries (QueryOcclusion in bo2zm_native_render.cpp). BeginOcclusion: whatever is drawn
   // until FinishOcclusion counts for the base structure. FinishOcclusion: returns the last complete count measured for
