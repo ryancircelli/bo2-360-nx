@@ -4,7 +4,7 @@
 `REX_BO2ZM_BENCHMARK_AB_FACTORS=waits_fence_wake,metal_encode_thread`
 to map the first factor to bit 0 and the second to bit 1. At startup the
 app rejects unknown, duplicate, empty, or more than two names. The Metal
-factor is available on macOS. Each switch returns to its startup value
+factors are available on macOS. Each switch returns to its startup value
 when the benchmark ends.
 
 Every arm transition, including the final `arm=-1`, writes a normal perf.tsv
@@ -48,3 +48,17 @@ two-sided binomial p value. Adjacent comparisons overlap and route drift
 can correlate them, so these p values are descriptive. The slowest 1% low
 FPS is 1000 / mean(slowest ceil(1% of frames) frame_ms). `--settle-s` can
 override the duration recorded in events.
+
+`metal_type0_register_batching` is also registered (existing cvar default false).
+It selects the existing sequential type-0 range writer versus per-register
+writes. Both finish synchronously before the next packet; repeated-register
+packets keep the ordered per-register path, and side-effecting/invalid ranges
+retain the existing fallback. No batching state persists between packets.
+Requests use exported rexruntime atomics, and the Metal CP latches its protected
+base-class mode at the same drained IssueSwap boundary as the encoder mode.
+Only that CP thread reads/writes the active mode. This avoids changing a cvar
+concurrently with ExecutePacketType0. A log confirms each actual change.
+
+The preferred latency experiment is
+`REX_BO2ZM_BENCHMARK_AB_FACTORS=metal_encode_thread,metal_type0_register_batching`
+(encoder bit 0, batching bit 1). Fence-wake remains selectable in either slot.
