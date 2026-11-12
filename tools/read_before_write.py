@@ -223,9 +223,13 @@ KNOWN = {
     "sub_827DC5C4": "VMX copy kernel: stvlx128 v64/v65 to the stack in its prologue (a save)",
     "sub_827DCA90": "VMX copy kernel: xor r30,r30,r30 (zero whatever r30 held)",
     "sub_827DCE20": "VMX copy kernel: stvlx128 saves of v64/v65 and xor r30,r30,r30",
+    "sub_827D7120": "r26 is copied to ctx for split-call ABI; the continuation does not read it and the parent has no later use",
+    "sub_827D7D10": "r28 is copied to ctx for split-call ABI; the continuation does not read it and the parent has no later use",
     "sub_8281F610": "software-pipelined loop: the first pass mixes in the caller's v29 on the 360 too, and drops it",
     "sub_8282C2D8": "subfe r29,r29,r29: the result is -1 + CA whatever r29 held",
     "sub_82918CA0": "the game's setjmp itself (saves every register); every call goes through ppc_setjmp",
+    "sub_8291B668": "r25-r29 are copied to ctx for a split call; the continuation only reads r24/r31 and the parent has no later use",
+    "sub_8292C688": "r29 is copied to ctx for a split call; the continuation has no nonvolatile-register use and the parent has no later use",
     "sub_8292FA64": "not code: the pointer 0x8292FA90 and a zero word before sub_8292FA6C, decoded as one lwz",
 }
 
