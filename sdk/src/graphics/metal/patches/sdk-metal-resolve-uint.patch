@@ -1,0 +1,26 @@
+--- a/src/xenia/gpu/shaders/resolve.xesli
++++ b/src/xenia/gpu/shaders/resolve.xesli
+@@ -81,6 +81,7 @@
+     bool dest_is_array;
+     uint dest_slice;
+     uint dest_format;
++    uint dest_number;
+     float dest_exp_bias_factor;
+     bool dest_swap;
+     uint dest_row_pitch_macro_tiles;
+@@ -135,6 +136,15 @@
+     resolve_info.dest_exp_bias_factor = int_bits_to_float_xe(
+         (int(dest_info) << (32 - (16 + 6)) >> (32 - 6) << 23) +
+         float_bits_to_int_xe(1.0f));
++    // Unsigned-integer 16-bit destinations (copy_dest_number == 2) store
++    // integer units; the UNorm packers multiply by 65535, so pre-divide.
++    resolve_info.dest_number = (dest_info >> 13u) & 7u;
++    if (resolve_info.dest_number == 2u &&
++        (resolve_info.dest_format == kXenosFormat_16 ||
++         resolve_info.dest_format == kXenosFormat_16_16 ||
++         resolve_info.dest_format == kXenosFormat_16_16_16_16)) {
++      resolve_info.dest_exp_bias_factor *= 1.0f / 65535.0f;
++    }
+     resolve_info.dest_swap = (dest_info & (1u << 24u)) != 0u;
+     resolve_info.dest_row_pitch_macro_tiles =
+         dest_coordinate_info & ((1u << 10u) - 1u);

@@ -81,12 +81,14 @@ for full,bpp,uint in tile_variants:
     defines=[f'{prefix}_BPP={bpp}',f'XE_RESOLVE_HOST_COLOR_MSAA_SAMPLES={msaa}',f'XE_RESOLVE_HOST_COLOR_SOURCE_UINT={uint}']
     if scaled:defines.append('XE_RESOLVE_RESOLUTION_SCALED=1')
     jobs.append(('gpu',tile_wrapper,name,defines,[xenia/'gpu/shaders'],tile_deps))
+shared_mtime=max(p.stat().st_mtime for a in ('gpu','ui') for p in (xenia/a/'shaders').glob('*.xesli'))
 def compile(job):
  area,source,name,defines=job[:4]
  includes=job[4] if len(job)>4 else []
  deps=job[5] if len(job)>5 else [source]
  dest=root/'rex'/area.replace('gpu','graphics')/'shaders/bytecode/metal'/(name+'.h')
- if dest.exists() and (not includes or dest.stat().st_mtime>=max(d.stat().st_mtime for d in deps)):return None
+ # Shared .xesli headers (e.g. the patched resolve.xesli) count as deps too.
+ if dest.exists() and dest.stat().st_mtime>=max([d.stat().st_mtime for d in deps]+[shared_mtime]):return None
  dest.parent.mkdir(parents=True,exist_ok=True)
  with tempfile.TemporaryDirectory(prefix='fable-metal-helper-') as tmp:
   air=Path(tmp)/'shader.air';lib=Path(tmp)/'shader.metallib'
