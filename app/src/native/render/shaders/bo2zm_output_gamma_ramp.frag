@@ -33,6 +33,11 @@
 // The header is generated with:
 //   glslangValidator -V --target-env vulkan1.0 --vn bo2zm_output_gamma_ramp_ps -o bo2zm_output_gamma_ramp_ps.h
 //     bo2zm_output_gamma_ramp.frag
+// and its MSL (bo2zm_output_gamma_ramp_msl.h, the Metal presenter's) with:
+//   glslangValidator -V --target-env vulkan1.0 -o ramp.spv bo2zm_output_gamma_ramp.frag
+//   spirv-cross ramp.spv --msl --msl-version 20100 --msl-decoration-binding
+//     --rename-entry-point main bo2zm_output_ramp frag --output ramp.metal
+//   then ramp.metal inside the R"msl( ... )msl" string of the header.
 
 layout(constant_id = 0) const bool kExact = false;
 layout(constant_id = 1) const bool kGrading = false;

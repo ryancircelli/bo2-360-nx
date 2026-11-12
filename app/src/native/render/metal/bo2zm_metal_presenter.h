@@ -17,6 +17,10 @@
 #include <memory>
 #include <mutex>
 
+namespace bo2zm::native::output {
+struct Pass;
+}
+
 namespace bo2zm::native::gpu::metal {
 
 class Presenter final : public rex::ui::Presenter {
@@ -57,8 +61,10 @@ class Presenter final : public rex::ui::Presenter {
   // Writes the guest output with a clear of `rgba` (0 to 1): the first Metal-drawn frames, before the
   // renderer draws on Metal.
   bool RefreshWithClear(uint32_t width, uint32_t height, const float rgba[4]);
-  // Writes the guest output from a frame drawn on Metal: the top-left `width` by `height` of an id<MTLTexture>.
-  bool RefreshWithImage(void* image, uint32_t width, uint32_t height);
+  // Writes the guest output from a frame drawn on Metal: the top-left `width` by `height` of an id<MTLTexture>,
+  // through the output pass when `pass` has the ramp on (as the Vulkan presenter does), else as is.
+  bool RefreshWithImage(void* image, uint32_t width, uint32_t height,
+                        const bo2zm::native::output::Pass* pass = nullptr);
 
  protected:
   SurfacePaintConnectResult ConnectOrReconnectPaintingToSurfaceFromUIThread(
