@@ -83,6 +83,7 @@ using BYTE = uint8_t;
 #endif
 
 DECLARE_bool(async_shader_compilation);
+DECLARE_bool(metal_draw_fastpath);
 DECLARE_bool(depth_float24_convert_in_pixel_shader);
 DECLARE_bool(depth_float24_round);
 
@@ -1356,6 +1357,7 @@ MetalPipelineCache::~MetalPipelineCache() {
     }
   }
   pipeline_cache_.clear();
+  last_fast_handle_ = nullptr;
 
   bindless_sampler_layout_map_.clear();
   bindless_sampler_layouts_.clear();
@@ -4769,6 +4771,33 @@ MetalPipelineCache::GetOrCreatePipelineState(
     REXLOG_ERROR("No vertex shader translation");
     return nullptr;
   }
+  // [draw-fastpath] The description is a pure function of the two translations
+  // (shader hash + modification are immutable per translation), the attachment
+  // formats and the rendering key, so an identical input tuple maps to the same
+  // cached handle: skip the description build, XXH3 and map lookup.  Handles
+  // are never erased except by the full clear that resets last_fast_handle_.
+  const bool fastpath = REXCVAR_GET(metal_draw_fastpath);
+  if (fastpath && last_fast_handle_ &&
+      last_fast_vertex_translation_ == vertex_translation &&
+      last_fast_pixel_translation_ == pixel_translation &&
+      last_fast_rendering_key_.normalized_color_mask ==
+          rendering_key.normalized_color_mask &&
+      last_fast_rendering_key_.alpha_to_mask_enable ==
+          rendering_key.alpha_to_mask_enable &&
+      std::memcmp(last_fast_rendering_key_.blendcontrol,
+                  rendering_key.blendcontrol,
+                  sizeof(rendering_key.blendcontrol)) == 0 &&
+      std::memcmp(last_fast_formats_.color_formats,
+                  attachment_formats.color_formats,
+                  sizeof(attachment_formats.color_formats)) == 0 &&
+      last_fast_formats_.depth_format == attachment_formats.depth_format &&
+      last_fast_formats_.stencil_format == attachment_formats.stencil_format &&
+      last_fast_formats_.sample_count == attachment_formats.sample_count) {
+    if (last_fast_handle_->ns_pixel_translation) {
+      last_fast_handle_->ns_pixel_translation->NoteUse();
+    }
+    return last_fast_handle_;
+  }
   MetalPipelineDescription description = BuildStandardPipelineDescription(
       vertex_translation, pixel_translation, attachment_formats, rendering_key);
   uint64_t key = XXH3_64bits(&description, sizeof(description));
@@ -4778,6 +4807,13 @@ MetalPipelineCache::GetOrCreatePipelineState(
   if (it != pipeline_cache_.end()) {
     if (it->second->ns_pixel_translation) {
       it->second->ns_pixel_translation->NoteUse();
+    }
+    if (fastpath) {
+      last_fast_handle_ = it->second.get();
+      last_fast_vertex_translation_ = vertex_translation;
+      last_fast_pixel_translation_ = pixel_translation;
+      last_fast_formats_ = attachment_formats;
+      last_fast_rendering_key_ = rendering_key;
     }
     return it->second.get();
   }
