@@ -85,6 +85,7 @@
 #include <rex/platform.h>
 
 #include "bo2zm_benchmark.h"
+#include "bo2zm_waits.h"
 #include "bo2zm_jobs.h"
 #include "native/render/bo2zm_native_render.h"
 
