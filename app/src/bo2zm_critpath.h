@@ -2,6 +2,7 @@
 #include <cstdint>
 namespace bo2zm::critpath {
 bool Enabled();
+bool FullEnabled();
 void Install();
 void Issue(uint32_t value, uint32_t completed_guest_address);
 void Test(uint32_t value, bool pending);

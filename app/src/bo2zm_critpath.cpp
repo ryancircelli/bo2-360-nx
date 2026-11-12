@@ -1,4 +1,5 @@
 #include "bo2zm_critpath.h"
+#include "bo2zm_critpath_light.h"
 #include <rex/cvar.h>
 #include <rex/graphics/swap_hook.h>
 #include <rex/system/xthread.h>
@@ -112,14 +113,18 @@ void Writer(std::filesystem::path dir) {
   std::fclose(ff); std::fclose(fr);
 }
 }
-bool Enabled() {
-  static const bool on = [] {
+int Mode() {
+  static const int mode = [] {
     const char* env = std::getenv("REX_BO2ZM_CRITPATH");
-    return (env && std::string_view(env) == "1") || REXCVAR_GET(bo2zm_critpath);
+    if (env && std::string_view(env)=="2") return 2;
+    return (env && std::string_view(env)=="1") || REXCVAR_GET(bo2zm_critpath) ? 1 : 0;
   }();
-  return on;
+  return mode;
 }
+bool Enabled() { return Mode()!=0; }
+bool FullEnabled() { return Mode()==1; }
 void Install() {
+  if (Mode()==2) { light::Install(); return; }
   if (!Enabled() || writer.joinable()) return;
   auto path = std::filesystem::path(REXCVAR_GET(bo2zm_perf_log));
   writer = std::thread(Writer, path.empty() ? std::filesystem::current_path() : path.parent_path());
@@ -171,6 +176,7 @@ void EndWait() {
   wait_seq.fetch_add(1);
 }
 void Present(uint64_t frame) {
+  if (Mode()==2) { light::Present(frame); return; }
   if (!Enabled()) return;
   uint64_t seq, w, start, present, calls;
   do {
@@ -199,6 +205,7 @@ void Present(uint64_t frame) {
   } else frame_drops.fetch_add(1);
 }
 void Close() {
+  if (Mode()==2) { light::Close(); return; }
   if (!Enabled()) return;
   rex::graphics::SetGuestFenceWriteHook(nullptr);
   stop.store(true, std::memory_order_release);

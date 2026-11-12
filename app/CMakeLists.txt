@@ -48,6 +48,7 @@ set(BO2ZM_SOURCES
     src/bo2zm_benchmark.cpp
     src/bo2zm_perf_log.cpp
     src/bo2zm_critpath.cpp
+    src/bo2zm_critpath_light.cpp
     src/bo2zm_heap_track.cpp
     src/bo2zm_memcpy_callers.cpp
     src/bo2zm_debug_options.cpp
