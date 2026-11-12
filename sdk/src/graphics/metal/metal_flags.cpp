@@ -36,6 +36,12 @@ DEFINE_bool(metal_encode_thread, false,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",
             "Metal");
+DEFINE_bool(metal_encode_thread_xpass, false,
+            "With metal_encode_thread: let the encode thread own whole "
+            "sequences of render passes (it creates and ends the encoders); "
+            "the command processor waits only when it touches the command "
+            "buffer itself.",
+            "Metal");
 DEFINE_bool(metal_constant_payload_cache, false,
             "Reuse identical Metal constant/descriptor payload uploads across "
             "draws within a frame. Disable to A/B hash/cache CPU cost against "

@@ -304,7 +304,7 @@ void EndSharedMemoryUploadBlitEncoderForCommandBuffer(
     MetalCommandProcessor& command_processor,
     MTL::CommandBuffer* command_buffer) {
   if (command_buffer &&
-      command_buffer == command_processor.GetCurrentCommandBuffer()) {
+      command_buffer == command_processor.PeekCurrentCommandBuffer()) {
     command_processor.EndSharedMemoryUploadBlitEncoder();
   }
 }

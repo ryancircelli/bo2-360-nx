@@ -412,6 +412,14 @@ void EndPass(PassRef pass, const char* end_reason) {
   static_cast<CbRecord*>(pass.cb)->passes[pass.index].end_reason = end_reason;
 }
 
+namespace {
+void (*g_encode_barrier)(MTL::CommandBuffer*) = nullptr;
+}
+void SetEncodeBarrier(void (*fn)(MTL::CommandBuffer*)) { g_encode_barrier = fn; }
+void EncodeBarrier(MTL::CommandBuffer* cmd) {
+  if (g_encode_barrier) g_encode_barrier(cmd);
+}
+
 MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site) {
   return Compute(cmd, site, nullptr);
 }
@@ -419,6 +427,7 @@ MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site) {
 MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site,
                                     const char* key) {
   if (!cmd) return nullptr;
+  EncodeBarrier(cmd);
   if (!Enabled()) return cmd->computeCommandEncoder();
   auto& s = Get();
   std::unique_lock<std::mutex> lock(s.mutex);
@@ -446,6 +455,7 @@ MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site,
 
 MTL::BlitCommandEncoder* Blit(MTL::CommandBuffer* cmd, const char* site) {
   if (!cmd) return nullptr;
+  EncodeBarrier(cmd);
   if (!Enabled()) return cmd->blitCommandEncoder();
   auto& s = Get();
   std::unique_lock<std::mutex> lock(s.mutex);
