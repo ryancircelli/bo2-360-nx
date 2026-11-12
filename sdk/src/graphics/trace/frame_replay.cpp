@@ -236,9 +236,16 @@ class ReplayHooks : public TraceHooks {
     if (timeline) {
       uint32_t header;
       std::memcpy(&header, ring_base + read_offset, sizeof(header));
+      uint32_t payload[3] = {0, 0, 0};
+      for (uint32_t k = 0; k < 3 && k + 1 < dword_count; ++k) {
+        uint32_t off = (read_offset + 4 * (k + 1)) % ring_capacity;
+        std::memcpy(&payload[k], ring_base + off, sizeof(uint32_t));
+        payload[k] = __builtin_bswap32(payload[k]);
+      }
       timeline_open.push_back(uint32_t(timeline->size()));
       timeline->push_back({mach_absolute_time(), 0, __builtin_bswap32(header),
-                           uint32_t(draw_count), uint32_t(timeline_open.size())});
+                           uint32_t(draw_count), uint32_t(timeline_open.size()),
+                           {payload[0], payload[1], payload[2]}});
     }
     if (forward())
       chain->OnPacketStart(ring_base, ring_capacity, read_offset, dword_count);
@@ -255,6 +262,7 @@ class ReplayHooks : public TraceHooks {
   struct TimelineEvent {
     uint64_t t_start, t_end;
     uint32_t header, draws_before, depth;
+    uint32_t payload[3];  // first three dwords after the header (byte-swapped)
   };
   std::vector<TimelineEvent>* timeline = nullptr;
   std::vector<uint32_t> timeline_open;
@@ -1424,15 +1432,15 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
       mach_timebase_info_data_t tb;
       mach_timebase_info(&tb);
       if (FILE* f = std::fopen(timeline_path, "w")) {
-        std::fprintf(f, "idx,start_ns,end_ns,depth,type,opcode,draws_before\n");
+        std::fprintf(f, "idx,start_ns,end_ns,depth,type,opcode,draws_before,p0,p1,p2\n");
         const uint64_t t0 = timeline.empty() ? 0 : timeline.front().t_start;
         for (size_t k = 0; k < timeline.size(); ++k) {
           const auto& e = timeline[k];
-          std::fprintf(f, "%zu,%llu,%llu,%u,%u,%u,%u\n", k,
+          std::fprintf(f, "%zu,%llu,%llu,%u,%u,%u,%u,%08x,%08x,%08x\n", k,
                        (unsigned long long)((e.t_start - t0) * tb.numer / tb.denom),
                        (unsigned long long)(e.t_end ? (e.t_end - t0) * tb.numer / tb.denom : 0),
                        e.depth, e.header >> 30, (e.header >> 30) == 3 ? (e.header >> 8) & 0x7F : 0,
-                       e.draws_before);
+                       e.draws_before, e.payload[0], e.payload[1], e.payload[2]);
         }
         std::fclose(f);
       }
