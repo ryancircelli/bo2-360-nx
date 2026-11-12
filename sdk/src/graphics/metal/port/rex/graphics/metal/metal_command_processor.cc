@@ -1687,6 +1687,9 @@ void MetalCommandProcessor::EncodePrecommitWait(MTL::CommandBuffer* cmd) {
       precommit_waited_value_ >= precommit_event_value_) {
     return;
   }
+  if (cmd == current_command_buffer_) {
+    render_encoder_recorder_.Barrier();
+  }
   cmd->encodeWait(precommit_event_, precommit_event_value_);
   precommit_waited_value_ = precommit_event_value_;
 }
@@ -1708,6 +1711,7 @@ void MetalCommandProcessor::EncodeMainCommandBufferEnd() {
   if (!current_command_buffer_) {
     return;
   }
+  render_encoder_recorder_.Barrier();
   CommitSharedMemoryPrecommit();
   // Also keeps the current command buffer's completion (and the release of
   // the pre-commit staging buffers tagged with its submission) after the
@@ -2264,6 +2268,7 @@ void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
   hitch::Scope hitch_scope(hitch::kSync);
   // Phase 1: commit the active command buffer and wait for it.
   if (current_command_buffer_) {
+    render_encoder_recorder_.Barrier();
     ++UploadTrace().cbend_wait;
     EndSharedMemoryUploadBlitEncoder(
         SharedMemoryUploadEncoderEndReason::kCommandBufferEnd);
@@ -2400,6 +2405,7 @@ void MetalCommandProcessor::ShutdownContext() {
   }
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
+  render_encoder_recorder_.LogXpassStats();
 
   FlushCommandBufferAndWait(std::numeric_limits<uint64_t>::max(),
                             "ShutdownContext");
@@ -10876,8 +10882,11 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   }
 }
 
+static DeferredRenderEncoder* g_xpass_recorder = nullptr;
+
 MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   ProcessCompletedSubmissions();
+  render_encoder_recorder_.Barrier();
   if (current_command_buffer_) {
     return current_command_buffer_;
   }
@@ -13249,7 +13258,16 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
       }
       current_render_pass_trace_ =
           pass_trace::BeginRender(current_command_buffer_, pass_descriptor, "draw");
-      if (MTL::RenderCommandEncoder* real_encoder =
+      if (REXCVAR_GET(metal_encode_thread) &&
+          REXCVAR_GET(metal_encode_thread_xpass)) {
+        // Cross-pass encode thread: the worker creates the encoder.
+        pass_trace::SetEncodeBarrier([](MTL::CommandBuffer*) {
+          if (g_xpass_recorder) g_xpass_recorder->Barrier();
+        });
+        g_xpass_recorder = &render_encoder_recorder_;
+        current_render_encoder_ = render_encoder_recorder_.OpenXpass(
+            current_command_buffer_, pass_descriptor);
+      } else if (MTL::RenderCommandEncoder* real_encoder =
               current_command_buffer_->renderCommandEncoder(pass_descriptor)) {
         real_encoder->retain();
         current_render_encoder_ = render_encoder_recorder_.Open(

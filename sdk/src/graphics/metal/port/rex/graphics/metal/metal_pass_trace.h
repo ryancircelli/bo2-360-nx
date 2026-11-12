@@ -40,4 +40,10 @@ MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site,
                                     const char* key);
 MTL::BlitCommandEncoder* Blit(MTL::CommandBuffer* cmd, const char* site);
 
+// Cross-pass encode thread hook: called before any encoder is created on a
+// command buffer outside the draw-pass path, so the worker has finished the
+// previous encoder of that buffer.
+void SetEncodeBarrier(void (*fn)(MTL::CommandBuffer*));
+void EncodeBarrier(MTL::CommandBuffer* cmd);
+
 }  // namespace rex::graphics::metal::pass_trace

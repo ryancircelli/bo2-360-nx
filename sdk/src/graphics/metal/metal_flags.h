@@ -20,6 +20,7 @@ DECLARE_bool(metal_tile_resolve_half_bits);
 DECLARE_bool(metal_fetch_constants_shared);
 DECLARE_bool(metal_draw_fastpath);
 DECLARE_bool(metal_encode_thread);
+DECLARE_bool(metal_encode_thread_xpass);
 DECLARE_bool(metal_direct_host_resolve);
 DECLARE_bool(metal_float_constants_dirty_on_change);
 DECLARE_bool(metal_force_bc_decompress);

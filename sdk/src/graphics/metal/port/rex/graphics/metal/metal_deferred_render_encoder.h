@@ -57,6 +57,20 @@ class DeferredRenderEncoder {
   // this encoder's lifetime. Returns this.
   DeferredRenderEncoder* Open(MTL::RenderCommandEncoder* real, bool deferred);
 
+  // Cross-pass mode (metal_encode_thread_xpass): the worker creates the
+  // encoder from the command buffer and descriptor (copied here, by value),
+  // endEncoding() only queues the end, and nothing drains at pass
+  // boundaries. The front end must call Barrier() before it touches the
+  // command buffer itself (other encoders, encodeWait/Signal, commit).
+  DeferredRenderEncoder* OpenXpass(MTL::CommandBuffer* cmd,
+                                   const MTL::RenderPassDescriptor* desc);
+  // Drains when the worker may still own an ended-or-open encoder of the
+  // command buffer. Cheap no-op when nothing was recorded since the last one
+  // and while the front end still has a pass open (mid-pass callers).
+  void Barrier();
+  bool xpass() const { return xpass_; }
+  void LogXpassStats();
+
   // Drains and returns the real encoder.
   MTL::RenderCommandEncoder* Sync();
   bool deferred() const { return deferred_; }
@@ -149,6 +163,10 @@ class DeferredRenderEncoder {
     uint64_t commands = 0;
     uint64_t drains = 0;
     uint64_t drain_wait_us = 0;
+    uint64_t xpass_passes = 0;
+    uint64_t xpass_barrier_calls = 0;
+    uint64_t xpass_barrier_drains = 0;
+    uint64_t xpass_sync_drains = 0;
   };
   const Stats& stats() const { return stats_; }
 
@@ -172,6 +190,9 @@ class DeferredRenderEncoder {
 
   MTL::RenderCommandEncoder* real_ = nullptr;
   bool deferred_ = false;
+  bool xpass_ = false;
+  bool pass_open_ = false;       // Front end view: Begin recorded, no End yet.
+  bool ended_undrained_ = false; // An End was queued since the last drain.
   Stats stats_;
 
   bool worker_waiting_ = false;  // Guarded by mutex_.

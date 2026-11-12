@@ -48,6 +48,12 @@ DEFINE_bool(metal_const_fastpath, false,
             "comparing and copying again. Gives up reuse of byte-identical "
             "re-uploads. Ignored while metal_constant_payload_cache is on.",
             "Metal");
+DEFINE_bool(metal_encode_thread_xpass, false,
+            "With metal_encode_thread: let the encode thread own whole "
+            "sequences of render passes (it creates and ends the encoders); "
+            "the command processor waits only when it touches the command "
+            "buffer itself.",
+            "Metal");
 DEFINE_bool(metal_constant_payload_cache, false,
             "Reuse identical Metal constant/descriptor payload uploads across "
             "draws within a frame. Disable to A/B hash/cache CPU cost against "

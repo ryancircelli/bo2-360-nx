@@ -9,6 +9,8 @@
 #include <chrono>
 #include <cstring>
 
+#include "rex/logging.h"
+
 #ifndef IR_RUNTIME_METALCPP
 #define IR_RUNTIME_METALCPP
 #endif
@@ -57,6 +59,7 @@ enum class DeferredRenderEncoder::Op : uint16_t {
   kIRDrawPrimitives,
   kIRDrawIndexedPrimitives,
   kEndEncoding,
+  kBegin,
 };
 
 namespace {
@@ -152,6 +155,10 @@ struct MeshArg {
   MTL::Size mesh_threads;
 };
 struct EmptyArg {};
+struct BeginArg {
+  MTL::CommandBuffer* cmd;
+  MTL::RenderPassDescriptor* desc;
+};
 
 }  // namespace
 
@@ -172,10 +179,56 @@ DeferredRenderEncoder* DeferredRenderEncoder::Open(
     MTL::RenderCommandEncoder* real, bool deferred) {
   real_ = real;
   deferred_ = deferred;
+  xpass_ = false;
   if (deferred_ && !worker_.joinable()) {
     StartWorker();
   }
   return this;
+}
+
+DeferredRenderEncoder* DeferredRenderEncoder::OpenXpass(
+    MTL::CommandBuffer* cmd, const MTL::RenderPassDescriptor* desc) {
+  deferred_ = true;
+  xpass_ = true;
+  if (!worker_.joinable()) {
+    StartWorker();
+  }
+  auto* copy = static_cast<MTL::RenderPassDescriptor*>(
+      const_cast<MTL::RenderPassDescriptor*>(desc)->copy());
+  BeginArg* arg = Record<BeginArg>(Op::kBegin);
+  arg->cmd = cmd;
+  arg->desc = copy;
+  Retain(cmd);
+  Retain(copy);  // Held until the worker has replayed the begin.
+  copy->release();
+  pass_open_ = true;
+  ++stats_.xpass_passes;
+  return this;
+}
+
+void DeferredRenderEncoder::Barrier() {
+  if (!xpass_) {
+    return;
+  }
+  ++stats_.xpass_barrier_calls;
+  if (pass_open_ || !ended_undrained_) {
+    return;
+  }
+  ++stats_.xpass_barrier_drains;
+  Drain();
+  ended_undrained_ = false;
+}
+
+void DeferredRenderEncoder::LogXpassStats() {
+  if (!xpass_) {
+    return;
+  }
+  REXLOG_WARN(
+      "encode-thread xpass: passes={} barrier_calls={} barrier_drains={} "
+      "sync_drains={} drain_blocked={} drain_wait_us={}",
+      stats_.xpass_passes, stats_.xpass_barrier_calls,
+      stats_.xpass_barrier_drains, stats_.xpass_sync_drains, stats_.drains,
+      stats_.drain_wait_us);
 }
 
 void DeferredRenderEncoder::StartWorker() {
@@ -314,12 +367,18 @@ void DeferredRenderEncoder::WorkerMain() {
 
 MTL::RenderCommandEncoder* DeferredRenderEncoder::Sync() {
   if (deferred_) {
+    if (xpass_) {
+      ++stats_.xpass_sync_drains;
+    }
     Drain();
   }
   return real_;
 }
 
 void DeferredRenderEncoder::release() {
+  if (xpass_) {
+    return;  // The worker releases the encoder when it replays the end.
+  }
   if (deferred_) {
     Drain();
   }
@@ -330,6 +389,13 @@ void DeferredRenderEncoder::release() {
 }
 
 void DeferredRenderEncoder::endEncoding() {
+  if (xpass_) {
+    Record<EmptyArg>(Op::kEndEncoding);
+    PublishChunk();
+    pass_open_ = false;
+    ended_undrained_ = true;
+    return;
+  }
   if (deferred_) {
     Record<EmptyArg>(Op::kEndEncoding);
     Drain();
@@ -679,7 +745,23 @@ void DeferredRenderEncoder::Replay(Chunk& chunk) {
       return reinterpret_cast<const std::remove_pointer_t<decltype(type_tag)>*>(
           payload);
     };
+    if (!enc && Op(header->op) != Op::kBegin) {
+      continue;  // Encoder creation failed; drop the pass.
+    }
     switch (Op(header->op)) {
+      case Op::kBegin: {
+        const BeginArg* a = arg((BeginArg*)nullptr);
+        NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+        real_ = a->cmd->renderCommandEncoder(a->desc);
+        if (real_) {
+          real_->retain();
+        } else {
+          REXLOG_ERROR("encode thread: renderCommandEncoder failed");
+        }
+        enc = real_;
+        pool->release();
+        break;
+      }
       case Op::kSetLabel:
         enc->setLabel(static_cast<NS::String*>(const_cast<void*>(
             arg((PtrArg*)nullptr)->object)));
@@ -872,6 +954,11 @@ void DeferredRenderEncoder::Replay(Chunk& chunk) {
       }
       case Op::kEndEncoding:
         enc->endEncoding();
+        if (xpass_) {
+          enc->release();
+          real_ = nullptr;
+          enc = nullptr;
+        }
         break;
     }
   }

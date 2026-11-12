@@ -100,7 +100,13 @@ class MetalCommandProcessor final : public CommandProcessor {
   // Get the Metal device and command queue
   MTL::Device* GetMetalDevice() const { return device_; }
   MTL::CommandQueue* GetMetalCommandQueue() const { return command_queue_; }
+  // Callers may encode into the returned buffer, so wait for the encode
+  // thread (cross-pass mode) first. Use PeekCurrentCommandBuffer to compare.
   MTL::CommandBuffer* GetCurrentCommandBuffer() const {
+    render_encoder_recorder_.Barrier();
+    return current_command_buffer_;
+  }
+  MTL::CommandBuffer* PeekCurrentCommandBuffer() const {
     return current_command_buffer_;
   }
 

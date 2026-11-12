@@ -792,7 +792,7 @@ bool MetalTextureCache::FlushDeferredUploadEncoderBatch() {
   bool success = true;
   if (cmd && !deferred_upload_copies_.empty()) {
     if (command_processor_ &&
-        cmd == command_processor_->GetCurrentCommandBuffer()) {
+        cmd == command_processor_->PeekCurrentCommandBuffer()) {
       command_processor_->EndSharedMemoryUploadBlitEncoder(
           MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
               kTextureDeferredBlit);
@@ -1129,7 +1129,7 @@ MTL::ComputeCommandEncoder* MetalTextureCache::GetDeferredUploadComputeEncoder(
   deferred_upload_command_buffer_ = command_buffer;
   if (!deferred_upload_compute_encoder_) {
     if (command_processor_ &&
-        command_buffer == command_processor_->GetCurrentCommandBuffer()) {
+        command_buffer == command_processor_->PeekCurrentCommandBuffer()) {
       command_processor_->EndSharedMemoryUploadBlitEncoder(
           MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
               kTextureCompute);
@@ -2939,7 +2939,7 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
   }
   if (!encoder) {
     if (command_processor_ &&
-        cmd == command_processor_->GetCurrentCommandBuffer()) {
+        cmd == command_processor_->PeekCurrentCommandBuffer()) {
       command_processor_->EndSharedMemoryUploadBlitEncoder(
           MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
               kTextureCompute);
@@ -3331,7 +3331,7 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
         }
       } else {
         if (command_processor_ &&
-            cmd == command_processor_->GetCurrentCommandBuffer()) {
+            cmd == command_processor_->PeekCurrentCommandBuffer()) {
           command_processor_->EndSharedMemoryUploadBlitEncoder(
               MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
                   kTextureBlit);
@@ -5597,7 +5597,7 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
     }
 
     if (!standalone && command_processor_ &&
-        cmd == command_processor_->GetCurrentCommandBuffer()) {
+        cmd == command_processor_->PeekCurrentCommandBuffer()) {
       // [res-scale texture-precommit] the copy below writes the new buffer
       // in the open command buffer: loads after it must stay behind it.
       if (precommit_target_cb_) {

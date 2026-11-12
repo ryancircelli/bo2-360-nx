@@ -388,7 +388,7 @@ void EndSharedMemoryUploadBlitEncoderForCommandBuffer(
     MetalCommandProcessor& command_processor,
     MTL::CommandBuffer* command_buffer) {
   if (command_buffer &&
-      command_buffer == command_processor.GetCurrentCommandBuffer()) {
+      command_buffer == command_processor.PeekCurrentCommandBuffer()) {
     command_processor.EndSharedMemoryUploadBlitEncoder();
   }
 }
@@ -847,7 +847,7 @@ bool MetalRenderTargetCache::Initialize() {
         command_processor_.CreateStandaloneTransferCommandBuffer(
             "XeniaCB reason=edram-init");
     if (cmd) {
-      MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+      MTL::BlitCommandEncoder* blit = (pass_trace::EncodeBarrier(cmd), cmd)->blitCommandEncoder();
       if (blit) {
         blit->fillBuffer(
             edram_buffer_,
@@ -3485,7 +3485,7 @@ bool MetalRenderTargetCache::RtShrinkGrow(MetalRenderTarget* rt,
         color->setClearColor(MTL::ClearColor::Make(0.0, 0.0, 0.0, 0.0));
       }
       MTL::RenderCommandEncoder* clear_encoder =
-          cmd->renderCommandEncoder(desc);
+          (pass_trace::EncodeBarrier(cmd), cmd)->renderCommandEncoder(desc);
       if (clear_encoder) {
         clear_encoder->endEncoding();
       }
@@ -3659,7 +3659,7 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
       return;
     }
 
-    MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+    MTL::BlitCommandEncoder* blit = (pass_trace::EncodeBarrier(cmd), cmd)->blitCommandEncoder();
     if (!blit) {
       cmd->release();
       staging->release();
@@ -3743,7 +3743,7 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
     return;
   }
 
-  MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+  MTL::BlitCommandEncoder* blit = (pass_trace::EncodeBarrier(cmd), cmd)->blitCommandEncoder();
   if (!blit) {
     cmd->release();
     staging->release();
@@ -4501,7 +4501,7 @@ void MetalRenderTargetCache::DumpRenderTargets(
   }
 
   EndSharedMemoryUploadBlitEncoderForCommandBuffer(command_processor_, cmd);
-  MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
+  MTL::ComputeCommandEncoder* encoder = (pass_trace::EncodeBarrier(cmd), cmd)->computeCommandEncoder();
   if (!encoder) {
     REXLOG_ERROR("MetalRenderTargetCache::DumpRenderTargets: no compute encoder");
     if (standalone) {
@@ -5963,7 +5963,7 @@ MTL::Texture* MetalRenderTargetCache::GetConstantClearColorTexture(
   a0->setLoadAction(MTL::LoadActionClear);
   a0->setStoreAction(MTL::StoreActionStore);
   a0->setClearColor(color);
-  MTL::RenderCommandEncoder* enc = cmd->renderCommandEncoder(rpd);
+  MTL::RenderCommandEncoder* enc = (pass_trace::EncodeBarrier(cmd), cmd)->renderCommandEncoder(rpd);
   rpd->release();
   if (!enc) {
     t->release();
@@ -6154,7 +6154,7 @@ void MetalRenderTargetCache::MainDepthDumpEdram(const char* tag) {
   if (!readback) {
     return;
   }
-  MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+  MTL::BlitCommandEncoder* blit = (pass_trace::EncodeBarrier(cmd), cmd)->blitCommandEncoder();
   if (!blit) {
     readback->release();
     return;
@@ -8198,7 +8198,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
       }
       const bool pass_traced =
           bool(pass_trace::BeginRender(cmd, rp, transfer_pass_site));
-      transfer_encoder = cmd->renderCommandEncoder(rp);
+      transfer_encoder = (pass_trace::EncodeBarrier(cmd), cmd)->renderCommandEncoder(rp);
       if (pass_traced) pass_trace::ClearRender(rp);
       if (transfer_encoder) {
         SetEncoderLabel(transfer_encoder, "XeniaTransferEncoder");
