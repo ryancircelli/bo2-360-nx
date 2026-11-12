@@ -16,6 +16,8 @@ void Skin1(PPCContext& ctx, uint8_t* base);
 void Skin2(PPCContext& ctx, uint8_t* base);
 // sub_82913B50: three bones per vertex, two weights.
 void Skin3(PPCContext& ctx, uint8_t* base);
+// sub_829143D0: four bones per vertex, three weights (hooked only with bo2zm_native_skin4).
+void Skin4(PPCContext& ctx, uint8_t* base);
 
 // GPU skinning (bo2zm_gpu_skin.h): records the call of kernel 0, 1 or 2 (one, two, three bones) as a job instead of
 // computing it. False when it cannot be one (the caller then computes it). cpu_written: the caller computes it too

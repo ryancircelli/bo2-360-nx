@@ -73,6 +73,7 @@ REXCVAR_DEFINE_INT32(bo2zm_native_skin_fast_ab, 0, "BO2",
 REX_EXTERN(__imp__sub_82912D78);
 REX_EXTERN(__imp__sub_82913378);
 REX_EXTERN(__imp__sub_82913B50);
+REX_EXTERN(__imp__sub_829143D0);
 
 namespace bo2zm::native_skin {
 namespace {
@@ -202,7 +203,7 @@ struct UnpackFast {
   S4 right;   // {-22, -22, -22, -30}
   U4 keep;    // {~0, ~0, ~0, 3}
   U4 add;     // 3.0f's bits in x, y and z, 1.0f's in w
-  S4 nan_at;  // -512 in x, y and z; w never matches
+  S4 nan_at;  // -512 in x only (the recompiled vupkd3d128 checks that field alone); y, z and w never match
   U4 nan;     // 0x7FC00000
 };
 
@@ -272,7 +273,7 @@ Constants Read(const PPCContext& ctx, uint8_t* base) {
     k.position_simple &= i < 12 ? (control[i] & 31) == i : (control[i] & 31) == (control[12] & 31) + (i - 12);
   }
 
-  const int32_t left[4] = {22, 12, 2, 0}, right[4] = {-22, -22, -22, -30}, nan_at[4] = {-512, -512, -512, INT32_MAX};
+  const int32_t left[4] = {22, 12, 2, 0}, right[4] = {-22, -22, -22, -30}, nan_at[4] = {-512, INT32_MAX, INT32_MAX, INT32_MAX};
   const uint32_t keep[4] = {~0u, ~0u, ~0u, 3}, add[4] = {0x40400000, 0x40400000, 0x40400000, 0x3F800000};
   k.unpack = {simde_vld1q_s32(left),   simde_vld1q_s32(right),   simde_vld1q_u32(keep),
               simde_vld1q_u32(add),    simde_vld1q_s32(nan_at), simde_vdupq_n_u32(0x7FC00000)};
@@ -421,7 +422,7 @@ struct Timing {
   std::atomic<uint64_t> vertices{0};
   std::atomic<uint64_t> ns{0};
 };
-Timing g_timing[3][2];  // [kernel][0 general, 1 fast]
+Timing g_timing[4][2];  // [kernel][0 general, 1 fast]
 
 // The thread's own CPU time in ns (on the Switch the kernel's count, svcGetInfo InfoType_ThreadTickCount = 25 at
 // 19.2 MHz: time the thread spends preempted is not counted, unlike wall-clock time, which swung timings by 25 %).
@@ -521,6 +522,45 @@ void Run3(const PPCContext& ctx, uint8_t* base, const Constants& k) {
   });
 }
 
+// sub_829143D0 (four bones). Record (14 bytes, big-endian halfwords): bone D, bone A, A's weight, bone B, B's weight,
+// bone C, C's weight; D takes what the three weights leave. The blend of each row, as the PowerPC code does it:
+// acc = C * wc; acc = wb * B + acc; acc = wa * A + acc; row = wd * D + acc, with wd = ((1 - wc) - wb) - wa.
+// An odd record array (never in the game) keeps no cached matrix: an lvlx there can cut a weight at a block end, so
+// equal record bytes would not mean equal weights.
+// Where the build does not fuse (clang, the PC and macOS builds), the chains are written in the recompiled code's own
+// operand order, add(mul(y, row 1), mul(z, row 2)), so that even the payload of a NaN that two products share is the
+// one the recompiled code gives; where GCC fuses (the Switch), Skin3's choice (see Skin4).
+#if defined(__aarch64__) && !defined(__clang__)
+constexpr bool kGccRounds4 = true;
+#else
+constexpr bool kGccRounds4 = false;
+#endif
+
+template <bool kFast>
+void Run4(const PPCContext& ctx, uint8_t* base, const Constants& k) {
+  const uint32_t records = ctx.r4.u32, bones = ctx.r6.u32;
+  const bool cache = (records & 1) == 0;
+  LastRecord<14> last;
+  Run<kGccRounds4, kGccRounds4, kFast>(base, k, ctx.r3.u32, ctx.r7.u32, ctx.r5.u32, [&](uint32_t i, Matrix& m) {
+    const uint32_t r = records + 14 * i;
+    if (cache && last.Same(Ptr(base, r))) {
+      return;
+    }
+    const Matrix d = Bone(base, bones + Load16(base, r));
+    const Matrix a = Bone(base, bones + Load16(base, r + 2));
+    const Matrix b = Bone(base, bones + Load16(base, r + 6));
+    const Matrix c = Bone(base, bones + Load16(base, r + 10));
+    const F4 wa = kFast ? WeightFast(base, r + 4, k) : Weight(base, r + 4, k);
+    const F4 wb = kFast ? WeightFast(base, r + 8, k) : Weight(base, r + 8, k);
+    const F4 wc = kFast ? WeightFast(base, r + 12, k) : Weight(base, r + 12, k);
+    const F4 wd = simde_vsubq_f32(simde_vsubq_f32(simde_vsubq_f32(k.one, wc), wb), wa);
+    m = {Madd(wd, d.r0, Madd(wa, a.r0, Madd(wb, b.r0, Mul(c.r0, wc)))),
+         Madd(wd, d.r1, Madd(wa, a.r1, Madd(wb, b.r1, Mul(c.r1, wc)))),
+         Madd(wd, d.r2, Madd(wa, a.r2, Madd(wb, b.r2, Mul(c.r2, wc)))),
+         Madd(wd, d.r3, Madd(wa, a.r3, Madd(wb, b.r3, Mul(c.r3, wc))))};
+  });
+}
+
 // A kernel: the game's own function for a vertex array that is not 8-byte aligned, nothing for no vertices, else
 // RunK in the fast form when it may run (weights: also an even record array, so that no weight crosses its block).
 template <void (*kFallback)(PPCContext&, uint8_t*), int kKernel, bool kWeights, typename General, typename FastForm>
@@ -562,6 +602,19 @@ void Skin2(PPCContext& ctx, uint8_t* base) {
 // y * row 1 in both chains, and wb * B in the blend (wa * A fused, then wc * C).
 void Skin3(PPCContext& ctx, uint8_t* base) {
   Kernel<__imp__sub_82913B50, 2, true>(ctx, base, Run3<false>, Run3<true>);
+}
+
+// sub_829143D0. Record: bone D, bone A, A's weight, bone B, B's weight, bone C, C's weight (see Run4). The rounding
+// choices are Skin3's (y * row 1 rounded and z * row 2 fused in both chains; in the blend the first product, c * wc,
+// rounded and the others fused): there is no compiled Switch kernel to read them from here, and the PC and macOS
+// builds (no fusing) cannot tell them apart. If GCC fuses differently on the Switch, the checked phase shows it and
+// turns the rewrite off. Leaves r3 after the last vertex, as the original does.
+void Skin4(PPCContext& ctx, uint8_t* base) {
+  const uint32_t first = ctx.r3.u32, count = ctx.r5.u32;
+  Kernel<__imp__sub_829143D0, 3, true>(ctx, base, Run4<false>, Run4<true>);
+  if ((first & 7) == 0 && count != 0) {
+    ctx.r3.u64 = uint32_t(first + 24 * count);
+  }
 }
 
 // GPU skinning (bo2zm_gpu_skin.h): the call as a job. Only what the fast form also takes: an 8-byte aligned vertex
@@ -622,10 +675,10 @@ bool RecordGpu(int kernel, PPCContext& ctx, uint8_t* base, bool cpu_written) {
 }
 
 void Report() {
-  static const char* const kNames[3] = {"one bone", "two bones", "three bones"};
-  static uint64_t said[3][2][3] = {};  // timed, vertices, ns already reported
+  static const char* const kNames[4] = {"one bone", "two bones", "three bones", "four bones"};
+  static uint64_t said[4][2][3] = {};  // timed, vertices, ns already reported
   std::string line;
-  for (int kernel = 0; kernel < 3; ++kernel) {
+  for (int kernel = 0; kernel < 4; ++kernel) {
     line += kernel ? "; " : "";
     line += kNames[kernel];
     for (int fast = 0; fast < 2; ++fast) {

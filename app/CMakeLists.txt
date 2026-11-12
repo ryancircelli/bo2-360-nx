@@ -60,6 +60,7 @@ set(BO2ZM_SOURCES
     src/bo2zm_native_skin.cpp
     src/bo2zm_gpu_skin.cpp
     src/bo2zm_native_cull.cpp
+    src/bo2zm_native_math.cpp
     # The entity loops: a read-only scan pass before sub_822FD360, the plane test sub_822FE3B8 natively.
     src/bo2zm_native_entities.cpp
     src/bo2zm_stream_alloc.cpp
@@ -203,7 +204,8 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
       src/native/render/bo2zm_native_shaders.cpp src/native/render/bo2zm_shader_library.cpp
       src/native/render/bo2zm_native_hooks.cpp src/native/render/bo2zm_native_texture_pool.cpp
       src/native/bo2zm_native_system.cpp src/bo2zm_native_audio.cpp src/bo2zm_native_limiter.cpp
-      src/bo2zm_native_skin.cpp src/bo2zm_gpu_skin.cpp src/bo2zm_native_cull.cpp src/bo2zm_native_entities.cpp
+      src/bo2zm_native_skin.cpp src/bo2zm_gpu_skin.cpp src/bo2zm_native_cull.cpp src/bo2zm_native_math.cpp
+      src/bo2zm_native_entities.cpp
       src/bo2zm_native_lzx.cpp src/bo2zm_page_writes.cpp src/bo2zm_volume_writes.cpp src/bo2zm_d3d_marker.cpp
       src/bo2zm_d3d_native.cpp src/bo2zm_crt.cpp)
   if(BO2ZM_PGO STREQUAL "generate")
@@ -334,6 +336,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     set_source_files_properties(src/bo2zm_player_projection.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+    # The native math functions repeat the game's operations one by one (fused only where the game fuses).
+    set_source_files_properties(src/bo2zm_native_math.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 endif()
 
 # Switch test build: the native renderer's ring thread's memcpy, memmove, memset and memcmp calls by call site in the

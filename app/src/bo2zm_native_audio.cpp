@@ -66,9 +66,14 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_audio, true, "BO2",
                     "Native versions of the sound mixer's hottest functions (checked against the game's own code "
                     "first, switched off at the first difference). false = the game's code only");
 REXCVAR_DEFINE_BOOL(bo2zm_native_skinning, true, "BO2",
-                    "The game's CPU vertex skinning kernels (sub_82912D78, sub_82913378, sub_82913B50) rewritten with "
+                    "The game's CPU vertex skinning kernels (sub_82912D78, sub_82913378, sub_82913B50; the four-bone sub_829143D0 only with bo2zm_native_skin4) rewritten with "
                     "vector registers (bo2zm_native_skin.cpp), checked against the game's own first. false = the "
                     "game's code only");
+REXCVAR_DEFINE_BOOL(bo2zm_native_skin4, false, "BO2",
+                    "The four-bones-per-vertex skinning kernel (sub_829143D0) rewritten as well (bo2zm_native_skin.cpp, "
+                    "Skin4), checked against the game's own first like the other three. Off by default: it is hooked "
+                    "only when true (needs bo2zm_native_skinning). false = the game's code")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(bo2zm_native_skinning_ab, false, "BO2",
                     "Test, with bo2zm_benchmark_ab_s: A/B factor 1 is bo2zm_native_skinning (on = the rewrites, off = "
                     "the game's code)")
@@ -314,9 +319,10 @@ Replacement g_voice_stereo{"voice resampler, stereo (sub_82440658)", 0.0f, false
 Replacement g_skin1{"skinning, one bone per vertex (sub_82912D78), vector rewrite", 0.0f, false, 3000};
 Replacement g_skin2{"skinning, two bones per vertex (sub_82913378), vector rewrite", 0.0f, false, 3000};
 Replacement g_skin3{"skinning, three bones per vertex (sub_82913B50), vector rewrite", 0.0f, false, 3000};
+Replacement g_skin4{"skinning, four bones per vertex (sub_829143D0), vector rewrite", 0.0f, false, 3000};
 struct SkinTags {
   SkinTags() {
-    for (Replacement* r : {&g_skin1, &g_skin2, &g_skin3}) {
+    for (Replacement* r : {&g_skin1, &g_skin2, &g_skin3, &g_skin4}) {
       r->tag = "native_skin";
       r->group = Group::kSkinning;
       r->skin_near = true;
@@ -338,7 +344,7 @@ struct LzxTags {
 // A/B starts.
 Replacement g_limiter{"limiter (sub_8258BE08), native", 1.0f / 1048576.0f, true, 5000};
 Replacement* const kAll[] = {&g_scalar, &g_mix,   &g_filter, &g_biquad, &g_biquad_native, &g_fill,  &g_reverb,
-                             &g_voice_mono, &g_voice_stereo, &g_skin1,  &g_skin2, &g_skin3,  &g_lzx,
+                             &g_voice_mono, &g_voice_stereo, &g_skin1,  &g_skin2, &g_skin3,  &g_skin4, &g_lzx,
                              &g_limiter};
 
 std::atomic<uint64_t> g_next_summary{0};
@@ -1445,6 +1451,7 @@ REX_HOOK_RAW(sub_827E7058) {
 REX_EXTERN(__imp__sub_82912D78);
 REX_EXTERN(__imp__sub_82913378);
 REX_EXTERN(__imp__sub_82913B50);
+REX_EXTERN(__imp__sub_829143D0);
 REX_EXTERN(__imp__sub_82914AA0);
 
 namespace {
@@ -1498,10 +1505,30 @@ REX_HOOK_RAW(sub_82913B50) {
   bo2zm::page_writes::MarkGuest(out, bytes);
 }
 
+// sub_829143D0 (four bones, three weights; the bones of the vertex's other three records follow the same layout, see
+// Skin4). Off by default (bo2zm_native_skin4): then the call goes straight to the game's function and its output is
+// not stamped, exactly as before this hook existed. No SkinOnGpu: RecordGpu and the GPU skinning shader only know
+// the one-, two- and three-bone kernels (kHalves, the shader's kernel index), so a four-bone group always stays on
+// the CPU (sub_82914AA0 below already forgets the GPU jobs in its whole output for it).
+REX_HOOK_RAW(sub_829143D0) {
+  static const bool on = REXCVAR_GET(bo2zm_native_skin4);
+  if (!on) {
+    __imp__sub_829143D0(ctx, base);
+    return;
+  }
+  const uint32_t out = ctx.r7.u32 & ~15u, bytes = ctx.r5.u32 * 32;
+  if (SkinningOffInThisArm()) {
+    __imp__sub_829143D0(ctx, base);
+  } else {
+    Call(g_skin4, ctx, base, __imp__sub_829143D0, bo2zm::native_skin::Skin4, RegionsSkin);
+  }
+  bo2zm::page_writes::MarkGuest(out, bytes);
+}
+
 // sub_82914AA0, the skinning of one surface (r4 its vertices, r5 its blend groups: the vertex counts of the one-,
 // two-, three- and four-bone groups as int16 at +0, +2, +4, +6, r6 the bone matrices, r7 the output; disassembly at
 // 0x82914AA0-0x82914E28: each group's kernel writes r7 + 32 * the vertices before it). With GPU skinning on, the jobs
-// in the whole output are forgotten first: a group whose kernel has no hook (four bones, sub_829143D0) or that stays
+// in the whole output are forgotten first: a group whose kernel has no hook (four bones, sub_829143D0, while bo2zm_native_skin4 is off) or that stays
 // on the CPU then never takes an older job's vertices.
 REX_HOOK_RAW(sub_82914AA0) {
   if (bo2zm::gpu_skin::Enabled()) {
