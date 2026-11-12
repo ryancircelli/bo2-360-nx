@@ -134,6 +134,16 @@ uint32_t VertexFormat(Format format) {
       return uint32_t(MTLVertexFormatShort2);
     case VK_FORMAT_R16G16_SFLOAT:
       return uint32_t(MTLVertexFormatHalf2);
+    // Scaled formats: integers read as floats without normalizing. Metal has no scaled formats; the integer
+    // format feeds a float attribute the same way (MoltenVK maps them so too).
+    case VK_FORMAT_R16G16_USCALED:
+      return uint32_t(MTLVertexFormatUShort2);
+    case VK_FORMAT_R16G16_SSCALED:
+      return uint32_t(MTLVertexFormatShort2);
+    case VK_FORMAT_R16G16B16A16_USCALED:
+      return uint32_t(MTLVertexFormatUShort4);
+    case VK_FORMAT_R16G16B16A16_SSCALED:
+      return uint32_t(MTLVertexFormatShort4);
     case VK_FORMAT_R16G16B16A16_UNORM:
       return uint32_t(MTLVertexFormatUShort4Normalized);
     case VK_FORMAT_R16G16B16A16_SNORM:
