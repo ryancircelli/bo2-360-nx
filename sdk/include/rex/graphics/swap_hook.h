@@ -28,4 +28,11 @@ void NotifyGpuJob(uint64_t order, uint64_t ns, bool measured);
 // Called by a command processor's IssueSwap.
 void NotifySwap(uint32_t width, uint32_t height);
 
+// A hook to hear that the command processor wrote a value into guest memory for the guest to poll: an EVENT_WRITE_SHD
+// (D3D fences, "GPU done" words). A guest thread that spins or sleeps on such a word can be woken at once instead of
+// at its next timeout. Runs on the GPU command thread and must be quick.
+using GuestWriteHook = void (*)();
+void SetGuestWriteHook(GuestWriteHook hook);
+void NotifyGuestWrite();
+
 }  // namespace rex::graphics

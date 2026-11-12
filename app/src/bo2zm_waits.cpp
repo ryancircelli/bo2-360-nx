@@ -79,6 +79,7 @@
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/graphics/swap_hook.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
@@ -129,6 +130,13 @@ REXCVAR_DEFINE_INT32(bo2zm_wait_sites, 0xFFF, "BO2",
                      "128 the Server, 256 jobs whose dependency is not met, 512 workers that find critical "
                      "section 6 taken, 1024 threads whose last jobs were all put back, 2048 the wait for the culling "
                      "jobs")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(bo2zm_waits_fence_wake, true, "BO2",
+                    "Wake threads sleeping on put-back jobs when the SDK command processor writes a fence "
+                    "(EVENT_WRITE_SHD), and let JQ workers wait for that too. The three put-back job types wait for a "
+                    "D3D fence (sub_828AA590), which only the command processor completes; without this they wake on "
+                    "the bo2zm_waits_max_us timeout")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REX_EXTERN(__imp__sub_8284AED8);
@@ -371,6 +379,11 @@ void Warn(tr::Reason m, uint32_t key = 0) {
 bool AnyActive() {
   static const bool active = REXCVAR_GET(bo2zm_blocking_waits);
   return active;
+}
+
+bool FenceWake() {
+  static const bool on = REXCVAR_GET(bo2zm_waits_fence_wake);
+  return on;
 }
 
 std::chrono::microseconds Limit() {
@@ -629,6 +642,21 @@ void WarnProgressRing() {
 }
 }  // namespace bo2zm::native
 
+// --- Fence writes from the SDK command processor (the Metal and Vulkan renderers) ---------------------------------
+// The SDK writes a D3D fence (EVENT_WRITE_SHD) as it reads the ring; the native renderer warns on its own above. Told
+// as ring progress: the put-back and ring-poll sleepers already wait for that reason.
+namespace {
+void WarnFenceWritten() {
+  if (FenceWake()) {  // off: the put-back sleeps are as before (the A arm of an A/B)
+    Warn(tr::kWarningRing);
+  }
+}
+[[maybe_unused]] const bool g_fence_hook_set = [] {
+  rex::graphics::SetGuestWriteHook(&WarnFenceWritten);
+  return true;
+}();
+}  // namespace
+
 // --- The picker: sub_8284AED8(slot, filter, record out, flag) returns 1 with a job, or yields and returns 0 --------
 REX_HOOK_RAW(sub_8284AED8) {
   bo2zm::benchmark::ApplyOwnPriority();
@@ -769,6 +797,9 @@ REX_HOOK_RAW(sub_8284C3B8) {
   uint32_t interests = kInterestsHelp | Bit(tr::kWarningEnded) | Bit(tr::kWarningLock);
   if (!worker) {
     interests |= Bit(tr::kWarningEvent) | Bit(tr::kWarningRing);
+  } else if (FenceWake()) {
+    // The jobs a worker puts back wait for a GPU fence (sub_828AA590): wake when the command processor writes one.
+    interests |= Bit(tr::kWarningRing);
   }
   Sleep(tr::kRoomPutBack, t.seen_choice, interests, 0, Limit());
 }
