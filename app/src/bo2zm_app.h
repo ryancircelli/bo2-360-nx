@@ -18,6 +18,7 @@
 #include <rex/rex_app.h>
 
 #include "bo2zm_autoexec.h"
+#include "bo2zm_benchmark.h"
 #include "bo2zm_controllers.h"
 #include "bo2zm_debug_options.h"
 #include "bo2zm_gsc_mods.h"
@@ -158,6 +159,7 @@ class Bo2zmApp : public rex::ReXApp {
 
   // Mode switches (MP <-> Zombies) relaunch the title; see bo2zm_relaunch.cpp.
   void OnPostSetup() override {
+    bo2zm::benchmark::InitializeFactors();
     if (!bo2zm::native::Active()) {
       bo2zm::perf_log::InstallSwapHook(rex::cvar::GetFlagByName("gpu_plugin") == "metal" ? "metal" : "xenos");
     }

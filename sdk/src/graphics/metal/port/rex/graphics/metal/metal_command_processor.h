@@ -1270,6 +1270,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   SharedMemoryRequestReason current_shared_memory_upload_reason_ =
       SharedMemoryRequestReason::kUnknown;
   // Current command buffer and encoder
+  bool encode_thread_active_ = false;  // CP-owned; latched only at a drained frame boundary.
   MTL::CommandBuffer* current_command_buffer_ = nullptr;
   // Wraps the real render encoder; with metal_encode_thread its calls are
   // replayed on a second thread (see metal_deferred_render_encoder.h).

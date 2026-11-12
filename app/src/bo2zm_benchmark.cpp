@@ -1,6 +1,9 @@
 // See bo2zm_benchmark.h.
 
 #include "bo2zm_benchmark.h"
+#include "bo2zm_waits.h"
+#include <rex/graphics/metal_runtime.h>
+#include <stdexcept>
 
 #include <algorithm>
 #include <atomic>
@@ -38,6 +41,12 @@
 REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "Test helper: once in a match, a fixed 3-minute route with the test pad and a frame-time "
                     "summary in the log ('[benchmark]'). Use with bo2zm_test_god")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(bo2zm_benchmark_ab_factors, "", "BO2",
+                      "Up to two comma-separated runtime A/B switches: waits_fence_wake,metal_encode_thread")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_settle_s, 3, "BO2",
+                     "Seconds excluded after each A/B arm change (also recorded in perf abarm events)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bo2zm_test_stall_at_s, 0, "BO2",
                      "Test helper, with bo2zm_benchmark: this many seconds into the route the renderer thread stops "
@@ -172,7 +181,38 @@ double Duration() {
   static const double seconds = double(REXCVAR_GET(bo2zm_benchmark_s));
   return seconds;
 }
-constexpr double kSettle = 0.5;      // A/B: seconds after each arm change whose frames are not counted
+double SettleSeconds() { return std::max(0, REXCVAR_GET(bo2zm_benchmark_ab_settle_s)); }
+struct Factor {
+  const char* name;
+  bool (*get)();
+  void (*set)(bool);
+};
+const Factor kFactors[] = {
+    {"waits_fence_wake", &bo2zm::waits::FenceWake, &bo2zm::waits::SetFenceWake},
+#if defined(__APPLE__)
+    {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
+#endif
+};
+struct SelectedFactor { const Factor* factor; bool usual; };
+std::vector<SelectedFactor> g_factors;
+int g_applied_arm = -1;
+int64_t g_arm_changed_ns = 0;
+
+void ApplyFactors(int arm, int64_t now) {
+  if (arm == g_applied_arm) return;
+  g_applied_arm = arm;
+  g_arm_changed_ns = now;
+  std::string fields = fmt::format("arm={}\tsettle_s={}\tfactors=", arm, SettleSeconds());
+  for (size_t bit = 0; bit < g_factors.size(); ++bit) {
+    const auto& f = g_factors[bit];
+    const bool on = arm < 0 ? f.usual : (arm & (1 << bit)) != 0;
+    f.factor->set(on);
+    if (bit) fields += ',';
+    fields += fmt::format("{}={}", f.factor->name, int(on));
+  }
+  bo2zm::perf_log::Event("abarm", fields);
+  REXLOG_INFO("[benchmark] A/B {}", fields);
+}
 
 // The test pad's bits (bo2zm_test_pad.cpp): left stick 18-21, right stick 22-25.
 constexpr uint32_t kLookRight = 1u << 24;
@@ -198,7 +238,7 @@ std::atomic<uint64_t> g_frames_seen{0};  // every frame AnnotateFrame sees, rout
 std::atomic<bool> g_off{false};          // Disable(): no benchmark in this start after all
 std::mutex g_mutex;
 std::vector<float> g_ms;           // frame times inside the window
-std::vector<float> g_arm_ms[4];    // A/B: the same, per arm (without each span's first kSettle seconds)
+std::vector<float> g_arm_ms[4];    // A/B: the same, per arm (without each arm's settle interval)
 Clock::time_point g_earlier{};
 bool g_summarized = false;
 
@@ -629,6 +669,31 @@ void Summarize(double seconds) {
 
 }  // namespace
 
+void InitializeFactors() {
+  static const bool initialized = [] {
+    std::string_view rest = REXCVAR_GET(bo2zm_benchmark_ab_factors);
+    if (rest.empty()) return true;
+    while (true) {
+      const auto comma = rest.find(',');
+      auto name = rest.substr(0, comma);
+      const auto first = name.find_first_not_of(" \t");
+      const auto last = name.find_last_not_of(" \t");
+      name = first == name.npos ? std::string_view{} : name.substr(first, last - first + 1);
+      const Factor* found = nullptr;
+      for (const auto& f : kFactors) if (name == f.name) found = &f;
+      if (!found || g_factors.size() >= 2 ||
+          std::any_of(g_factors.begin(), g_factors.end(), [&](const auto& f) { return f.factor == found; })) {
+        throw std::runtime_error(fmt::format("Invalid bo2zm_benchmark_ab_factors entry '{}': expected up to two distinct registered switches", name));
+      }
+      g_factors.push_back({found, found->get()});
+      if (comma == rest.npos) break;
+      rest.remove_prefix(comma + 1);
+    }
+    return true;
+  }();
+  (void)initialized;
+}
+
 bool IsActive() {
   static const bool active = REXCVAR_GET(bo2zm_benchmark);
   return active && !g_off.load(std::memory_order_relaxed);
@@ -787,6 +852,7 @@ void AnnotateFrame() {
   ApplyAbXmaCache(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyAbIpak(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyAbPriorities(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
+  ApplyFactors(ArmAt(t, nullptr), Now());
   g_arm_cached.store(AbSeconds() > 0 && t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1, std::memory_order_relaxed);
 #if defined(__SWITCH__)
   if (AbSeconds() > 0 && !g_summarized) {
@@ -852,9 +918,8 @@ void AnnotateFrame() {
   if (g_earlier.time_since_epoch().count() != 0) {
     const float ms = float(std::chrono::duration<double, std::milli>(now - g_earlier).count());
     g_ms.push_back(ms);
-    double into = 0.0;
-    const int arm = ArmAt(t, &into);
-    if (arm >= 0 && into >= kSettle) {
+    const int arm = ArmAt(t, nullptr);
+    if (arm >= 0 && double(Now() - g_arm_changed_ns) / 1e9 >= SettleSeconds() + ms / 1000.0) {
       g_arm_ms[arm].push_back(ms);
     }
   }
