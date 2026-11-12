@@ -26,6 +26,7 @@
 #include <rex/graphics/graphics_system.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/sampler_info.h>
+#include <rex/graphics/swap_hook.h>
 #include <rex/graphics/trace/trace_hooks.h>
 #include <rex/graphics/xenos.h>
 #include <rex/logging.h>
@@ -1369,6 +1370,8 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
   address &= ~0x3;
   data_value = GpuSwap(data_value, endianness);
   memory::store(memory_->TranslatePhysical(address), data_value);
+  // Guest threads polling this word (D3D fences) can wake now.
+  NotifyGuestWrite();
   return true;
 }
 
