@@ -58,7 +58,21 @@ endforeach()
 
 set(_mcpp ${_metal_deps}/metal-cpp)
 set(_msc ${_metal_deps}/metal-shader-converter)
-set(_xenios ${_metal_deps}/xenios-source)
+# Patch a private Xenios tree so repeated configuration is idempotent.
+set(_xenios_uint ${_metal_work}/xenios-uint)
+file(REMOVE_RECURSE ${_xenios_uint})
+file(COPY ${_metal_deps}/xenios-source/ DESTINATION ${_xenios_uint})
+execute_process(
+    COMMAND ${REXGPU_METAL_PATCH} --batch -p1 -i ${_metal_dir}/patches/sdk-metal-resolve-uint.patch
+    WORKING_DIRECTORY ${_xenios_uint}
+    RESULT_VARIABLE _uint_patch_rc)
+if(NOT _uint_patch_rc EQUAL 0)
+    message(FATAL_ERROR "Integer resolve shader patch failed")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${_metal_dir}/patches/sdk-metal-resolve-uint.patch)
+
+set(_xenios ${_xenios_uint})
 
 # The adapted sources include "third_party/metal-cpp/..." and
 # "third_party/metal-shader-converter/...".
@@ -142,6 +156,7 @@ add_custom_command(
             ${_xenios} ${_metal_gen} 8
     COMMAND ${CMAKE_COMMAND} -E touch ${_metal_helpers_stamp}
     DEPENDS ${_metal_dir}/tools/compile_metal_helpers.py ${_metal_helper_wrappers}
+            ${_metal_dir}/patches/sdk-metal-resolve-uint.patch
     COMMENT "rexgpu-metal: compiling built-in Metal helper shaders"
     VERBATIM
 )
@@ -161,6 +176,20 @@ add_library(rexgpu-metal SHARED
 )
 add_library(rex::gpu-metal ALIAS rexgpu-metal)
 add_dependencies(rexgpu-metal rexgpu-metal-helpers)
+# Sources that embed helper bytecode headers: rebuild them when the helpers
+# are regenerated (depfiles miss the generated headers).
+foreach(_src
+    port/rex/ui/metal/metal_presenter.mm
+    port/rex/ui/metal/metal_immediate_drawer.mm
+    port/rex/graphics/metal/metal_tile_resolve.cc
+    port/rex/graphics/metal/metal_render_target_cache.cc
+    port/rex/graphics/metal/metal_resolve_to_texture.cc
+    port/rex/graphics/metal/metal_direct_host_resolve.cc
+    port/rex/graphics/metal/metal_texture_cache.cc
+    port/rex/graphics/metal/metal_command_processor.cc)
+    set_property(SOURCE ${_metal_dir}/${_src} APPEND PROPERTY
+        OBJECT_DEPENDS ${_metal_helpers_stamp})
+endforeach()
 
 set_target_properties(rexgpu-metal PROPERTIES
     EXPORT_NAME gpu-metal

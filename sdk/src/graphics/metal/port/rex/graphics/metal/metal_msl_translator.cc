@@ -3200,6 +3200,25 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
   }
 
   if (instr.opcode == FetchOpcode::kTextureFetch) {
+    // Integer fetches reinterpret normalized host views in integer units.
+    Open(fmt::format("if (({} & 1u) != 0u)", FetchWord(tf, 3)));
+    std::string format = NewTemp("integer_format");
+    std::string scale = NewTemp("integer_scale");
+    Line("uint {} = {} & 63u;", format, FetchWord(tf, 1));
+    // Only the 16-bit unsigned formats are validated (BO2 5.11 luminance).
+    Line("float {} = ({} == 24u || {} == 25u || {} == 26u) ? 65535.0f : 1.0f;", scale, format,
+         format, format);
+    for (uint32_t i = 0; i < 4; ++i) {
+      if (!(nonzero & (1u << i)))
+        continue;
+      Open(fmt::format(
+          "if (extract_bits({}, {}, 2) == {}u)",
+          SysU(offsetof(SystemConstants, texture_swizzled_signs) + sizeof(uint32_t) * (tf >> 2)),
+          (tf & 3) * 8 + 2 * i, uint32_t(xenos::TextureSign::kUnsigned)));
+      Line("{}.{} *= {};", res, kComp[i], scale);
+      Close();
+    }
+    Close();
     std::string e = NewTemp("ea");
     Line("float {} = as_type<float>(extract_bits(as_type<int>({}), 13, 6) * "
          "{} + as_type<int>(1.0f));",
