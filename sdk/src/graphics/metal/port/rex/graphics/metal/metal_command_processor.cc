@@ -6541,6 +6541,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     MTL::RenderPassDescriptor* render_pass_descriptor,
     UniformBufferInfo& uniforms_out, DrawDynamicState& dynamic_state_out) {
   const bool lite2 = DrawPrepLite2Enabled();
+  const bool draw_fastpath = REXCVAR_GET(metal_draw_fastpath);
   // Determine primitive type characteristics
   bool primitive_polygonal = draw_util::IsPrimitivePolygonal(regs);
 
@@ -6948,12 +6949,30 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     }
     current_samplers_vertex_.resize(
         std::max(current_samplers_vertex_.size(), sampler_count_vertex));
-    for (size_t i = 0; i < sampler_count_vertex; ++i) {
-      auto parameters =
-          texture_cache_->GetSamplerParameters(sampler_bindings_vertex[i]);
-      if (current_samplers_vertex_[i] != parameters) {
-        current_samplers_vertex_[i] = parameters;
-        cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+    // [draw-fastpath] no fetch dword changed, same bindings: the parameters
+    // computed last time are still this draw's parameters.
+    const SamplerFastKey sampler_key_vertex = {
+        true, fetch_value_epoch_, sampler_bindings_vertex.data(),
+        sampler_count_vertex, sampler_layout_uid_vertex,
+        int32_t(REXCVAR_GET(anisotropic_override))};
+    const bool sampler_fast_hit_vertex =
+        draw_fastpath && sampler_fast_vertex_.valid &&
+        sampler_fast_vertex_.fetch_epoch == sampler_key_vertex.fetch_epoch &&
+        sampler_fast_vertex_.bindings == sampler_key_vertex.bindings &&
+        sampler_fast_vertex_.count == sampler_key_vertex.count &&
+        sampler_fast_vertex_.layout_uid == sampler_key_vertex.layout_uid &&
+        sampler_fast_vertex_.aniso_override == sampler_key_vertex.aniso_override;
+    if (!sampler_fast_hit_vertex) {
+      for (size_t i = 0; i < sampler_count_vertex; ++i) {
+        auto parameters =
+            texture_cache_->GetSamplerParameters(sampler_bindings_vertex[i]);
+        if (current_samplers_vertex_[i] != parameters) {
+          current_samplers_vertex_[i] = parameters;
+          cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+        }
+      }
+      if (draw_fastpath) {
+        sampler_fast_vertex_ = sampler_key_vertex;
       }
     }
   } else if (current_sampler_layout_uid_vertex_ != sampler_layout_uid_vertex) {
@@ -7033,12 +7052,29 @@ bool MetalCommandProcessor::PrepareDrawConstants(
       }
       current_samplers_pixel_.resize(
           std::max(current_samplers_pixel_.size(), sampler_count_pixel));
-      for (size_t i = 0; i < sampler_count_pixel; ++i) {
-        auto parameters =
-            texture_cache_->GetSamplerParameters(sampler_bindings_pixel[i]);
-        if (current_samplers_pixel_[i] != parameters) {
-          current_samplers_pixel_[i] = parameters;
-          cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+      // [draw-fastpath] see the vertex stage above.
+      const SamplerFastKey sampler_key_pixel = {
+          true, fetch_value_epoch_, sampler_bindings_pixel.data(),
+          sampler_count_pixel, sampler_layout_uid_pixel,
+          int32_t(REXCVAR_GET(anisotropic_override))};
+      const bool sampler_fast_hit_pixel =
+          draw_fastpath && sampler_fast_pixel_.valid &&
+          sampler_fast_pixel_.fetch_epoch == sampler_key_pixel.fetch_epoch &&
+          sampler_fast_pixel_.bindings == sampler_key_pixel.bindings &&
+          sampler_fast_pixel_.count == sampler_key_pixel.count &&
+          sampler_fast_pixel_.layout_uid == sampler_key_pixel.layout_uid &&
+          sampler_fast_pixel_.aniso_override == sampler_key_pixel.aniso_override;
+      if (!sampler_fast_hit_pixel) {
+        for (size_t i = 0; i < sampler_count_pixel; ++i) {
+          auto parameters =
+              texture_cache_->GetSamplerParameters(sampler_bindings_pixel[i]);
+          if (current_samplers_pixel_[i] != parameters) {
+            current_samplers_pixel_[i] = parameters;
+            cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+          }
+        }
+        if (draw_fastpath) {
+          sampler_fast_pixel_ = sampler_key_pixel;
         }
       }
     } else if (current_sampler_layout_uid_pixel_ != sampler_layout_uid_pixel) {
@@ -10641,6 +10677,17 @@ void MetalCommandProcessor::WriteFetchConstantsFromMem(uint32_t start_index,
   const uint32_t dword_start =
       start_index - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
   const uint32_t dword_end = dword_start + num_registers;
+  {
+    // [draw-fastpath] epoch of fetch-register value changes (any path).
+    const uint32_t* old_epoch_values = &register_file_->values[start_index];
+    for (uint32_t i = 0; i < num_registers; ++i) {
+      if (rex::memory::load_and_swap<uint32_t>(base + i) !=
+          old_epoch_values[i]) {
+        ++fetch_value_epoch_;
+        break;
+      }
+    }
+  }
   if (REXCVAR_GET(metal_fetch_constants_shared)) {
     // [fetch-shared] only dwords whose value changes dirty the snapshots.
     const uint32_t* old_values = &register_file_->values[start_index];
@@ -10788,6 +10835,9 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
     const bool fetch_shared = REXCVAR_GET(metal_fetch_constants_shared);
     if (fetch_shared && value_changed) {
       ++fetch_constants_generation_;
+    }
+    if (value_changed) {
+      ++fetch_value_epoch_;
     }
     if (!fetch_shared || value_changed) {
       DxbcShader::FetchConstantDwordMask changed_fetch_dword_mask = {};

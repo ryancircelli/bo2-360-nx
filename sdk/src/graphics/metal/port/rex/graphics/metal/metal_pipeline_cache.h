@@ -516,6 +516,12 @@ class MetalPipelineCache {
 
   // MSC pipeline caches (keyed by shader combination).
   std::unordered_map<uint64_t, std::unique_ptr<PipelineHandle>> pipeline_cache_;
+  // [draw-fastpath] last standard-pipeline lookup (command thread only).
+  PipelineHandle* last_fast_handle_ = nullptr;
+  MetalShader::MetalTranslation* last_fast_vertex_translation_ = nullptr;
+  MetalShader::MetalTranslation* last_fast_pixel_translation_ = nullptr;
+  PipelineAttachmentFormats last_fast_formats_ = {};
+  PipelineRenderingKey last_fast_rendering_key_ = {};
   std::unordered_map<uint64_t, GeometryPipelineState> geometry_pipeline_cache_;
   PipelineFailureBackoff geometry_pipeline_failures_;
   std::unordered_map<uint64_t, TessellationPipelineState>

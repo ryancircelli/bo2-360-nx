@@ -21,6 +21,12 @@ DEFINE_bool(metal_dedupe_gpu_access, true,
             "Skip marking a shared memory range as GPU-accessed again when it "
             "was already marked for the same submission.",
             "Metal");
+DEFINE_bool(metal_draw_fastpath, false,
+            "Per-draw cache-hit fast path: reuse the last pipeline handle when "
+            "the shader pair, attachment formats and rendering key are "
+            "unchanged, and skip re-deriving sampler parameters when no fetch "
+            "constant changed. Output is identical; default off.",
+            "Metal");
 DEFINE_bool(metal_fetch_constants_shared, true,
             "Fetch constant uploads: dirty only fetch registers whose value "
             "changed, and let every shader stage and draw share one upload "

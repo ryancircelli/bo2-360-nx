@@ -1687,6 +1687,19 @@ class MetalCommandProcessor final : public CommandProcessor {
   std::vector<MetalTextureCache::TextureSRVKey> current_texture_srv_keys_pixel_;
   std::vector<MetalTextureCache::SamplerParameters> current_samplers_vertex_;
   std::vector<MetalTextureCache::SamplerParameters> current_samplers_pixel_;
+  // [draw-fastpath] sampler parameters in current_samplers_<stage>_ were built
+  // for this key; they stay valid while no fetch register changed value.
+  struct SamplerFastKey {
+    bool valid = false;
+    uint64_t fetch_epoch = 0;
+    const void* bindings = nullptr;
+    size_t count = 0;
+    size_t layout_uid = 0;
+    int32_t aniso_override = 0;
+  };
+  SamplerFastKey sampler_fast_vertex_;
+  SamplerFastKey sampler_fast_pixel_;
+  uint64_t fetch_value_epoch_ = 1;  // bumped when any fetch dword changes
   std::vector<MTL::Texture*> current_texture_bindless_resources_vertex_;
   std::vector<MTL::Texture*> current_texture_bindless_resources_pixel_;
   std::vector<uint32_t> current_descriptor_indices_vertex_;
