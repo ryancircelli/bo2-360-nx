@@ -7,8 +7,8 @@
 // grows. Without the cvar Get() is null and the layer makes one test per call.
 //
 // What the mirror does not do yet is logged once and skipped: queries and timestamps (stubs), scaled blits, the
-// renderer's own shaders that are not in the shader pack (output, conversion copies, GPU skinning,
-// volume gathers), and anything that writes guest memory back. Barriers are no-ops: Metal tracks the hazards of
+// renderer's own shaders that are not in the shader pack (output, GPU skinning, volume gathers; the converted
+// copy of the resolves is the exception: it has MSL of its own, OwnShader), and anything that writes guest memory back. Barriers are no-ops: Metal tracks the hazards of
 // the objects the mirror makes.
 //
 // Every entry point takes one lock, so lists recorded on several threads stay coherent. Submit commits the lists in
@@ -23,6 +23,13 @@
 namespace bo2zm::native::gpu::metal {
 
 class Device;
+
+// The renderer's own shaders the mirror has a Metal version of (MSL in render/shaders, built at run time).
+enum class OwnShader : uint32_t {
+  kNone = 0,
+  kRectVertex,   // guest_output_triangle_strip_rect_vs: a rectangle from four vertices, push constants 0-15
+  kResolveCopy,  // bo2zm_resolve_copy.frag: the converted copy of the resolves, push constants 16-31
+};
 
 class Mirror {
  public:
@@ -44,6 +51,9 @@ class Mirror {
   // Which pack shader a module holds (its container hash; early_z for the EarlyFragmentTests copy). Modules
   // without a tag (the renderer's own shaders) give pipelines the mirror skips.
   void ShaderTagged(Shader shader, bool vertex, uint64_t hash, bool early_z);
+  // The same for one of the renderer's own shaders that the mirror has an MSL version of (OwnShader). A pipeline
+  // made only of these is built from the MSL; any other untagged shader still gives a pipeline the mirror skips.
+  void ShaderOwn(Shader shader, bool vertex, OwnShader own);
   void ShaderDestroyed(Shader shader);
   void SetLayoutCreated(SetLayout layout, const SetBinding* bindings, uint32_t count);
   void SetsAllocated(uint32_t count, const SetLayout* layouts, const Set* sets);
@@ -69,6 +79,9 @@ class Mirror {
   void SetDepthBias(CommandList list, float constant, float slope);
   void SetStencilValues(CommandList list, uint32_t front, uint32_t back);
   void BindPipeline(CommandList list, Pipeline pipeline);
+  // The push constants (vertex 0x1 and fragment 0x10 stages; compute is not mirrored). Kept in the list's bound
+  // state and given to the renderer's own pipelines at the draw, as bytes.
+  void PushConstants(CommandList list, uint32_t stages, uint32_t offset, uint32_t size, const void* data);
   void BindSets(CommandList list, uint32_t first, uint32_t count, const Set* sets, uint32_t n_offsets,
                 const uint32_t* offsets);
   void BindVertexBuffers(CommandList list, uint32_t count, const Buffer* buffers, const Size* offsets);
