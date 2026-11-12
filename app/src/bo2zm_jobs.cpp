@@ -1,6 +1,7 @@
 // See bo2zm_jobs.h. The periodic report of BO2's job system (bo2zm_jobs_report_s seconds, 0 = off).
 
 #include "bo2zm_jobs.h"
+#include "bo2zm_critpath_light.h"
 
 #include <algorithm>
 #include <chrono>
@@ -75,6 +76,9 @@ void Report(const uint8_t* base, double seconds) {
   auto ps = [&](uint64_t v) { return double(v) / seconds; };
   auto ms = [&](uint64_t ns) { return double(ns) / 1e6 / seconds; };  // ms per second
   for (PerThread* h : g_threads) {
+    const uint64_t gw=Take(h->group_warned), gt=Take(h->group_timeout), gd=Take(h->group_direct), ge=Take(h->group_end_warnings);
+    if (gw || gt || ge) REXLOG_INFO("[jobs] group-sleep thread={} host={} window_s={:.6f} warned={} timeout={} direct={} watched_group={:08X} ended_warnings={}",
+      h->label,h->id,seconds,gw,gt,gd,bo2zm::critpath::light::WatchedGroup(),ge);
     const uint64_t choose = Take(h->choose), dependent = Take(h->choose_dependent), v0 = Take(h->choose_empty[0]), v1 = Take(h->choose_empty[1]),
                    v2 = Take(h->choose_empty[2]), yielded = Take(h->yielded),
                    wait = Take(h->wait_worker), no_sleep = Take(h->wait_no_sleep),

@@ -66,3 +66,19 @@ For exit-only recording on macOS, give runq a canonical output path (`/private/t
 installed `boot_test.sh` compares the cloned app path literally with the process argv, while the launcher resolves
 its executable with `realpath`. A logical `/tmp` clone path can therefore miss the harness's TERM and leave runq to
 SIGKILL the process, losing the exit dump. Both names refer to the same output directory.
+
+## Group-own overrun diagnostics
+
+The group-own LIGHT variant adds report-only `kRoomGroup` outcomes to each traced target wait:
+`group_sleep_warned`, `group_sleep_timeout`, `group_sleep_direct`, total sleep ns, and the last sleep's start/end
+and warned result. `warned` is the existing wait predicate's success: either a direct signal **or a global warning
+counter change**. `direct` counts the subset whose sleeper flag was actually signalled; a change-only return must
+not be described as a matching-group direct wake. These observations do not change the sleep predicate or timeout.
+
+With `bo2zm_jobs_report_s=5`, `[jobs] group-sleep` lines give exact per-thread counts for the report window. Their
+`ended_warnings` counts calls made by that thread to `Warn(kWarningEnded,key)` where `key` is Main's most recently
+observed target group (`watched_group`). Group-sleep warned/timeout/direct counters on those log lines include all
+that thread's `kRoomGroup` sleeps; the LIGHT TSV fields are restricted to the traced Main wait.
+
+For the report-enabled overrun build, the group hook captures the LIGHT return before `AnnotateWait` takes the
+shared jobs-report map mutex. The return timestamp therefore excludes post-return reporting lock contention.

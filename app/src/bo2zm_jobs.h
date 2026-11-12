@@ -105,6 +105,7 @@ struct PerThread {
   std::atomic<uint64_t> ns_helps{0};
   std::atomic<uint64_t> waits_type{0};       // sub_8284B730 calls
   std::atomic<uint64_t> ns_waits_type{0};
+  std::atomic<uint64_t> group_warned{0}, group_timeout{0}, group_direct{0}, group_end_warnings{0};
   std::atomic<uint64_t> stalls{0};           // host blocks added by bo2zm_waits.cpp
   std::atomic<uint64_t> stalls_warned{0};  // ... ended by a notification (not by the timeout)
   std::atomic<uint64_t> ns_stalls{0};

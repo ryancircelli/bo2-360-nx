@@ -341,6 +341,10 @@ void Warn(tr::Reason m, uint32_t key = 0) {
   g_changes[m].fetch_add(1, std::memory_order_seq_cst);
   if (tr::ReportActive()) {
     tr::g_warnings[m].fetch_add(1, std::memory_order_relaxed);
+    if (bo2zm_critpath_light && m == tr::kWarningEnded && key != 0 &&
+        key == bo2zm::critpath::light::WatchedGroup()) {
+      tr::JobThread().group_end_warnings.fetch_add(1, std::memory_order_relaxed);
+    }
   }
   if (g_interested[m].load(std::memory_order_seq_cst) == 0) {
     return;
@@ -460,8 +464,10 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
   }
   thread_local Sleeper yo;
   const bool report = tr::ReportActive();
-  const uint64_t t0 = report ? NowNs() : 0;
+  const bool light_group = bo2zm_critpath_light && room == tr::kRoomGroup;
+  const uint64_t t0 = (report || light_group) ? NowNs() : 0;
   bool warned;
+  bool direct = false;
   const int slot = OwnLocks() ? MySlot() : -1;
   if (slot >= 0) {
     // A lock of its own (see "Sleepers with a lock of their own").
@@ -481,6 +487,7 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
       warned = false;
       for (;;) {
         if (s.word.load(std::memory_order_seq_cst) == kWarned || Change(seen, interests)) {
+          direct = s.word.load(std::memory_order_seq_cst) == kWarned;
           warned = true;
           break;
         }
@@ -498,6 +505,7 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
       s.warned = false;
       s.active.store(true, std::memory_order_seq_cst);
       warned = s.cv.wait_for(lock, limit, [&] { return s.warned || Change(seen, interests); });
+      direct = s.warned;
       s.active.store(false, std::memory_order_relaxed);
     }
 #endif
@@ -523,6 +531,7 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
     yo.warned = false;
     g_sleeping.push_back(&yo);
     warned = yo.cv.wait_for(lock, limit, [&] { return yo.warned || Change(seen, interests); });
+    direct = yo.warned;
     g_sleeping.erase(std::find(g_sleeping.begin(), g_sleeping.end(), &yo));
     for (int m = 0; m < tr::kNumWarnings; ++m) {
       if (interests & (1u << m)) {
@@ -535,10 +544,16 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
       g_shared_woken.fetch_add(1, std::memory_order_relaxed);
     }
   }
+  const uint64_t end = (report || light_group) ? NowNs() : 0;
+  const uint64_t ns = end - t0;
+  if (light_group) bo2zm::critpath::light::GroupSleep(warned, direct, t0, end);
   ReportWaits();
   if (report) {
     auto& h = tr::JobThread();
-    const uint64_t ns = NowNs() - t0;
+    if (room == tr::kRoomGroup) {
+      (warned ? h.group_warned : h.group_timeout).fetch_add(1, std::memory_order_relaxed);
+      if (direct) h.group_direct.fetch_add(1, std::memory_order_relaxed);
+    }
     h.stalls.fetch_add(1, std::memory_order_relaxed);
     h.ns_stalls.fetch_add(ns, std::memory_order_relaxed);
     auto& s = tr::g_rooms[room];
@@ -940,10 +955,16 @@ REX_HOOK_RAW(sub_82493690) {
   if (critical) bo2zm::critpath::BeginWait();
   const uint32_t earlier = t.group;
   t.group = ctx.r3.u32;
-  Measure(0x82493690, ctx, base, __imp__sub_82493690);
-  t.group = earlier;
-  if (critical) bo2zm::critpath::EndWait();
+  const bool report = tr::ReportActive();
+  const uint32_t lr = uint32_t(ctx.lr);
+  const uint64_t begin = report ? NowNs() : 0;
+  __imp__sub_82493690(ctx, base);
+  const uint64_t end = report ? NowNs() : 0;
+  // Capture the guest return before AnnotateWait's shared reporting lock can delay this thread.
   if (light) bo2zm::critpath::light::End(base);
+  if (critical) bo2zm::critpath::EndWait();
+  t.group = earlier;
+  if (report) tr::AnnotateWait(0x82493690, lr, end - begin);
 }
 REX_HOOK_RAW(sub_82493240) { Measure(0x82493240, ctx, base, __imp__sub_82493240); }  // help once with a job type
 // Help once. From the Server's wait for its client jobs, with nothing to take: sleep until one of those jobs ends

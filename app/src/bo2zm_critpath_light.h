@@ -9,5 +9,7 @@ void Queued(const uint8_t* base, uint32_t record);
 void Begin(const uint8_t* base, uint32_t group);
 void End(const uint8_t* base);
 void Present(uint64_t frame);
+uint32_t WatchedGroup();
+void GroupSleep(bool warned, bool direct, uint64_t start, uint64_t end);
 void Close();
 }

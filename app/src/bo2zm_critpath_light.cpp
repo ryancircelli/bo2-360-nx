@@ -61,7 +61,8 @@ struct Thread {
 };
 std::array<Thread,kThreads> threads;
 std::atomic<uint32_t> thread_count{0};
-std::atomic<uint32_t> active_group{0};
+std::atomic<uint32_t> active_group{0}, watched_group{0};
+thread_local bool tracing_wait=false;
 std::atomic<uint64_t> generation{0};
 Thread* ThisThread() {
   static thread_local Thread* own=[]() -> Thread* {
@@ -79,6 +80,7 @@ Thread* ThisThread() {
 struct TypeRow { uint32_t descriptor=0, function=0; int32_t before=0, after=0; uint32_t completed=0; };
 struct Wait {
   uint64_t start=0,end=0,last_ns=0;
+  uint64_t sleep_warned=0,sleep_timeout=0,sleep_direct=0,sleep_ns=0,last_sleep_start=0,last_sleep_end=0,last_sleep_warned=0;
   uint32_t group=0, queued_start=0,running_start=0,queued_end=0,running_end=0;
   uint32_t last_type=0,last_function=0,last_record=0,last_data=0,last_thread=0;
   std::array<TypeRow,kTypes> types;
@@ -109,11 +111,12 @@ void Dump() {
   auto* f=std::fopen((out/"critpath_light_frames.tsv").c_str(),"wb");
   auto* wf=std::fopen((out/"critpath_light_waits.tsv").c_str(),"wb");
   if (!f || !wf) { if(f)std::fclose(f); if(wf)std::fclose(wf); return; }
-  const char* cols="group\tqueued_start\trunning_start\tqueued_end\trunning_end\tlast_finish_ns\tlast_type\tlast_function\tlast_record\tlast_data\tlast_thread\ttypes\n";
+  const char* cols="group\tqueued_start\trunning_start\tqueued_end\trunning_end\tlast_finish_ns\tlast_type\tlast_function\tlast_record\tlast_data\tlast_thread\ttypes\tgroup_sleep_warned\tgroup_sleep_timeout\tgroup_sleep_direct\tgroup_sleep_ns\tlast_sleep_start\tlast_sleep_end\tlast_sleep_warned\n";
   std::fprintf(f,"# LIGHT mode; monotonic ns; types=descriptor:function:outstanding_start:outstanding_end:completed_during_wait; last_finish is callback return before scheduler counter release; last_thread indexes footer\nframe\tt_present\tmain_wait_ns\tmain_wait_calls\tlongest_start\tlongest_end\t"); std::fputs(cols,f);
   std::fprintf(wf,"start\tend\t");std::fputs(cols,wf);
   auto print=[&](std::FILE* file,const Wait& w) {
-    std::fprintf(file,"%08X\t%u\t%u\t%u\t%u\t%llu\t%08X\t%08X\t%08X\t%08X\t%u\t",w.group,w.queued_start,w.running_start,w.queued_end,w.running_end,(unsigned long long)w.last_ns,w.last_type,w.last_function,w.last_record,w.last_data,w.last_thread); PrintTypes(file,w);std::fputc('\n',file);
+    std::fprintf(file,"%08X\t%u\t%u\t%u\t%u\t%llu\t%08X\t%08X\t%08X\t%08X\t%u\t",w.group,w.queued_start,w.running_start,w.queued_end,w.running_end,(unsigned long long)w.last_ns,w.last_type,w.last_function,w.last_record,w.last_data,w.last_thread); PrintTypes(file,w);
+    std::fprintf(file,"\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\n",(unsigned long long)w.sleep_warned,(unsigned long long)w.sleep_timeout,(unsigned long long)w.sleep_direct,(unsigned long long)w.sleep_ns,(unsigned long long)w.last_sleep_start,(unsigned long long)w.last_sleep_end,(unsigned long long)w.last_sleep_warned);
   };
   auto nw=wait_count.load(std::memory_order_acquire),nf=frame_count.load(std::memory_order_acquire);
   for(unsigned i=0;i<nw;++i) { const auto& w=waits[i];std::fprintf(wf,"%llu\t%llu\t",(unsigned long long)w.start,(unsigned long long)w.end);print(wf,w); }
@@ -182,6 +185,7 @@ void Complete(const uint8_t* base,uint32_t record) {
   c.seq.fetch_add(1,std::memory_order_release);
 }
 void Begin(const uint8_t* base,uint32_t group) {
+  tracing_wait=true;watched_group.store(group,std::memory_order_relaxed);
   current=Wait{};current.group=group;current_group=FindGroup(group);
   current.queued_start=jobs::Read32(base,group);current.running_start=jobs::Read32(base,group+4);
   if(current_group)for(unsigned i=0;i<kTypes;++i) {
@@ -191,7 +195,7 @@ void Begin(const uint8_t* base,uint32_t group) {
   current.start=Now();active_group.store(group,std::memory_order_release);
 }
 void End(const uint8_t* base) {
-  current.end=Now();active_group.store(0,std::memory_order_release);
+  current.end=Now();tracing_wait=false;active_group.store(0,std::memory_order_release);
   current.queued_end=jobs::Read32(base,current.group);current.running_end=jobs::Read32(base,current.group+4);
   uint32_t mask=0;
   for(unsigned ti=0;ti<std::min(thread_count.load(),kThreads);++ti) {
@@ -213,6 +217,13 @@ void End(const uint8_t* base) {
 void Present(uint64_t frame) {
   auto n=frame_count.load(std::memory_order_relaxed);
   if(n<kRows) { frames[n]={frame,Now()};frame_count.store(n+1,std::memory_order_release); }else frame_drops.fetch_add(1,std::memory_order_relaxed);
+}
+uint32_t WatchedGroup() { return watched_group.load(std::memory_order_relaxed); }
+void GroupSleep(bool warned,bool direct,uint64_t start,uint64_t end) {
+  if(!tracing_wait)return;
+  if(warned)++current.sleep_warned;else ++current.sleep_timeout;
+  if(direct)++current.sleep_direct;
+  current.sleep_ns+=end-start;current.last_sleep_start=start;current.last_sleep_end=end;current.last_sleep_warned=warned;
 }
 void Close() {
   stopping.store(true,std::memory_order_relaxed);
