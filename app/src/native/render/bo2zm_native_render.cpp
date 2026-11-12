@@ -5229,7 +5229,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         uint32_t w = 0;
         uint32_t h = 0;
         if (void* image = gpu::metal::Mirror::Get()->Shown(w, h)) {
-          metal_presenter_->RefreshWithImage(image, w, h);
+          metal_presenter_->RefreshWithImage(image, w, h, targets_->OutputPass());
           return;
         }
       }
