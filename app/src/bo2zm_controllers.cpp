@@ -437,6 +437,9 @@ PadEdit OnPad(const bo2zm::pad::Pad& pad) {
   if (!ScreenEnabled()) {
     if (pad.Pressed(kA) || pad.Pressed(kStart)) {
       joined[user].store(true, std::memory_order_relaxed);  // the game's own join
+      REXLOG_WARN("[controllers] lobby join input user={} A={} START={} owner={} lobby_open={} joined={}", user,
+                  pad.Pressed(kA), pad.Pressed(kStart), first, lobby_open.load(std::memory_order_relaxed),
+                  joined[user].load(std::memory_order_relaxed));
     }
     return edit;
   }
@@ -498,7 +501,8 @@ bool RunCommand(std::string_view name, std::string_view argument) {
       // The menus may pause the controller reads on the way in: nobody has just connected.
       quiet_until.store(Now() + kQuietNs, std::memory_order_relaxed);
     }
-    REXLOG_INFO("[controllers] Local lobby {}", open ? "open" : "closed");
+    REXLOG_WARN("[controllers] Local lobby {} (leader={})", open ? "open" : "closed",
+                owner.load(std::memory_order_relaxed));
   }
   return true;
 }

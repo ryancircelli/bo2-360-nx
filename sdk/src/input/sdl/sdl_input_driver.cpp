@@ -528,19 +528,31 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
                                             SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
   const char* path = SDL_GetGamepadPath(controller);
   state.path = path ? path : "";
-  // Only pads without a serial need their port or Bluetooth address; the
-  // lookup may briefly retag the pad's player index to find it.
+  // On macOS the GameController backend often exposes neither a serial nor
+  // an SDL path. Resolve its USB port or Bluetooth address before assigning it.
   if (state.serial.empty() && !state.virtual_device) {
     PadLocation location = FindPadLocation(controller);
     state.location = std::move(location.location);
     state.bt_address = std::move(location.bt_address);
     state.location_note = std::move(location.note);
-    // SDL often reports no link for GameController pads; IOKit knows it.
     if (state.transport.empty() && !location.transport.empty()) {
       state.transport = location.transport.find("luetooth") != std::string::npos ? "bluetooth"
                         : location.transport == "USB"                            ? "usb"
                                                                                  : "";
     }
+  }
+  char guid_text[33] = {};
+  SDL_GUIDToString(SDL_GetJoystickGUID(SDL_GetGamepadJoystick(controller)), guid_text,
+                   static_cast<int>(sizeof(guid_text)));
+  const std::string_view stable_path = !state.location.empty() ? state.location
+                                      : !state.bt_address.empty() ? state.bt_address
+                                                                  : state.path;
+  const auto identity = MakePadIdentity(guid_text, state.serial, stable_path);
+  if (!pad_ownership_.Owns(identity)) {
+    REXLOG_INFO("SDL OnControllerDeviceAdded: pad is assigned to another BO2 instance or the shared pad limit is full (GUID {}, path \"{}\").",
+                guid_text, state.path);
+    SDL_CloseGamepad(controller);
+    return;
   }
   state.state_changed = true;  // XInput starts with packet_number = 1
   UpdateXCapabilities(state);

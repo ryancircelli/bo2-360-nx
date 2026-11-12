@@ -227,7 +227,16 @@ int main(int argc, char **argv) {
     snprintf(opt, sizeof opt, "--game_data_root=%s/game", data); push(opt);
     snprintf(opt, sizeof opt, "--update_data_root=%s/update", data); push(opt);
     snprintf(opt, sizeof opt, "--user_data_root=%s", support); push(opt);
-    snprintf(opt, sizeof opt, "--log_file=%s/bo2zm-%s.log", logs, stamp); push(opt);
+    const char *instance = getenv("BO2_INSTANCE");
+    char instance_log[96];
+    char *instance_end = NULL;
+    long instance_number = instance ? strtol(instance, &instance_end, 10) : -1;
+    if (instance && instance_end && *instance_end == '\0' && instance_number >= 0 && instance_number < 16) {
+        snprintf(instance_log, sizeof instance_log, "bo2zm-%s-instance-%ld.log", stamp, instance_number);
+    } else {
+        snprintf(instance_log, sizeof instance_log, "bo2zm-%s.log", stamp);
+    }
+    snprintf(opt, sizeof opt, "--log_file=%s/%s", logs, instance_log); push(opt);
     snprintf(opt, sizeof opt, "%s/args.txt", support); read_args_file(opt);
     for (int i = 1; i < argc; i++) {   // the command line replaces earlier options of the same name
         if (!strncmp(argv[i], "-psn_", 5)) continue;   // the launch serial number Finder adds on old systems
@@ -255,7 +264,9 @@ int main(int argc, char **argv) {
     int has_offset = getenv("REX_NET_SYSTEM_PORT_OFFSET") != NULL;
     for (int i = base; i < g_argc && !has_offset; i++)
         if (!strncmp(g_argv[i], "--net_system_port_offset", 24) && (g_argv[i][24] == '=' || !g_argv[i][24])) has_offset = 1;
-    if (!has_offset && !(udp_free(31000) && udp_free(31001))) {
+    // BO2_INSTANCE selects a disjoint title-port block in the app. Do not
+    // inject the legacy 1000-port fallback on top of that assignment.
+    if (!has_offset && !getenv("BO2_INSTANCE") && !(udp_free(31000) && udp_free(31001))) {
         int chosen = 0;
         for (int k = 1; k <= 20 && !chosen; k++) {
             int off = 30000 + 1000 * k;

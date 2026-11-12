@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <rex/input/input_driver.h>
+#include <rex/input/sdl/pad_ownership.h>
 
 #include <SDL3/SDL.h>
 
@@ -121,6 +122,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   // assignment decides how many the guest sees.
   std::vector<ControllerState> controllers_;
   std::mutex controllers_mutex_;
+  PadOwnership pad_ownership_;
   std::mutex event_queue_mutex_;
   std::vector<SDL_Event> pending_events_;
   // Never rewound, so a handle held past a disconnect resolves to nothing.
