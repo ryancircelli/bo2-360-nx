@@ -1,3 +1,4 @@
+#include <rex/thread_qos.h>
 #include "rex/graphics/metal/metal_hitch.h"
 #include "rex/graphics/metal/metal_converter_census.h"
 #include "rex/graphics/metal/metal_frame_log.h"
@@ -5194,6 +5195,8 @@ MTL::RenderPipelineState* MetalPipelineCache::WaitForPipeline(
 
 void MetalPipelineCache::CreationThread(size_t thread_index) {
   NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
+  const bool pool_thread = thread_index < kWarmupHelperIndex;
+  int qos_applied = 0;  // 1 = utility applied by shader_pool_cap
 
   while (true) {
     PipelineCreationRequest request;
@@ -5209,6 +5212,15 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
       if (creation_threads_shutdown_ && creation_queue_.empty()) {
         break;
       }
+      // shader_pool_cap: while frames are swapping, at most 2 pool threads compile at once.
+      if (pool_thread && rex::thread::ShaderPoolCapRequested()) {
+        while (!creation_threads_shutdown_ && creation_threads_busy_ >= 2 && rex::thread::FrameInFlight()) {
+          creation_request_cond_.wait_for(lock, std::chrono::milliseconds(2));
+        }
+        if (creation_queue_.empty()) {
+          continue;  // another thread took the request meanwhile
+        }
+      }
       request = creation_queue_.top();
       creation_queue_.pop();
       ++creation_threads_busy_;
@@ -5217,6 +5229,14 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     // Drain and recreate autorelease pool per pipeline.
     pool->drain();
     pool = NS::AutoreleasePool::alloc()->init();
+
+    if (pool_thread) {
+      const int want = rex::thread::ShaderPoolCapRequested() ? 1 : 0;
+      if (want != qos_applied) {
+        qos_applied = want;
+        pthread_set_qos_class_self_np(want ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INTERACTIVE, 0);
+      }
+    }
 
     // Create the pipeline.
     PipelineHandle* handle = request.handle;

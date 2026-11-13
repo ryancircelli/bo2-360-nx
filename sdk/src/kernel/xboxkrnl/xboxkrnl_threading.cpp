@@ -34,6 +34,7 @@
 #include <rex/system/xmutant.h>
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xthread.h>
+#include <rex/thread_qos.h>
 #include <rex/system/xtimer.h>
 #include <rex/system/xtypes.h>
 #include <rex/thread/atomic.h>
@@ -390,7 +391,11 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 }
 
 u32 NtYieldExecution_entry() {
-  rex::thread::MaybeYield();
+  if (rex::thread::ServerYieldSleepRequested() && rex::thread::CurrentThreadIsServer()) {
+    rex::thread::Sleep(std::chrono::microseconds(200));
+  } else {
+    rex::thread::MaybeYield();
+  }
   return X_STATUS_SUCCESS;
 }
 

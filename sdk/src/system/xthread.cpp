@@ -37,6 +37,7 @@
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread_audio.h>
+#include <rex/thread_qos.h>
 #include <rex/vec128.h>
 
 #if REX_PLATFORM_SWITCH
@@ -1222,6 +1223,7 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
   }
   timeout_ms = chrono::Clock::ScaleGuestDurationMillis(timeout_ms);
   CheckTitleTermination();
+  rex::thread::ReapplyQosIfFlipped();
   if (alertable) {
     const bool reported = timeout_ms > 0 && DelayReported(thread_name_);
     const auto before = std::chrono::steady_clock::now();
@@ -1239,7 +1241,9 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
     }
   } else {
     if (timeout_ms == 0) {
-      if (priority_ <= rex::thread::ThreadPriority::kBelowNormal) {
+      if (rex::thread::ServerYieldSleepRequested() && rex::thread::CurrentThreadIsServer()) {
+        rex::thread::Sleep(std::chrono::microseconds(200));
+      } else if (priority_ <= rex::thread::ThreadPriority::kBelowNormal) {
         rex::thread::Sleep(std::chrono::microseconds(100));
       } else {
         rex::thread::MaybeYield();

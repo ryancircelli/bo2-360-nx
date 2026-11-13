@@ -36,6 +36,15 @@ DEFINE_bool(metal_encode_thread, false,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",
             "Metal");
+DEFINE_bool(thread_qos_critical, false,
+            "Keep Main XThread and GPU Commands at user-interactive QoS and run other guest threads one class lower.",
+            "Metal");
+DEFINE_bool(server_yield_sleep, false,
+            "The guest Server thread sleeps 200 us on a zero-timeout delay or yield instead of sched-yield spinning.",
+            "Metal");
+DEFINE_bool(shader_pool_cap, false,
+            "Shader-compile pool threads run at utility QoS and at most 2 compile at once while frames are swapping.",
+            "Metal");
 DEFINE_bool(metal_constant_payload_cache, false,
             "Reuse identical Metal constant/descriptor payload uploads across "
             "draws within a frame. Disable to A/B hash/cache CPU cost against "

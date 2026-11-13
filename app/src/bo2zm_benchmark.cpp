@@ -31,6 +31,7 @@
 #include "bo2zm_lifecycle.h"
 #include "bo2zm_perf_log.h"
 #include "bo2zm_preset.h"
+#include <rex/thread_qos.h>
 #include "bo2zm_waits.h"
 #include "native/render/bo2zm_native_capture.h"
 
@@ -189,6 +190,9 @@ struct Factor {
 };
 const Factor kFactors[] = {
     {"waits_fence_wake", &bo2zm::waits::FenceWake, &bo2zm::waits::SetFenceWake},
+    {"thread_qos_critical", &rex::thread::QosCriticalRequested, &rex::thread::RequestQosCritical},
+    {"server_yield_sleep", &rex::thread::ServerYieldSleepRequested, &rex::thread::RequestServerYieldSleep},
+    {"shader_pool_cap", &rex::thread::ShaderPoolCapRequested, &rex::thread::RequestShaderPoolCap},
 #if defined(__APPLE__)
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
     {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
