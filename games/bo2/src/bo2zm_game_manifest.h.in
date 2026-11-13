@@ -1,0 +1,3 @@
+// Generated from games/bo2/game.toml by app/CMakeLists.txt. Do not edit.
+#pragma once
+inline constexpr const char kBo2zmGameManifest[] = R"bo2zm_manifest(@BO2ZM_GAME_TOML@)bo2zm_manifest";

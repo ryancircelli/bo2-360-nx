@@ -18,6 +18,7 @@
 #include <rex/rex_app.h>
 
 #include "bo2zm_autoexec.h"
+#include "bo2zm_game_manifest.h"  // generated from games/bo2/game.toml
 #include "bo2zm_benchmark.h"
 #include "bo2zm_controllers.h"
 #include "bo2zm_debug_options.h"
@@ -106,8 +107,11 @@ void ConfigureInstancePaths(rex::PathConfig& paths) {
 }  // namespace
 
 void rex::RegisterGame(rex::GameApi& api) {
-  api.info().short_name = "bo2zm";
-  api.info().first_link_port = 1000;  // BO2's VDP port; 1001 (UDP) and the side channel's 1002 follow
+  // Name, title id, executable, data folder, shader pack, pipeline list, link
+  // port and setting defaults: games/bo2/game.toml.
+  if (std::string error; !rex::LoadGameManifest(kBo2zmGameManifest, api.info(), &error)) {
+    throw std::runtime_error("games/bo2/game.toml: " + error);
+  }
 
   // Without command-line paths (always the case on the Switch, where the NRO
   // is started from hbmenu or a forwarder), use folders next to the
@@ -127,14 +131,14 @@ void rex::RegisterGame(rex::GameApi& api) {
 #if REX_PLATFORM_SWITCH
     // Emulators (Ryujinx) may run the NRO from a temporary copy, away from
     // its folder: fall back to the standard install folder.
-    if (!std::filesystem::is_directory(dir / "game", ec) &&
+    if (!std::filesystem::is_directory(dir / rex::Game().data_root, ec) &&
         std::filesystem::is_directory("sdmc:/switch/bo2zm/game", ec)) {
       dir = "sdmc:/switch/bo2zm";
       paths.config_path = dir / "bo2zm.toml";
     }
 #endif
-    if (paths.game_data_root.empty() && std::filesystem::is_directory(dir / "game", ec)) {
-      paths.game_data_root = dir / "game";
+    if (paths.game_data_root.empty() && std::filesystem::is_directory(dir / rex::Game().data_root, ec)) {
+      paths.game_data_root = dir / rex::Game().data_root;
     }
     if (paths.update_data_root.empty() && std::filesystem::is_directory(dir / "update", ec)) {
       paths.update_data_root = dir / "update";
@@ -188,10 +192,7 @@ void rex::RegisterGame(rex::GameApi& api) {
     if (!bo2zm::lifecycle::Prepare()) {
       throw std::runtime_error("Could not disable automated diagnostics after a fatal restart");
     }
-    // Local MP and Zombies expose an offline profile for each controller port.
-    if (rex::cvar::GetFlagSource("offline_user_count") == rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("offline_user_count", "4");
-    }
+    // offline_user_count = 4: games/bo2/game.toml [defaults], applied before these hooks.
     bo2zm::InitSwitchServices();
     bo2zm::lifecycle::OnBoot();  // bo2zm_lifecycle.h
     bo2zm::autoexec::ApplyVolume();  // bo2zm_volume (PC test runs: 5 %)
@@ -202,11 +203,7 @@ void rex::RegisterGame(rex::GameApi& api) {
     }
   });
 
-  // The SDK loads game:\default.xex (the campaign executable). Zombies and
-  // multiplayer live in default_mp.xex, which is what app/ recompiles.
-  // Loading the wrong one fails with "No function registered at 825C69B8"
-  // (default.xex's TU18 entry point).
-  api.OnLoadXexImage([](rex::GameApp&, std::string& xex_image) { xex_image = "game:\\default_mp.xex"; });
+  // game:\\default_mp.xex, not the SDK's default.xex: games/bo2/game.toml (game.executable).
 
   // Mode switches (MP <-> Zombies) relaunch the title; see bo2zm_relaunch.cpp.
   api.OnPostSetup([](rex::GameApp& app) {

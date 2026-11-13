@@ -100,9 +100,11 @@ class GameApp : public ReXApp {
     for (auto& fn : api_->post_init_logging_) fn(*this);
   }
   void OnPreSetup(RuntimeConfig& config) override {
+    ApplyGameDefaults(Game());  // the manifest's [defaults], before the title's own hooks
     for (auto& fn : api_->pre_setup_) fn(*this, config);
   }
   void OnLoadXexImage(std::string& xex_image) override {
+    if (!Game().executable.empty()) xex_image = Game().executable;  // the manifest's game.executable
     for (auto& fn : api_->load_xex_image_) fn(*this, xex_image);
   }
   void OnPostSetup() override {

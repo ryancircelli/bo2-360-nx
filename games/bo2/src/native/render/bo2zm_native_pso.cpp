@@ -5,6 +5,7 @@
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/game_info.h>
 
 #include <cstdlib>
 #include <string>
@@ -72,10 +73,11 @@ fs::path ListToLoad() {
     return fs::path(path);
   }
   const fs::path exe = rex::filesystem::GetExecutableFolder();
+  // game.pipeline_list in the title manifest (games/bo2/game.toml).
+  const std::string name = rex::Game().pipeline_list.empty() ? "bo2zm_pso.psolist" : rex::Game().pipeline_list;
   std::error_code ec;
   for (const fs::path& candidate :
-       {exe / "bo2zm_pso.psolist", exe.parent_path() / "Resources" / "bo2zm_pso.psolist",
-        exe.parent_path() / "Resources" / "runtime" / "bo2zm_pso.psolist"}) {
+       {exe / name, exe.parent_path() / "Resources" / name, exe.parent_path() / "Resources" / "runtime" / name}) {
     if (fs::is_regular_file(candidate, ec)) {
       return candidate;
     }

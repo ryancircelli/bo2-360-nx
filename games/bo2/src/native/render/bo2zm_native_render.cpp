@@ -43,6 +43,7 @@
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/game_info.h>
 #include <rex/graphics/pipeline/shader/interpreter.h>  // memexport on the CPU
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
@@ -103,8 +104,8 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-// The shader library next to the executable. A build for another program of the game, which shares the folder, names
-// its own.
+// The shader library next to the executable: game.shader_pack in the title manifest (games/bo2/game.toml), else this
+// name. A build for another program of the game, which shares the folder, names its own.
 #ifndef BO2ZM_SHADER_LIBRARY_FILE
 #define BO2ZM_SHADER_LIBRARY_FILE "bo2zm_shaders.spvpack"
 #endif
@@ -1133,7 +1134,9 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       }
       progress->Update(done, total);
     };
-    const bool library = shaders_.Load(rex::filesystem::GetExecutableFolder() / BO2ZM_SHADER_LIBRARY_FILE,
+    const bool library = shaders_.Load(rex::filesystem::GetExecutableFolder() / (rex::Game().shader_pack.empty()
+                                                                       ? std::string(BO2ZM_SHADER_LIBRARY_FILE)
+                                                                       : rex::Game().shader_pack),
                                        presenter_ ? NativeShaders::IndexProgress(show) : nullptr);
     if (progress) {
       progress->Finish();
