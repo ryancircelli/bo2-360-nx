@@ -137,8 +137,8 @@ DEFINE_bool(
     "Metal");
 
 DEFINE_bool(
-    metal_reg_early_out, false,
-    "Skip type-0 register writes whose value is unchanged for an allow-list of register families. Runtime-switchable at a drained frame boundary.",
+    metal_reg_early_out, true,
+    "Skip type-0 register writes whose value is unchanged for an allow-list of register families. Runtime-switchable at a drained frame boundary Default on; env REX_METAL_REG_EARLY_OUT=0/1 overrides.",
     "Metal");
 
 DEFINE_bool(
@@ -147,8 +147,8 @@ DEFINE_bool(
     "Metal");
 
 DEFINE_bool(
-    metal_draw_consts_dirty, false,
-    "Skip recomputing viewport/scissor/system constants when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
+    metal_draw_consts_dirty, true,
+    "Skip recomputing viewport/scissor/system constants when none of their inputs changed. Runtime-switchable at a drained frame boundary Default on; env REX_METAL_DRAW_CONSTS_DIRTY=0/1 overrides.",
     "Metal");
 
 // [gpu-capture] Trace-only (docs/native-shaders.md): FABLE2_GPU_CAPTURE_PATH=<x.gputrace>
