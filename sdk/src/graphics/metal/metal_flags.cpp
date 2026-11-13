@@ -42,6 +42,12 @@ DEFINE_bool(metal_encode_thread, false,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",
             "Metal");
+DEFINE_bool(metal_const_fastpath, false,
+            "Pack changed constant blocks (system, float, bool/loop) straight "
+            "into the upload slice instead of packing into a scratch copy, "
+            "comparing and copying again. Gives up reuse of byte-identical "
+            "re-uploads. Ignored while metal_constant_payload_cache is on.",
+            "Metal");
 DEFINE_bool(metal_constant_payload_cache, false,
             "Reuse identical Metal constant/descriptor payload uploads across "
             "draws within a frame. Disable to A/B hash/cache CPU cost against "

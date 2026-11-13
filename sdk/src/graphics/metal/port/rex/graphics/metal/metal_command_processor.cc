@@ -6542,6 +6542,8 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     UniformBufferInfo& uniforms_out, DrawDynamicState& dynamic_state_out) {
   const bool lite2 = DrawPrepLite2Enabled();
   const bool draw_fastpath = REXCVAR_GET(metal_draw_fastpath);
+  const bool const_fastpath = REXCVAR_GET(metal_const_fastpath) &&
+                              !REXCVAR_GET(metal_constant_payload_cache);
   // Determine primitive type characteristics
   bool primitive_polygonal = draw_util::IsPrimitivePolygonal(regs);
 
@@ -7168,6 +7170,13 @@ bool MetalCommandProcessor::PrepareDrawConstants(
           std::vector<uint8_t>& scratch_payload, size_t logical_size,
           const char* name, auto&& writer) -> bool {
     const size_t aligned_size = std::max(logical_size, size_t(16));
+    if (const_fastpath) {
+      // [const-fastpath] one pack, straight into the upload slice.
+      return upload_binding(binding, cbv_slot, logical_size, name,
+                            [&](uint8_t* data, size_t out_size) {
+                              writer(data, out_size);
+                            });
+    }
     if (lite2 && logical_size >= 16) {
       // [draw-prep-lite2] every writer fills all logical_size bytes (the float
       // writer clears its whole buffer first), so the zero fill is redundant.
@@ -7232,7 +7241,10 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   auto write_packed_float_constants =
       [&](uint8_t* dst, size_t dst_size, const Shader::ConstantRegisterMap* map,
           uint32_t regs_base) {
-        std::memset(dst, 0, dst_size);
+        if (!const_fastpath || !map || !map->float_count ||
+            dst_size != size_t(map->float_count) * 4 * sizeof(uint32_t)) {
+          std::memset(dst, 0, dst_size);
+        }
         if (!map || !map->float_count) {
           return;
         }
