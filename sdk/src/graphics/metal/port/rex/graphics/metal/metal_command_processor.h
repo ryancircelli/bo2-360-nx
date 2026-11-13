@@ -1956,6 +1956,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   };
   void TsStart();
   void TsStop();
+  void TsEndFrameWork(const char* why);
   void TsThreadMain();
   void TsExecuteBatch(TsBatch& batch);
   void TsPublish();
@@ -1980,6 +1981,8 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool ts_sync_all_draws_ = false;
   bool ts_flush_queue_always_ = false;
   bool ts_sync_resolves_ = false;
+  bool ts_start_requested_ = false;
+  bool ts_in_swap_ = false;
   bool TsRunsOverlapPreparedQueue(const TsBatch& batch, uint32_t first, uint32_t end) const;
   uint32_t ts_logged_misses_ = 0;  // stage 2 is running a queued (async) draw
   uint32_t ts_publish_draws_ = 16;
