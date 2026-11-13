@@ -13,6 +13,9 @@
 //                    bo2zm_native_async_pipelines those go to the compile thread and are not counted: the ring does
 //                    not wait for them).
 //   draws            draws read from the ring.
+//   cpu2_ms          the two-stage Metal command processor (metal_cp_two_stage): CPU time of its second thread (the
+//                    Metal encoding and submission; idle waits for work excluded) since the previous presented frame.
+//                    cpu_ms is then the ring thread's parsing stage only. 0 when the two-stage CP is off.
 #include "bo2zm_perf_log.h"
 #include <rex/graphics/swap_hook.h>
 
@@ -75,6 +78,7 @@ struct Row {
   uint64_t frame = 0;
   double t_ms = 0.0, frame_ms = -1.0, cpu_ms = 0.0, present_wait_ms = 0.0, compile_ms = 0.0;
   uint64_t draws = 0;
+  double cpu2_ms = 0.0;
   uint64_t first_job = 0, last_job = 0;  // its submissions: (first_job, last_job]
   uint64_t jobs_left = 0;
   uint64_t gpu_ns = 0;
@@ -112,6 +116,7 @@ class Log {
       row.cpu_ms = cpu > 0.0 ? cpu / 1e6 : 0.0;
       row.present_wait_ms = wait / 1e6;
       row.draws = c.draws - previous_.draws;
+      row.cpu2_ms = double(c.ns_working_stage2 - previous_.ns_working_stage2) / 1e6;
       row.first_job = previous_.jobs_submitted;
     } else {
       // The first frame: what came before the log started is not this frame's. Its own submission is the last one.
@@ -258,7 +263,7 @@ class Log {
     if (const char* route = std::getenv("BO2ZM_ROUTE")) {
       meta("route", route);
     }
-    buffer_ += "frame\tt_ms\tframe_ms\tcpu_ms\tgpu_ms\tpresent_wait_ms\tcompile_ms\tdraws\n";
+    buffer_ += "frame\tt_ms\tframe_ms\tcpu_ms\tgpu_ms\tpresent_wait_ms\tcompile_ms\tdraws\tcpu2_ms\n";
     writer_ = std::thread([this] { Writer(); });
     REXLOG_INFO("[perf log] writing {}", path);
     return true;
@@ -302,7 +307,8 @@ class Log {
       } else {
         buffer_ += "-\t";
       }
-      fmt::format_to(std::back_inserter(buffer_), "{:.3f}\t{:.3f}\t{}\n", r.present_wait_ms, r.compile_ms, r.draws);
+      fmt::format_to(std::back_inserter(buffer_), "{:.3f}\t{:.3f}\t{}\t{:.3f}\n", r.present_wait_ms, r.compile_ms, r.draws,
+                     r.cpu2_ms);
       rows_.pop_front();
     }
     if (all) {
@@ -396,6 +402,7 @@ void InstallSwapHook(std::string_view renderer) {
     c.ns_present_wait = st.ns_present_wait.load(std::memory_order_relaxed);
     c.draws = st.draws.load(std::memory_order_relaxed);
     c.jobs_submitted = st.jobs_submitted.load(std::memory_order_relaxed);
+    c.ns_working_stage2 = st.ns_working_stage2.load(std::memory_order_relaxed);
     c.width = width;
     c.height = height;
     OnPresent(c);
