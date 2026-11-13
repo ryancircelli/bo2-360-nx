@@ -2868,7 +2868,7 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   }
   if (reg_early_out_active_ != RegEarlyOutRequested()) {
     reg_early_out_active_ = RegEarlyOutRequested();
-    REXLOG_INFO("Metal reg early-out: {} at drained frame boundary", reg_early_out_active_ ? "on" : "off");
+    REXLOG_INFO("Metal reg early-out: {} at drained frame boundary (hits so far: fetch {}, bool/loop {})", reg_early_out_active_ ? "on" : "off", reg_early_out_hits_[0], reg_early_out_hits_[1]);
   }
   if (bindless_cache_active_ != BindlessCacheRequested()) {
     bindless_cache_active_ = BindlessCacheRequested();
@@ -10877,6 +10877,25 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   bool valid_register = index < RegisterFile::kRegisterCount;
   if (valid_register) {
     old_value = register_file_->values[index];
+  }
+  // [reg-early-out] Allow-list: an unchanged write to these families has no
+  // side effect in CommandProcessor::WriteRegister (only COHER_STATUS_HOST,
+  // SCRATCH_REG0-7 and DC_LUT_* do, none of which are listed). Fetch constants:
+  // dirty marks and texture-binding checks persist until consumed, and the value
+  // (so every derived binding) is identical to the one already seen. Bool/loop
+  // constants: the CBV is only invalidated by the write; an identical value
+  // leaves its contents identical.
+  if (reg_early_out_active_ && valid_register && value == old_value) {
+    if (index >= XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 &&
+        index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5) {
+      ++reg_early_out_hits_[0];
+      return;
+    }
+    if (index >= XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031 &&
+        index <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31) {
+      ++reg_early_out_hits_[1];
+      return;
+    }
   }
   CommandProcessor::WriteRegister(index, value);
   if (!valid_register) {
