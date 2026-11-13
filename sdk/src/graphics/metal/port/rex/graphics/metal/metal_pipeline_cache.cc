@@ -5389,6 +5389,23 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
 // CreationThread (background pipeline compilation)
 // ---------------------------------------------------------------------------
 
+void MetalPipelineCache::NoteFrameDraws(uint64_t draws) {
+  if (seed_live_.load(std::memory_order_relaxed)) return;
+  const int threshold = REXCVAR_GET(metal_shader_seed_live_draws);
+  // A few consecutive gameplay-sized frames, so one busy menu frame doesn't
+  // count.
+  seed_live_frames_ =
+      draws >= uint64_t(std::max(threshold, 0)) ? seed_live_frames_ + 1 : 0;
+  if (threshold > 0 && seed_live_frames_ < 30) return;
+  seed_live_.store(true, std::memory_order_relaxed);
+  REXLOG_INFO("[shader-seed] gameplay is live: {} seeded pipelines left, now "
+              "at most {} threads{}",
+              seed_pending_.load(std::memory_order_relaxed),
+              REXCVAR_GET(metal_shader_seed_threads),
+              REXCVAR_GET(metal_shader_seed_background) ? " at background QoS"
+                                                        : "");
+}
+
 void MetalPipelineCache::RaisePipelinePriority(PipelineHandle* handle,
                                                uint8_t priority) {
   // Rebuild the heap under its lock: mutating a queued priority alone breaks
@@ -5440,7 +5457,10 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
       // Seed pipelines nobody has drawn with yet (priority 0) use at most
       // metal_shader_seed_threads threads, so a pipeline the game needs now
       // never waits for a thread (or the OS shader compiler) behind the seed.
-      const int seed_cap = REXCVAR_GET(metal_shader_seed_threads);
+      // Before gameplay (menus, lobby, loading) the seed uses every thread.
+      const int seed_cap = seed_live_.load(std::memory_order_relaxed)
+                               ? REXCVAR_GET(metal_shader_seed_threads)
+                               : 0;
       auto seed_gated = [&] {
         if (seed_cap <= 0 || creation_queue_.empty()) return false;
         const PipelineHandle* top = creation_queue_.top().handle;
@@ -5476,11 +5496,12 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     PipelineHandle* handle = request.handle;
     bool optimized = false;
     bool vertex_native = false;
-    // Seed work runs at background QoS (efficiency cores; Metal passes the
-    // QoS on to its compiler service), so precreating pipelines nobody needs
-    // yet never takes CPU time from the game's own threads.
+    // Once gameplay is live, seed work runs at background QoS (Metal passes
+    // the QoS on to its compiler service), so precreating pipelines nobody
+    // needs yet takes as little CPU time from the game as possible.
     const bool seed_background =
-        seed_job && REXCVAR_GET(metal_shader_seed_background);
+        seed_job && seed_live_.load(std::memory_order_relaxed) &&
+        REXCVAR_GET(metal_shader_seed_background);
     qos_class_t saved_qos = QOS_CLASS_UNSPECIFIED;
     if (seed_background) {
       saved_qos = qos_class_self();

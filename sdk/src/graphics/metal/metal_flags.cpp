@@ -163,13 +163,19 @@ DEFINE_string(metal_shader_seed, "",
               "Metal");
 DEFINE_int32(metal_shader_seed_threads, 2,
              "Most pipeline creation threads the shipped shader seed may use "
-             "at once, so the game's own pipelines never queue behind it (each "
+             "at once once gameplay is live, so the game's own pipelines never queue behind it (each "
              "seed pipeline can take a few hundred ms on a cold macOS shader "
              "cache). 0 = no limit.",
              "Metal");
+DEFINE_int32(metal_shader_seed_live_draws, 1000,
+             "Draws per frame (30 frames in a row) that mark gameplay as live. "
+             "Before that the shader seed uses every creation thread at "
+             "normal priority; after it, metal_shader_seed_threads and "
+             "metal_shader_seed_background apply. 0 = always live.",
+             "Metal");
 DEFINE_bool(metal_shader_seed_background, true,
-            "Create shader seed pipelines at background QoS (efficiency "
-            "cores) so they never take CPU time from the game.",
+            "Once gameplay is live, create shader seed pipelines at background "
+            "QoS so they take as little CPU time from the game as possible.",
             "Metal");
 DEFINE_int32(metal_pipeline_wait_budget_ms, 10,
              "Per-frame time a draw may wait for a pipeline still being "

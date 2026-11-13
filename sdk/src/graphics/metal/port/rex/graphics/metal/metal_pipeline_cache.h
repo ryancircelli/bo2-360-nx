@@ -398,6 +398,11 @@ class MetalPipelineCache {
   // pipelines added since the last periodic save would be lost).
   void FlushPipelineBinaryArchiveForQuit();
 
+  // Called once per frame with the frame's draw count: frames of gameplay
+  // size switch the seed to its gameplay limits (metal_shader_seed_threads,
+  // metal_shader_seed_background).
+  void NoteFrameDraws(uint64_t draws);
+
  private:
   bool InitializeShaderStorageInternal(const std::filesystem::path& cache_root,
                                        uint32_t title_id, bool blocking);
@@ -809,6 +814,8 @@ class MetalPipelineCache {
   uint32_t seed_queued_ = 0;
   // Seed pipelines being created now (under creation_request_lock_).
   size_t seed_inflight_ = 0;
+  std::atomic<bool> seed_live_{false};
+  uint32_t seed_live_frames_ = 0;  // command thread only
 };
 
 }  // namespace metal
