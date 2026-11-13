@@ -35,6 +35,8 @@ for f in bo2zm_shaders.spvpack bo2zm_shaders.spvidx; do
 done
 # The recorded pipeline list (docs/mac/pso-list-format.md), when one sits beside the shaders.
 [ -f "$SHADERS/bo2zm_pso.psolist" ] && put "$SHADERS/bo2zm_pso.psolist" "$RUN/bo2zm_pso.psolist"
+# The Metal shader seed (tools/mac/shader_seed.py), when one sits beside the shaders.
+[ -d "$SHADERS/shader_seed" ] && put "$SHADERS/shader_seed" "$RUN/shader_seed"
 [ -f "$RUN/bo2zm.toml" ] || cp "$ROOT/tools/mac/bo2zm.toml" "$RUN/bo2zm.toml"
 for d in game update content; do
   if [ -d "$DATA/$d" ]; then
