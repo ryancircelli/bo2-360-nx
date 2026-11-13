@@ -48,11 +48,12 @@ DEFINE_bool(metal_cmdcost_all, true,
             "thread and cross-pass encode thread. Flippable at run time "
             "(latched at the drained frame boundary). Default on.",
             "Metal");
-DEFINE_bool(metal_encode_nosync, false,
+DEFINE_bool(metal_encode_nosync, true,
             "With the encode thread: record tile resolves and draw-pass "
             "transfers/clears on the encode thread instead of draining it to "
             "hand them the real encoder. Flippable at run time (latched at "
-            "the drained frame boundary). Env REX_METAL_ENCODE_NOSYNC=1.",
+            "the drained frame boundary). Default on; env "
+            "REX_METAL_ENCODE_NOSYNC=0/1 overrides.",
             "Metal");
 DEFINE_bool(metal_const_fastpath, false,
             "Pack changed constant blocks (system, float, bool/loop) straight "

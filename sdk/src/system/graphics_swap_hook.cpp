@@ -78,8 +78,8 @@ namespace {
 std::atomic<bool>& EncodeNosyncSwitch() {
   static std::atomic<bool> requested{[] {
     const char* env = std::getenv("REX_METAL_ENCODE_NOSYNC");
-    return rex::cvar::Query<bool>("metal_encode_nosync") ||
-           (env && env[0] == '1');
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_encode_nosync");
   }()};
   return requested;
 }
