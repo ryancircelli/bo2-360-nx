@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -1394,6 +1395,9 @@ class MetalCommandProcessor final : public CommandProcessor {
   void ZpdInitialize();
   void ZpdShutdown();
   bool ZpdExecuteEvent(memory::RingBuffer* reader, uint32_t packet, uint32_t count);
+  // [cp-two-stage] the part of ZpdExecuteEvent after the register write and the
+  // guest record read; ts_begin_cleared: stage 1 already zeroed a BEGIN record.
+  bool ZpdExecuteEventTail(uint32_t address, bool is_end, bool ts_begin_cleared);
   void ZpdBeginDrawSpan();
   void ZpdEndDrawSpan(bool dispatched);
   void ZpdNoteIssueDraw(bool dispatched_before_valid, uint32_t dispatched_before);
@@ -1845,6 +1849,157 @@ class MetalCommandProcessor final : public CommandProcessor {
   };
   std::shared_ptr<CheckpointBarrier> checkpoint_barrier_;
 
+  // ==========================================================================
+  // [cp-two-stage] metal_cp_two_stage (REX_METAL_CP_TWO_STAGE=1, default off),
+  // metal_cp_two_stage.cc. Stage 1 is the command processor thread: it parses
+  // PM4, keeps the guest-visible register file, writes fences and snapshots
+  // the guest memory each draw will read. Stage 2 is a thread of its own that
+  // does all the Metal work (IssueDraw and below) from a queue of batches.
+  // Everything that can let the guest observe or depend on stage-2 results is
+  // a barrier: stage 1 waits until stage 2 ran the queue and the closure.
+  // ==========================================================================
+ public:
+  bool two_stage_active() const { return ts_active_; }
+  // True while stage 2 executes queued (non-barrier) work: guest RAM may be
+  // newer than that work, so the shared buffer (filled from stage-1 snapshots)
+  // is the source of truth and nothing may read or upload live guest RAM.
+  bool two_stage_async_work() const { return ts_async_draw_; }
+
+ protected:
+  void PrepareForIdleWait() override;
+  void OnInterruptPacket() override;
+  void TraceRegistersRestored(uint32_t first, uint32_t count) override;
+  void TraceDrainBackend() override;
+
+ private:
+  // The register file stage 2 (and every backend object) reads: the guest
+  // file (CommandProcessor::register_file_) when two-stage is off, an owned
+  // copy that stage 2 updates from the register-write log when it is on.
+  // Hides the base member on purpose: MetalCommandProcessor code is stage-2
+  // code; stage-1 code names CommandProcessor::register_file_ explicitly.
+  RegisterFile* register_file_ = CommandProcessor::register_file_;
+  std::unique_ptr<RegisterFile> ts_register_file_;
+  Shader* active_vertex_shader() const {
+    return ts_active_ ? ts_vertex_shader_ : CommandProcessor::active_vertex_shader();
+  }
+  Shader* active_pixel_shader() const {
+    return ts_active_ ? ts_pixel_shader_ : CommandProcessor::active_pixel_shader();
+  }
+  bool IssueDrawBackend(xenos::PrimitiveType primitive_type, uint32_t index_count,
+                        IndexBufferInfo* index_buffer_info, bool major_mode_explicit);
+  void ApplyRegisterWrite(uint32_t index, uint32_t old_value, uint32_t value);
+  bool CollectVertexFetchRangesNoLog(const RegisterFile& regs, const Shader& vertex_shader,
+                                     SharedMemory::Range* ranges, uint32_t max_ranges,
+                                     uint32_t* range_count);
+
+  enum class TsOp : uint32_t {
+    kRegister,       // index, value
+    kRegisterRange,  // start, count, count big-endian dwords (fast-range path)
+    kRegisterCopy,   // first, count, count values (trace register restore)
+    kDraw,           // see TsRecordDraw
+    kZpd,            // address, is_end
+    kPrimaryBufferEnd,
+    kIdleWait,
+    kReturnFromWait,
+    kFunction,       // index into TsBatch::functions
+  };
+  enum class TsSync : uint32_t {
+    kSwap,
+    kInterrupt,
+    kZpd,
+    kWaitRegMem,
+    kTraceReadback,
+    kTraceDrain,
+    kMemexport,
+    kTessellation,
+    kIndexConversion,
+    kMaintenance,
+    kShutdown,
+    kCount,
+  };
+  struct TsBatch {
+    std::vector<uint32_t> ops;
+    std::vector<uint8_t> arena;
+    std::vector<SharedMemory::CapturedRun> runs;
+    std::vector<std::function<void()>> functions;
+    uint64_t seq = 0;
+    uint32_t draws = 0;
+    void Clear() {
+      ops.clear();
+      arena.clear();
+      runs.clear();
+      functions.clear();
+      seq = 0;
+      draws = 0;
+    }
+  };
+  struct TsStats {
+    // Stage 1 (written by the command processor thread).
+    uint64_t batches = 0;
+    uint64_t draws_async = 0;
+    uint64_t draws_sync = 0;
+    uint64_t syncs[size_t(TsSync::kCount)] = {};
+    uint64_t captured_runs = 0;
+    uint64_t captured_bytes = 0;
+    uint64_t capture_failures = 0;
+    uint64_t register_ops = 0;
+    uint64_t barrier_wait_ns = 0;
+    // Stage 2.
+    uint64_t stage2_cpu_ns = 0;
+    uint64_t stage2_batches = 0;
+    uint64_t stage2_draws = 0;
+    uint64_t overlap_flushes = 0;
+    uint64_t upload_failures = 0;
+    uint64_t misses = 0;  // stage-2 shared memory uploads from live guest RAM
+    uint64_t miss_bytes = 0;
+    uint64_t miss_by_reason[16] = {};
+  };
+  void TsStart();
+  void TsStop();
+  void TsThreadMain();
+  void TsExecuteBatch(TsBatch& batch);
+  void TsPublish();
+  // Runs fn on stage 2 after everything queued so far; stage 1 waits.
+  void TsBarrier(TsSync reason, std::function<void()> fn);
+  bool TsOnStage1() const;
+  void TsAppend(TsOp op, std::initializer_list<uint32_t> words);
+  void TsLogRegister(uint32_t index);
+  void TsLogRegisterRange(uint32_t start, const uint32_t* big_endian, uint32_t count);
+  bool TsRecordDraw(xenos::PrimitiveType primitive_type, uint32_t index_count,
+                    IndexBufferInfo* index_buffer_info, bool major_mode_explicit);
+  void TsLogStats(const char* when);
+  void TsNoteStage2Upload(uint32_t reason, uint64_t bytes);
+
+  bool ts_active_ = false;
+  bool ts_zpd_async_ = false;
+  bool ts_interrupt_barrier_ = true;
+  bool ts_verify_registers_ = false;
+  bool ts_in_barrier_ = false;  // stage 2 is running a barrier closure
+  bool ts_async_draw_ = false;
+  bool ts_log_misses_ = false;
+  bool ts_sync_all_draws_ = false;
+  bool ts_flush_queue_always_ = false;
+  bool ts_sync_resolves_ = false;
+  bool TsRunsOverlapPreparedQueue(const TsBatch& batch, uint32_t first, uint32_t end) const;
+  uint32_t ts_logged_misses_ = 0;  // stage 2 is running a queued (async) draw
+  uint32_t ts_publish_draws_ = 16;
+  std::thread ts_thread_;
+  std::mutex ts_mutex_;
+  std::condition_variable ts_work_cv_;
+  std::condition_variable ts_done_cv_;
+  std::deque<std::unique_ptr<TsBatch>> ts_queue_;
+  std::vector<std::unique_ptr<TsBatch>> ts_free_;
+  std::unique_ptr<TsBatch> ts_batch_;  // stage 1's batch being recorded
+  uint64_t ts_next_seq_ = 1;
+  uint64_t ts_done_seq_ = 0;
+  bool ts_stop_ = false;
+  bool ts_stage2_idle_ = false;
+  Shader* ts_vertex_shader_ = nullptr;
+  Shader* ts_pixel_shader_ = nullptr;
+  const uint32_t* ts_alias_clear_vertices_ = nullptr;
+  rex::string::StringBuffer ts_ucode_disasm_buffer_;
+  std::vector<SharedMemory::Range> ts_ranges_;
+  TsStats ts_stats_;
 };
 
 }  // namespace metal

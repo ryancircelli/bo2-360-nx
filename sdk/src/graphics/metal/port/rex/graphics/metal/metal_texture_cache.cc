@@ -619,6 +619,24 @@ void MetalTextureCache::UploadBufferPool::HandleCommandBufferCompleted(
   }
 }
 
+uint32_t MetalTextureCache::GuestRangesForFetchConstant(
+    const xenos::xe_gpu_texture_fetch_t& fetch, SharedMemory::Range* ranges_out) {
+  TextureKey key;
+  BindingInfoFromFetchConstant(fetch, key, nullptr);
+  if (!key.is_valid) {
+    return 0;
+  }
+  const texture_util::TextureGuestLayout layout = key.GetGuestLayout();
+  uint32_t count = 0;
+  if (key.base_page && layout.base.level_data_extent_bytes) {
+    ranges_out[count++] = {uint32_t(key.base_page) << 12, layout.base.level_data_extent_bytes};
+  }
+  if (key.mip_page && layout.mips_total_extent_bytes) {
+    ranges_out[count++] = {uint32_t(key.mip_page) << 12, layout.mips_total_extent_bytes};
+  }
+  return count;
+}
+
 MetalTextureCache::MetalTextureCache(MetalCommandProcessor* command_processor,
                                      const RegisterFile& register_file,
                                      MetalSharedMemory& shared_memory,
@@ -1272,6 +1290,11 @@ bool MetalTextureCache::PrepareTextureMaterialization(
                                   uint32_t length) {
       if (!needed || !length) {
         return SourceRangeState::kNone;
+      }
+      if (command_processor_ && command_processor_->two_stage_async_work()) {
+        // [cp-two-stage] stage 1 uploaded this draw's snapshot; pages it
+        // invalidated since hold data for later draws.
+        return SourceRangeState::kValid;
       }
       if (shared_memory().IsRangeInvalid(start, length)) {
         return SourceRangeState::kInvalid;

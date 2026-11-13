@@ -43,6 +43,10 @@ class MetalHeapPool;
 
 class MetalTextureCache : public TextureCache {
  public:
+  // [cp-two-stage] the guest ranges (base, mips) a texture fetch constant
+  // reads; 0 when it is not a valid texture. Pure, callable from any thread.
+  static uint32_t GuestRangesForFetchConstant(
+      const xenos::xe_gpu_texture_fetch_t& fetch, SharedMemory::Range* ranges_out);
   MetalTextureCache(MetalCommandProcessor* command_processor,
                     const RegisterFile& register_file,
                     MetalSharedMemory& shared_memory,

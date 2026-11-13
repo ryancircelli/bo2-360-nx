@@ -162,6 +162,11 @@ DEFINE_bool(metal_ssm_merge, false,
             "Merge stencil-only alias clear transfers into the next draw pass. "
             "Exact; can help bandwidth-bound Macs, slightly slower on others.",
             "Metal");
+DEFINE_bool(metal_cp_two_stage, false,
+            "Prototype: split the GPU command processor in two threads; the "
+            "guest sees fences once commands are parsed and their memory "
+            "snapshotted, Metal encoding runs behind on a second thread.",
+            "Metal");
 DEFINE_bool(metal_occlusion_real, true,
             "Answer guest occlusion queries with real Metal visibility results; "
             "off reports a fixed 1000 samples passed.",

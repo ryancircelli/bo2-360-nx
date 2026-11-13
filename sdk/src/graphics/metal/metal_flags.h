@@ -64,6 +64,7 @@ DECLARE_string(metal_ns_cache_toolchain);
 DECLARE_bool(metal_ns_specialize);
 DECLARE_string(metal_msc_min_target);
 DECLARE_bool(metal_occlusion_real);
+DECLARE_bool(metal_cp_two_stage);
 DECLARE_int32(metal_present_drawables);
 DECLARE_string(metal_res_scale);
 DECLARE_bool(metal_resolve_to_texture);
