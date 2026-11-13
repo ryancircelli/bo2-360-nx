@@ -90,21 +90,29 @@ void MetalCommandProcessor::TsStart() {
       ts_publish_draws_ = uint32_t(n);
     }
   }
-  // A command buffer (and its autorelease pool) begun on this thread during
-  // setup must end here: from now on only stage 2 touches Metal.
-  if (current_command_buffer_ || command_buffer_autorelease_pool_) {
-    FlushCommandBufferAndWait(5000000000ULL, "cp two-stage start");
+  // A command buffer (and its autorelease pool) begun on this thread must end
+  // here: from now on only stage 2 touches Metal.
+  TsEndFrameWork("cp two-stage start");
+  if (!ts_batch_) {
+    ts_batch_ = std::make_unique<TsBatch>();
   }
-  ts_batch_ = std::make_unique<TsBatch>();
-  ts_stop_ = false;
   ts_vertex_shader_ = CommandProcessor::active_vertex_shader();
   ts_pixel_shader_ = CommandProcessor::active_pixel_shader();
   ts_active_ = true;
-  ts_thread_ = std::thread([this] { TsThreadMain(); });
+  if (!ts_thread_.joinable()) {
+    ts_stop_ = false;
+    ts_thread_ = std::thread([this] { TsThreadMain(); });
+  }
   REXLOG_INFO(
       "[cp-two-stage] on: publish every {} draws, zpd {}, interrupts {}, verify {}",
       ts_publish_draws_, ts_zpd_async_ ? "async" : "barrier",
       ts_interrupt_barrier_ ? "barrier" : "async", ts_verify_registers_ ? "on" : "off");
+}
+
+void MetalCommandProcessor::TsEndFrameWork(const char* why) {
+  if (current_command_buffer_ || command_buffer_autorelease_pool_) {
+    FlushCommandBufferAndWait(5000000000ULL, why);
+  }
 }
 
 void MetalCommandProcessor::TsStop() {
@@ -234,13 +242,15 @@ void MetalCommandProcessor::TsLogRegisterRange(uint32_t start, const uint32_t* b
 }
 
 void MetalCommandProcessor::TraceRegistersRestored(uint32_t first, uint32_t count) {
-  if (!ts_active_ || !TsOnStage1()) {
-    return;
-  }
-  if (first >= RegisterFile::kRegisterCount) {
+  if (!ts_register_file_ || !TsOnStage1() || first >= RegisterFile::kRegisterCount) {
     return;
   }
   count = uint32_t(std::min<size_t>(count, RegisterFile::kRegisterCount - first));
+  if (!ts_active_) {
+    std::memcpy(register_file_->values + first, CommandProcessor::register_file_->values + first,
+                count * sizeof(uint32_t));
+    return;
+  }
   std::vector<uint32_t>& ops = ts_batch_->ops;
   ops.push_back(uint32_t(TsOp::kRegisterCopy));
   ops.push_back(first);
