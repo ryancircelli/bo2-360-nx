@@ -34,6 +34,30 @@ bool ReadString(const toml::table& table, const char* key, std::string& out, std
 
 }  // namespace
 
+// A TOML scalar as cvar text.
+bool ScalarText(const toml::node& node, std::string& out) {
+  if (const auto* s = node.as_string()) {
+    out = s->get();
+  } else if (const auto* b = node.as_boolean()) {
+    out = b->get() ? "true" : "false";
+  } else if (const auto* i = node.as_integer()) {
+    out = std::to_string(i->get());
+  } else if (const auto* f = node.as_floating_point()) {
+    out = std::to_string(f->get());
+  } else {
+    return false;
+  }
+  return true;
+}
+
+// Settings a renderer profile may name: the GPU backends' own.
+bool IsRendererSetting(std::string_view name) {
+  for (std::string_view prefix : {"metal_", "vulkan_", "d3d12_", "gpu_", "draw_resolution_scale_"}) {
+    if (name.starts_with(prefix)) return true;
+  }
+  return name == "half_pixel_offset" || name == "anisotropic_override";
+}
+
 bool LoadGameManifest(std::string_view toml_text, GameInfo& info, std::string* error) {
   toml::table root;
   try {
@@ -81,18 +105,43 @@ bool LoadGameManifest(std::string_view toml_text, GameInfo& info, std::string* e
     next.default_cvars.clear();
     for (const auto& [key, node] : *defaults) {
       std::string value;
-      if (const auto* s = node.as_string()) {
-        value = s->get();
-      } else if (const auto* b = node.as_boolean()) {
-        value = b->get() ? "true" : "false";
-      } else if (const auto* i = node.as_integer()) {
-        value = std::to_string(i->get());
-      } else if (const auto* f = node.as_floating_point()) {
-        value = std::to_string(f->get());
-      } else {
+      if (!ScalarText(node, value)) {
         return Fail(error, "defaults." + std::string(key.str()) + " must be a string, boolean or number");
       }
       next.default_cvars.emplace_back(std::string(key.str()), std::move(value));
+    }
+  }
+
+  if (const toml::node* renderer_node = root.get("renderer")) {
+    const toml::table* renderer = renderer_node->as_table();
+    if (!renderer) return Fail(error, "renderer must be a table");
+    if (const toml::node* quirks_node = renderer->get("quirks")) {
+      const toml::array* quirks = quirks_node->as_array();
+      if (!quirks) return Fail(error, "renderer.quirks must be an array of names");
+      next.renderer.quirks.clear();
+      for (const toml::node& quirk : *quirks) {
+        const auto* name = quirk.as_string();
+        if (!name || name->get().empty() || name->get().find(',') != std::string::npos) {
+          return Fail(error, "renderer.quirks entries must be names such as \"fable2\"");
+        }
+        next.renderer.quirks.push_back(name->get());
+      }
+    }
+    if (const toml::node* settings_node = renderer->get("settings")) {
+      const toml::table* settings = settings_node->as_table();
+      if (!settings) return Fail(error, "renderer.settings must be a table");
+      next.renderer.settings.clear();
+      for (const auto& [key, node] : *settings) {
+        std::string name(key.str());
+        if (!IsRendererSetting(name)) {
+          return Fail(error, "renderer.settings." + name + " is not a GPU backend setting");
+        }
+        std::string value;
+        if (!ScalarText(node, value)) {
+          return Fail(error, "renderer.settings." + name + " must be a string, boolean or number");
+        }
+        next.renderer.settings.emplace_back(std::move(name), std::move(value));
+      }
     }
   }
 
@@ -108,6 +157,21 @@ int ApplyGameDefaults(const GameInfo& info) {
     }
   }
   return applied;
+}
+
+bool ApplyRendererProfile(const RendererProfile& profile) {
+  bool ok = true;
+  if (!profile.quirks.empty()) {
+    std::string quirks;
+    for (const auto& quirk : profile.quirks) {
+      quirks += (quirks.empty() ? "" : ",") + quirk;
+    }
+    ok = cvar::SetDefaultValue("metal_title_quirks", quirks) && ok;
+  }
+  for (const auto& [name, value] : profile.settings) {
+    ok = cvar::SetDefaultValue(name, value) && ok;
+  }
+  return ok;
 }
 
 }  // namespace rex

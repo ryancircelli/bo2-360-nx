@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <rex/game_info.h>
+#include <rex/logging.h>
 #include <rex/rex_app.h>
 
 namespace rex {
@@ -100,7 +101,11 @@ class GameApp : public ReXApp {
     for (auto& fn : api_->post_init_logging_) fn(*this);
   }
   void OnPreSetup(RuntimeConfig& config) override {
-    ApplyGameDefaults(Game());  // the manifest's [defaults], before the title's own hooks
+    // The manifest's [renderer] and [defaults], before the title's own hooks.
+    if (!ApplyRendererProfile(Game().renderer)) {
+      REXLOG_WARN("{}: a renderer setting in the title manifest did not parse", Game().short_name);
+    }
+    ApplyGameDefaults(Game());
     for (auto& fn : api_->pre_setup_) fn(*this, config);
   }
   void OnLoadXexImage(std::string& xex_image) override {

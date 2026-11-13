@@ -249,6 +249,12 @@ using ChangeCallback = std::function<void(std::string_view name, std::string_vie
 /// Register a callback to be invoked when a specific CVAR changes
 void RegisterChangeCallback(std::string_view name, ChangeCallback callback);
 
+// Replaces a cvar's compiled-in default (a title's own default). The cvar takes the value
+// while no source has set it, and ResetToDefault, HasNonDefaultValue and SaveConfig treat it
+// as the default. A cvar not registered yet (a GPU plugin's) gets it when it registers.
+// Returns false when the value does not parse for a registered cvar.
+bool SetDefaultValue(std::string_view name, std::string_view value);
+
 // Old names for renamed cvars. An alias is accepted wherever a cvar name is:
 // config files, --alias / --no-alias, REX_<ALIAS>, SetFlagByName, GetFlagInfo,
 // Query and change callbacks. Within one source the current name wins over an

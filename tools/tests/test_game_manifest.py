@@ -18,7 +18,8 @@ def main():
                         str(ROOT / "tools/tests/game_manifest_test.cpp"),
                         str(ROOT / "sdk/src/core/game_manifest.cpp"), "-o", str(executable)],
                        check=True, cwd=ROOT)
-        subprocess.run([str(executable), str(ROOT / "games/bo2/game.toml")], check=True, cwd=ROOT, timeout=30)
+        subprocess.run([str(executable), str(ROOT / "games/bo2/game.toml"),
+                        str(ROOT / "sdk/src/graphics/metal/metal_flags.cpp")], check=True, cwd=ROOT, timeout=30)
 
 
 if __name__ == "__main__":

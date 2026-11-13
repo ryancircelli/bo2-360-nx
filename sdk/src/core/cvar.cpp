@@ -67,6 +67,27 @@ std::unordered_map<std::string, PendingValues>& GetPendingValuesStorage() {
   return pending;
 }
 
+// Replacement defaults (SetDefaultValue) for cvars not registered yet, such as a GPU plugin's,
+// keyed by current name and applied when the cvar registers.
+std::unordered_map<std::string, std::string>& GetPendingDefaultsStorage() {
+  static std::unordered_map<std::string, std::string> pending;
+  return pending;
+}
+
+// Makes `value` the entry's default: the value it has while no source set it, and the one
+// ResetToDefault, HasNonDefaultValue and SaveConfig compare against.
+bool ReplaceDefault(FlagEntry& entry, std::string_view value) {
+  const std::string current = entry.getter();
+  if (!entry.setter(value)) {
+    return false;
+  }
+  entry.default_value = entry.getter();
+  if (entry.source != Source::kDefault) {
+    entry.setter(current);
+  }
+  return true;
+}
+
 // Old names kept for renamed cvars: alias -> canonical name. An alias whose
 // target is registered also sits in the registry index at the target's
 // position, so every lookup by name accepts it.
@@ -276,6 +297,14 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
     }
   }
   names.push_back(storage[pos].name);
+
+  auto& pending_defaults = GetPendingDefaultsStorage();
+  if (auto default_it = pending_defaults.find(storage[pos].name); default_it != pending_defaults.end()) {
+    if (!ReplaceDefault(storage[pos], default_it->second)) {
+      REXLOG_WARN("cvar: invalid default '{}' for '{}'", default_it->second, storage[pos].name);
+    }
+    pending_defaults.erase(default_it);
+  }
 
   // Late registration: replay pending values in ascending priority.
   if (g_init_done) {
@@ -650,6 +679,16 @@ void UnregisterAlias(std::string_view alias) {
   }
 }
 
+bool SetDefaultValue(std::string_view name, std::string_view value) {
+  std::lock_guard lock(GetRegistryMutex());
+  auto it = GetRegistryIndex().find(std::string(name));
+  if (it == GetRegistryIndex().end()) {
+    GetPendingDefaultsStorage()[CanonicalName(name)] = std::string(value);
+    return true;
+  }
+  return ReplaceDefault(GetRegistryStorage()[it->second], value);
+}
+
 std::string CanonicalName(std::string_view name) {
   std::lock_guard lock(GetRegistryMutex());
   auto it = GetAliasStorage().find(std::string(name));
@@ -817,6 +856,7 @@ void ResetAllForTesting() {
   ResetAllToDefaults();
   ClearPendingRestartFlags();
   GetPendingValuesStorage().clear();
+  GetPendingDefaultsStorage().clear();
   g_init_done = false;
   g_finalized = false;
 }

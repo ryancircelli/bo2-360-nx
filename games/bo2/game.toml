@@ -16,3 +16,17 @@ first_link_port = 1000               # BO2's VDP port; 1001 (UDP) and the side c
 [defaults]
 # Local MP and Zombies expose an offline profile for each controller port.
 offline_user_count = 4
+
+[renderer]
+# The Metal backend settings BO2 was measured and shipped with. They are the SDK's
+# defaults today; naming them here keeps BO2 on them if a later title changes the
+# SDK's. A config file, REX_ variable or command-line option still wins.
+quirks = []                          # metal_title_quirks: BO2 needs none
+
+[renderer.settings]
+metal_tile_resolve = true            # colour resolves as tile functions inside the draw pass
+metal_tile_resolve_half_bits = true  # BO2's HDR luminance chain: RGBA16Float through RGBA16Uint views
+metal_resolve_to_texture = true      # resolves land straight in textures
+metal_occlusion_real = true          # real occlusion query results
+metal_vsync_phase_lock = true        # presentation phase-locked to the display
+metal_present_drawables = 2          # two drawables: lower latency

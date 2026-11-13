@@ -21,6 +21,15 @@ namespace rex {
 
 /// Facts about the running title that SDK code needs without naming it.
 /// Defaults are the values the SDK used before titles registered themselves.
+// How the title sets up the GPU backends ([renderer] in its manifest).
+struct RendererProfile {
+  // Backend workarounds the title needs, by name (metal_title_quirks).
+  std::vector<std::string> quirks;
+  // Backend settings (metal_*, vulkan_*, d3d12_*, gpu_*, ...) whose default the title
+  // replaces; config files, the environment and the command line still win.
+  std::vector<std::pair<std::string, std::string>> settings;
+};
+
 struct GameInfo {
   /// Short id: config file stem, Switch folder (sdmc:/switch/<short_name>).
   std::string short_name = "rex";
@@ -38,6 +47,7 @@ struct GameInfo {
   /// Settings whose compiled-in default the title replaces. Applied at
   /// setup only when the user's config and environment left them alone.
   std::vector<std::pair<std::string, std::string>> default_cvars;
+  RendererProfile renderer;
   /// First guest port the title's system link uses; the online relay carries
   /// three ports from here (the last one is the SDK's side channel).
   uint16_t first_link_port = 1000;
@@ -60,5 +70,9 @@ bool LoadGameManifest(std::string_view toml_text, GameInfo& info, std::string* e
 /// Applies `info.default_cvars` to settings still at their compiled-in
 /// default. Returns the number applied.
 int ApplyGameDefaults(const GameInfo& info);
+
+// Makes the renderer profile's quirks and settings the defaults of the backend cvars,
+// including those of a GPU plugin loaded later. Returns false when a value does not parse.
+bool ApplyRendererProfile(const RendererProfile& profile);
 
 }  // namespace rex

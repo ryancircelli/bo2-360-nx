@@ -156,6 +156,35 @@ int main() {
   cv::RegisterAlias("old_limit", "plain");
   assert(cv::CanonicalName("old_limit") == "fps_limit");
 
-  std::puts("cvar aliases: lookups, callbacks, config, SaveConfig, command line, environment, late registration passed");
+  // A title's own default (SetDefaultValue, the manifest's [renderer] settings).
+  Reset();
+  Init({});
+  assert(cv::SetDefaultValue("old_limit", "30"));  // through the old name
+  assert(REXCVAR_GET(fps_limit) == 30 && cv::GetFlagSource("fps_limit") == cv::Source::kDefault);
+  assert(!cv::HasNonDefaultValue("fps_limit") && cv::GetFlagInfo("fps_limit")->default_value == "30");
+  assert(!cv::SetDefaultValue("fps_limit", "fast") && REXCVAR_GET(fps_limit) == 30);
+  cv::LoadConfig(Write("cvar_alias_e.toml", "label = \"b\"\n"));
+  assert(cv::SetDefaultValue("label", "c"));  // a config value still wins
+  assert(REXCVAR_GET(label) == "b");
+  cv::ResetToDefault("label");
+  assert(REXCVAR_GET(label) == "c");
+  // A cvar registered later (a GPU plugin's) takes it, and a config value still wins over it.
+  cv::LoadConfig(Write("cvar_alias_f.toml", "plugin_b = 9\n"));
+  assert(cv::SetDefaultValue("plugin_a", "5") && cv::SetDefaultValue("plugin_b", "5"));
+  {
+    int32_t a = 0, b = 0;
+    auto entry = [](const char* name, int32_t& v) {
+      return cv::FlagEntry{name, cv::FlagType::Int32, "Test", name,
+                           [&v](std::string_view s) { v = std::atoi(std::string(s).c_str()); return true; },
+                           [&v] { return std::to_string(v); }, [](std::string_view) {},
+                           cv::Lifecycle::kHotReload, {}, "0", false};
+    };
+    cv::FlagRegistrar flag_a(entry("plugin_a", a)), flag_b(entry("plugin_b", b));
+    assert(a == 5 && cv::GetFlagSource("plugin_a") == cv::Source::kDefault);
+    assert(b == 9 && cv::GetFlagInfo("plugin_b")->default_value == "5");
+  }
+
+  std::puts("cvar aliases: lookups, callbacks, config, SaveConfig, command line, environment, late registration, "
+            "title defaults passed");
   return 0;
 }
