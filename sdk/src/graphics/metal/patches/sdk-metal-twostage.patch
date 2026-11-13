@@ -1,9 +1,9 @@
 --- a/include/rex/graphics/command_processor.h
 +++ b/include/rex/graphics/command_processor.h
-@@ -132,6 +132,12 @@
-   // readback_resolve = full) need nothing; backends that keep resolve output
-   // on the GPU (Metal) override it.
-   virtual void TraceReadbackGuestMemory(uint32_t /*physical_address*/, uint32_t /*length*/) {}
+@@ -123,6 +123,12 @@
+   void UpdateWritePointer(uint32_t value);
+ 
+   void ExecutePacket(uint32_t ptr, uint32_t count);
 +  // GPU trace replay, two-stage backends (metal_cp_two_stage): the replayer
 +  // copied count register values starting at first straight into the register
 +  // file; and the replayer finished a pass and wants all queued backend work
@@ -11,8 +11,8 @@
 +  virtual void TraceRegistersRestored(uint32_t /*first*/, uint32_t /*count*/) {}
 +  virtual void TraceDrainBackend() {}
  
-   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
-   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
+   bool is_paused() const { return paused_; }
+   void Pause();
 @@ -185,6 +191,11 @@
  
    virtual void MakeCoherent();
