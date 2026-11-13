@@ -39,11 +39,19 @@
 
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
+#include <mach/mach.h>
+#include <pthread.h>
+#include <map>
 #endif
 
 REXCVAR_DEFINE_STRING(bo2zm_perf_log, "", "BO2",
                       "Test helper: write a per-frame performance log (docs/mac/perf-log-format.md) to this file, "
                       "for tools/mac/perf_summary.py. Empty = off")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(bo2zm_perf_counters, false, "BO2",
+                    "Test helper: append main_ms, server_ms, worker_ms, tex_new, tex_ms, upload_bytes columns to the "
+                    "perf log (see bo2zm_perf_log.cpp)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 #ifndef BO2ZM_BUILD_ID
@@ -70,11 +78,61 @@ double MsNow() {
   return std::chrono::duration<double, std::milli>(Clock::now() - g_start).count();
 }
 
+#if defined(__APPLE__)
+// bo2zm_perf_counters: CPU time (user+system, thread_info) of the game's threads, summed per role by host thread name:
+//   main_ms    threads named "Main XThread*": CPU time since the previous presented frame
+//   server_ms  threads named "Server*"
+//   worker_ms  sum over threads named "Worker*" or "Job*" (the job workers; Audio Worker excluded)
+// Sampled on the ring thread at each present; the interval is the same as frame_ms.
+struct ThreadSampler {
+  struct T { std::string name; uint64_t ns = 0; };
+  std::map<mach_port_t, T> known;
+  double main_ms = 0, server_ms = 0, worker_ms = 0;
+  std::string all_names;
+  static uint64_t Cpu(mach_port_t t) {
+    thread_basic_info_data_t i; mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT;
+    if (thread_info(t, THREAD_BASIC_INFO, (thread_info_t)&i, &n) != KERN_SUCCESS) return 0;
+    return (uint64_t(i.user_time.seconds) + i.system_time.seconds) * 1000000000ull +
+           (uint64_t(i.user_time.microseconds) + i.system_time.microseconds) * 1000ull;
+  }
+  void Sample() {
+    thread_act_array_t list; mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &list, &count) != KERN_SUCCESS) return;
+    uint64_t m = 0, sv = 0, w = 0;
+    for (mach_msg_type_number_t k = 0; k < count; ++k) {
+      mach_port_t t = list[k];
+      auto it = known.find(t);
+      if (it == known.end()) {
+        T e; char buf[128] = {};
+        if (pthread_t pt = pthread_from_mach_thread_np(t)) pthread_getname_np(pt, buf, sizeof buf);
+        e.name = buf; e.ns = Cpu(t);
+        all_names += e.name + ";";
+        known.emplace(t, e);
+      } else {
+        const uint64_t now = Cpu(t), d = now - it->second.ns;
+        it->second.ns = now;
+        const std::string& n = it->second.name;
+        if (n.rfind("Main XThread", 0) == 0) m += d;
+        else if (n.rfind("Server", 0) == 0) sv += d;
+        else if (n.rfind("Worker", 0) == 0 || n.rfind("Job", 0) == 0) w += d;
+      }
+      mach_port_deallocate(mach_task_self(), t);
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)list, count * sizeof(*list));
+    main_ms = m / 1e6; server_ms = sv / 1e6; worker_ms = w / 1e6;
+  }
+};
+#else
+struct ThreadSampler { double main_ms = 0, server_ms = 0, worker_ms = 0; std::string all_names; void Sample() {} };
+#endif
+
 // A frame whose GPU time is not known yet.
 struct Row {
   uint64_t frame = 0;
   double t_ms = 0.0, frame_ms = -1.0, cpu_ms = 0.0, present_wait_ms = 0.0, compile_ms = 0.0;
   uint64_t draws = 0;
+  double main_ms = 0, server_ms = 0, worker_ms = 0, tex_ms = 0;
+  uint64_t tex_new = 0, upload_bytes = 0;
   uint64_t first_job = 0, last_job = 0;  // its submissions: (first_job, last_job]
   uint64_t jobs_left = 0;
   uint64_t gpu_ns = 0;
@@ -101,6 +159,12 @@ class Log {
     Row row;
     row.frame = frames_++;
     row.t_ms = t;
+    if (counters_on_ && !have_previous_) {
+      threads_.Sample();  // baselines
+    }
+    if (counters_on_ && frames_ == 1800 && !threads_.all_names.empty()) {
+      events_.emplace_back(t, "threads\t" + threads_.all_names);
+    }
     const double ns_compile = double(compile_ns_);
     compile_ns_ = 0;
     if (have_previous_) {
@@ -112,6 +176,13 @@ class Log {
       row.cpu_ms = cpu > 0.0 ? cpu / 1e6 : 0.0;
       row.present_wait_ms = wait / 1e6;
       row.draws = c.draws - previous_.draws;
+      row.tex_new = c.tex_new - previous_.tex_new;
+      row.tex_ms = double(c.ns_tex - previous_.ns_tex) / 1e6;
+      row.upload_bytes = c.upload_bytes - previous_.upload_bytes;
+      if (counters_on_) {
+        threads_.Sample();
+        row.main_ms = threads_.main_ms; row.server_ms = threads_.server_ms; row.worker_ms = threads_.worker_ms;
+      }
       row.first_job = previous_.jobs_submitted;
     } else {
       // The first frame: what came before the log started is not this frame's. Its own submission is the last one.
@@ -258,7 +329,11 @@ class Log {
     if (const char* route = std::getenv("BO2ZM_ROUTE")) {
       meta("route", route);
     }
-    buffer_ += "frame\tt_ms\tframe_ms\tcpu_ms\tgpu_ms\tpresent_wait_ms\tcompile_ms\tdraws\n";
+    buffer_ += "frame\tt_ms\tframe_ms\tcpu_ms\tgpu_ms\tpresent_wait_ms\tcompile_ms\tdraws";
+    if (counters_on_) {
+      buffer_ += "\tmain_ms\tserver_ms\tworker_ms\ttex_new\ttex_ms\tupload_bytes";
+    }
+    buffer_ += "\n";
     writer_ = std::thread([this] { Writer(); });
     REXLOG_INFO("[perf log] writing {}", path);
     return true;
@@ -302,7 +377,12 @@ class Log {
       } else {
         buffer_ += "-\t";
       }
-      fmt::format_to(std::back_inserter(buffer_), "{:.3f}\t{:.3f}\t{}\n", r.present_wait_ms, r.compile_ms, r.draws);
+      fmt::format_to(std::back_inserter(buffer_), "{:.3f}\t{:.3f}\t{}", r.present_wait_ms, r.compile_ms, r.draws);
+      if (counters_on_) {
+        fmt::format_to(std::back_inserter(buffer_), "\t{:.3f}\t{:.3f}\t{:.3f}\t{}\t{:.3f}\t{}", r.main_ms, r.server_ms,
+                       r.worker_ms, r.tex_new, r.tex_ms, r.upload_bytes);
+      }
+      buffer_ += '\n';
       rows_.pop_front();
     }
     if (all) {
@@ -357,6 +437,8 @@ class Log {
   double previous_t_ = 0.0;
   bool have_previous_ = false;
   bool loading_done_ = false;
+  const bool counters_on_ = REXCVAR_GET(bo2zm_perf_counters);
+  ThreadSampler threads_;
   uint64_t compile_ns_ = 0;  // this frame's so far
   uint64_t early_gpu_ns_ = 0, early_jobs_ = 0;
   bool early_measured_ = false;
@@ -396,6 +478,9 @@ void InstallSwapHook(std::string_view renderer) {
     c.ns_present_wait = st.ns_present_wait.load(std::memory_order_relaxed);
     c.draws = st.draws.load(std::memory_order_relaxed);
     c.jobs_submitted = st.jobs_submitted.load(std::memory_order_relaxed);
+    c.tex_new = st.tex_new.load(std::memory_order_relaxed);
+    c.ns_tex = st.ns_tex.load(std::memory_order_relaxed);
+    c.upload_bytes = st.upload_bytes.load(std::memory_order_relaxed);
     c.width = width;
     c.height = height;
     OnPresent(c);
