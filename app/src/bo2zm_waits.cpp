@@ -131,6 +131,13 @@ REXCVAR_DEFINE_INT32(bo2zm_wait_sites, 0xFFF, "BO2",
                      "jobs")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(bo2zm_waits_group_own, true, "BO2",
+                    "In sub_82493690's second loop (the group's jobs all taken, some still running elsewhere) help only "
+                    "with that group's jobs instead of any job. The game helps with any job there; in 4-player split "
+                    "screen Main took a long unrelated job and returned 11-17 ms after its group was done (critpath "
+                    "LIGHT trace). With nothing of the group to take, the thread sleeps until a job of it ends")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REX_EXTERN(__imp__sub_8284AED8);
 REX_EXTERN(__imp__sub_827D8DD8);
 REX_EXTERN(__imp__sub_8284A088);
@@ -371,6 +378,11 @@ void Warn(tr::Reason m, uint32_t key = 0) {
 bool AnyActive() {
   static const bool active = REXCVAR_GET(bo2zm_blocking_waits);
   return active;
+}
+
+bool GroupOwn() {
+  static const bool on = REXCVAR_GET(bo2zm_waits_group_own);
+  return on;
 }
 
 std::chrono::microseconds Limit() {
@@ -819,6 +831,11 @@ REX_HOOK_RAW(sub_8284BB48) {
   const uint32_t lr = uint32_t(ctx.lr);
   const bool report = tr::ReportActive();
   const uint64_t t0 = report ? NowNs() : 0;
+  // The second loop passes no filter (r5 = 0): any job. Give it the group's, as the first loop does.
+  const bool own = lr == kHelpInGroup2 && t.group != 0 && ctx.r5.u32 == 0 && GroupOwn();
+  if (own) {
+    ctx.r5.u64 = t.group;
+  }
   __imp__sub_8284BB48(ctx, base);
   WarnYesEnded();
   if (report) {
@@ -826,7 +843,9 @@ REX_HOOK_RAW(sub_8284BB48) {
     h.helps.fetch_add(1, std::memory_order_relaxed);
     h.ns_helps.fetch_add(NowNs() - t0, std::memory_order_relaxed);
   }
-  if (AnyActive() && t.last_empty && (lr == kHelpInGroup1 || lr == kHelpInGroup2) && !HasTakeableHelp(base)) {
+  // Other jobs in the queues do not keep a thread that only takes its group's awake.
+  if (AnyActive() && t.last_empty && (lr == kHelpInGroup1 || lr == kHelpInGroup2) &&
+      (own || !HasTakeableHelp(base))) {
     Sleep(tr::kRoomGroup, t.seen_choice, kInterestsHelp | Bit(tr::kWarningEnded), t.group, Limit());
   }
 }
