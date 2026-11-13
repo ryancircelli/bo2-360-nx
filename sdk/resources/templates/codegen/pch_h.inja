@@ -31,6 +31,7 @@
 
 #include <rex/ppc.h>
 {% if config_flags.abi_poison_checks %}#include <rex/ppc/abi_poison.h>
+{% endif %}{% if config_flags.reference_functions %}#include <rex/ppc/reference.h>
 {% endif %}#include <rex/image_info.h>
 #include <rex/logging.h>
 #include <rex/chrono/clock.h>
@@ -257,11 +258,11 @@ extern PPCFuncMapping PPCFuncMappings[];
 
 {% include "codegen/_indirect_call.inja" %}
 
-//=============================================================================
+{% if config_flags.abi_poison_checks %}//=============================================================================
 // ABI poison checks (abi_poison_checks, checking builds only)
 //=============================================================================
 
-{% if config_flags.abi_poison_checks %}// Emitted around every direct and indirect guest call when the generator ran
+// Emitted around every direct and indirect guest call when the generator ran
 // with abi_poison_checks: the caller snapshots the PowerPC non-volatile
 // registers before the call, checks after it that the callee preserved them,
 // and overwrites the volatile registers the ABI leaves dead at a return with
@@ -269,8 +270,22 @@ extern PPCFuncMapping PPCFuncMappings[];
 // (rex/ppc/abi_poison.h).
 #define REX_ABI_POISON_PRE(site) ::rex::ppc::AbiPoisonPreCall(ctx, (site))
 #define REX_ABI_POISON_POST(site) ::rex::ppc::AbiPoisonPostCall(ctx, (site))
-{% endif %}
-//=============================================================================
+
+{% endif %}{% if config_flags.reference_functions %}// Reference copies (reference_functions): the generator wraps a `ref_sub_X`
+// body in push_macro/pop_macro and points the store macros here, so every
+// store is logged for the verifier's rollback and comparison
+// (rex/ppc/reference.h).
+#define REX_REF_STORE_U8(x, y)  ::rex::ppc::RefStore<u8>((volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (u32)(x), (u8)(y))
+#define REX_REF_STORE_U16(x, y) ::rex::ppc::RefStore<u16>((volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (u32)(x), __builtin_bswap16(y))
+#define REX_REF_STORE_U32(x, y) ::rex::ppc::RefStore<u32>((volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (u32)(x), __builtin_bswap32(y))
+#define REX_REF_STORE_U64(x, y) ::rex::ppc::RefStore<u64>((volatile u64*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (u32)(x), __builtin_bswap64(y))
+// A save-area store (the link-register slot, a GPR save) that the optimized
+// form keeps in a host local or leaves to the helper: logged for the
+// rollback, not compared.
+#define REX_REF_STORE_UNCHECKED_U32(x, y) ::rex::ppc::RefStore<u32>((volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (u32)(x), __builtin_bswap32(y), false)
+#define REX_REF_STORE_UNCHECKED_U64(x, y) ::rex::ppc::RefStore<u64>((volatile u64*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (u32)(x), __builtin_bswap64(y), false)
+
+{% endif %}//=============================================================================
 // Flush Mode
 //=============================================================================
 
