@@ -42,11 +42,11 @@ DEFINE_bool(metal_encode_thread, false,
             "Record render encoder calls on the command processor thread and "
             "replay them into Metal on a second thread.",
             "Metal");
-DEFINE_bool(metal_cmdcost_all, false,
+DEFINE_bool(metal_cmdcost_all, true,
             "Master switch for the command-processor cost reductions: draw "
             "fast path, constant fast path, shared-memory upload fix, encode "
             "thread and cross-pass encode thread. Flippable at run time "
-            "(latched at the drained frame boundary). Default off.",
+            "(latched at the drained frame boundary). Default on.",
             "Metal");
 DEFINE_bool(metal_const_fastpath, false,
             "Pack changed constant blocks (system, float, bool/loop) straight "
