@@ -1710,6 +1710,29 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool reg_early_out_active_ = false;
   uint64_t reg_early_out_hits_[2] = {0, 0};  // [0] fetch constants, [1] bool/loop constants
   bool bindless_cache_active_ = false;
+  uint64_t bindless_cache_hits_ = 0;
+  uint64_t bindless_cache_calls_ = 0;
+  // Last fully-processed PopulateBindlessTables inputs (lever B).
+  struct BindlessCacheKey {
+    bool valid = false;
+    bool shared_memory_is_uav = false;
+    bool use_geometry_emulation = false;
+    bool use_tessellation_emulation = false;
+    uint32_t shared_memory_usage_bits = 0;
+    uint64_t frame = 0;
+    uint64_t fixed_source_serial = 0;
+    const void* encoder = nullptr;
+    const void* root_buffer = nullptr;
+    uint64_t root_serial = 0;
+    std::array<uint32_t, kStageCount> active_cbv_masks = {};
+    struct Cbv {
+      const void* buffer;
+      uint64_t offset;
+      uint64_t gpu_address;
+    };
+    std::array<std::array<Cbv, kCbvSlotCount>, kStageCount> cbvs = {};
+  };
+  BindlessCacheKey bindless_cache_key_;
   bool draw_consts_dirty_active_ = false;
   uint64_t fetch_value_epoch_ = 1;  // bumped when any fetch dword changes
   std::vector<MTL::Texture*> current_texture_bindless_resources_vertex_;

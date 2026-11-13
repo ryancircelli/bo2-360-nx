@@ -1423,6 +1423,7 @@ MetalCommandProcessor::~MetalCommandProcessor() {
   render_encoder_bindless_table_bind_mesh_path_ = false;
   render_encoder_bindless_table_bind_tessellation_ = false;
   current_bindless_stage_root_arguments_ = {};
+  bindless_cache_key_.valid = false;
 }
 
 void MetalCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
@@ -2872,8 +2873,8 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   }
   if (bindless_cache_active_ != BindlessCacheRequested()) {
     bindless_cache_active_ = BindlessCacheRequested();
-    // TODO(lever B): invalidate the bindless cache here.
-    REXLOG_INFO("Metal bindless cache: {} at drained frame boundary", bindless_cache_active_ ? "on" : "off");
+    bindless_cache_key_.valid = false;
+    REXLOG_INFO("Metal bindless cache: {} at drained frame boundary (hits so far: {}/{})", bindless_cache_active_ ? "on" : "off", bindless_cache_hits_, bindless_cache_calls_);
   }
   if (draw_consts_dirty_active_ != DrawConstsDirtyRequested()) {
     draw_consts_dirty_active_ = DrawConstsDirtyRequested();
@@ -7938,6 +7939,97 @@ bool MetalCommandProcessor::PopulateBindlessTables(
   }
 
   constexpr size_t kGraphicsRootStage = kStageVertex;
+  // Lever B (metal_bindless_cache): when every input and every piece of derived
+  // state is identical to the previous completed call on this encoder, the full
+  // path below is a no-op (entries diff empty -> root reuse, same CBV arrays,
+  // serial-skipped resource sets, binds already applied), so return early.
+  BindlessCacheKey cache_key;
+  const bool cache_enabled = bindless_cache_active_;
+  if (cache_enabled) {
+    ++bindless_cache_calls_;
+    cache_key.valid = true;
+    cache_key.shared_memory_is_uav = shared_memory_is_uav;
+    cache_key.use_geometry_emulation = use_geometry_emulation;
+    cache_key.use_tessellation_emulation = use_tessellation_emulation;
+    cache_key.shared_memory_usage_bits =
+        MetalResourceUsageBits(shared_memory_usage);
+    cache_key.frame = frame_current_;
+    cache_key.fixed_source_serial =
+        GetBindlessFixedResourceSourceSerial(shared_memory_usage);
+    cache_key.encoder = current_render_encoder_;
+    const StageRootArgumentAllocation& cache_root =
+        current_bindless_stage_root_arguments_[kGraphicsRootStage];
+    cache_key.root_buffer = cache_root.valid ? cache_root.buffer : nullptr;
+    cache_key.root_serial = current_bindless_stage_root_serials_[kGraphicsRootStage];
+    for (size_t stage = 0; stage < kStageCount; ++stage) {
+      cache_key.active_cbv_masks[stage] = uniforms.active_cbv_masks[stage];
+      for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
+        const UniformBufferInfo::Cbv& u = uniforms.cbvs[stage][cbv];
+        const bool active = uniforms.active_cbv_masks[stage] & (uint32_t(1) << cbv);
+        cache_key.cbvs[stage][cbv] = {active ? u.buffer : nullptr,
+                                      active ? uint64_t(u.offset) : 0,
+                                      active ? u.gpu_address : 0};
+      }
+    }
+    const BindlessCacheKey& last = bindless_cache_key_;
+    bool hit = last.valid && last.shared_memory_is_uav == shared_memory_is_uav &&
+               last.use_geometry_emulation == use_geometry_emulation &&
+               last.use_tessellation_emulation == use_tessellation_emulation &&
+               last.shared_memory_usage_bits == cache_key.shared_memory_usage_bits &&
+               last.frame == cache_key.frame &&
+               last.fixed_source_serial == cache_key.fixed_source_serial &&
+               last.encoder == cache_key.encoder && current_render_encoder_ &&
+               last.root_buffer == cache_key.root_buffer &&
+               last.root_serial == cache_key.root_serial &&
+               last.active_cbv_masks == cache_key.active_cbv_masks;
+    if (hit) {
+      for (size_t stage = 0; stage < kStageCount && hit; ++stage) {
+        for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
+          const auto& a = last.cbvs[stage][cbv];
+          const auto& b = cache_key.cbvs[stage][cbv];
+          if (a.buffer != b.buffer || a.offset != b.offset ||
+              a.gpu_address != b.gpu_address) {
+            hit = false;
+            break;
+          }
+        }
+      }
+    }
+    if (hit) {
+      const uint64_t graphics_root_serial =
+          current_bindless_stage_root_serials_[kGraphicsRootStage];
+      const bool use_mesh = use_geometry_emulation || use_tessellation_emulation;
+      hit = current_bindless_stage_root_valid_[kGraphicsRootStage] &&
+            current_bindless_stage_root_entries_valid_[kGraphicsRootStage] &&
+            current_bindless_stage_root_arguments_[kGraphicsRootStage].valid &&
+            current_bindless_shared_memory_is_uav_ == shared_memory_is_uav &&
+            heap_binds_set_on_encoder_ &&
+            render_encoder_bindless_fixed_resources_serial_ ==
+                current_bindless_fixed_resource_set_.serial &&
+            render_encoder_bindless_texture_resources_serial_ ==
+                current_bindless_texture_resource_set_.serial &&
+            render_encoder_bindless_root_resources_serial_ ==
+                current_bindless_root_resource_set_.serial &&
+            current_bindless_fixed_resource_set_.serial &&
+            current_bindless_texture_resource_set_.serial &&
+            current_bindless_root_resource_set_.serial &&
+            render_encoder_bindless_stage_root_bind_serials_[kStageVertex] ==
+                graphics_root_serial &&
+            render_encoder_bindless_stage_root_bind_serials_[kStagePixel] ==
+                graphics_root_serial &&
+            render_encoder_bindless_table_bind_mesh_path_ == use_mesh &&
+            render_encoder_bindless_table_bind_tessellation_ ==
+                use_tessellation_emulation &&
+            !current_bindless_stage_root_valid_[kStagePixel] &&
+            !current_bindless_stage_root_serials_[kStagePixel];
+    }
+    if (hit) {
+      ++bindless_cache_hits_;
+      ++backend_telemetry_.bindless_root_reuse_hits[kGraphicsRootStage];
+      return true;
+    }
+    bindless_cache_key_.valid = false;
+  }
   const bool bindless_shared_memory_uav_mismatch =
       current_bindless_shared_memory_is_uav_ != shared_memory_is_uav;
   StageRootArgumentEntries entries = BuildGraphicsRootArgumentEntries(
@@ -8321,6 +8413,17 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     }
   }
 
+  if (cache_enabled) {
+    // Re-capture root identity after the (possible) root rebuild above.
+    const StageRootArgumentAllocation& root_after =
+        current_bindless_stage_root_arguments_[kGraphicsRootStage];
+    cache_key.root_buffer = root_after.valid ? root_after.buffer : nullptr;
+    cache_key.root_serial =
+        current_bindless_stage_root_serials_[kGraphicsRootStage];
+    cache_key.fixed_source_serial =
+        GetBindlessFixedResourceSourceSerial(shared_memory_usage);
+    bindless_cache_key_ = cache_key;
+  }
   return true;
 }
 
