@@ -31,6 +31,7 @@ inline bool FixtureGet(bool value) { return value; }
   FixtureString name{value}; auto name##_registration = name
 #define REXCVAR_DEFINE_BOOL(name, value, ...) bool name = value
 #define REXCVAR_GET(name) FixtureGet(name)
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 ''',
 }
 BACKEND = r'''#pragma once

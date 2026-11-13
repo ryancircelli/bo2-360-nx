@@ -72,12 +72,15 @@ REXCVAR_DEFINE_BOOL(bo2zm_audio_off_ring_core, true, "BO2",
 // Core 3, experimental (the SDK's switch_core3.cpp, docs/research/08-core3.md). Only does anything when the game is
 // started from a forwarder that allows cores 0-3 (sphaira: CPU Cores 4) and bo2zm_cpu_cores is 4 (Extras >
 // EXPERIMENTAL > CPU CORES, saved; 3 at first); with hbmenu or a normal forwarder core 3 is not the process's.
-REXCVAR_DEFINE_INT32(bo2zm_cpu_cores, 3, "BO2",
+REXCVAR_DEFINE_INT32(cpu_cores, 3, "BO2",
                      "Switch, experimental: 4 = the game also uses the fourth CPU core (the threads bo2zm_core3_threads "
                      "names), which only a forwarder made with four cores allows (sphaira: CPU Cores 4); started any "
                      "other way, 4 changes nothing. 3 = the three cores every launch has. Extras > EXPERIMENTAL > CPU "
                      "CORES sets it at once and saves the pick (cpu_cores); a value set here wins over the saved pick")
     .range(3, 4);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_cpu_cores, cpu_cores);
 // The default, as measured on a Switch Lite (Town on very low from round 20, 180 s routes). The mixer and the XMA
 // decoder move to core 3 at their own audio priority (0x2B = 43): with the Server alone on core 3 as well, that gave
 // 52.4 FPS against 43.4 with no thread moved. The audio threads keep their priority because at 63 the XMA decoder
@@ -155,11 +158,11 @@ static void LogBuildIdentity() {
 const char* BuildId() { return BO2ZM_BUILD_ID; }
 
 int CpuCoresSetting() {
-  return REXCVAR_GET(bo2zm_cpu_cores);
+  return REXCVAR_GET(cpu_cores);
 }
 
 void SetCpuCoresSetting(int cores) {
-  rex::cvar::SetFlagByName("bo2zm_cpu_cores", cores == 4 ? "4" : "3");
+  rex::cvar::SetFlagByName("cpu_cores", cores == 4 ? "4" : "3");
 #if defined(__SWITCH__)
   RexSwitchCore3SetActive(cores == 4);
 #endif
@@ -290,7 +293,7 @@ void InitSwitchServices() {
   RexSwitchCore3SetLog([](const char* text) { REXLOG_INFO("{}", text); });
   RexSwitchCore3SetHogLimit(REXCVAR_GET(bo2zm_core3_failsafe_percent), REXCVAR_GET(bo2zm_core3_failsafe_s));
   RexSwitchCore3Configure(REXCVAR_GET(bo2zm_core3_threads).c_str(), REXCVAR_GET(bo2zm_core3_clamp),
-                          REXCVAR_GET(bo2zm_core3_meter), REXCVAR_GET(bo2zm_cpu_cores) == 4);
+                          REXCVAR_GET(bo2zm_core3_meter), REXCVAR_GET(cpu_cores) == 4);
   // A first visit measured on a console that has made the visit: Mesa keeps every shader it compiles on the SD
   // (sdmc:/.mesa, its disk cache, read when NVK sets up the GPU), so the app's own empty pipeline cache is not enough.
   // Set before the GPU is: nvk_physical_device_init_pipeline_cache reads it.

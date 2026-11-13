@@ -140,7 +140,7 @@ static void ProductionBoundaryCases() {
   auto system = config.input_factory(false);
   X_INPUT_STATE state{};
   assert(static_cast<InputSystem*>(system.get())->GetState(0, &state) == X_ERROR_DEVICE_NOT_CONNECTED);
-  FLAGS_bo2zm_test_buttons_p2 = "0-3600:a,60-65:disconnect";
+  FLAGS_test_buttons_p2 = "0-3600:a,60-65:disconnect";
   WrapInput(config);
   auto tools = config.input_factory(true);
   assert(static_cast<InputSystem*>(tools.get())->GetState(1, &state) == X_ERROR_DEVICE_NOT_CONNECTED);
@@ -189,10 +189,10 @@ static void ProductionBoundaryCases() {
 }
 
 static void ResetScripts() {
-  FLAGS_bo2zm_test_buttons.clear();
-  FLAGS_bo2zm_test_buttons_p2.clear();
-  FLAGS_bo2zm_test_buttons_p3.clear();
-  FLAGS_bo2zm_test_buttons_p4.clear();
+  FLAGS_test_buttons.clear();
+  FLAGS_test_buttons_p2.clear();
+  FLAGS_test_buttons_p3.clear();
+  FLAGS_test_buttons_p4.clear();
   bench::active = false;
   bench::buttons = 0;
 }
@@ -210,8 +210,8 @@ static RuntimeConfig BaseConfig() {
 static void FourFactoryCases() {
   ResetScripts();
   std::array<std::string*, kMaxGuestUsers> scripts{
-      &FLAGS_bo2zm_test_buttons, &FLAGS_bo2zm_test_buttons_p2,
-      &FLAGS_bo2zm_test_buttons_p3, &FLAGS_bo2zm_test_buttons_p4};
+      &FLAGS_test_buttons, &FLAGS_test_buttons_p2,
+      &FLAGS_test_buttons_p3, &FLAGS_test_buttons_p4};
   constexpr std::array<uint16_t, 4> bits{
       X_INPUT_GAMEPAD_A, X_INPUT_GAMEPAD_B, X_INPUT_GAMEPAD_X, X_INPUT_GAMEPAD_Y};
   const std::array<std::string, 4> valid{"0-3600:a", "0-3600:b", "0-3600:x", "0-3600:y"};
@@ -288,7 +288,7 @@ static void FourFactoryCases() {
   ResetScripts();
   // A missing factory remains missing, even with valid P4, and null/tool
   // results from the original factory must be preserved.
-  FLAGS_bo2zm_test_buttons_p4 = "0:a";
+  FLAGS_test_buttons_p4 = "0:a";
   config = {};
   WrapInput(config);
   assert(!config.input_factory);

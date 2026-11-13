@@ -38,20 +38,26 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
-REXCVAR_DEFINE_BOOL(bo2zm_pc_profile, false, "BO2",
+REXCVAR_DEFINE_BOOL(pc_profile, false, "BO2",
                     "Test helper (PC): sample the busy threads' stacks every 2 ms and write pc_profile_<pid>.txt next "
                     "to the executable (tools/pc_profile_report.py reads it)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_pc_profile_from_s, 40, "BO2", "Test helper (PC): seconds before sampling starts")
+REXCVAR_DEFINE_INT32(pc_profile_from_s, 40, "BO2", "Test helper (PC): seconds before sampling starts")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_pc_profile_for_s, 180, "BO2", "Test helper (PC): seconds of sampling")
+REXCVAR_DEFINE_INT32(pc_profile_for_s, 180, "BO2", "Test helper (PC): seconds of sampling")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_pc_profile_stalls_ms, 0, "BO2",
+REXCVAR_DEFINE_INT32(pc_profile_stalls_ms, 0, "BO2",
                      "Test helper (PC), with bo2zm_pc_profile: also samples the game's main threads (Main, Backend, "
                      "Stream, the job workers, Server, the ring) every 2 ms even while they are blocked, and keeps "
                      "the samples taken while no frame has been presented for this many ms in "
                      "pc_stalls_<pid>.txt (same format; where each thread was during the freezes). 0 = off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_pc_profile, pc_profile);
+REXCVAR_ALIAS(bo2zm_pc_profile_from_s, pc_profile_from_s);
+REXCVAR_ALIAS(bo2zm_pc_profile_for_s, pc_profile_for_s);
+REXCVAR_ALIAS(bo2zm_pc_profile_stalls_ms, pc_profile_stalls_ms);
 
 namespace {
 
@@ -239,20 +245,20 @@ void Write(const std::map<DWORD, ThreadInfo>& threads, double seconds, const cha
 
 void Loop() {
   using Clock = std::chrono::steady_clock;
-  std::this_thread::sleep_for(std::chrono::seconds(std::max(0, REXCVAR_GET(bo2zm_pc_profile_from_s))));
+  std::this_thread::sleep_for(std::chrono::seconds(std::max(0, REXCVAR_GET(pc_profile_from_s))));
   LoadModules();
   const DWORD self = GetCurrentThreadId();
   std::map<DWORD, ThreadInfo> threads;
   // Freezes: the watched threads' samples while no frame comes (their stacks; cpu_ms = 2 ms per sample).
-  const int64_t stall_ns = int64_t(std::max(0, REXCVAR_GET(bo2zm_pc_profile_stalls_ms))) * 1000000;
+  const int64_t stall_ns = int64_t(std::max(0, REXCVAR_GET(pc_profile_stalls_ms))) * 1000000;
   std::map<DWORD, ThreadInfo> stalls;
   uint64_t stalls_seen = 0;
   bool in_stall = false;
   const auto start = Clock::now();
-  const auto stop = start + std::chrono::seconds(std::max(1, REXCVAR_GET(bo2zm_pc_profile_for_s)));
+  const auto stop = start + std::chrono::seconds(std::max(1, REXCVAR_GET(pc_profile_for_s)));
   auto next_refresh = start;
   auto next_write = start + std::chrono::seconds(10);
-  REXLOG_INFO("[pc_profile] sampling the busy threads every 2 ms for {} s", REXCVAR_GET(bo2zm_pc_profile_for_s));
+  REXLOG_INFO("[pc_profile] sampling the busy threads every 2 ms for {} s", REXCVAR_GET(pc_profile_for_s));
   while (Clock::now() < stop) {
     const auto now = Clock::now();
     if (now >= next_refresh) {
@@ -337,7 +343,7 @@ void Loop() {
 
 namespace bo2zm::pc_profiler {
 void Start() {
-  if (REXCVAR_GET(bo2zm_pc_profile)) {
+  if (REXCVAR_GET(pc_profile)) {
     std::thread(Loop).detach();
   }
 }

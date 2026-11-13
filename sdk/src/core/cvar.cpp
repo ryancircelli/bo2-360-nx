@@ -67,6 +67,29 @@ std::unordered_map<std::string, PendingValues>& GetPendingValuesStorage() {
   return pending;
 }
 
+// Old names kept for renamed cvars: alias -> canonical name. An alias whose
+// target is registered also sits in the registry index at the target's
+// position, so every lookup by name accepts it.
+std::unordered_map<std::string, std::string>& GetAliasStorage() {
+  static std::unordered_map<std::string, std::string> aliases;
+  return aliases;
+}
+
+// The aliases of `canonical`, in no particular order.
+std::vector<std::string> AliasesOf(const std::string& canonical) {
+  std::vector<std::string> result;
+  for (const auto& [alias, target] : GetAliasStorage()) {
+    if (target == canonical) {
+      result.push_back(alias);
+    }
+  }
+  return result;
+}
+
+bool IsAlias(const std::string& name) {
+  return GetAliasStorage().count(name) != 0;
+}
+
 // Convert flag name to environment variable: gpu_vsync -> REX_GPU_VSYNC
 std::string FlagNameToEnvVar(std::string_view name) {
   std::string result = "REX_";
@@ -95,8 +118,18 @@ bool ApplyFromSource(FlagEntry& entry, std::string_view value, Source source) {
 
 // Recursively apply TOML values
 void ApplyTomlTable(const toml::table& table, const std::string& prefix) {
-  for (const auto& [key, value] : table) {
-    std::string full_key = prefix.empty() ? std::string(key) : prefix + "_" + std::string(key);
+  // Old names first, so a stale old key never beats the current one in the same file.
+  std::vector<std::pair<std::string, const toml::node*>> entries;
+  for (int pass = 0; pass < 2; ++pass) {
+    for (const auto& [key, value] : table) {
+      std::string full_key = prefix.empty() ? std::string(key) : prefix + "_" + std::string(key);
+      if (IsAlias(full_key) == (pass == 0)) {
+        entries.emplace_back(std::move(full_key), &value);
+      }
+    }
+  }
+  for (const auto& [full_key, node] : entries) {
+    const toml::node& value = *node;
 
     if (value.is_table()) {
       ApplyTomlTable(*value.as_table(), full_key);
@@ -235,20 +268,36 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
   size_t pos = storage.size();
   index[entry.name] = pos;
   storage.push_back(std::move(entry));
+  // Old names first, then the current one: within a source the current name wins.
+  std::vector<std::string> names = AliasesOf(storage[pos].name);
+  for (const auto& alias : names) {
+    if (index.count(alias) == 0) {
+      index[alias] = pos;
+    }
+  }
+  names.push_back(storage[pos].name);
 
   // Late registration: replay pending values in ascending priority.
   if (g_init_done) {
     FlagEntry& stored = storage[pos];
     auto& pending = GetPendingValuesStorage();
-    auto pending_it = pending.find(stored.name);
-    if (pending_it != pending.end() && pending_it->second.config) {
-      ApplyFromSource(stored, *pending_it->second.config, Source::kConfig);
+    for (const auto& name : names) {
+      auto pending_it = pending.find(name);
+      if (pending_it != pending.end() && pending_it->second.config) {
+        ApplyFromSource(stored, *pending_it->second.config, Source::kConfig);
+      }
     }
-    auto env_value = rex::platform::env::get(FlagNameToEnvVar(stored.name));
-    if (env_value.has_value()) {
-      ApplyFromSource(stored, *env_value, Source::kEnvironment);
+    for (const auto& name : names) {
+      auto env_value = rex::platform::env::get(FlagNameToEnvVar(name));
+      if (env_value.has_value()) {
+        ApplyFromSource(stored, *env_value, Source::kEnvironment);
+      }
     }
-    if (pending_it != pending.end()) {
+    for (const auto& name : names) {
+      auto pending_it = pending.find(name);
+      if (pending_it == pending.end()) {
+        continue;
+      }
       if (pending_it->second.cmdline) {
         ApplyFromSource(stored, *pending_it->second.cmdline, Source::kCommandLine);
       }
@@ -268,7 +317,10 @@ void UnregisterFlag(std::string_view name) {
     return;
   }
   size_t pos = idx_it->second;
-  index.erase(idx_it);
+  key = storage[pos].name;  // `name` may be an alias
+  for (auto it = index.begin(); it != index.end();) {
+    it = it->second == pos ? index.erase(it) : std::next(it);
+  }
   storage.erase(storage.begin() + pos);
   for (auto& [n, i] : index) {
     if (i > pos) {
@@ -323,11 +375,11 @@ ApplyResult SetFlagFromSource(std::string_view name, std::string_view value, Sou
   entry.source = source;
 
   if (entry.lifecycle == Lifecycle::kRequiresRestart) {
-    MarkPendingRestart(name);
+    MarkPendingRestart(entry.name);
   }
 
   auto& callbacks = GetCallbackStorage();
-  auto callback_it = callbacks.find(std::string(name));
+  auto callback_it = callbacks.find(entry.name);
   if (callback_it != callbacks.end()) {
     for (const auto& callback : callback_it->second) {
       callback(name, value);
@@ -567,12 +619,41 @@ std::string SerializeToTOML(std::string_view category) {
 
 void RegisterChangeCallback(std::string_view name, ChangeCallback callback) {
   std::lock_guard lock(GetRegistryMutex());
-  GetCallbackStorage()[std::string(name)].push_back(std::move(callback));
+  GetCallbackStorage()[CanonicalName(name)].push_back(std::move(callback));
 }
 
 void UnregisterChangeCallbacks(std::string_view name) {
   std::lock_guard lock(GetRegistryMutex());
-  GetCallbackStorage().erase(std::string(name));
+  GetCallbackStorage().erase(CanonicalName(name));
+}
+
+void RegisterAlias(std::string_view alias, std::string_view canonical) {
+  std::lock_guard lock(GetRegistryMutex());
+  std::string alias_str(alias);
+  auto& index = GetRegistryIndex();
+  if (index.count(alias_str) != 0 || IsAlias(alias_str)) {
+    REXLOG_ERROR("cvar: alias '{}' is already a cvar or an alias; ignored", alias_str);
+    return;
+  }
+  GetAliasStorage()[alias_str] = std::string(canonical);
+  auto it = index.find(std::string(canonical));
+  if (it != index.end()) {
+    index[alias_str] = it->second;
+  }
+}
+
+void UnregisterAlias(std::string_view alias) {
+  std::lock_guard lock(GetRegistryMutex());
+  std::string alias_str(alias);
+  if (GetAliasStorage().erase(alias_str) != 0) {
+    GetRegistryIndex().erase(alias_str);
+  }
+}
+
+std::string CanonicalName(std::string_view name) {
+  std::lock_guard lock(GetRegistryMutex());
+  auto it = GetAliasStorage().find(std::string(name));
+  return it != GetAliasStorage().end() ? it->second : std::string(name);
 }
 
 //=============================================================================
@@ -584,16 +665,22 @@ std::vector<std::string> Init(int argc, char** argv) {
   app.allow_extras();
 
   for (auto& entry : GetRegistryStorage()) {
+    std::string names = "--" + entry.name;
+    std::string negated = "!--no-" + entry.name;
+    for (const auto& alias : AliasesOf(entry.name)) {
+      names += ",--" + alias;
+      negated += ",!--no-" + alias;
+    }
     if (entry.type == FlagType::Boolean) {
       app.add_flag_function(
-          "--" + entry.name + ",!--no-" + entry.name,
+          names + "," + negated,
           [&entry](int64_t count) {
             ApplyFromSource(entry, count > 0 ? "true" : "false", Source::kCommandLine);
           },
           entry.description);
     } else {
       app.add_option_function<std::string>(
-          "--" + entry.name,
+          names,
           [&entry](const std::string& val) { ApplyFromSource(entry, val, Source::kCommandLine); },
           entry.description);
     }
@@ -654,20 +741,25 @@ void LoadConfig(const std::filesystem::path& config_path) {
 void ApplyEnvironment() {
   int count = 0;
   for (auto& entry : GetRegistryStorage()) {
-    std::string env_name = FlagNameToEnvVar(entry.name);
-    auto env_value = rex::platform::env::get(env_name);
-    if (!env_value.has_value()) {
-      continue;
-    }
-    if (!Outranks(Source::kEnvironment, entry)) {
-      REXLOG_DEBUG("Env: {} ignored, already set on the command line", entry.name);
-      continue;
-    }
-    if (ApplyFromSource(entry, *env_value, Source::kEnvironment)) {
-      REXLOG_DEBUG("Env: {} = {} (from {})", entry.name, *env_value, env_name);
-      ++count;
-    } else {
-      REXLOG_WARN("Env: failed to parse {} = {}", env_name, *env_value);
+    // Old names first, so REX_<NEW> wins over REX_<OLD>.
+    std::vector<std::string> names = AliasesOf(entry.name);
+    names.push_back(entry.name);
+    for (const auto& name : names) {
+      std::string env_name = FlagNameToEnvVar(name);
+      auto env_value = rex::platform::env::get(env_name);
+      if (!env_value.has_value()) {
+        continue;
+      }
+      if (!Outranks(Source::kEnvironment, entry)) {
+        REXLOG_DEBUG("Env: {} ignored, already set on the command line", entry.name);
+        continue;
+      }
+      if (ApplyFromSource(entry, *env_value, Source::kEnvironment)) {
+        REXLOG_DEBUG("Env: {} = {} (from {})", entry.name, *env_value, env_name);
+        ++count;
+      } else {
+        REXLOG_WARN("Env: failed to parse {} = {}", env_name, *env_value);
+      }
     }
   }
 

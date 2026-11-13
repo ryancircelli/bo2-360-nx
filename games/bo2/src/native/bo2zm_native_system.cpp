@@ -40,10 +40,13 @@
 #include <rex/ui/vulkan/provider.h>
 #include <rex/ui/windowed_app_context.h>
 
-REXCVAR_DEFINE_STRING(bo2zm_renderer, "xenos", "BO2",
+REXCVAR_DEFINE_STRING(renderer, "xenos", "BO2",
                       "Graphics path: \"xenos\" (GPU emulation plugin), \"native\" (the native renderer) "
                       "or \"skeleton\" (keeps the game running, draws a test color)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_renderer, renderer);
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_log_vs_misses, false, "BO2",
                     "Native renderer: log vertex shaders from the ring that the library cannot identify");
@@ -1067,14 +1070,14 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
 // samples on the PC.
 bool Active() {
   static const bool value = [] {
-    const std::string& renderer = REXCVAR_GET(bo2zm_renderer);
+    const std::string& renderer = REXCVAR_GET(renderer);
     return renderer == "native" || renderer == "skeleton";
   }();
   return value;
 }
 
 bool PortedRendererActive() {
-  static const bool value = REXCVAR_GET(bo2zm_renderer) == "native";
+  static const bool value = REXCVAR_GET(renderer) == "native";
   return value;
 }
 

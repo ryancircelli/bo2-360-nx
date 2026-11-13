@@ -40,6 +40,7 @@ struct Registrar { Registrar& lifecycle(Lifecycle) { return *this; } };
 #define REXCVAR_DEFINE_BOOL(name,value,...) inline bool FLAGS_##name=value; \
   static auto reg_##name=rex::cvar::Registrar{}
 #define REXCVAR_GET(name) FLAGS_##name
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 ''',
     "runtime.h": r'''#pragma once
 #include <cstdint>

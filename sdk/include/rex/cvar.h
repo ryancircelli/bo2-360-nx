@@ -249,6 +249,25 @@ using ChangeCallback = std::function<void(std::string_view name, std::string_vie
 /// Register a callback to be invoked when a specific CVAR changes
 void RegisterChangeCallback(std::string_view name, ChangeCallback callback);
 
+// Old names for renamed cvars. An alias is accepted wherever a cvar name is:
+// config files, --alias / --no-alias, REX_<ALIAS>, SetFlagByName, GetFlagInfo,
+// Query and change callbacks. Within one source the current name wins over an
+// alias. SaveConfig writes the current name. Either may register first.
+void RegisterAlias(std::string_view alias, std::string_view canonical);
+void UnregisterAlias(std::string_view alias);
+// The current name for `name` (itself when it is not an alias).
+std::string CanonicalName(std::string_view name);
+
+struct AliasRegistrar {
+  std::string alias_;
+  AliasRegistrar(std::string_view alias, std::string_view canonical) : alias_(alias) {
+    RegisterAlias(alias, canonical);
+  }
+  ~AliasRegistrar() { UnregisterAlias(alias_); }
+  AliasRegistrar(const AliasRegistrar&) = delete;
+  AliasRegistrar& operator=(const AliasRegistrar&) = delete;
+};
+
 /// Unregister all callbacks for a specific CVAR
 void UnregisterChangeCallbacks(std::string_view name);
 
@@ -350,6 +369,10 @@ inline bool ParseDouble(std::string_view s, double& out) {
 // across one-way subsystem dependencies where adding the reverse link would
 // create a cycle). Slower than REXCVAR_GET; prefer REXCVAR_GET when possible.
 #define REXCVAR_QUERY(type, name) (::rex::cvar::Query<type>(#name))
+
+// Keep an old name working after a rename: REXCVAR_ALIAS(bo2zm_fps_limit, fps_limit).
+#define REXCVAR_ALIAS(alias, name) \
+  static ::rex::cvar::AliasRegistrar _cvar_alias_##alias(#alias, #name)
 
 // Define cvars (use in one .cpp file per cvar)
 // The FlagRegistrar registers the flag in its destructor, allowing method chaining.

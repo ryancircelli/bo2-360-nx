@@ -41,10 +41,13 @@
 #include <sys/sysctl.h>
 #endif
 
-REXCVAR_DEFINE_STRING(bo2zm_perf_log, "", "BO2",
+REXCVAR_DEFINE_STRING(perf_log, "", "BO2",
                       "Test helper: write a per-frame performance log (docs/mac/perf-log-format.md) to this file, "
                       "for tools/mac/perf_summary.py. Empty = off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_perf_log, perf_log);
 
 #ifndef BO2ZM_BUILD_ID
 #define BO2ZM_BUILD_ID "dev"
@@ -229,7 +232,7 @@ class Log {
  private:
   // With mutex_. The file and the header, at the first presented frame.
   bool Open(const Counters& c) {
-    const std::string& path = REXCVAR_GET(bo2zm_perf_log);
+    const std::string& path = REXCVAR_GET(perf_log);
     file_ = std::fopen(path.c_str(), "wb");
     if (!file_) {
       REXLOG_WARN("[perf log] could not create {}: the log is off", path);
@@ -372,7 +375,7 @@ Log& TheLog() {
 }  // namespace
 
 bool Enabled() {
-  static const bool on = !REXCVAR_GET(bo2zm_perf_log).empty();
+  static const bool on = !REXCVAR_GET(perf_log).empty();
   return on;
 }
 

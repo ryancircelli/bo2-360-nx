@@ -54,7 +54,7 @@
 #include <windows.h>
 #endif
 
-REXCVAR_DEFINE_INT32(bo2zm_volume, 100, "BO2",
+REXCVAR_DEFINE_INT32(volume, 100, "BO2",
                      "PC output volume, 0-100 percent; Switch always uses normal 100 percent output")
     .range(0, 100);
 
@@ -81,23 +81,30 @@ REXCVAR_DEFINE_INT32(bo2zm_autoexec_delay_s, 20, "BO2", "Test helper: seconds be
 
 // Test helper, PC only: with the game started under RenderDoc (renderdoccmd capture ...), capture one frame
 // this many seconds after startup, to inspect the native renderer's draws. 0 = off.
-REXCVAR_DEFINE_INT32(bo2zm_renderdoc_capture_s, 0, "BO2",
+REXCVAR_DEFINE_INT32(renderdoc_capture_s, 0, "BO2",
                      "Test helper (PC, under RenderDoc): capture one frame after this many seconds (0 = off)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_renderdoc_count, 1, "BO2",
+REXCVAR_DEFINE_INT32(renderdoc_count, 1, "BO2",
                      "Test helper (PC, under RenderDoc): how many frames to capture from bo2zm_renderdoc_capture_s on, "
                      "each one requested once the previous capture is written")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_renderdoc_path, "", "BO2",
+REXCVAR_DEFINE_STRING(renderdoc_path, "", "BO2",
                       "Test helper: RenderDoc capture file path template (empty = RenderDoc's default)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // Test helper: copy guest physical memory to a file at given times, under any renderer (Xenos or native), to
 // compare what the game has put at an address. "ADDR:BYTES@S1,S2,..." (hex address and size, seconds after
 // startup); writes dump_<ADDR>_<S>s.bin next to the executable. Empty = off.
-REXCVAR_DEFINE_STRING(bo2zm_dump_memory, "", "BO2",
+REXCVAR_DEFINE_STRING(dump_memory, "", "BO2",
                       "Test helper: \"ADDR:BYTES@S1,S2\" copies guest physical memory to dump_<ADDR>_<S>s.bin")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_volume, volume);
+REXCVAR_ALIAS(bo2zm_renderdoc_capture_s, renderdoc_capture_s);
+REXCVAR_ALIAS(bo2zm_renderdoc_count, renderdoc_count);
+REXCVAR_ALIAS(bo2zm_renderdoc_path, renderdoc_path);
+REXCVAR_ALIAS(bo2zm_dump_memory, dump_memory);
 
 namespace {
 
@@ -111,7 +118,7 @@ int32_t g_captures_requested = 0;
 rex::ui::RenderDocAPI* RenderDoc() {
   static std::unique_ptr<rex::ui::RenderDocAPI> api = [] {
     auto api = rex::ui::RenderDocAPI::CreateIfConnected();
-    const std::string& path = REXCVAR_GET(bo2zm_renderdoc_path);
+    const std::string& path = REXCVAR_GET(renderdoc_path);
     if (api && !path.empty()) {
       api->api_1_0_0()->SetLogFilePathTemplate(path.c_str());
     }
@@ -126,7 +133,7 @@ void MaybeTriggerCapture(std::chrono::steady_clock::time_point now) {
   if (g_capture_done) [[likely]] {
     return;
   }
-  const int32_t seconds = REXCVAR_GET(bo2zm_renderdoc_capture_s);
+  const int32_t seconds = REXCVAR_GET(renderdoc_capture_s);
   if (seconds <= 0) {
     g_capture_done = true;
     return;
@@ -145,7 +152,7 @@ void MaybeTriggerCapture(std::chrono::steady_clock::time_point now) {
   }
   api->api_1_0_0()->TriggerCapture();
   ++g_captures_requested;
-  g_capture_done = g_captures_requested >= std::max(1, REXCVAR_GET(bo2zm_renderdoc_count));
+  g_capture_done = g_captures_requested >= std::max(1, REXCVAR_GET(renderdoc_count));
   REXLOG_INFO("[renderdoc] capture {} of the next frame requested", g_captures_requested);
 #else
   (void)now;
@@ -155,7 +162,7 @@ void MaybeTriggerCapture(std::chrono::steady_clock::time_point now) {
 // Physical memory is also mapped at guest 0xA0000000 (xmemory.cpp heap vA0000000), so base + 0xA0000000 + addr.
 void MaybeDumpMemory(std::chrono::steady_clock::time_point now, uint8_t* base) {
   static size_t next = 0;  // index of the next time in the list
-  const std::string& spec = REXCVAR_GET(bo2zm_dump_memory);
+  const std::string& spec = REXCVAR_GET(dump_memory);
   const size_t colon = spec.find(':'), at = spec.find('@');
   if (spec.empty() || colon == std::string::npos || at == std::string::npos) {
     return;
@@ -278,7 +285,7 @@ REX_EXTERN(__imp__sub_824032C0);
 REX_EXTERN(__imp__sub_8240F058);
 
 void bo2zm::autoexec::ApplyVolume() {
-  const int volume = bo2zm::audio::OutputVolumePercent(REXCVAR_GET(bo2zm_volume));
+  const int volume = bo2zm::audio::OutputVolumePercent(REXCVAR_GET(volume));
   rex::audio::SetOutputGain(float(volume) / 100.0f);
   REXLOG_INFO("[autoexec] sound output volume {} %", volume);
 }

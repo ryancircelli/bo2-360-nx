@@ -950,9 +950,9 @@ void bo2zm::extras::EveryFrame(PPCContext& ctx, uint8_t* base) {
       if ((std::string_view(option.name) == "loading_video" &&
            rex::cvar::GetFlagSource("bo2zm_loading_video") != rex::cvar::Source::kDefault) ||
           (std::string_view(option.name) == "cpu_cores" &&
-           rex::cvar::GetFlagSource("bo2zm_cpu_cores") != rex::cvar::Source::kDefault) ||
+           rex::cvar::GetFlagSource("cpu_cores") != rex::cvar::Source::kDefault) ||
           (std::string_view(option.name) == "max_logs" &&
-           rex::cvar::GetFlagSource("bo2zm_max_log_files") != rex::cvar::Source::kDefault)) {
+           rex::cvar::GetFlagSource("max_log_files") != rex::cvar::Source::kDefault)) {
         continue;
       }
       if (const auto saved = bo2zm::settings::Get(option.saved_as)) {

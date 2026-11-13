@@ -56,6 +56,7 @@ void operator delete[](void* p) noexcept { ::operator delete(p); }
 bool bo2zm_native_audio = true, bo2zm_native_skinning = true, bo2zm_native_lzx = true;
 bool bo2zm_native_audio_check_only = false;
 #define REXCVAR_GET(name) (name)
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 unsigned warnings = 0, summaries = 0;
 bool log_oom = false;
 template <typename... Args> void Warn(const Args&...) {

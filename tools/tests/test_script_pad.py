@@ -38,6 +38,7 @@ struct Registrar {
 #define REXCVAR_DEFINE_STRING(name, value, ...) TEST_CVAR(std::string, name, value)
 #define REXCVAR_DEFINE_INT32(name, value, ...) TEST_CVAR(int, name, value)
 #define REXCVAR_GET(name) (FLAGS_##name)
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 """,
 }
 

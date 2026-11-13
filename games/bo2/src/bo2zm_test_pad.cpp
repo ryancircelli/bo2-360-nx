@@ -43,22 +43,29 @@
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
 
-REXCVAR_DEFINE_STRING(bo2zm_test_buttons, "", "BO2",
+REXCVAR_DEFINE_STRING(test_buttons, "", "BO2",
                       "Test helper: virtual pad script, e.g. \"25:down,27:a,60-65:disconnect\" (seconds from startup)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_test_buttons_p2, "", "BO2",
+REXCVAR_DEFINE_STRING(test_buttons_p2, "", "BO2",
                       "Test helper: independent second-player pad script; empty disables it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_test_buttons_p3, "", "BO2",
+REXCVAR_DEFINE_STRING(test_buttons_p3, "", "BO2",
                       "Test helper: independent third-player pad script; empty disables it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_test_buttons_p4, "", "BO2",
+REXCVAR_DEFINE_STRING(test_buttons_p4, "", "BO2",
                       "Test helper: independent fourth-player pad script; empty disables it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_test_look_speed, 35, "BO2",
+REXCVAR_DEFINE_INT32(test_look_speed, 35, "BO2",
                      "Test helper: right-stick tilt of the look_* buttons, in percent (lower turns slower)")
     .range(1, 100)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_test_buttons, test_buttons);
+REXCVAR_ALIAS(bo2zm_test_buttons_p2, test_buttons_p2);
+REXCVAR_ALIAS(bo2zm_test_buttons_p3, test_buttons_p3);
+REXCVAR_ALIAS(bo2zm_test_buttons_p4, test_buttons_p4);
+REXCVAR_ALIAS(bo2zm_test_look_speed, test_look_speed);
 
 namespace bo2zm::test_pad {
 namespace {
@@ -179,7 +186,7 @@ class ScriptPad final : public in::InputDriver {
       out_state->packet_number = packet_;
       out_state->gamepad.buttons = uint16_t(bits & 0xFFFF);
       // The benchmark's route sets its own tilts while it runs (bo2zm_benchmark.cpp: a small circle in place).
-      static const int look_usual = REXCVAR_GET(bo2zm_test_look_speed);
+      static const int look_usual = REXCVAR_GET(test_look_speed);
       int move_percent = 100, look_percent = look_usual;
       if (!user_) bo2zm::benchmark::PathTilts(move_percent, look_percent);
       const int16_t move = int16_t(30000 * move_percent / 100);
@@ -323,8 +330,8 @@ class ScriptPad final : public in::InputDriver {
 
 void WrapInput(rex::RuntimeConfig& config) {
   const std::array<std::string, in::kMaxGuestUsers> scripts{
-      REXCVAR_GET(bo2zm_test_buttons), REXCVAR_GET(bo2zm_test_buttons_p2),
-      REXCVAR_GET(bo2zm_test_buttons_p3), REXCVAR_GET(bo2zm_test_buttons_p4)};
+      REXCVAR_GET(test_buttons), REXCVAR_GET(test_buttons_p2),
+      REXCVAR_GET(test_buttons_p3), REXCVAR_GET(test_buttons_p4)};
   const bool benchmark = bo2zm::benchmark::IsActive();
   // bo2zm_benchmark drives its route through this pad too, with or without a script.
   if ((std::all_of(scripts.begin(), scripts.end(), [](const auto& script) { return script.empty(); }) &&

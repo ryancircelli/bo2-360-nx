@@ -23,6 +23,7 @@
 bool bo2zm_test_god = false, bo2zm_test_ammo = false;
 std::string bo2zm_test_start;
 #define REXCVAR_GET(name) (name)
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 #define REXLOG_INFO(...) ((void)0)
 #define REXLOG_WARN(...) ((void)0)
 #undef REX_EXTERN

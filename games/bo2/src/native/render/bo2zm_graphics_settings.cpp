@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-REXCVAR_DEFINE_STRING(bo2zm_internal_resolution, "auto", "Graphics",
+REXCVAR_DEFINE_STRING(internal_resolution, "auto", "Graphics",
                       "Video mode passed to the game. It does nothing in BO2: nothing applies it, and the game draws "
                       "its 3D view at 880x720 at every setting and stretches it to 1280x720 itself. auto: 1920x1080 "
                       "docked and 1280x720 handheld, switching on the fly when the console goes in and out of the "
@@ -37,7 +37,7 @@ REXCVAR_DEFINE_STRING(bo2zm_internal_resolution, "auto", "Graphics",
  * The default is 0: the game requests no clock at all, so the system's clocks apply, or whatever sys-clk (or one of
  * its forks) has been configured to set, with nothing in between.
  */
-REXCVAR_DEFINE_INT32(bo2zm_switch_gpu_mhz, 0, "Graphics",
+REXCVAR_DEFINE_INT32(switch_gpu_mhz, 0, "Graphics",
                      "Switch: GPU MHz requested from the system in handheld mode (0 = touch nothing: the system's "
                      "clocks, or sys-clk's; 384, 460). 460.8 MHz is an official Horizon profile, not an overclock; it "
                      "uses more battery and runs hotter")
@@ -52,16 +52,16 @@ REXCVAR_DEFINE_INT32(bo2zm_switch_gpu_mhz, 0, "Graphics",
  * lacks the first profile, the default leaves the GPU alone rather than raise the memory clock; setting this to true
  * accepts the second profile instead.
  */
-REXCVAR_DEFINE_BOOL(bo2zm_switch_ram_1600, false, "Graphics",
+REXCVAR_DEFINE_BOOL(switch_ram_1600, false, "Graphics",
                     "Switch: accept the high GPU profile even if it raises the memory to 1600 MHz. Default NO: if there "
                     "is none that leaves the RAM where it was, the GPU stays as it was. The [apm] log says which one "
                     "was applied");
 
-REXCVAR_DEFINE_BOOL(bo2zm_switch_saltynx, true, "Graphics",
+REXCVAR_DEFINE_BOOL(switch_saltynx, true, "Graphics",
                     "Switch: publishes the FPS and the resolution where the console's overlays read them (SaltyNX) and "
                     "follows Reverse-NX's handheld/docked mode. Without SaltyNX it does nothing");
 
-REXCVAR_DEFINE_BOOL(bo2zm_switch_clocks_reverse, false, "Graphics",
+REXCVAR_DEFINE_BOOL(switch_clocks_reverse, false, "Graphics",
                     "Switch: make the clocks follow Reverse-NX when it does not match the hardware, in BOTH directions, "
                     "by asking the sysmodule (Horizon OC and other sys-clk forks). If it fakes DOCKED with the console "
                     "in your hands, YOUR docked column is applied (the game profile's or the global one): that is an "
@@ -77,7 +77,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_switch_clocks_reverse, false, "Graphics",
  * vblanks: "30" only lowers the guest interrupt to 30 Hz (0.25 % of a core) and tells the game the panel runs at 30,
  * which changes nothing while a frame takes longer than 33.3 ms.
  */
-REXCVAR_DEFINE_STRING(bo2zm_fps_limit, "60", "Graphics",
+REXCVAR_DEFINE_STRING(fps_limit, "60", "Graphics",
                       "Maximum game FPS. 60: no limit of its own (the game runs at the pace of a 60 Hz vblank). 30: a "
                       "fixed 30 FPS pace, without ups and downs, with the game at its normal speed. Applied on restart")
     .allowed({"60", "30"})
@@ -100,14 +100,14 @@ REXCVAR_DEFINE_STRING(bo2zm_fps_limit, "60", "Graphics",
  * overwrote the WSI's 0 on the first frame and undid IMMEDIATE. With 0 the swapchain's mode is left alone. An interval
  * of 2 still works for locking to the panel, but only pays when the work really fits in 33.3 ms.
  */
-REXCVAR_DEFINE_UINT32(bo2zm_swap_interval, 0, "Graphics",
+REXCVAR_DEFINE_UINT32(swap_interval, 0, "Graphics",
                       "Switch: vblanks between images. 0 = leave it alone, the swapchain's mode decides (the usual "
                       "IMMEDIATE, that is interval 0, which is what removes the gap). 2 = 30 FPS "
                       "locked by the panel, only useful if the work fits in 33.3 ms. 1 = up to 60");
 
 // Optional antialiasing on the output, applied live. The Xbox 360 draws the scene with MSAA; here there is none (it
 // costs GPU time, and it has hung NVK before), and FXAA smooths the edges for little work.
-REXCVAR_DEFINE_STRING(bo2zm_antialiasing, "off", "Graphics",
+REXCVAR_DEFINE_STRING(antialiasing, "off", "Graphics",
                       "Image antialiasing. off: as until now. fxaa: smooths jagged edges (the Xbox 360 uses 2x MSAA, "
                       "which is not available here); costs some GPU")
     .allowed({"off", "fxaa"});
@@ -136,35 +136,54 @@ REXCVAR_DEFINE_STRING(bo2zm_visual_treatment, "original", "Graphics",
 // Optional post-processing, applied live (the change is visible with the menu still open). The values are option
 // lists, which are easy to change with a gamepad. The presets' values come from a public-domain post-processing
 // filter set.
-REXCVAR_DEFINE_STRING(bo2zm_postprocess, "off", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess, "off", "Graphics/Postprocess",
                       "Image postprocessing. off: like the Xbox 360. Presets: cinema, sepia, noir, cold, warm, vivid, "
                       "matrix and crt. custom: the values below. Grading of a single channel costs nothing; saturation, "
                       "vibrance, vignette and scanlines do some work per pixel")
     .allowed({"off", "cinema", "sepia", "noir", "cold", "warm", "vivid", "matrix", "crt", "custom"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_brightness, "0.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_brightness, "0.00", "Graphics/Postprocess",
                       "Custom: brightness added (0.00 = no change)")
     .allowed({"-0.20", "-0.15", "-0.10", "-0.05", "0.00", "+0.05", "+0.10", "+0.15", "+0.20"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_contrast, "1.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_contrast, "1.00", "Graphics/Postprocess",
                       "Custom: contrast around middle gray (1.00 = no change)")
     .allowed({"0.70", "0.80", "0.90", "1.00", "1.10", "1.20", "1.30", "1.40"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_saturation, "1.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_saturation, "1.00", "Graphics/Postprocess",
                       "Custom: saturation (0.00 = black and white, 1.00 = no change)")
     .allowed({"0.00", "0.25", "0.50", "0.75", "1.00", "1.10", "1.20", "1.35", "1.50", "2.00"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_vibrance, "0.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_vibrance, "0.00", "Graphics/Postprocess",
                       "Custom: vibrance, boosts the less saturated colors more (0.00 = no change)")
     .allowed({"-0.50", "-0.25", "0.00", "+0.15", "+0.25", "+0.50", "+0.75", "+1.00"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_temperature, "0.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_temperature, "0.00", "Graphics/Postprocess",
                       "Custom: temperature, warm (+) or cold (-) (0.00 = no change)")
     .allowed({"-1.00", "-0.75", "-0.50", "-0.25", "0.00", "+0.25", "+0.50", "+0.75", "+1.00"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_gamma, "1.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_gamma, "1.00", "Graphics/Postprocess",
                       "Custom: gamma, above 1 brightens the midtones (1.00 = no change)")
     .allowed({"0.70", "0.80", "0.90", "1.00", "1.10", "1.20", "1.30"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_vignette, "0.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_vignette, "0.00", "Graphics/Postprocess",
                       "Custom: vignette, darkens the edges (0.00 = no vignette)")
     .allowed({"0.00", "0.20", "0.30", "0.40", "0.55", "0.70", "1.00"});
-REXCVAR_DEFINE_STRING(bo2zm_postprocess_scanlines, "0.00", "Graphics/Postprocess",
+REXCVAR_DEFINE_STRING(postprocess_scanlines, "0.00", "Graphics/Postprocess",
                       "Custom: old television scanlines, one row in three (0.00 = no scanlines)")
     .allowed({"0.00", "0.25", "0.50", "0.75", "1.00"});
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_internal_resolution, internal_resolution);
+REXCVAR_ALIAS(bo2zm_switch_gpu_mhz, switch_gpu_mhz);
+REXCVAR_ALIAS(bo2zm_switch_ram_1600, switch_ram_1600);
+REXCVAR_ALIAS(bo2zm_switch_saltynx, switch_saltynx);
+REXCVAR_ALIAS(bo2zm_switch_clocks_reverse, switch_clocks_reverse);
+REXCVAR_ALIAS(bo2zm_fps_limit, fps_limit);
+REXCVAR_ALIAS(bo2zm_swap_interval, swap_interval);
+REXCVAR_ALIAS(bo2zm_antialiasing, antialiasing);
+REXCVAR_ALIAS(bo2zm_postprocess, postprocess);
+REXCVAR_ALIAS(bo2zm_postprocess_brightness, postprocess_brightness);
+REXCVAR_ALIAS(bo2zm_postprocess_contrast, postprocess_contrast);
+REXCVAR_ALIAS(bo2zm_postprocess_saturation, postprocess_saturation);
+REXCVAR_ALIAS(bo2zm_postprocess_vibrance, postprocess_vibrance);
+REXCVAR_ALIAS(bo2zm_postprocess_temperature, postprocess_temperature);
+REXCVAR_ALIAS(bo2zm_postprocess_gamma, postprocess_gamma);
+REXCVAR_ALIAS(bo2zm_postprocess_vignette, postprocess_vignette);
+REXCVAR_ALIAS(bo2zm_postprocess_scanlines, postprocess_scanlines);
 
 namespace bo2zm::settings {
 namespace {
@@ -175,9 +194,9 @@ std::atomic<int> g_glow_sky{0};  // 0 original, 1 natural, 2 soft
 std::atomic<int> g_treatment_visual{0};  // 0 original, 1 soft, 2 off
 
 constexpr const char* kCvarsPostprocess[] = {
-    "bo2zm_postprocess",           "bo2zm_postprocess_brightness",      "bo2zm_postprocess_contrast",
-    "bo2zm_postprocess_saturation", "bo2zm_postprocess_vibrance",  "bo2zm_postprocess_temperature",
-    "bo2zm_postprocess_gamma",     "bo2zm_postprocess_vignette",      "bo2zm_postprocess_scanlines",
+    "postprocess",           "postprocess_brightness",      "postprocess_contrast",
+    "postprocess_saturation", "postprocess_vibrance",  "postprocess_temperature",
+    "postprocess_gamma",     "postprocess_vignette",      "postprocess_scanlines",
 };
 
 // bo2zm_sky_glow: 0 original, 1 natural, 2 soft.
@@ -236,19 +255,19 @@ extern "C" void RexSwitchApmWatchMemory(int watch);
 // Status Monitor show the game's FPS (the SaltyNX block).
 void RequestBootClocks() {
 #if REX_PLATFORM_SWITCH
-  RexSwitchSaltyNxEnable(REXCVAR_GET(bo2zm_switch_saltynx) ? 1 : 0);
-  RexSwitchClocksReverseEnable(REXCVAR_GET(bo2zm_switch_clocks_reverse) ? 1 : 0);
-  RexSwitchApmRequestGpuMhz(REXCVAR_GET(bo2zm_switch_gpu_mhz));
-  RexSwitchApmAllowRam1600(REXCVAR_GET(bo2zm_switch_ram_1600) ? 1 : 0);
+  RexSwitchSaltyNxEnable(REXCVAR_GET(switch_saltynx) ? 1 : 0);
+  RexSwitchClocksReverseEnable(REXCVAR_GET(switch_clocks_reverse) ? 1 : 0);
+  RexSwitchApmRequestGpuMhz(REXCVAR_GET(switch_gpu_mhz));
+  RexSwitchApmAllowRam1600(REXCVAR_GET(switch_ram_1600) ? 1 : 0);
   RexSwitchApmWatchMemory(0);
   RexSwitchApmApply();
   REXLOG_INFO("[settings] clocks: GPU requested {} MHz in handheld mode (0 = the system's), memory not watched",
-              REXCVAR_GET(bo2zm_switch_gpu_mhz));
+              REXCVAR_GET(switch_gpu_mhz));
 #endif
 }
 
 void ApplySettingsGraphics() {
-  const std::string resolution = REXCVAR_GET(bo2zm_internal_resolution);
+  const std::string resolution = REXCVAR_GET(internal_resolution);
   // 1920x1080 is not requested through the video mode: the video mode stays at 720p, which is what is presented, and
   // a 1920x1080 video mode would not enlarge the front buffer, which is registered earlier. A game whose render
   // targets follow a mode table of its own takes the internal size from this same cvar instead.
@@ -261,16 +280,16 @@ void ApplySettingsGraphics() {
   }
 #if REX_PLATFORM_SWITCH
   // FPS and resolution for the console overlays, and honoring Reverse-NX. Can be turned off if it gets in the way.
-  RexSwitchSaltyNxEnable(REXCVAR_GET(bo2zm_switch_saltynx) ? 1 : 0);
-  RexSwitchClocksReverseEnable(REXCVAR_GET(bo2zm_switch_clocks_reverse) ? 1 : 0);
+  RexSwitchSaltyNxEnable(REXCVAR_GET(switch_saltynx) ? 1 : 0);
+  RexSwitchClocksReverseEnable(REXCVAR_GET(switch_clocks_reverse) ? 1 : 0);
   // GPU profile in handheld mode. See bo2zm_switch_gpu_mhz.
-  RexSwitchApmRequestGpuMhz(REXCVAR_GET(bo2zm_switch_gpu_mhz));
-  RexSwitchApmAllowRam1600(REXCVAR_GET(bo2zm_switch_ram_1600) ? 1 : 0);
+  RexSwitchApmRequestGpuMhz(REXCVAR_GET(switch_gpu_mhz));
+  RexSwitchApmAllowRam1600(REXCVAR_GET(switch_ram_1600) ? 1 : 0);
   RexSwitchApmApply();
-  RexSwitchPerfSwapInterval(unsigned(REXCVAR_GET(bo2zm_swap_interval)));
+  RexSwitchPerfSwapInterval(unsigned(REXCVAR_GET(swap_interval)));
 #endif
   Put("resolution", "");  // empty preset: the width and height above apply
-  const std::string limit = REXCVAR_GET(bo2zm_fps_limit);
+  const std::string limit = REXCVAR_GET(fps_limit);
   Put("video_mode_refresh_rate", limit == "30" ? "30" : "60");
   REXLOG_INFO("[settings] internal resolution {} and FPS limit {}: video mode {}x{} at {} Hz", resolution, limit,
               rex::cvar::GetFlagByName("video_mode_width"), rex::cvar::GetFlagByName("video_mode_height"),
@@ -337,7 +356,7 @@ Postprocess ReadPostprocess() {
       {"matrix", {true, -0.03f, 1.10f, 0.85f, 0.20f, 0.0f, 1.0f, 0.55f, 1.0f, 0.60f, 0.30f, 0.30f, 0.25f}},
       {"crt", {true, -0.02f, 1.05f, 1.10f, 0.10f, 0.0f, 1.0f, 0.90f, 1.0f, 0.90f, 0.10f, 0.20f, 0.50f}},
   };
-  const std::string mode = rex::cvar::GetFlagByName("bo2zm_postprocess");
+  const std::string mode = rex::cvar::GetFlagByName("postprocess");
   for (const Preset& p : kPresets) {
     if (mode == p.label) {
       return p.values;
@@ -348,14 +367,14 @@ Postprocess ReadPostprocess() {
     return result;  // off
   }
   result.active = true;
-  result.brightness = Number("bo2zm_postprocess_brightness", 0.0f);
-  result.contrast = Number("bo2zm_postprocess_contrast", 1.0f);
-  result.saturation = Number("bo2zm_postprocess_saturation", 1.0f);
-  result.vibrance = Number("bo2zm_postprocess_vibrance", 0.0f);
-  result.temperature = Number("bo2zm_postprocess_temperature", 0.0f);
-  result.gamma = Number("bo2zm_postprocess_gamma", 1.0f);
-  result.vignette = Number("bo2zm_postprocess_vignette", 0.0f);
-  result.lines = Number("bo2zm_postprocess_scanlines", 0.0f);
+  result.brightness = Number("postprocess_brightness", 0.0f);
+  result.contrast = Number("postprocess_contrast", 1.0f);
+  result.saturation = Number("postprocess_saturation", 1.0f);
+  result.vibrance = Number("postprocess_vibrance", 0.0f);
+  result.temperature = Number("postprocess_temperature", 0.0f);
+  result.gamma = Number("postprocess_gamma", 1.0f);
+  result.vignette = Number("postprocess_vignette", 0.0f);
+  result.lines = Number("postprocess_scanlines", 0.0f);
   return result;
 }
 
@@ -382,8 +401,8 @@ void WatchSettingsInLive() {
       g_version_postprocess.fetch_add(1, std::memory_order_relaxed);
     });
   }
-  g_fxaa.store(rex::cvar::GetFlagByName("bo2zm_antialiasing") == "fxaa", std::memory_order_relaxed);
-  rex::cvar::RegisterChangeCallback("bo2zm_antialiasing", [](std::string_view, std::string_view value) {
+  g_fxaa.store(rex::cvar::GetFlagByName("antialiasing") == "fxaa", std::memory_order_relaxed);
+  rex::cvar::RegisterChangeCallback("antialiasing", [](std::string_view, std::string_view value) {
     g_fxaa.store(value == "fxaa", std::memory_order_relaxed);
   });
   g_glow_sky.store(ModeGlow(rex::cvar::GetFlagByName("bo2zm_sky_glow")),

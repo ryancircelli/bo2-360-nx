@@ -24,16 +24,22 @@
 #include <string>
 #include <thread>
 
-REXCVAR_DEFINE_STRING(bo2zm_video_rgba, "", "BO2",
+REXCVAR_DEFINE_STRING(video_rgba, "", "BO2",
                       "Test video: record the game image as raw frames to this .rgba file plus a .txt beside it "
                       "(\"w h fps count\"; empty = off; the environment variables REX_BO2ZM_VIDEO_RGBA and "
                       "BO2ZM_VIDEO_RGBA do the same)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_video_fps, 30, "BO2", "Test video (bo2zm_video_rgba): frames per second").range(1, 60);
-REXCVAR_DEFINE_INT32(bo2zm_video_from_s, 0, "BO2", "Test video: seconds after start-up before the first frame")
+REXCVAR_DEFINE_INT32(video_fps, 30, "BO2", "Test video (bo2zm_video_rgba): frames per second").range(1, 60);
+REXCVAR_DEFINE_INT32(video_from_s, 0, "BO2", "Test video: seconds after start-up before the first frame")
     .range(0, 3600);
-REXCVAR_DEFINE_INT32(bo2zm_video_s, 120, "BO2", "Test video: seconds to record (then the file is closed)")
+REXCVAR_DEFINE_INT32(video_s, 120, "BO2", "Test video: seconds to record (then the file is closed)")
     .range(1, 3600);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_video_rgba, video_rgba);
+REXCVAR_ALIAS(bo2zm_video_fps, video_fps);
+REXCVAR_ALIAS(bo2zm_video_from_s, video_from_s);
+REXCVAR_ALIAS(bo2zm_video_s, video_s);
 
 namespace bo2zm::video {
 namespace {
@@ -44,7 +50,7 @@ bool g_stop = false;
 std::thread g_thread;
 
 std::string OutputPath() {
-  std::string path = REXCVAR_GET(bo2zm_video_rgba);
+  std::string path = REXCVAR_GET(video_rgba);
   for (const char* name : {"REX_BO2ZM_VIDEO_RGBA", "BO2ZM_VIDEO_RGBA"}) {
     if (!path.empty()) {
       break;
@@ -68,10 +74,10 @@ void WriteInfo(const std::filesystem::path& path, uint32_t w, uint32_t h, int fp
 }
 
 void Loop(std::function<rex::ui::Presenter*()> get_presenter, std::filesystem::path path) {
-  const int fps = REXCVAR_GET(bo2zm_video_fps);
+  const int fps = REXCVAR_GET(video_fps);
   const auto period = std::chrono::nanoseconds(1'000'000'000LL / fps);
-  const auto start = std::chrono::steady_clock::now() + std::chrono::seconds(REXCVAR_GET(bo2zm_video_from_s));
-  const auto end = start + std::chrono::seconds(REXCVAR_GET(bo2zm_video_s));
+  const auto start = std::chrono::steady_clock::now() + std::chrono::seconds(REXCVAR_GET(video_from_s));
+  const auto end = start + std::chrono::seconds(REXCVAR_GET(video_s));
   std::error_code ec;
   if (path.has_parent_path()) {
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -81,7 +87,7 @@ void Loop(std::function<rex::ui::Presenter*()> get_presenter, std::filesystem::p
     REXLOG_WARN("[video] Could not create {}", path.string());
     return;
   }
-  REXLOG_INFO("[video] Recording {} fps to {} for {} s", fps, path.string(), int(REXCVAR_GET(bo2zm_video_s)));
+  REXLOG_INFO("[video] Recording {} fps to {} for {} s", fps, path.string(), int(REXCVAR_GET(video_s)));
   uint32_t width = 0, height = 0;
   uint64_t count = 0, skipped = 0;
   std::vector<uint8_t> row_buffer;

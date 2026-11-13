@@ -27,24 +27,30 @@
 #include <thread>
 #include <vector>
 
-REXCVAR_DEFINE_INT32(bo2zm_capture_every_s, 0, "BO2",
+REXCVAR_DEFINE_INT32(capture_every_s, 0, "BO2",
                      "Save a PNG capture of the game image every N seconds in captures/ next to the executable (0 = "
                      "never; tests only)")
     .range(0, 3600);
-REXCVAR_DEFINE_INT32(bo2zm_capture_max, 20, "BO2", "Maximum captures per run")
+REXCVAR_DEFINE_INT32(capture_max, 20, "BO2", "Maximum captures per run")
     .range(1, 1000);
 // Lets a test capture only the match itself (a match is usually loaded about 40 s after start), for example one
 // capture every 2 s while the camera turns.
-REXCVAR_DEFINE_INT32(bo2zm_capture_from_s, 0, "BO2",
+REXCVAR_DEFINE_INT32(capture_from_s, 0, "BO2",
                      "Test captures (bo2zm_capture_every_s): seconds before the first one counts down")
     .range(0, 3600);
 
 // A quick run of captures for what changes from frame to frame (blinking models, popping): "S:N:MS" takes N of
 // them MS milliseconds apart from S seconds after start-up, named burst_00.png and on.
-REXCVAR_DEFINE_STRING(bo2zm_capture_burst, "", "BO2",
+REXCVAR_DEFINE_STRING(capture_burst, "", "BO2",
                       "Test captures: \"S:N:MS\", N captures MS milliseconds apart from S seconds after start-up "
                       "(captures/burst_NN.png; empty = none)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_capture_every_s, capture_every_s);
+REXCVAR_ALIAS(bo2zm_capture_max, capture_max);
+REXCVAR_ALIAS(bo2zm_capture_from_s, capture_from_s);
+REXCVAR_ALIAS(bo2zm_capture_burst, capture_burst);
 
 namespace bo2zm::capture {
 namespace {
@@ -161,7 +167,7 @@ std::filesystem::path CaptureFolder() {
 void Loop(std::function<rex::ui::Presenter*()> get_presenter, int every_s, int max) {
   const std::filesystem::path folder = CaptureFolder();
   const auto start = std::chrono::steady_clock::now();
-  auto next = start + std::chrono::seconds(REXCVAR_GET(bo2zm_capture_from_s)) + std::chrono::seconds(every_s);
+  auto next = start + std::chrono::seconds(REXCVAR_GET(capture_from_s)) + std::chrono::seconds(every_s);
   int n = 0;
   for (;;) {
     std::string requested;
@@ -227,13 +233,13 @@ void Loop(std::function<rex::ui::Presenter*()> get_presenter, int every_s, int m
 }  // namespace
 
 void Boot(std::function<rex::ui::Presenter*()> get_presenter) {
-  const int every_s = REXCVAR_GET(bo2zm_capture_every_s);
+  const int every_s = REXCVAR_GET(capture_every_s);
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_get_presenter = get_presenter;  // RequestCapture starts the thread on demand
   }
   int burst_s = 0, burst_n = 0, burst_ms = 0;
-  if (std::sscanf(REXCVAR_GET(bo2zm_capture_burst).c_str(), "%d:%d:%d", &burst_s, &burst_n, &burst_ms) == 3 &&
+  if (std::sscanf(REXCVAR_GET(capture_burst).c_str(), "%d:%d:%d", &burst_s, &burst_n, &burst_ms) == 3 &&
       burst_s >= 0 && burst_n > 0 && burst_n <= 500 && burst_ms >= 0) {
     for (int i = 0; i < burst_n; ++i) {
       char name[32];
@@ -250,9 +256,9 @@ void Boot(std::function<rex::ui::Presenter*()> get_presenter) {
     g_stop = false;
   }
   g_thread = std::thread(Loop, std::move(get_presenter), every_s,
-                       int(REXCVAR_GET(bo2zm_capture_max)));
+                       int(REXCVAR_GET(capture_max)));
   REXLOG_INFO("[capture] One capture every {} s (maximum {})", every_s,
-              int(REXCVAR_GET(bo2zm_capture_max)));
+              int(REXCVAR_GET(capture_max)));
 }
 
 void RequestCapture(std::string label, std::chrono::milliseconds delay) {
@@ -271,7 +277,7 @@ void RequestCapture(std::string label, std::chrono::milliseconds delay) {
 }
 
 void CaptureNowForTests(rex::ui::Presenter* presenter, const std::string& label) {
-  if (REXCVAR_GET(bo2zm_capture_every_s) <= 0 || !presenter) {
+  if (REXCVAR_GET(capture_every_s) <= 0 || !presenter) {
     return;
   }
   rex::ui::RawImage image;

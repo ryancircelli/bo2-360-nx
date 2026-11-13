@@ -27,9 +27,12 @@ REXCVAR_DEFINE_BOOL(bo2zm_debug_party, false, "BO2",
 namespace {
 
 #if !defined(__SWITCH__)
-REXCVAR_DEFINE_BOOL(bo2zm_test_exit_on_error, false, "BO2",
+REXCVAR_DEFINE_BOOL(test_exit_on_error, false, "BO2",
                     "PC test helper: flush the log and exit at the first Com_Error instead of restarting")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_test_exit_on_error, test_exit_on_error);
 #endif
 
 uint32_t LoadBE32(const uint8_t* p) {
@@ -156,7 +159,7 @@ REX_HOOK_RAW(sub_8240C468) {
                uint32_t(ctx.lr));
   rex::FlushLogging();
 #if !defined(__SWITCH__)
-  if (REXCVAR_GET(bo2zm_test_exit_on_error)) std::_Exit(EXIT_FAILURE);
+  if (REXCVAR_GET(test_exit_on_error)) std::_Exit(EXIT_FAILURE);
 #endif
   __imp__sub_8240C468(ctx, base);
 }

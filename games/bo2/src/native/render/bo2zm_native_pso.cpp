@@ -15,23 +15,29 @@
 #define BO2ZM_NATIVE_CACHE_FOLDER "cache"  // as in bo2zm_native_draws.cpp
 #endif
 
-REXCVAR_DEFINE_STRING(bo2zm_pso_record, "", "BO2",
+REXCVAR_DEFINE_STRING(pso_record, "", "BO2",
                       "Record every pipeline this run creates to this bo2pso text list (docs/mac/pso-list-format.md; "
                       "empty = off; the environment variable REX_BO2ZM_PSO_RECORD does the same)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(bo2zm_pso_verify, false, "BO2",
+REXCVAR_DEFINE_BOOL(pso_verify, false, "BO2",
                     "Log \"[pso] unlisted pipeline <key>\" (and a perf log compile event) for every pipeline created "
                     "that the loaded bo2zm_pso.psolist does not list (the environment variable REX_BO2ZM_PSO_VERIFY=1 "
                     "does the same)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_pso_list, "", "BO2",
+REXCVAR_DEFINE_STRING(pso_list, "", "BO2",
                       "The bo2pso text list read at start-up and compiled behind the loading screen (empty = "
                       "bo2zm_pso.psolist beside the executable, or in the app bundle's Resources)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_STRING(bo2zm_native_cache_dir, "", "BO2",
+REXCVAR_DEFINE_STRING(native_cache_dir, "", "BO2",
                       "Folder of the native renderer's pipeline cache (empty = cache/ beside the executable; on macOS "
                       "~/Library/Caches/bo2-360-nx when the game runs from an .app bundle)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_pso_record, pso_record);
+REXCVAR_ALIAS(bo2zm_pso_verify, pso_verify);
+REXCVAR_ALIAS(bo2zm_pso_list, pso_list);
+REXCVAR_ALIAS(bo2zm_native_cache_dir, native_cache_dir);
 
 namespace bo2zm::native::pso {
 namespace fs = std::filesystem;
@@ -54,7 +60,7 @@ bool InBundle(const fs::path& exe_folder) {
 }  // namespace
 
 fs::path CacheFolder() {
-  if (const std::string dir = REXCVAR_GET(bo2zm_native_cache_dir); !dir.empty()) {
+  if (const std::string dir = REXCVAR_GET(native_cache_dir); !dir.empty()) {
     return fs::path(dir);
   }
   const fs::path exe = rex::filesystem::GetExecutableFolder();
@@ -69,7 +75,7 @@ fs::path CacheFolder() {
 }
 
 fs::path ListToLoad() {
-  if (const std::string path = REXCVAR_GET(bo2zm_pso_list); !path.empty()) {
+  if (const std::string path = REXCVAR_GET(pso_list); !path.empty()) {
     return fs::path(path);
   }
   const fs::path exe = rex::filesystem::GetExecutableFolder();
@@ -86,7 +92,7 @@ fs::path ListToLoad() {
 }
 
 fs::path RecordPath() {
-  std::string path = REXCVAR_GET(bo2zm_pso_record);
+  std::string path = REXCVAR_GET(pso_record);
   if (path.empty()) {
     path = Env("REX_BO2ZM_PSO_RECORD");
   }
@@ -95,7 +101,7 @@ fs::path RecordPath() {
 
 bool Verify() {
   const std::string env = Env("REX_BO2ZM_PSO_VERIFY");
-  return REXCVAR_GET(bo2zm_pso_verify) || (!env.empty() && env != "0");
+  return REXCVAR_GET(pso_verify) || (!env.empty() && env != "0");
 }
 
 std::string ListStamp() {

@@ -93,11 +93,14 @@ extern "C" const char* RexSwitchLogDir(void);
 extern "C" void RexSwitchPerfSetReport(bool on);
 #endif
 
-REXCVAR_DEFINE_STRING(bo2zm_max_log_files, "10", "BO2",
+REXCVAR_DEFINE_STRING(max_log_files, "10", "BO2",
                       "Logs kept, one per start: \"5\", \"10\", \"20\" or \"off\" (every log; test tomls). Set here, it "
                       "wins over MAX LOG FILES on the DEBUG page")
     .allowed({"5", "10", "20", "off"})
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Old names, still accepted from configuration files, the command line, REX_ variables and scripts.
+REXCVAR_ALIAS(bo2zm_max_log_files, max_log_files);
 
 namespace {
 
@@ -499,8 +502,8 @@ void bo2zm::debug::ConfigureStartup(const std::filesystem::path& user_data_root)
   const bool debug_on = SavedValue(settings, "debug") == "on";
   g_quiet_start = !g_level_given && !debug_on;
   // MAX LOG FILES: the toml's, else the saved pick, else 10.
-  const std::string max_logs = rex::cvar::GetFlagSource("bo2zm_max_log_files") != rex::cvar::Source::kDefault
-                                   ? std::string(REXCVAR_GET(bo2zm_max_log_files))
+  const std::string max_logs = rex::cvar::GetFlagSource("max_log_files") != rex::cvar::Source::kDefault
+                                   ? std::string(REXCVAR_GET(max_log_files))
                                    : SavedValue(settings, "max_log_files");
   for (int i = 0; i < int(std::size(kMaxLogNames)); ++i) {
     if (max_logs == kMaxLogNames[i]) {

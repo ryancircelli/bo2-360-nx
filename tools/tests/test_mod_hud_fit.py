@@ -34,6 +34,7 @@ struct Registrar {
 #define REXCVAR_DEFINE_BOOL(name, value, ...) bool FLAGS_##name=value; static auto reg_##name=rex::cvar::Registrar{}
 #define REXCVAR_DEFINE_DOUBLE(name, value, ...) double FLAGS_##name=value; static auto reg_##name=rex::cvar::Registrar{}
 #define REXCVAR_GET(name) FLAGS_##name
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 ''',
     "system/xmemory.h": '''#pragma once
 #include <cstdint>

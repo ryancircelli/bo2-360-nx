@@ -23,7 +23,7 @@ template<class T> T load_and_swap(const void* data) {
 }
 """,
     "logging.h": "#pragma once\n#define REXSYS_INFO(...) ((void)0)\n#define REXSYS_WARN(...) ((void)0)\n#define REXSYS_ERROR(...) ((void)0)\n",
-    "cvar.h": "#pragma once\n#include <string>\n#define REXCVAR_DEFINE_STRING(name, value, ...) std::string name = value\n#define REXCVAR_GET(name) name\n",
+    "cvar.h": "#pragma once\n#include <string>\n#define REXCVAR_DEFINE_STRING(name, value, ...) std::string name = value\n#define REXCVAR_GET(name) name\n#define REXCVAR_ALIAS(alias, name) static_assert(true)\n",
     "filesystem/devices/host_path_device.h": r"""#pragma once
 #include <filesystem>
 #include <string>
