@@ -13,5 +13,10 @@ __attribute__((visibility("default"))) void RequestType0Batching(bool on);
 // upload fix, encode thread + xpass). Same request/latch protocol, default false.
 __attribute__((visibility("default"))) bool CmdcostAllRequested();
 __attribute__((visibility("default"))) void RequestCmdcostAll(bool on);
+// Encode-thread no-sync: tile resolves and draw-pass transfers are recorded on
+// the encode thread instead of draining it (metal_encode_nosync, env
+// REX_METAL_ENCODE_NOSYNC=1). Same request/latch protocol, default false.
+__attribute__((visibility("default"))) bool EncodeNosyncRequested();
+__attribute__((visibility("default"))) void RequestEncodeNosync(bool on);
 }  // namespace rex::graphics::metal
 #endif

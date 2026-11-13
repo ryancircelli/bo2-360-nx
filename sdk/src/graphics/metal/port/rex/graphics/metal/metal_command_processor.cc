@@ -1333,6 +1333,9 @@ MetalCommandProcessor::MetalCommandProcessor(
   encode_thread_active_ = EncodeThreadRequested() || cmdcost_all_active_;
   std::fprintf(stderr, "[warn] [cmdcost] all=%s\n",
                cmdcost_all_active_ ? "on" : "off");
+  encode_nosync_active_ = EncodeNosyncRequested();
+  std::fprintf(stderr, "[warn] [encode-nosync] %s\n",
+               encode_nosync_active_ ? "on" : "off");
   type0_register_batching_active_ = Type0BatchingRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
@@ -2841,6 +2844,12 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   if (encode_thread_active_ != encode_thread_requested) {
     encode_thread_active_ = encode_thread_requested;
     REXLOG_INFO("Metal encode thread: {} at drained frame boundary", encode_thread_active_ ? "on" : "off");
+  }
+  const bool encode_nosync_requested = EncodeNosyncRequested();
+  if (encode_nosync_active_ != encode_nosync_requested) {
+    encode_nosync_active_ = encode_nosync_requested;
+    std::fprintf(stderr, "[encode-nosync] %s\n",
+                 encode_nosync_active_ ? "on" : "off");
   }
   const bool type0_requested = Type0BatchingRequested();
   if (type0_register_batching_active_ != type0_requested) {

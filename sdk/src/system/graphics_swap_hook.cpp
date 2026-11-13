@@ -74,5 +74,17 @@ std::atomic<bool>& CmdcostAllSwitch() {
 }
 bool CmdcostAllRequested() { return CmdcostAllSwitch().load(std::memory_order_relaxed); }
 void RequestCmdcostAll(bool on) { CmdcostAllSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& EncodeNosyncSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_ENCODE_NOSYNC");
+    return rex::cvar::Query<bool>("metal_encode_nosync") ||
+           (env && env[0] == '1');
+  }()};
+  return requested;
+}
+}
+bool EncodeNosyncRequested() { return EncodeNosyncSwitch().load(std::memory_order_relaxed); }
+void RequestEncodeNosync(bool on) { EncodeNosyncSwitch().store(on, std::memory_order_relaxed); }
 }  // namespace rex::graphics::metal
 #endif

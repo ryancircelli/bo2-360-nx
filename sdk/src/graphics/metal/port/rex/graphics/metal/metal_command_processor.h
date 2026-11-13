@@ -1281,6 +1281,10 @@ class MetalCommandProcessor final : public CommandProcessor {
   // Current command buffer and encoder
   bool cmdcost_all_active_ = false;  // CP-owned master latch; changes only at the drained frame boundary.
   bool encode_thread_active_ = false;  // CP-owned; latched only at a drained frame boundary.
+  // [encode-nosync] CP-owned; latched only at a drained frame boundary. With
+  // a deferred encoder, tile resolves and draw-pass transfers record into it
+  // instead of draining it (TileResolveRenderEncoder, transfers call site).
+  bool encode_nosync_active_ = false;
   MTL::CommandBuffer* current_command_buffer_ = nullptr;
   // Wraps the real render encoder; with metal_encode_thread its calls are
   // replayed on a second thread (see metal_deferred_render_encoder.h).

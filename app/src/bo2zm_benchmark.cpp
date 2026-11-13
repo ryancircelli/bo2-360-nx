@@ -194,6 +194,7 @@ const Factor kFactors[] = {
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
     {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
     {"metal_cmdcost_all", &rex::graphics::metal::CmdcostAllRequested, &rex::graphics::metal::RequestCmdcostAll},
+    {"metal_encode_nosync", &rex::graphics::metal::EncodeNosyncRequested, &rex::graphics::metal::RequestEncodeNosync},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };
