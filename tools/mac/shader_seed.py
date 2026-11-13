@@ -93,12 +93,16 @@ def main():
     title = titles.pop()
 
     pipelines, shaders, header, used, stale = {}, {}, None, 0, 0
+    runs = {}  # pipeline key -> number of recorded runs that used it
     for path, version, records in inputs:
         if version != newest:
             stale += 1
             continue
         used += 1
         header = read_shaders(path[:-len('.metal.xpso')] + '.xsh', shaders) or header
+        for key in {r[:8] for r in records
+                    if struct.unpack_from('<I', r, KIND_OFFSET)[0] == KIND_STANDARD}:
+            runs[key] = runs.get(key, 0) + 1
         for r in records:
             if struct.unpack_from('<I', r, KIND_OFFSET)[0] == KIND_STANDARD:
                 pipelines.setdefault(r[:8], r)
@@ -119,7 +123,9 @@ def main():
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, title + '.metal.xpso'), 'wb') as f:
         f.write(struct.pack('<III', PIPELINE_MAGIC, METAL_API_MAGIC, swap32(newest)))
-        f.write(b''.join(sorted(kept)))
+        # Most-used first: the game creates the seed in file order, so the
+        # pipelines nearly every session needs are ready soonest.
+        f.write(b''.join(sorted(kept, key=lambda r: (-runs[r[:8]], r))))
     with open(os.path.join(out, title + '.xsh'), 'wb') as f:
         f.write(header)
         f.write(b''.join(shaders[h] for h in sorted(needed)))

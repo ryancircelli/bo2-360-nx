@@ -5027,7 +5027,8 @@ MetalPipelineCache::GetOrCreatePipelineState(
   if (REXCVAR_GET(async_shader_compilation) && !creation_threads_.empty()) {
     {
       std::lock_guard<std::mutex> lock(creation_request_lock_);
-      creation_queue_.push(PipelineCreationRequest{raw_handle});
+      creation_queue_.push(
+          PipelineCreationRequest{raw_handle, creation_sequence_++});
     }
     creation_request_cond_.notify_one();
     return raw_handle;
@@ -5389,6 +5390,18 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
 // CreationThread (background pipeline compilation)
 // ---------------------------------------------------------------------------
 
+void MetalPipelineCache::NoteFrameDraws(uint64_t draws) {
+  // Menus and loading screens draw a few hundred draws a frame; 4-player
+  // gameplay draws thousands. The seed gets more threads on light frames.
+  const bool light = draws < 1000;
+  if (seed_light_frames_.exchange(light, std::memory_order_relaxed) != light &&
+      light) {
+    // Gated seed work may start now.
+    { std::lock_guard<std::mutex> lock(creation_request_lock_); }
+    creation_request_cond_.notify_all();
+  }
+}
+
 void MetalPipelineCache::RaisePipelinePriority(PipelineHandle* handle,
                                                uint8_t priority) {
   // Rebuild the heap under its lock: mutating a queued priority alone breaks
@@ -5440,7 +5453,12 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
       // Seed pipelines nobody has drawn with yet (priority 0) use at most
       // metal_shader_seed_threads threads, so a pipeline the game needs now
       // never waits for a thread (or the OS shader compiler) behind the seed.
-      const int seed_cap = REXCVAR_GET(metal_shader_seed_threads);
+      int seed_cap = REXCVAR_GET(metal_shader_seed_threads);
+      const int seed_menu_cap = REXCVAR_GET(metal_shader_seed_menu_threads);
+      if (seed_cap > 0 && seed_menu_cap > seed_cap &&
+          seed_light_frames_.load(std::memory_order_relaxed)) {
+        seed_cap = seed_menu_cap;
+      }
       auto seed_gated = [&] {
         if (seed_cap <= 0 || creation_queue_.empty()) return false;
         const PipelineHandle* top = creation_queue_.top().handle;

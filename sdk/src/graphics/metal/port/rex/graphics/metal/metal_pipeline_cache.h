@@ -589,6 +589,8 @@ class MetalPipelineCache {
     draw_fastpath_all_ = on;
     last_fast_handle_ = nullptr;
   }
+  // Called by the command processor at each swap with the frame's draw count.
+  void NoteFrameDraws(uint64_t draws);
   const std::filesystem::path& shader_storage_title_root() const {
     return shader_storage_title_root_;
   }
@@ -787,13 +789,23 @@ class MetalPipelineCache {
   std::atomic<uint32_t> native_geom_archive_misses_{0};
   struct PipelineCreationRequest {
     PipelineHandle* handle{nullptr};
+    // Queue order within one priority: first queued, first created (the
+    // shipped seed is stored most-used first).
+    uint64_t sequence{0};
   };
   struct PipelineCreationPriorityCompare {
     bool operator()(const PipelineCreationRequest& a,
                     const PipelineCreationRequest& b) const {
-      return a.handle->priority < b.handle->priority;
+      if (a.handle->priority != b.handle->priority) {
+        return a.handle->priority < b.handle->priority;
+      }
+      return a.sequence > b.sequence;
     }
   };
+  uint64_t creation_sequence_{0};  // under creation_request_lock_
+  // Set at each swap: the frame was light (menu / loading), so the seed may
+  // use metal_shader_seed_menu_threads.
+  std::atomic<bool> seed_light_frames_{true};
   std::priority_queue<PipelineCreationRequest,
                       std::vector<PipelineCreationRequest>,
                       PipelineCreationPriorityCompare>

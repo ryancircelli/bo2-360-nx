@@ -2818,6 +2818,16 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     perf_last_cpu_ns = cpu_now;
     perf.jobs_submitted.store(submission_current_, std::memory_order_relaxed);
   }
+  {
+    // Shader seed: more creation threads while frames are light (menus).
+    static uint64_t seed_last_draws = 0;
+    const uint64_t draws_now =
+        rex::graphics::GetPerfStats().draws.load(std::memory_order_relaxed);
+    if (pipeline_cache_) {
+      pipeline_cache_->NoteFrameDraws(draws_now - seed_last_draws);
+    }
+    seed_last_draws = draws_now;
+  }
   rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
   ZpdMaybeLogStats();
   if (hle_census::Enabled()) {

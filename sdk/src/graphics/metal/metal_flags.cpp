@@ -167,6 +167,12 @@ DEFINE_int32(metal_shader_seed_threads, 2,
              "seed pipeline can take a few hundred ms on a cold macOS shader "
              "cache). 0 = no limit.",
              "Metal");
+DEFINE_int32(metal_shader_seed_menu_threads, 10,
+             "Creation threads the shipped shader seed may use while the game "
+             "draws few draws per frame (menus, loading screens), so the seed "
+             "is done before gameplay starts. Gameplay frames fall back to "
+             "metal_shader_seed_threads. 0 = same as metal_shader_seed_threads.",
+             "Metal");
 DEFINE_int32(metal_pipeline_wait_budget_ms, 10,
              "Per-frame time a draw may wait for a pipeline still being "
              "created when its shaders are already translated (instead of "
