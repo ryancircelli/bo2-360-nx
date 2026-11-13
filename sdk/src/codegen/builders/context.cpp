@@ -231,8 +231,16 @@ void BuilderContext::emit_function_call(uint32_t address) {
         return;
       }
 
+      // The save/restore helpers take the frame pointer in r12 and are not
+      // ABI calls, so the checks skip them.
+      const bool poison = cfg.abiPoisonChecks &&
+                          !(name.find("__rest") == 0 || name.find("__save") == 0);
       emitCtx.reference(name);
+      if (poison)
+        println("\tREX_ABI_POISON_PRE(0x{:08X});", base);
       println("\t{}(ctx, base);", name);
+      if (poison)
+        println("\tREX_ABI_POISON_POST(0x{:08X});", base);
       return;
     }
 
@@ -263,7 +271,11 @@ void BuilderContext::emit_function_call(uint32_t address) {
       }
 
       emitCtx.reference(func_name);
+      if (cfg.abiPoisonChecks)
+        println("\tREX_ABI_POISON_PRE(0x{:08X});", base);
       println("\t{}(ctx, base);", func_name);
+      if (cfg.abiPoisonChecks)
+        println("\tREX_ABI_POISON_POST(0x{:08X});", base);
       return;
     }
 

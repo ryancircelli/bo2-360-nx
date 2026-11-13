@@ -30,7 +30,8 @@
 //=============================================================================
 
 #include <rex/ppc.h>
-#include <rex/image_info.h>
+{% if config_flags.abi_poison_checks %}#include <rex/ppc/abi_poison.h>
+{% endif %}#include <rex/image_info.h>
 #include <rex/logging.h>
 #include <rex/chrono/clock.h>
 #include <rex/perf/counter.h>
@@ -256,6 +257,19 @@ extern PPCFuncMapping PPCFuncMappings[];
 
 {% include "codegen/_indirect_call.inja" %}
 
+//=============================================================================
+// ABI poison checks (abi_poison_checks, checking builds only)
+//=============================================================================
+
+{% if config_flags.abi_poison_checks %}// Emitted around every direct and indirect guest call when the generator ran
+// with abi_poison_checks: the caller snapshots the PowerPC non-volatile
+// registers before the call, checks after it that the callee preserved them,
+// and overwrites the volatile registers the ABI leaves dead at a return with
+// poison, so a caller that still reads one changes the route results
+// (rex/ppc/abi_poison.h).
+#define REX_ABI_POISON_PRE(site) ::rex::ppc::AbiPoisonPreCall(ctx, (site))
+#define REX_ABI_POISON_POST(site) ::rex::ppc::AbiPoisonPostCall(ctx, (site))
+{% endif %}
 //=============================================================================
 // Flush Mode
 //=============================================================================
