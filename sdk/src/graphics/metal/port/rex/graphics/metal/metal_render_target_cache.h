@@ -31,6 +31,7 @@
 #include "rex/memory.h"
 
 #include "third_party/metal-cpp/Metal/Metal.hpp"
+#include "metal_deferred_render_encoder.h"
 
 struct IRDescriptorTableEntry;
 
@@ -231,7 +232,7 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
 
   // [raster-state] FABLE2_TRANSFER_QUAD_STATE_RESET (default on).
   static bool TransferQuadStateResetEnabled();
-  static void ResetDrawPassRasterizerState(MTL::RenderCommandEncoder* encoder);
+  static void ResetDrawPassRasterizerState(RenderEncoderRef encoder);
   // Ownership-transfer quads (not [deferred-clears] clears) wait to be drawn
   // in the next draw pass.
   bool HasPendingDrawPassTransferQuads() const {
@@ -256,8 +257,9 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
     kDrawPassTransferEncoderMutationRasterizer = 1u << 10,
   };
   using DrawPassTransferEncoderMutationMask = uint32_t;
+  // [encode-nosync] encoder may be the open pass's deferred encoder.
   bool EncodePendingDrawPassTransfers(
-      MTL::RenderCommandEncoder* encoder,
+      RenderEncoderRef encoder,
       MTL::RenderPassDescriptor* pass_descriptor,
       DrawPassTransferEncoderMutationMask* mutations_out = nullptr);
   // requeue_clears: the draw that bound the targets was not encoded, so
@@ -1047,7 +1049,7 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
       const uint64_t* render_target_resolve_clear_values = nullptr,
       const Transfer::Rectangle* resolve_clear_rectangle = nullptr,
       MTL::CommandBuffer* command_buffer = nullptr,
-      MTL::RenderCommandEncoder* active_render_encoder = nullptr,
+      RenderEncoderRef active_render_encoder = nullptr,
       MTL::RenderPassDescriptor* active_render_pass_descriptor = nullptr,
       DrawPassTransferEncoderMutationMask* mutations_out = nullptr);
 

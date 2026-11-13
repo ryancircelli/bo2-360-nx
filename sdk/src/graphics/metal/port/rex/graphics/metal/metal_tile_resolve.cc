@@ -577,8 +577,7 @@ bool MetalRenderTargetCache::TileResolveDrawClearInPass(
       has_remainder = true;
     }
   }
-  MTL::RenderCommandEncoder* encoder =
-      command_processor_.TileResolveRenderEncoder();
+  RenderEncoderRef encoder = command_processor_.TileResolveRenderEncoder();
   MTL::RenderPassDescriptor* pass =
       command_processor_.TileResolvePassDescriptor();
   if (!encoder || !pass) return false;
@@ -735,11 +734,11 @@ bool MetalRenderTargetCache::TryTileResolveEncode(
       !command_processor_.HasTileResolveRenderEncoder()) {
     return fallback(u.tres_fb_pass, "pass-ended");
   }
-  MTL::RenderCommandEncoder* encoder =
-      command_processor_.TileResolveRenderEncoder();
+  RenderEncoderRef encoder = command_processor_.TileResolveRenderEncoder();
   MTL::RenderPassDescriptor* pass =
       command_processor_.TileResolvePassDescriptor();
   if (!pass) return fallback(u.tres_fb_pass, "no-descriptor");
+  if (!encoder) return fallback(u.tres_fb_pass, "no-encoder");
 
   std::string label = r.pipeline_label ? r.pipeline_label : "";
   const std::string suffix = "_cs";
@@ -852,9 +851,17 @@ bool MetalRenderTargetCache::TryTileResolveEncode(
     }
   }
 
-  const uint32_t tile_w = uint32_t(encoder->tileWidth());
-  const uint32_t tile_h = uint32_t(encoder->tileHeight());
-  if (!tile_w || !tile_h || tile_w % r.pixels_per_thread) {
+  // [encode-nosync] A deferred encoder's tile size is only known where the
+  // dispatch is replayed (dispatchThreadsPerTileDivided checks it there).
+  uint32_t tile_w = 0;
+  uint32_t tile_h = 0;
+  if (encoder.real()) {
+    tile_w = uint32_t(encoder.real()->tileWidth());
+    tile_h = uint32_t(encoder.real()->tileHeight());
+    if (!tile_w || !tile_h || tile_w % r.pixels_per_thread) {
+      return fallback(u.tres_fb_tile, "tile-width");
+    }
+  } else if (!r.pixels_per_thread) {
     return fallback(u.tres_fb_tile, "tile-width");
   }
 
@@ -890,8 +897,12 @@ bool MetalRenderTargetCache::TryTileResolveEncode(
       encoder->useResource(v, MTL::ResourceUsageWrite, MTL::RenderStageTile);
     }
   }
-  encoder->dispatchThreadsPerTile(
-      MTL::Size::Make(tile_w / r.pixels_per_thread, tile_h, 1));
+  if (encoder.real()) {
+    encoder.real()->dispatchThreadsPerTile(
+        MTL::Size::Make(tile_w / r.pixels_per_thread, tile_h, 1));
+  } else {
+    encoder.deferred()->dispatchThreadsPerTileDivided(r.pixels_per_thread);
+  }
   if (!r.scaled) {
     // Shared-memory destination: the pass's fence update at its end covers
     // the tile stage (MarkSharedMemoryRenderWritePending).

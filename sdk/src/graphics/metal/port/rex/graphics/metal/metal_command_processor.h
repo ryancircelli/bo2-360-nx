@@ -334,8 +334,21 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool HasTileResolveRenderEncoder() const {
     return current_render_encoder_ != nullptr;
   }
-  MTL::RenderCommandEncoder* TileResolveRenderEncoder() const {
-    return current_render_encoder_ ? current_render_encoder_->Sync() : nullptr;
+  // [encode-nosync] The deferred encoder itself (recorded on the encode
+  // thread) with metal_encode_nosync, else drains and hands out the real one.
+  RenderEncoderRef TileResolveRenderEncoder() const {
+    return OpenPassEncoderRef(DeferredRenderEncoder::SyncCaller::kTileResolve);
+  }
+  RenderEncoderRef OpenPassEncoderRef(
+      DeferredRenderEncoder::SyncCaller caller) const {
+    if (!current_render_encoder_) {
+      return nullptr;
+    }
+    if (encode_nosync_active_ && current_render_encoder_->deferred()) {
+      current_render_encoder_->NoteNosync(caller);
+      return RenderEncoderRef(current_render_encoder_);
+    }
+    return RenderEncoderRef(current_render_encoder_->Sync(caller));
   }
   MTL::RenderPassDescriptor* TileResolvePassDescriptor() const {
     return current_render_pass_descriptor_;

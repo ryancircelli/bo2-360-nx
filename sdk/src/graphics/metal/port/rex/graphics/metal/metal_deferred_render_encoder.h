@@ -71,8 +71,11 @@ class DeferredRenderEncoder {
   bool xpass() const { return xpass_; }
   void LogXpassStats();
 
-  // Drains and returns the real encoder.
-  MTL::RenderCommandEncoder* Sync();
+  // Drains and returns the real encoder. caller only splits the counters.
+  enum class SyncCaller : uint8_t { kOther, kTileResolve, kTransfers, kCount };
+  MTL::RenderCommandEncoder* Sync(SyncCaller caller = SyncCaller::kOther);
+  // [encode-nosync] A caller recorded its work here instead of Sync().
+  void NoteNosync(SyncCaller caller) { ++stats_.nosync_uses[size_t(caller)]; }
   bool deferred() const { return deferred_; }
 
   // Lifetime (same meaning as on MTL::RenderCommandEncoder).
@@ -116,6 +119,23 @@ class DeferredRenderEncoder {
   void setObjectBytes(const void* bytes, NS::UInteger length,
                       NS::UInteger index);
   void setMeshBytes(const void* bytes, NS::UInteger length, NS::UInteger index);
+  void setFragmentBytes(const void* bytes, NS::UInteger length,
+                        NS::UInteger index);
+  void setFragmentTexture(const MTL::Texture* texture, NS::UInteger index);
+
+  // Tile shading ([encode-nosync] tile resolve).
+  void setTileBytes(const void* bytes, NS::UInteger length, NS::UInteger index);
+  void setTileBuffer(const MTL::Buffer* buffer, NS::UInteger offset,
+                     NS::UInteger index);
+  void setTileTexture(const MTL::Texture* texture, NS::UInteger index);
+  // dispatchThreadsPerTile(tileWidth / x_divisor, tileHeight, 1), the tile
+  // size read from the real encoder where the dispatch is replayed. A tile
+  // width the divisor does not divide drops the dispatch and counts it
+  // (tile_dispatch_failures).
+  void dispatchThreadsPerTileDivided(uint32_t x_divisor);
+  uint64_t tile_dispatch_failures() const {
+    return tile_dispatch_failures_.load(std::memory_order_relaxed);
+  }
 
   // Residency and synchronization.
   void useResource(const MTL::Resource* resource, MTL::ResourceUsage usage,
@@ -167,6 +187,11 @@ class DeferredRenderEncoder {
     uint64_t xpass_barrier_calls = 0;
     uint64_t xpass_barrier_drains = 0;
     uint64_t xpass_sync_drains = 0;
+    // [encode-nosync] Per SyncCaller: Sync() calls on a deferred encoder,
+    // microseconds they waited, and uses recorded instead (NoteNosync).
+    uint64_t sync_drains[size_t(SyncCaller::kCount)] = {};
+    uint64_t sync_wait_us[size_t(SyncCaller::kCount)] = {};
+    uint64_t nosync_uses[size_t(SyncCaller::kCount)] = {};
   };
   const Stats& stats() const { return stats_; }
 
@@ -183,7 +208,8 @@ class DeferredRenderEncoder {
   void Retain(const NS::Object* object);
   void RetainBuffer(const NS::Object* buffer);
   void PublishChunk();
-  void Drain();
+  // Returns the microseconds spent waiting (0 when nothing was pending).
+  uint64_t Drain();
   void StartWorker();
   void WorkerMain();
   void Replay(Chunk& chunk);
@@ -207,7 +233,103 @@ class DeferredRenderEncoder {
   std::vector<std::unique_ptr<Chunk>> free_chunks_;
   uint64_t published_ = 0;
   std::atomic<uint64_t> completed_{0};
+  std::atomic<uint64_t> tile_dispatch_failures_{0};
   bool stop_ = false;
+};
+
+// [encode-nosync] The render encoder a draw-pass transfer or tile resolve
+// encodes into: either a plain Metal encoder (its own pass, or the encode
+// thread off) or the deferred encoder of the open draw pass, so those paths
+// record onto the encode thread instead of draining it. encoder->method()
+// works as on MTL::RenderCommandEncoder for the methods those paths use.
+class RenderEncoderRef {
+ public:
+  RenderEncoderRef() = default;
+  RenderEncoderRef(std::nullptr_t) {}
+  RenderEncoderRef(MTL::RenderCommandEncoder* real) : real_(real) {}
+  RenderEncoderRef(DeferredRenderEncoder* deferred) : deferred_(deferred) {}
+
+  explicit operator bool() const { return real_ || deferred_; }
+  const RenderEncoderRef* operator->() const { return this; }
+  bool operator==(const RenderEncoderRef& o) const {
+    return real_ == o.real_ && deferred_ == o.deferred_;
+  }
+  bool operator!=(const RenderEncoderRef& o) const { return !(*this == o); }
+  // The plain encoder, nullptr for a deferred one.
+  MTL::RenderCommandEncoder* real() const { return real_; }
+  DeferredRenderEncoder* deferred() const { return deferred_; }
+
+#define REX_ENCODER_REF_FORWARD(method, params, args) \
+  void method params const {                         \
+    if (deferred_) {                                 \
+      deferred_->method args;                        \
+    } else {                                         \
+      real_->method args;                            \
+    }                                                \
+  }
+  REX_ENCODER_REF_FORWARD(setRenderPipelineState,
+                          (const MTL::RenderPipelineState* state), (state))
+  REX_ENCODER_REF_FORWARD(setDepthStencilState,
+                          (const MTL::DepthStencilState* state), (state))
+  REX_ENCODER_REF_FORWARD(setStencilReferenceValue, (uint32_t value), (value))
+  REX_ENCODER_REF_FORWARD(setViewport, (MTL::Viewport viewport), (viewport))
+  REX_ENCODER_REF_FORWARD(setScissorRect, (MTL::ScissorRect rect), (rect))
+  REX_ENCODER_REF_FORWARD(setCullMode, (MTL::CullMode mode), (mode))
+  REX_ENCODER_REF_FORWARD(setFrontFacingWinding, (MTL::Winding winding),
+                          (winding))
+  REX_ENCODER_REF_FORWARD(setTriangleFillMode, (MTL::TriangleFillMode mode),
+                          (mode))
+  REX_ENCODER_REF_FORWARD(setDepthBias, (float bias, float slope, float clamp),
+                          (bias, slope, clamp))
+  REX_ENCODER_REF_FORWARD(setDepthClipMode, (MTL::DepthClipMode mode), (mode))
+  REX_ENCODER_REF_FORWARD(setVertexBytes,
+                          (const void* bytes, NS::UInteger length,
+                           NS::UInteger index),
+                          (bytes, length, index))
+  REX_ENCODER_REF_FORWARD(setFragmentBytes,
+                          (const void* bytes, NS::UInteger length,
+                           NS::UInteger index),
+                          (bytes, length, index))
+  REX_ENCODER_REF_FORWARD(setFragmentBuffer,
+                          (const MTL::Buffer* buffer, NS::UInteger offset,
+                           NS::UInteger index),
+                          (buffer, offset, index))
+  REX_ENCODER_REF_FORWARD(setFragmentTexture,
+                          (const MTL::Texture* texture, NS::UInteger index),
+                          (texture, index))
+  REX_ENCODER_REF_FORWARD(setTileBytes,
+                          (const void* bytes, NS::UInteger length,
+                           NS::UInteger index),
+                          (bytes, length, index))
+  REX_ENCODER_REF_FORWARD(setTileBuffer,
+                          (const MTL::Buffer* buffer, NS::UInteger offset,
+                           NS::UInteger index),
+                          (buffer, offset, index))
+  REX_ENCODER_REF_FORWARD(setTileTexture,
+                          (const MTL::Texture* texture, NS::UInteger index),
+                          (texture, index))
+  REX_ENCODER_REF_FORWARD(useResource,
+                          (const MTL::Resource* resource,
+                           MTL::ResourceUsage usage, MTL::RenderStages stages),
+                          (resource, usage, stages))
+  void drawPrimitives(MTL::PrimitiveType type, NS::UInteger start,
+                      NS::UInteger count) const {
+    if (deferred_) {
+      deferred_->drawPrimitives(type, start, count, NS::UInteger(1));
+    } else {
+      real_->drawPrimitives(type, start, count);
+    }
+  }
+  REX_ENCODER_REF_FORWARD(drawPrimitives,
+                          (MTL::PrimitiveType type, NS::UInteger start,
+                           NS::UInteger count, NS::UInteger instances),
+                          (type, start, count, instances))
+  REX_ENCODER_REF_FORWARD(endEncoding, (), ())
+#undef REX_ENCODER_REF_FORWARD
+
+ private:
+  MTL::RenderCommandEncoder* real_ = nullptr;
+  DeferredRenderEncoder* deferred_ = nullptr;
 };
 
 }  // namespace rex::graphics::metal

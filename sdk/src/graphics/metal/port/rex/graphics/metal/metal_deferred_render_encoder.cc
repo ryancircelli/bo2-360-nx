@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 
+#include "rex/graphics/swap_hook.h"
 #include "rex/logging.h"
 
 #ifndef IR_RUNTIME_METALCPP
@@ -60,6 +61,12 @@ enum class DeferredRenderEncoder::Op : uint16_t {
   kIRDrawIndexedPrimitives,
   kEndEncoding,
   kBegin,
+  kSetFragmentBytes,
+  kSetFragmentTexture,
+  kSetTileBytes,
+  kSetTileBuffer,
+  kSetTileTexture,
+  kDispatchThreadsPerTileDivided,
 };
 
 namespace {
@@ -154,6 +161,10 @@ struct MeshArg {
   MTL::Size object_threads;
   MTL::Size mesh_threads;
 };
+struct TextureArg {
+  const MTL::Texture* texture;
+  NS::UInteger index;
+};
 struct EmptyArg {};
 struct BeginArg {
   MTL::CommandBuffer* cmd;
@@ -220,6 +231,19 @@ void DeferredRenderEncoder::Barrier() {
 }
 
 void DeferredRenderEncoder::LogXpassStats() {
+  const auto& sd = stats_.sync_drains;
+  const auto& sw = stats_.sync_wait_us;
+  const auto& nu = stats_.nosync_uses;
+  constexpr size_t kO = size_t(SyncCaller::kOther);
+  constexpr size_t kT = size_t(SyncCaller::kTileResolve);
+  constexpr size_t kX = size_t(SyncCaller::kTransfers);
+  // [encode-nosync] per-caller drains, also without xpass.
+  REXLOG_WARN(
+      "encode-thread sync: drains tile_resolve={} transfers={} other={} "
+      "wait_us tile_resolve={} transfers={} other={} nosync tile_resolve={} "
+      "transfers={} tile_dispatch_failures={}",
+      sd[kT], sd[kX], sd[kO], sw[kT], sw[kX], sw[kO], nu[kT], nu[kX],
+      tile_dispatch_failures());
   if (!xpass_) {
     return;
   }
@@ -304,10 +328,10 @@ void DeferredRenderEncoder::PublishChunk() {
   }
 }
 
-void DeferredRenderEncoder::Drain() {
+uint64_t DeferredRenderEncoder::Drain() {
   PublishChunk();
   if (completed_.load(std::memory_order_acquire) == published_) {
-    return;
+    return 0;
   }
   ++stats_.drains;
   auto start = std::chrono::steady_clock::now();
@@ -327,10 +351,16 @@ void DeferredRenderEncoder::Drain() {
       return completed_.load(std::memory_order_acquire) == published_;
     });
   }
-  stats_.drain_wait_us += uint64_t(
-      std::chrono::duration_cast<std::chrono::microseconds>(
+  const uint64_t waited_ns = uint64_t(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - start)
           .count());
+  // [encode-nosync] The perf log's per-frame enc_wait_ms.
+  rex::graphics::GetPerfStats().ns_encode_wait.fetch_add(
+      waited_ns, std::memory_order_relaxed);
+  const uint64_t waited_us = waited_ns / 1000;
+  stats_.drain_wait_us += waited_us;
+  return waited_us;
 }
 
 void DeferredRenderEncoder::WorkerMain() {
@@ -365,12 +395,13 @@ void DeferredRenderEncoder::WorkerMain() {
   }
 }
 
-MTL::RenderCommandEncoder* DeferredRenderEncoder::Sync() {
+MTL::RenderCommandEncoder* DeferredRenderEncoder::Sync(SyncCaller caller) {
   if (deferred_) {
     if (xpass_) {
       ++stats_.xpass_sync_drains;
     }
-    Drain();
+    ++stats_.sync_drains[size_t(caller)];
+    stats_.sync_wait_us[size_t(caller)] += Drain();
   }
   return real_;
 }
@@ -555,6 +586,83 @@ REX_DEFERRED_BYTES(setVertexBytes, kSetVertexBytes)
 REX_DEFERRED_BYTES(setObjectBytes, kSetObjectBytes)
 REX_DEFERRED_BYTES(setMeshBytes, kSetMeshBytes)
 #undef REX_DEFERRED_BYTES
+
+void DeferredRenderEncoder::setFragmentBytes(const void* bytes,
+                                             NS::UInteger length,
+                                             NS::UInteger index) {
+  if (!deferred_) {
+    real_->setFragmentBytes(bytes, length, index);
+    return;
+  }
+  auto* arg = Record<BytesArg>(Op::kSetFragmentBytes, length);
+  arg->length = length;
+  arg->index = index;
+  std::memcpy(reinterpret_cast<uint8_t*>(arg) + Align8(sizeof(BytesArg)),
+              bytes, length);
+}
+
+void DeferredRenderEncoder::setTileBytes(const void* bytes,
+                                         NS::UInteger length,
+                                         NS::UInteger index) {
+  if (!deferred_) {
+    real_->setTileBytes(bytes, length, index);
+    return;
+  }
+  auto* arg = Record<BytesArg>(Op::kSetTileBytes, length);
+  arg->length = length;
+  arg->index = index;
+  std::memcpy(reinterpret_cast<uint8_t*>(arg) + Align8(sizeof(BytesArg)),
+              bytes, length);
+}
+
+void DeferredRenderEncoder::setTileBuffer(const MTL::Buffer* buffer,
+                                          NS::UInteger offset,
+                                          NS::UInteger index) {
+  if (!deferred_) {
+    real_->setTileBuffer(buffer, offset, index);
+    return;
+  }
+  *Record<BufferArg>(Op::kSetTileBuffer) = BufferArg{buffer, offset, index};
+  RetainBuffer(buffer);
+}
+
+void DeferredRenderEncoder::setFragmentTexture(const MTL::Texture* texture,
+                                               NS::UInteger index) {
+  if (!deferred_) {
+    real_->setFragmentTexture(texture, index);
+    return;
+  }
+  *Record<TextureArg>(Op::kSetFragmentTexture) = TextureArg{texture, index};
+  if (texture) {
+    Retain(texture);
+  }
+}
+
+void DeferredRenderEncoder::setTileTexture(const MTL::Texture* texture,
+                                           NS::UInteger index) {
+  if (!deferred_) {
+    real_->setTileTexture(texture, index);
+    return;
+  }
+  *Record<TextureArg>(Op::kSetTileTexture) = TextureArg{texture, index};
+  if (texture) {
+    Retain(texture);
+  }
+}
+
+void DeferredRenderEncoder::dispatchThreadsPerTileDivided(uint32_t x_divisor) {
+  if (!deferred_) {
+    const NS::UInteger w = real_->tileWidth();
+    const NS::UInteger h = real_->tileHeight();
+    if (!x_divisor || !w || !h || w % x_divisor) {
+      tile_dispatch_failures_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    real_->dispatchThreadsPerTile(MTL::Size::Make(w / x_divisor, h, 1));
+    return;
+  }
+  Record<U32Arg>(Op::kDispatchThreadsPerTileDivided)->value = x_divisor;
+}
 
 void DeferredRenderEncoder::useResource(const MTL::Resource* resource,
                                         MTL::ResourceUsage usage,
@@ -950,6 +1058,46 @@ void DeferredRenderEncoder::Replay(Chunk& chunk) {
             const_cast<MTL::Buffer*>(a->index_buffer),
             uint64_t(a->index_offset), uint64_t(a->instances),
             int64_t(a->base_vertex), uint64_t(a->base_instance));
+        break;
+      }
+      case Op::kSetFragmentBytes:
+      case Op::kSetTileBytes: {
+        const BytesArg* a = arg((BytesArg*)nullptr);
+        const void* bytes = payload + Align8(sizeof(BytesArg));
+        if (Op(header->op) == Op::kSetFragmentBytes) {
+          enc->setFragmentBytes(bytes, a->length, a->index);
+        } else {
+          enc->setTileBytes(bytes, a->length, a->index);
+        }
+        break;
+      }
+      case Op::kSetTileBuffer: {
+        const BufferArg* a = arg((BufferArg*)nullptr);
+        enc->setTileBuffer(a->buffer, a->offset, a->index);
+        break;
+      }
+      case Op::kSetFragmentTexture: {
+        const TextureArg* a = arg((TextureArg*)nullptr);
+        enc->setFragmentTexture(a->texture, a->index);
+        break;
+      }
+      case Op::kSetTileTexture: {
+        const TextureArg* a = arg((TextureArg*)nullptr);
+        enc->setTileTexture(a->texture, a->index);
+        break;
+      }
+      case Op::kDispatchThreadsPerTileDivided: {
+        const uint32_t div = arg((U32Arg*)nullptr)->value;
+        const NS::UInteger w = enc->tileWidth();
+        const NS::UInteger h = enc->tileHeight();
+        if (!div || !w || !h || w % div) {
+          tile_dispatch_failures_.fetch_add(1, std::memory_order_relaxed);
+          REXLOG_ERROR(
+              "encode thread: tile dispatch dropped (tile {}x{}, divisor {})",
+              w, h, div);
+          break;
+        }
+        enc->dispatchThreadsPerTile(MTL::Size::Make(w / div, h, 1));
         break;
       }
       case Op::kEndEncoding:

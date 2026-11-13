@@ -2736,7 +2736,7 @@ bool MetalRenderTargetCache::BuildCurrentAttachmentPlan(
 }
 
 bool MetalRenderTargetCache::EncodePendingDrawPassTransfers(
-    MTL::RenderCommandEncoder* encoder,
+    RenderEncoderRef encoder,
     MTL::RenderPassDescriptor* pass_descriptor,
     DrawPassTransferEncoderMutationMask* mutations_out) {
   if (mutations_out) {
@@ -5515,7 +5515,7 @@ bool MetalRenderTargetCache::TransferQuadStateResetEnabled() {
 }
 
 void MetalRenderTargetCache::ResetDrawPassRasterizerState(
-    MTL::RenderCommandEncoder* encoder) {
+    RenderEncoderRef encoder) {
   // Metal's defaults for a new render command encoder.
   encoder->setCullMode(MTL::CullModeNone);
   encoder->setFrontFacingWinding(MTL::WindingClockwise);
@@ -7591,7 +7591,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
     const uint64_t* render_target_resolve_clear_values,
     const Transfer::Rectangle* resolve_clear_rectangle,
     MTL::CommandBuffer* command_buffer,
-    MTL::RenderCommandEncoder* active_render_encoder,
+    RenderEncoderRef active_render_encoder,
     MTL::RenderPassDescriptor* active_render_pass_descriptor,
     DrawPassTransferEncoderMutationMask* mutations_out) {
   if (mutations_out) {
@@ -7609,7 +7609,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
 
   bool resolve_clear_needed =
       render_target_resolve_clear_values && resolve_clear_rectangle;
-  bool use_active_render_encoder = active_render_encoder != nullptr;
+  bool use_active_render_encoder = bool(active_render_encoder);
   // A resolve clear inside an active draw pass comes only from
   // [deferred-clears] (EncodePendingDrawPassTransfers, no transfers).
   if (use_active_render_encoder && !active_render_pass_descriptor) {
@@ -7864,7 +7864,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
       return true;
     };
 
-    auto set_rect_viewport = [&](MTL::RenderCommandEncoder* encoder,
+    auto set_rect_viewport = [&](RenderEncoderRef encoder,
                                  const Transfer::Rectangle& rect) -> bool {
       uint32_t scaled_x = 0;
       uint32_t scaled_y = 0;
@@ -8125,8 +8125,8 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
         }
       }
     }
-    MTL::RenderCommandEncoder* transfer_encoder = nullptr;
-    auto ensure_transfer_encoder = [&]() -> MTL::RenderCommandEncoder* {
+    RenderEncoderRef transfer_encoder = nullptr;
+    auto ensure_transfer_encoder = [&]() -> RenderEncoderRef {
       if (transfer_encoder) {
         return transfer_encoder;
       }
@@ -8201,7 +8201,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
       transfer_encoder = (pass_trace::EncodeBarrier(cmd), cmd)->renderCommandEncoder(rp);
       if (pass_traced) pass_trace::ClearRender(rp);
       if (transfer_encoder) {
-        SetEncoderLabel(transfer_encoder, "XeniaTransferEncoder");
+        SetEncoderLabel(transfer_encoder.real(), "XeniaTransferEncoder");
       }
       return transfer_encoder;
     };
@@ -8291,7 +8291,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
         MTL::DepthStencilState* stencil_clear_state =
             GetTransferStencilClearState();
         if (clear_pipeline && stencil_clear_state) {
-          MTL::RenderCommandEncoder* encoder = ensure_transfer_encoder();
+          RenderEncoderRef encoder = ensure_transfer_encoder();
           if (encoder) {
             TransferClearDepthConstants constants = {};
             constants.depth = 0.0f;
@@ -8324,7 +8324,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
           }
         }
       }
-      MTL::RenderCommandEncoder* encoder = ensure_transfer_encoder();
+      RenderEncoderRef encoder = ensure_transfer_encoder();
       if (encoder) {
         bool transfer_viewport_full_set = false;
         MTL::ScissorRect last_transfer_scissor = {};
@@ -8893,7 +8893,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
             resolve_clear_stencil_only ? GetTransferStencilClearState()
                                        : GetTransferDepthClearState();
         if (clear_pipeline && clear_state) {
-          MTL::RenderCommandEncoder* clear_encoder = ensure_transfer_encoder();
+          RenderEncoderRef clear_encoder = ensure_transfer_encoder();
           if (clear_encoder) {
             TransferClearDepthConstants constants = {};
             constants.depth = depth_host_clear_value;
@@ -9052,8 +9052,7 @@ bool MetalRenderTargetCache::PerformTransfersAndResolveClears(
                       ? active_attachment_formats.stencil_attachment_format
                       : MTL::PixelFormatInvalid);
           if (clear_pipeline) {
-            MTL::RenderCommandEncoder* clear_encoder =
-                ensure_transfer_encoder();
+            RenderEncoderRef clear_encoder = ensure_transfer_encoder();
             if (clear_encoder) {
               MTL::DepthStencilState* no_depth_state =
                   GetTransferNoDepthStencilState();

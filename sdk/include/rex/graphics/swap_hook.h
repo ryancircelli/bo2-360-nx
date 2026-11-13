@@ -19,6 +19,7 @@ struct PerfStats {
   std::atomic<uint64_t> ns_present_wait{0};  // blocked on nextDrawable or the frame-slot (frame latency) wait
   std::atomic<uint64_t> draws{0};
   std::atomic<uint64_t> jobs_submitted{0};   // main command buffers committed so far
+  std::atomic<uint64_t> ns_encode_wait{0};   // submit thread blocked draining the Metal encode thread (part of ns_working)
 };
 PerfStats& GetPerfStats();
 // Called from a command buffer completion handler: submission number, GPU time in ns.

@@ -8611,7 +8611,8 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
         transfer_mutations =
             MetalRenderTargetCache::kDrawPassTransferEncoderMutationNone;
     if (!render_target_cache_->EncodePendingDrawPassTransfers(
-            current_render_encoder_->Sync(), current_render_pass_descriptor_,
+            OpenPassEncoderRef(DeferredRenderEncoder::SyncCaller::kTransfers),
+            current_render_pass_descriptor_,
             &transfer_mutations)) {
       if (!render_target_cache_->FlushPendingDrawPassTransfers()) {
         return false;
