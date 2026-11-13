@@ -5434,13 +5434,26 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
 
   while (true) {
     PipelineCreationRequest request;
+    bool seed_job = false;
     {
       std::unique_lock<std::mutex> lock(creation_request_lock_);
+      // Seed pipelines nobody has drawn with yet (priority 0) use at most
+      // metal_shader_seed_threads threads, so a pipeline the game needs now
+      // never waits for a thread (or the OS shader compiler) behind the seed.
+      const int seed_cap = REXCVAR_GET(metal_shader_seed_threads);
+      auto seed_gated = [&] {
+        if (seed_cap <= 0 || creation_queue_.empty()) return false;
+        const PipelineHandle* top = creation_queue_.top().handle;
+        return top->seeded && top->priority == 0 &&
+               seed_inflight_ >= size_t(seed_cap);
+      };
       if (thread_index >= kWarmupHelperIndex &&
-          (creation_queue_.empty() || creation_threads_shutdown_)) {
+          (creation_queue_.empty() || creation_threads_shutdown_ ||
+           seed_gated())) {
         break;  // startup warm-up helper: done
       }
-      while (creation_queue_.empty() && !creation_threads_shutdown_) {
+      while ((creation_queue_.empty() || seed_gated()) &&
+             !creation_threads_shutdown_) {
         creation_request_cond_.wait(lock);
       }
       if (creation_threads_shutdown_ && creation_queue_.empty()) {
@@ -5448,6 +5461,10 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
       }
       request = creation_queue_.top();
       creation_queue_.pop();
+      seed_job = request.handle->seeded && request.handle->priority == 0;
+      if (seed_job) {
+        ++seed_inflight_;
+      }
       ++creation_threads_busy_;
     }
 
@@ -5492,6 +5509,13 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     handle->creation_complete.notify_all();
     if (handle->seeded) {
       NoteSeedPipelineDone();
+    }
+    if (seed_job) {
+      {
+        std::lock_guard<std::mutex> lock(creation_request_lock_);
+        --seed_inflight_;
+      }
+      creation_request_cond_.notify_all();
     }
 
     --creation_threads_busy_;

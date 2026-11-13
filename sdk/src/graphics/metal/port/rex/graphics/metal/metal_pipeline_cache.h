@@ -807,6 +807,8 @@ class MetalPipelineCache {
   // and the total queued.
   std::atomic<uint32_t> seed_pending_{0};
   uint32_t seed_queued_ = 0;
+  // Seed pipelines being created now (under creation_request_lock_).
+  size_t seed_inflight_ = 0;
 };
 
 }  // namespace metal
