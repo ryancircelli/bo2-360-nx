@@ -1,4 +1,4 @@
-// Start-up and shutdown hooks that the app calls at fixed points of a run (bo2zm_app.h, bo2zm_benchmark.cpp).
+// Start-up and shutdown hooks that the app calls at fixed points of a run (bo2zm_register.cpp, bo2zm_benchmark.cpp).
 //
 // A build for development consoles fills them with its PC link (log uploads, new builds, the benchmark watchdog). The
 // standard build compiles bo2zm_lifecycle.cpp instead, which keeps only what every console needs: the console stays

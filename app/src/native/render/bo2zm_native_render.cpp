@@ -4,7 +4,7 @@
 //
 // What it does
 //   Replaces the Xenos emulation plugin when the native renderer is selected (bo2zm_renderer = "native";
-//   OnPreSetup in bo2zm_app.h decides):
+//   OnPreSetup in bo2zm_register.cpp decides):
 //     - Presentation: the SDK's VulkanProvider + VulkanPresenter, same as
 //       the emulation. ReXApp sees presenter() and sets up F3, settings and
 //       the console the usual way (rex_app.cpp:386-398).

@@ -14,7 +14,7 @@
 
 namespace bo2zm::name {
 
-// After the runtime exists and before the game runs (bo2zm_app.h OnPostSetup): the saved name, if any.
+// After the runtime exists and before the game runs (bo2zm_register.cpp OnPostSetup): the saved name, if any.
 void ApplySaved();
 
 // From the game's per-frame hook on the main thread (bo2zm_autoexec.cpp): takes a name the player just entered (saves

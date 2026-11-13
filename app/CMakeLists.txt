@@ -17,6 +17,7 @@ include(generated/rexglue.cmake)
 # Sources
 set(BO2ZM_SOURCES
     src/main.cpp
+    src/bo2zm_register.cpp
     src/kernel/xboxkrnl_usbcam.cpp
     src/bo2zm_relaunch.cpp
     src/debug_party.cpp
@@ -318,7 +319,7 @@ if(REXGLUE_PLATFORM_SWITCH)
 endif()
 
 # Nintendo Switch: bo2zm.nro next to the ELF. On the SD card:
-#   sdmc:/switch/bo2zm/bo2zm.nro + game/ + update/ (src/bo2zm_app.h).
+#   sdmc:/switch/bo2zm/bo2zm.nro + game/ + update/ (src/bo2zm_register.cpp).
 # Switch: contended host mutexes and the C heap's lock spin briefly before sleeping (src/bo2zm_switch_mutex.cpp).
 if(REXGLUE_PLATFORM_SWITCH)
     target_sources(bo2zm PRIVATE src/bo2zm_switch_mutex.cpp)

@@ -1,8 +1,7 @@
-// bo2zm - ReXGlue Recompiled Project
-//
-// Customize your app by overriding virtual hooks from rex::ReXApp.
+// bo2zm - the BO2 title pack registers its hooks with the game-neutral app
+// (rex/game_api.h). Hooks run in the order registered, which is the order the
+// former Bo2zmApp overrides ran them.
 
-#pragma once
 
 #include <charconv>
 #include <cstdlib>
@@ -15,6 +14,7 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/platform.h>
+#include <rex/game_api.h>
 #include <rex/rex_app.h>
 
 #include "bo2zm_autoexec.h"
@@ -105,29 +105,74 @@ void ConfigureInstancePaths(rex::PathConfig& paths) {
 
 }  // namespace
 
-class Bo2zmApp : public rex::ReXApp {
- public:
-  using rex::ReXApp::ReXApp;
+void rex::RegisterGame(rex::GameApi& api) {
+  api.info().short_name = "bo2zm";
+  api.info().first_link_port = 1000;  // BO2's VDP port; 1001 (UDP) and the side channel's 1002 follow
 
-  static std::unique_ptr<rex::ui::WindowedApp> Create(
-      rex::ui::WindowedAppContext& ctx) {
-    return std::unique_ptr<Bo2zmApp>(new Bo2zmApp(ctx, "bo2zm",
-        PPCImageConfig));
-  }
+  // Without command-line paths (always the case on the Switch, where the NRO
+  // is started from hbmenu or a forwarder), use folders next to the
+  // executable:
+  //   sdmc:/switch/bo2zm/bo2zm.nro
+  //   sdmc:/switch/bo2zm/game/     the disc files + default_mp.xexp (TU18)
+  //   sdmc:/switch/bo2zm/update/   the rest of the TU18 package
+  //   sdmc:/switch/bo2zm/user/     profile, saves, caches
+  // Command-line --game_data_root / --update_data_root still win (as on the PC).
+  api.OnConfigurePaths([](rex::GameApp& app, rex::PathConfig& paths) {
+    std::error_code ec;
+    auto dir = rex::filesystem::GetExecutableFolder();
+    if (dir.empty()) {
+      ConfigureInstancePaths(paths);
+      return;
+    }
+#if REX_PLATFORM_SWITCH
+    // Emulators (Ryujinx) may run the NRO from a temporary copy, away from
+    // its folder: fall back to the standard install folder.
+    if (!std::filesystem::is_directory(dir / "game", ec) &&
+        std::filesystem::is_directory("sdmc:/switch/bo2zm/game", ec)) {
+      dir = "sdmc:/switch/bo2zm";
+      paths.config_path = dir / "bo2zm.toml";
+    }
+#endif
+    if (paths.game_data_root.empty() && std::filesystem::is_directory(dir / "game", ec)) {
+      paths.game_data_root = dir / "game";
+    }
+    if (paths.update_data_root.empty() && std::filesystem::is_directory(dir / "update", ec)) {
+      paths.update_data_root = dir / "update";
+    }
+#if REX_PLATFORM_SWITCH
+    (void)app;
+    paths.user_data_root = dir / "user";
+    paths.cache_root = dir / "user" / "cache";
+#else
+    // A portable PC install keeps its saves, settings and DLC in user/ next to the program when that folder exists
+    // and no --user_data_root was given, so a plain shortcut to the exe (which carries the icon) is enough.
+    if (std::filesystem::is_directory(dir / "user", ec) &&
+        paths.user_data_root == rex::filesystem::GetUserFolder() / app.GetName()) {
+      if (paths.cache_root == paths.user_data_root / "cache") {
+        paths.cache_root = dir / "user" / "cache";
+      }
+      paths.user_data_root = dir / "user";
+    }
+#endif
+    ConfigureInstancePaths(paths);
+  });
 
-  // The SDK loads game:\default.xex (the campaign executable). Zombies and
-  // multiplayer live in default_mp.xex, which is what app/ recompiles.
-  // Loading the wrong one fails with "No function registered at 825C69B8"
-  // (default.xex's TU18 entry point).
-  void OnLoadXexImage(std::string& xex_image) override {
-    xex_image = "game:\\default_mp.xex";
-  }
+  // The log's level and the profiler's report, from the toml and the saved DEBUG, before logging starts (the quiet
+  // log: bo2zm_debug_options.cpp).
+  api.OnConfigLoaded([](rex::GameApp& app) { bo2zm::debug::ConfigureStartup(app.user_data_root()); });
+
+  // Clocks and the overlay FPS block, once the toml has been read (Switch; nothing on the PC), then the quiet log's
+  // note and the pruning of old logs.
+  api.OnPostInitLogging([](rex::GameApp&) {
+    bo2zm::settings::RequestBootClocks();
+    bo2zm::debug::AfterLoggingStarted();
+  });
 
   // Switch: start the services the game uses (sockets) before it runs.
   // With bo2zm_renderer = "native" the graphics system is the port's own
   // (native/bo2zm_native_system.cpp); ReXApp only loads the Xenos plugin when
   // config.graphics is empty.
-  void OnPreSetup(rex::RuntimeConfig& config) override {
+  api.OnPreSetup([](rex::GameApp&, rex::RuntimeConfig& config) {
     if (const auto instance = Bo2InstanceIndex()) {
       rex::cvar::SetFlagByName("net_system_port_offset", std::to_string(30000 + 16 * *instance));
     }
@@ -155,10 +200,16 @@ class Bo2zmApp : public rex::ReXApp {
     if (bo2zm::native::Active()) {
       config.graphics = bo2zm::native::CreateGraphicsSystem();
     }
-  }
+  });
+
+  // The SDK loads game:\default.xex (the campaign executable). Zombies and
+  // multiplayer live in default_mp.xex, which is what app/ recompiles.
+  // Loading the wrong one fails with "No function registered at 825C69B8"
+  // (default.xex's TU18 entry point).
+  api.OnLoadXexImage([](rex::GameApp&, std::string& xex_image) { xex_image = "game:\\default_mp.xex"; });
 
   // Mode switches (MP <-> Zombies) relaunch the title; see bo2zm_relaunch.cpp.
-  void OnPostSetup() override {
+  api.OnPostSetup([](rex::GameApp& app) {
     bo2zm::benchmark::InitializeFactors();
     if (!bo2zm::native::Active()) {
       bo2zm::perf_log::InstallSwapHook(rex::cvar::GetFlagByName("gpu_plugin") == "metal" ? "metal" : "xenos");
@@ -166,102 +217,33 @@ class Bo2zmApp : public rex::ReXApp {
     bo2zm::name::ApplySaved();  // before the game signs in
     bo2zm::pc_profiler::Start();  // bo2zm_pc_profile (PC test helper; off by default)
     bo2zm::test_waits::RunIfRequested();  // bo2zm_test_waits, off by default
-    bo2zm::ApplyPendingRelaunch(user_data_root());
+    bo2zm::ApplyPendingRelaunch(app.user_data_root());
     bo2zm::scripts::Boot();
     bo2zm::gsc::Configure();
     // PNG captures of the game image (bo2zm_capture_every_s, off by default), to
     // compare the native renderer with Xenos emulation without watching the screen.
-    auto get_presenter = [this]() -> rex::ui::Presenter* {
-      const auto* rt = runtime();
+    auto get_presenter = [&app]() -> rex::ui::Presenter* {
+      const auto* rt = app.runtime();
       const auto* graphics = rt ? rt->graphics_system() : nullptr;
       return graphics ? graphics->presenter() : nullptr;
     };
     bo2zm::capture::Boot(get_presenter);
     // Raw test video (bo2zm_video_rgba, off by default) for tools/mac/boot_test.sh --video.
     bo2zm::video::Boot(get_presenter);
-  }
+  });
 
   // The game waits while the native renderer compiles the pipelines that earlier runs used and that this build,
   // driver or shader pack has not compiled yet, behind its progress screen (native/render/bo2zm_native_precompile.h).
-  bool OnHoldModuleLaunch(std::function<void()> start) override {
-    return bo2zm::native::precompile::Hold(std::move(start), imgui_drawer());
-  }
+  api.OnHoldModuleLaunch([](rex::GameApp& app, std::function<void()> start) {
+    return bo2zm::native::precompile::Hold(std::move(start), app.imgui_drawer());
+  });
 
-  void OnShutdown() override {
+  api.OnShutdown([](rex::GameApp&) {
     bo2zm::perf_log::Close();  // the "# end" line; a run stopped by a signal ends without it, which the readers allow
     bo2zm::video::Stop();
     bo2zm::capture::Stop();
     bo2zm::lifecycle::Stop();
     bo2zm::updates::Stop();
     bo2zm::online::Stop();
-  }
-
-  // Without command-line paths (always the case on the Switch, where the NRO
-  // is started from hbmenu or a forwarder), use folders next to the
-  // executable:
-  //   sdmc:/switch/bo2zm/bo2zm.nro
-  //   sdmc:/switch/bo2zm/game/     the disc files + default_mp.xexp (TU18)
-  //   sdmc:/switch/bo2zm/update/   the rest of the TU18 package
-  //   sdmc:/switch/bo2zm/user/     profile, saves, caches
-  // Command-line --game_data_root / --update_data_root still win (as on the PC).
-  void OnConfigurePaths(rex::PathConfig& paths) override {
-    std::error_code ec;
-    auto dir = rex::filesystem::GetExecutableFolder();
-    if (dir.empty()) {
-      ConfigureInstancePaths(paths);
-      return;
-    }
-#if REX_PLATFORM_SWITCH
-    // Emulators (Ryujinx) may run the NRO from a temporary copy, away from
-    // its folder: fall back to the standard install folder.
-    if (!std::filesystem::is_directory(dir / "game", ec) &&
-        std::filesystem::is_directory("sdmc:/switch/bo2zm/game", ec)) {
-      dir = "sdmc:/switch/bo2zm";
-      paths.config_path = dir / "bo2zm.toml";
-    }
-#endif
-    if (paths.game_data_root.empty() && std::filesystem::is_directory(dir / "game", ec)) {
-      paths.game_data_root = dir / "game";
-    }
-    if (paths.update_data_root.empty() && std::filesystem::is_directory(dir / "update", ec)) {
-      paths.update_data_root = dir / "update";
-    }
-#if REX_PLATFORM_SWITCH
-    paths.user_data_root = dir / "user";
-    paths.cache_root = dir / "user" / "cache";
-#else
-    // A portable PC install keeps its saves, settings and DLC in user/ next to the program when that folder exists
-    // and no --user_data_root was given, so a plain shortcut to the exe (which carries the icon) is enough.
-    if (std::filesystem::is_directory(dir / "user", ec) &&
-        paths.user_data_root == rex::filesystem::GetUserFolder() / GetName()) {
-      if (paths.cache_root == paths.user_data_root / "cache") {
-        paths.cache_root = dir / "user" / "cache";
-      }
-      paths.user_data_root = dir / "user";
-    }
-#endif
-    ConfigureInstancePaths(paths);
-  }
-
-  // The log's level and the profiler's report, from the toml and the saved DEBUG, before logging starts (the quiet
-  // log: bo2zm_debug_options.cpp).
-  void OnConfigLoaded() override { bo2zm::debug::ConfigureStartup(user_data_root()); }
-
-  // Clocks and the overlay FPS block, once the toml has been read (Switch; nothing on the PC), then the quiet log's
-  // note and the pruning of old logs.
-  void OnPostInitLogging() override {
-    bo2zm::settings::RequestBootClocks();
-    bo2zm::debug::AfterLoggingStarted();
-  }
-
-  // Override virtual hooks for customization:
-  // void OnPreSetup(rex::RuntimeConfig& config) override {}
-  // void OnPostLoadXexImage() override {}
-  // void OnPostSetup() override {}
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
-  // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
-  // std::unique_ptr<rex::ui::AchievementNotificationDialog>
-  // CreateAchievementNotificationDialog() override;
-  // void OnShutdown() override {}
-  // void OnConfigurePaths(rex::PathConfig& paths) override {}
-};
+  });
+}

@@ -30,7 +30,7 @@ bool WaitProgressRing(uint32_t seen, std::chrono::microseconds limit);
 void WarnProgressRing();
 
 // Swaps presented by the native renderer since startup (0 with Xenos emulation). The watchdog in
-// bo2zm_app.h counts them as progress: with blocking waits the game threads sleep in the same place
+// bo2zm_register.cpp counts them as progress: with blocking waits the game threads sleep in the same place
 // for most of the frame.
 uint64_t SwapsNative();
 

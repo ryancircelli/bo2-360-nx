@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <rex/cvar.h>
+#include <rex/game_info.h>
 #include <rex/logging.h>
 #include <rex/system/join_code.h>
 #include <rex/system/relay_wire.h>
@@ -44,7 +45,9 @@ namespace wire = relay_wire;
 namespace mqtt = relay_wire::mqtt;
 
 constexpr int kPorts = 3;
-constexpr uint16_t kGuestPorts[kPorts] = {1000, 1001, 1002};  // VDP, UDP (BO2's), the side channel (ours)
+// The title's link ports from rex::Game().first_link_port: VDP, UDP, then the side channel (ours).
+// BO2: 1000, 1001, 1002.
+uint16_t GuestPort(int i) { return uint16_t(rex::Game().first_link_port + i); }
 constexpr char kPunchMagic[8] = {'B', 'O', '2', 'Z', 'M', 'P', 'C', 'H'};
 constexpr int kPunchSize = 18;  // magic, session (8), the title port it is for (2)
 constexpr uint16_t kKeepAliveS = 30;
@@ -69,7 +72,7 @@ std::mt19937_64& Rng() {
 
 struct StunTx {
   std::array<uint8_t, 12> id{};
-  int port = 0;    // index into kGuestPorts
+  int port = 0;    // index into the guest ports (GuestPort)
   int server = 0;  // 0 or 1
   Clock::time_point sent{};
 };
@@ -340,7 +343,7 @@ wire::Message OwnMessage() {
   std::lock_guard lock(g_stun_mutex);
   for (int i = 0; i < kPorts; ++i) {
     auto& e = m.endpoints[size_t(i)];
-    e.local_port = system_link::HostPort(kGuestPorts[i]);
+    e.local_port = system_link::HostPort(GuestPort(i));
     const PortMap& map = g_maps[size_t(i)];
     const int s = map.ip[0] ? 0 : (map.ip[1] ? 1 : -1);
     if (s >= 0) {
@@ -395,7 +398,7 @@ void StartPunching(Peer& p) {
 // The peer's endpoint for one of this console's ports (by index), or nullptr.
 const wire::Endpoint* PeerEndpoint(const Peer& p, int index) {
   for (int i = 0; i < p.count; ++i) {
-    if (system_link::GuestPort(p.endpoints[size_t(i)].local_port) == kGuestPorts[index]) return &p.endpoints[size_t(i)];
+    if (system_link::GuestPort(p.endpoints[size_t(i)].local_port) == GuestPort(index)) return &p.endpoints[size_t(i)];
   }
   return nullptr;
 }
@@ -636,13 +639,13 @@ void StunRound() {
         g_tx.push_back(tx);
         g_tx_count.store(int(g_tx.size()), std::memory_order_relaxed);
       }
-      const int n = system_link::SendFromPort(system_link::HostPort(kGuestPorts[i]), g_session.stun_ip[size_t(s)],
+      const int n = system_link::SendFromPort(system_link::HostPort(GuestPort(i)), g_session.stun_ip[size_t(s)],
                                               g_session.stun_port[size_t(s)], request, sizeof(request));
       if (n < 0) {
         std::lock_guard lock(g_stun_mutex);
         g_tx.pop_back();
         g_tx_count.store(int(g_tx.size()), std::memory_order_relaxed);
-        if (s == 0) missing += (missing.empty() ? "" : ", ") + std::to_string(system_link::HostPort(kGuestPorts[i]));
+        if (s == 0) missing += (missing.empty() ? "" : ", ") + std::to_string(system_link::HostPort(GuestPort(i)));
         break;
       }
       ++sent;
@@ -714,9 +717,9 @@ void TickPeers() {
       uint8_t punch[kPunchSize];
       std::memcpy(punch, kPunchMagic, sizeof(kPunchMagic));
       for (int b = 0; b < 8; ++b) punch[8 + b] = uint8_t(g_session.session >> (56 - 8 * b));
-      punch[16] = uint8_t(kGuestPorts[i] >> 8);
-      punch[17] = uint8_t(kGuestPorts[i]);
-      const uint16_t from = system_link::HostPort(kGuestPorts[i]);
+      punch[16] = uint8_t(GuestPort(i) >> 8);
+      punch[17] = uint8_t(GuestPort(i));
+      const uint16_t from = system_link::HostPort(GuestPort(i));
       const int n = system_link::SendFromPort(from, e->ip, e->port, punch, sizeof(punch));
       if (Trace() && p.punches == 0) {
         sent += (sent.empty() ? "" : ", ") + std::to_string(from) + " -> " + Ip(e->ip) + ":" + std::to_string(e->port) +
@@ -754,7 +757,7 @@ void Begin(bool host, uint32_t code_ip, uint32_t public_ip) {
   }
   system_link::ForgetInternetPeers();
   bool bound = false;
-  g_session.side = system_link::OpenSideSocket(system_link::HostPort(kGuestPorts[kPorts - 1]), &bound);
+  g_session.side = system_link::OpenSideSocket(system_link::HostPort(GuestPort(kPorts - 1)), &bound);
   g_session.brokers = ConfiguredBrokers();
   REXSYS_INFO("[online] relay: {} {} through {} broker(s) on topic {}", host ? "hosting" : "joining",
               join_code::Make(code_ip), g_session.brokers.size(), wire::Topic(g_session.code));
@@ -765,7 +768,7 @@ void Begin(bool host, uint32_t code_ip, uint32_t public_ip) {
     guess.count = kPorts;
     for (int i = 0; i < kPorts; ++i) {
       auto& e = guess.endpoints[size_t(i)];
-      e.local_port = system_link::HostPort(kGuestPorts[i]);
+      e.local_port = system_link::HostPort(GuestPort(i));
       e.ip = code_ip;
       e.port = e.local_port;
     }

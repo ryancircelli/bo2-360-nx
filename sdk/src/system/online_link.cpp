@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <rex/cvar.h>
+#include <rex/game_info.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/system/xsocket.h>
@@ -48,7 +49,6 @@ namespace {
 
 using namespace net;
 
-constexpr uint16_t kFirstGuestPort = 1000;  // BO2's VDP port; 1001 (UDP) and the side channel's 1002 follow
 constexpr int kPorts = 3;
 constexpr size_t kMaxHttp = 256 * 1024;
 
@@ -875,7 +875,7 @@ Report Current() {
 uint64_t Version() { return g_version.load(std::memory_order_relaxed) + relay::Version(); }
 uint32_t PublicAddress() { return g_public.load(std::memory_order_acquire); }
 uint32_t Target() { return g_target.load(std::memory_order_acquire); }
-uint16_t FirstPort() { return system_link::HostPort(kFirstGuestPort); }
+uint16_t FirstPort() { return system_link::HostPort(rex::Game().first_link_port); }
 int PortCount() { return kPorts; }
 
 }  // namespace rex::system::online
