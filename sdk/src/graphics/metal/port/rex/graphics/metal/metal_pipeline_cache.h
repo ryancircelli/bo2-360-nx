@@ -196,9 +196,12 @@ class MetalPipelineCache {
     uint32_t pending_blendcontrol[4]{};
     bool pending_alpha_to_mask{false};
     bool storage_write_pending = false;
-    uint8_t priority{0};
+    // Creation queue order: shipped seed 0, everything else 1, waited-on 255.
+    uint8_t priority{1};
     // Command-processor thread only. Preserve cached draws during startup.
     bool startup_warmup = false;
+    // Queued from the shipped shader seed (QueueShaderSeed).
+    bool seeded = false;
     // FABLE2_NATIVE_SHADERS (docs/native-shaders.md): the translations kept
     // for the background rebuild with the optimized pixel shader (the
     // pending_* pointers are cleared after the first creation), whether
@@ -229,9 +232,12 @@ class MetalPipelineCache {
       MetalShader::MetalTranslation* vertex_translation,
       MetalShader::MetalTranslation* pixel_translation,
       const PipelineAttachmentFormats& attachment_formats,
-      const PipelineRenderingKey& rendering_key);
+      const PipelineRenderingKey& rendering_key, bool seeded = false);
 
-  MTL::RenderPipelineState* WaitForPipeline(PipelineHandle* handle);
+  // Moves the handle to the front of the creation queue and waits for it,
+  // for at most timeout_us when given (null when still pending then).
+  MTL::RenderPipelineState* WaitForPipeline(
+      PipelineHandle* handle, uint64_t timeout_us = UINT64_MAX);
 
   // Returns true while background pipeline creation threads are busy.
   bool IsCreatingPipelines();
@@ -402,6 +408,16 @@ class MetalPipelineCache {
   void PrewarmStoredPipelines(
       const std::vector<MetalPipelineStoredDescription>& descriptions,
       bool blocking);
+  // Shipped shader seed (metal_shader_seed): LoadShaderSeed loads its shaders
+  // and returns its standard pipelines the local storage lacks;
+  // QueueShaderSeed queues those at the lowest creation priority.
+  std::vector<MetalPipelineStoredDescription> LoadShaderSeed(
+      uint32_t title_id, uint32_t pipeline_storage_version);
+  void QueueShaderSeed(
+      const std::vector<MetalPipelineStoredDescription>& descriptions);
+  void NoteSeedPipelineDone();
+  // Moves a queued pipeline ahead of lower-priority creation work.
+  void RaisePipelinePriority(PipelineHandle* handle, uint8_t priority);
   MetalShader* LoadShader(xenos::ShaderType shader_type,
                           const uint32_t* host_address, uint32_t dword_count,
                           uint64_t data_hash);
@@ -774,6 +790,10 @@ class MetalPipelineCache {
   std::atomic<size_t> creation_threads_busy_{0};
   bool creation_threads_shutdown_{false};
   bool background_warmup_pending_ = false;
+  // Shipped shader seed pipelines still being created (+1 while queueing),
+  // and the total queued.
+  std::atomic<uint32_t> seed_pending_{0};
+  uint32_t seed_queued_ = 0;
 };
 
 }  // namespace metal

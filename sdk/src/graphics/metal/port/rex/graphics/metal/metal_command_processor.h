@@ -481,6 +481,9 @@ class MetalCommandProcessor final : public CommandProcessor {
                          reg::RB_DEPTHCONTROL normalized_depth_control,
                          uint32_t normalized_color_mask, bool memexport_used);
   const char* draw_skip_reason_ = nullptr;
+  // Time draws waited this frame for pipelines whose shaders were already
+  // translated (metal_pipeline_wait_budget_ms); reset at each swap.
+  uint64_t pipeline_wait_us_frame_ = 0;
   int census_draw_site_ = -1;  // [hle-census] site of the draw being issued
   bool IssueCopy() override;
 

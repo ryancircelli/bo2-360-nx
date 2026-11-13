@@ -1732,10 +1732,14 @@ bool MetalPipelineCache::InitializeShaderStorageInternal(
     prewarm_binary_archive = archive_sets_[0].archive != nullptr ||
                              !archive_sets_[0].segments.empty();
   }
+  // Seed shaders join the cache before any warm-up thread starts.
+  std::vector<MetalPipelineStoredDescription> seed_descriptions =
+      LoadShaderSeed(title_id, pipeline_config.version);
   if (prewarm_binary_archive && !stored_descriptions.empty()) {
     PrewarmStoredPipelines(stored_descriptions, blocking);
     background_warmup_pending_ = !blocking;
   }
+  QueueShaderSeed(seed_descriptions);
 
   if (!background_warmup_pending_) frame_log::Warmup(false);
   if (readiness::Enabled()) {
@@ -2340,6 +2344,27 @@ void MetalPipelineCache::JoinPipelineBinaryArchiveSave() {
   pipeline_binary_archive_saving_.store(false);
 }
 
+// The attachment formats and rendering key a stored description was built
+// from (the inverse of BuildPipelineDescription for those fields).
+static void StoredPipelineTargets(
+    const MetalPipelineCache::MetalPipelineDescription& desc,
+    PipelineAttachmentFormats& formats,
+    PipelineRenderingKey& rendering) {
+  formats = {};
+  formats.sample_count = desc.sample_count;
+  formats.depth_format = static_cast<MTL::PixelFormat>(desc.depth_format);
+  formats.stencil_format = static_cast<MTL::PixelFormat>(desc.stencil_format);
+  for (uint32_t i = 0; i < 4; ++i) {
+    formats.color_formats[i] =
+        static_cast<MTL::PixelFormat>(desc.color_formats[i]);
+  }
+  rendering = {};
+  rendering.normalized_color_mask = desc.normalized_color_mask;
+  rendering.alpha_to_mask_enable = desc.alpha_to_mask_enable;
+  std::memcpy(rendering.blendcontrol, desc.blendcontrol,
+              sizeof(rendering.blendcontrol));
+}
+
 void MetalPipelineCache::PrewarmStoredPipelines(
     const std::vector<MetalPipelineStoredDescription>& descriptions,
     bool blocking) {
@@ -2423,19 +2448,9 @@ void MetalPipelineCache::PrewarmStoredPipelines(
       }
     }
 
-    PipelineAttachmentFormats formats = {};
-    formats.sample_count = desc.sample_count;
-    formats.depth_format = static_cast<MTL::PixelFormat>(desc.depth_format);
-    formats.stencil_format = static_cast<MTL::PixelFormat>(desc.stencil_format);
-    for (uint32_t i = 0; i < 4; ++i) {
-      formats.color_formats[i] =
-          static_cast<MTL::PixelFormat>(desc.color_formats[i]);
-    }
-    PipelineRenderingKey rendering = {};
-    rendering.normalized_color_mask = desc.normalized_color_mask;
-    rendering.alpha_to_mask_enable = desc.alpha_to_mask_enable;
-    std::memcpy(rendering.blendcontrol, desc.blendcontrol,
-                sizeof(rendering.blendcontrol));
+    PipelineAttachmentFormats formats;
+    PipelineRenderingKey rendering;
+    StoredPipelineTargets(desc, formats, rendering);
 
     if (desc.kind == uint32_t(PipelineKind::kStandard)) {
       PipelineHandle* handle = GetOrCreatePipelineState(
@@ -2566,6 +2581,159 @@ void MetalPipelineCache::PrewarmStoredPipelines(
   }
   REXLOG_INFO("Metal shader storage: queued {} warm pipelines, skipped {}", queued,
          skipped);
+}
+
+std::vector<MetalPipelineCache::MetalPipelineStoredDescription>
+MetalPipelineCache::LoadShaderSeed(uint32_t title_id,
+                                   uint32_t pipeline_storage_version) {
+  std::vector<MetalPipelineStoredDescription> seeded;
+  // Created on the creation threads like any draw's pipeline; without them a
+  // seed would compile synchronously at startup.
+  if (!REXCVAR_GET(async_shader_compilation) || creation_threads_.empty()) {
+    return seeded;
+  }
+  const std::string& setting = REXCVAR_GET(metal_shader_seed);
+  if (setting == "off" || setting == "0") {
+    return seeded;
+  }
+  const std::filesystem::path root =
+      setting.empty() ? rex::filesystem::GetExecutableFolder() / "shader_seed"
+                      : std::filesystem::path(setting);
+  const std::filesystem::path shader_path =
+      root / fmt::format("{:08X}.xsh", title_id);
+  const std::filesystem::path pipeline_path =
+      root / fmt::format("{:08X}.metal.xpso", title_id);
+  std::error_code ec;
+  if (!std::filesystem::exists(pipeline_path, ec)) {
+    if (!setting.empty()) {
+      REXLOG_WARN("[shader-seed] none at {}", rex::path_to_utf8(root));
+    }
+    return seeded;
+  }
+  const auto start = std::chrono::steady_clock::now();
+
+  // Pipelines first: a seed recorded with another description version is
+  // ignored as a whole (regenerate it with tools/mac/shader_seed.py).
+  std::vector<MetalPipelineStoredDescription> descriptions;
+  if (FILE* file = rex::filesystem::OpenFile(pipeline_path, "rb")) {
+    PipelineStorageFileHeader header;
+    if (fread(&header, sizeof(header), 1, file) &&
+        header.magic == kPipelineStorageMagic &&
+        header.magic_api == kMetalPipelineStorageMagic &&
+        header.version_swapped == rex::byte_swap(pipeline_storage_version)) {
+      MetalPipelineStoredDescription stored;
+      while (fread(&stored, sizeof(stored), 1, file)) {
+        descriptions.push_back(stored);
+      }
+    } else {
+      REXLOG_WARN("[shader-seed] {} is for another pipeline storage version, "
+                  "ignored",
+                  rex::path_to_utf8(pipeline_path));
+    }
+    fclose(file);
+  }
+  if (descriptions.empty()) {
+    return seeded;
+  }
+
+  size_t shaders_loaded = 0;
+  if (FILE* file = rex::filesystem::OpenFile(shader_path, "rb")) {
+    ShaderStorageFileHeader header;
+    if (ValidateShaderStorageHeader(file, header)) {
+      ReadShaderEntries(file, [&](xenos::ShaderType type,
+                                  const uint32_t* ucode_dwords,
+                                  uint32_t ucode_dword_count,
+                                  uint64_t ucode_data_hash) {
+        if (shader_cache_.find(ucode_data_hash) == shader_cache_.end()) {
+          MetalShader* shader = LoadShader(type, ucode_dwords,
+                                           ucode_dword_count, ucode_data_hash);
+          if (!shader->is_ucode_analyzed()) {
+            shader->AnalyzeUcode(ucode_disasm_buffer_);
+          }
+          ++shaders_loaded;
+        }
+        return true;
+      });
+    }
+    fclose(file);
+  }
+
+  size_t already_stored = 0;
+  size_t skipped = 0;
+  {
+    std::lock_guard<std::mutex> lock(stored_pipeline_mutex_);
+    for (const MetalPipelineStoredDescription& stored : descriptions) {
+      const MetalPipelineDescription& desc = stored.description;
+      if (XXH3_64bits(&desc, sizeof(desc)) != stored.description_hash ||
+          desc.kind != uint32_t(PipelineKind::kStandard) ||
+          shader_cache_.find(desc.vertex_shader_hash) == shader_cache_.end() ||
+          (desc.pixel_shader_hash &&
+           shader_cache_.find(desc.pixel_shader_hash) ==
+               shader_cache_.end())) {
+        ++skipped;
+      } else if (stored_pipeline_hashes_.count(stored.description_hash)) {
+        ++already_stored;
+      } else {
+        seeded.push_back(stored);
+      }
+    }
+  }
+  REXLOG_INFO("[shader-seed] {}: {} new shaders, {} pipelines to create "
+              "({} already stored, {} skipped) in {:.0f} ms",
+              rex::path_to_utf8(root), shaders_loaded, seeded.size(),
+              already_stored, skipped, startup::MsSince(start));
+  return seeded;
+}
+
+void MetalPipelineCache::QueueShaderSeed(
+    const std::vector<MetalPipelineStoredDescription>& descriptions) {
+  if (descriptions.empty()) {
+    return;
+  }
+  // Held until every pipeline is queued, so a fast creation thread cannot
+  // report the seed done early.
+  seed_pending_.fetch_add(1, std::memory_order_relaxed);
+  uint32_t queued = 0;
+  for (const MetalPipelineStoredDescription& stored : descriptions) {
+    const MetalPipelineDescription& desc = stored.description;
+    // The translations are made on the creation threads, as for a draw's
+    // pipeline; only those of the local storage are installed at startup.
+    auto* vertex_translation = static_cast<MetalShader::MetalTranslation*>(
+        shader_cache_.find(desc.vertex_shader_hash)
+            ->second->GetOrCreateTranslation(desc.vertex_shader_modification));
+    MetalShader::MetalTranslation* pixel_translation = nullptr;
+    if (desc.pixel_shader_hash) {
+      pixel_translation = static_cast<MetalShader::MetalTranslation*>(
+          shader_cache_.find(desc.pixel_shader_hash)
+              ->second->GetOrCreateTranslation(desc.pixel_shader_modification));
+    }
+    if (!vertex_translation) {
+      continue;
+    }
+    PipelineAttachmentFormats formats;
+    PipelineRenderingKey rendering;
+    StoredPipelineTargets(desc, formats, rendering);
+    PipelineHandle* handle = GetOrCreatePipelineState(
+        vertex_translation, pixel_translation, formats, rendering, true);
+    if (handle && handle->seeded) {
+      ++queued;
+    }
+  }
+  seed_queued_ = queued;
+  REXLOG_INFO("[shader-seed] queued {} pipelines behind the game's own",
+              queued);
+  NoteSeedPipelineDone();
+}
+
+void MetalPipelineCache::NoteSeedPipelineDone() {
+  if (seed_pending_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    REXLOG_INFO("[shader-seed] all {} seeded pipelines created, {:.2f}s after "
+                "storage init",
+                seed_queued_,
+                std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                              warmup_start_)
+                    .count());
+  }
 }
 
 void MetalPipelineCache::PrewarmNativeGeometry(
@@ -4764,7 +4932,7 @@ MetalPipelineCache::GetOrCreatePipelineState(
     MetalShader::MetalTranslation* vertex_translation,
     MetalShader::MetalTranslation* pixel_translation,
     const PipelineAttachmentFormats& attachment_formats,
-    const PipelineRenderingKey& rendering_key) {
+    const PipelineRenderingKey& rendering_key, bool seeded) {
   if (!vertex_translation) {
     REXLOG_ERROR("No vertex shader translation");
     return nullptr;
@@ -4776,10 +4944,16 @@ MetalPipelineCache::GetOrCreatePipelineState(
   // Check cache.
   auto it = pipeline_cache_.find(key);
   if (it != pipeline_cache_.end()) {
-    if (it->second->ns_pixel_translation) {
-      it->second->ns_pixel_translation->NoteUse();
+    PipelineHandle* existing = it->second.get();
+    if (existing->ns_pixel_translation) {
+      existing->ns_pixel_translation->NoteUse();
     }
-    return it->second.get();
+    // A draw needs a seeded pipeline still queued: no longer behind the seed.
+    if (!seeded && existing->seeded && existing->priority == 0 &&
+        !existing->creation_complete.load(std::memory_order_acquire)) {
+      RaisePipelinePriority(existing, 1);
+    }
+    return existing;
   }
 
   // Create a new handle.
@@ -4793,14 +4967,23 @@ MetalPipelineCache::GetOrCreatePipelineState(
   std::memcpy(handle->pending_blendcontrol, description.blendcontrol,
               sizeof(description.blendcontrol));
   handle->pending_alpha_to_mask = (description.alpha_to_mask_enable != 0);
-  handle->storage_write_pending = true;
+  // Seeded pipelines are shipped with the app: not stored locally until a
+  // draw creates one of them first.
+  handle->storage_write_pending = !seeded;
+  if (seeded) {
+    handle->seeded = true;
+    handle->priority = 0;
+    seed_pending_.fetch_add(1, std::memory_order_relaxed);
+  }
 
   PipelineHandle* raw_handle = handle.get();
   pipeline_cache_.emplace(key, std::move(handle));
   if (NativeShadersMode() && pixel_translation) {
     raw_handle->ns_vertex_translation = vertex_translation;
     raw_handle->ns_pixel_translation = pixel_translation;
-    pixel_translation->NoteUse();
+    if (!seeded) {
+      pixel_translation->NoteUse();
+    }
     RegisterNativeShaderHandle(raw_handle);
   }
 
@@ -5170,24 +5353,42 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
 // CreationThread (background pipeline compilation)
 // ---------------------------------------------------------------------------
 
+void MetalPipelineCache::RaisePipelinePriority(PipelineHandle* handle,
+                                               uint8_t priority) {
+  // Rebuild the heap under its lock: mutating a queued priority alone breaks
+  // heap order.
+  {
+    std::lock_guard<std::mutex> lock(creation_request_lock_);
+    std::vector<PipelineCreationRequest> pending;
+    pending.reserve(creation_queue_.size());
+    while (!creation_queue_.empty()) {
+      pending.push_back(creation_queue_.top());
+      creation_queue_.pop();
+    }
+    handle->priority = std::max(handle->priority, priority);
+    for (const auto& request : pending) creation_queue_.push(request);
+  }
+  creation_request_cond_.notify_all();
+}
+
 MTL::RenderPipelineState* MetalPipelineCache::WaitForPipeline(
-    PipelineHandle* handle) {
+    PipelineHandle* handle, uint64_t timeout_us) {
   hitch::Scope hitch_scope(hitch::kPsoWait);
   if (!handle->creation_complete.load(std::memory_order_acquire)) {
     // A video or a player who skips the logos may need a cached pipeline
-    // before warm-up finishes. Move it ahead of speculative work. Rebuild the
-    // heap under its lock: mutating a queued priority alone breaks heap order.
-    {
-      std::lock_guard<std::mutex> lock(creation_request_lock_);
-      std::vector<PipelineCreationRequest> pending;
-      while (!creation_queue_.empty()) {
-        pending.push_back(creation_queue_.top());
-        creation_queue_.pop();
+    // before warm-up finishes. Move it ahead of speculative work.
+    RaisePipelinePriority(handle, UINT8_MAX);
+  }
+  if (timeout_us != UINT64_MAX) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::microseconds(timeout_us);
+    while (!handle->creation_complete.load(std::memory_order_acquire)) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return nullptr;
       }
-      handle->priority = UINT8_MAX;
-      for (const auto& request : pending) creation_queue_.push(request);
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    creation_request_cond_.notify_all();
+    return handle->state.load(std::memory_order_acquire);
   }
   return handle->WaitForCreation();
 }
@@ -5253,6 +5454,9 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     handle->pending_pixel_translation = nullptr;
     handle->creation_complete.store(true, std::memory_order_release);
     handle->creation_complete.notify_all();
+    if (handle->seeded) {
+      NoteSeedPipelineDone();
+    }
 
     --creation_threads_busy_;
   }
