@@ -122,7 +122,7 @@ class MslShaderTranslator : public ShaderTranslator {
                                  const std::vector<MslBakedDword>& baked);
 
   // Version of the emitted code; part of any cache key.
-  static constexpr uint32_t kVersion = 1;
+  static constexpr uint32_t kVersion = 2;
 
  protected:
   void Reset() override;
