@@ -2818,6 +2818,19 @@ void MetalCommandProcessor::MaybeLogMemReport() {
   REXLOG_INFO("[mem-report] top RTs: {}", rt.top);
 }
 
+namespace {
+// Perf log: this thread's CPU time since its previous swap goes to `counter`.
+// Thread-local, so the ring thread (stage 1) and stage 2 each keep their own.
+void PerfAddThreadCpu(std::atomic<uint64_t>& counter) {
+  static thread_local uint64_t last_cpu_ns = 0;
+  const uint64_t cpu_now = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+  if (last_cpu_ns) {
+    counter.fetch_add(cpu_now - last_cpu_ns, std::memory_order_relaxed);
+  }
+  last_cpu_ns = cpu_now;
+}
+}  // namespace
+
 void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
@@ -2827,6 +2840,8 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     const bool want = CpTwoStageRequested();
     ts_in_swap_ = true;
     if (ts_active_) {
+      // Stage 1's own work this frame (cpu_ms); stage 2 adds its own below.
+      PerfAddThreadCpu(rex::graphics::GetPerfStats().ns_working);
       TsBarrier(TsSync::kSwap, [=, this] {
         IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
         if (!want) {
@@ -2849,14 +2864,10 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     return;
   }
   {
-    // Perf log: command processor thread CPU time since the previous swap, and the submissions so far.
-    static thread_local uint64_t perf_last_cpu_ns = 0;
-    const uint64_t cpu_now = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+    // Perf log: command processor thread CPU time since the previous swap, and the submissions so far. With the
+    // two-stage CP the swap runs on stage 2: its busy time goes to ns_working_stage2 (stage 1 added its own above).
     auto& perf = rex::graphics::GetPerfStats();
-    if (perf_last_cpu_ns) {
-      perf.ns_working.fetch_add(cpu_now - perf_last_cpu_ns, std::memory_order_relaxed);
-    }
-    perf_last_cpu_ns = cpu_now;
+    PerfAddThreadCpu(ts_active_ && !TsOnStage1() ? perf.ns_working_stage2 : perf.ns_working);
     perf.jobs_submitted.store(submission_current_, std::memory_order_relaxed);
   }
   rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
