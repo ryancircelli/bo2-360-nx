@@ -1331,6 +1331,7 @@ MetalCommandProcessor::MetalCommandProcessor(
     : CommandProcessor(graphics_system, kernel_state) {
   cmdcost_all_active_ = CmdcostAllRequested();
   encode_thread_active_ = EncodeThreadRequested() || cmdcost_all_active_;
+  REXLOG_WARN("[cmdcost] all={}", cmdcost_all_active_ ? "on" : "off");
   type0_register_batching_active_ = Type0BatchingRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
@@ -2831,8 +2832,7 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     if (pipeline_cache_) {
       pipeline_cache_->SetDrawFastpathAll(cmdcost_all_active_);
     }
-    REXLOG_INFO("Metal cmdcost master: {} at drained frame boundary",
-                cmdcost_all_active_ ? "on" : "off");
+    REXLOG_WARN("[cmdcost] all={}", cmdcost_all_active_ ? "on" : "off");
   }
   const bool encode_thread_requested =
       EncodeThreadRequested() || cmdcost_all_active_;
