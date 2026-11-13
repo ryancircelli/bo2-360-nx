@@ -1735,6 +1735,10 @@ class MetalCommandProcessor final : public CommandProcessor {
     std::array<std::array<Cbv, kCbvSlotCount>, kStageCount> cbvs = {};
   };
   BindlessCacheKey bindless_cache_key_;
+  // Miss reasons: 0 no key,1 flags,2 frame,3 fixed serial,4 encoder,5 root buf,
+  // 6 root serial,7 cbv masks,8 cbv identity,9 bound-state check.
+  uint64_t bindless_cache_miss_[10] = {};
+  uint64_t bindless_cache_cbv_miss_[64] = {};
   bool draw_consts_dirty_active_ = false;
   // Lever C (metal_draw_consts_dirty): every register PrepareDrawConstants /
   // UpdateSystemConstantValues read. A value-changing write to one bumps the

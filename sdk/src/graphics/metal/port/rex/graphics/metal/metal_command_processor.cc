@@ -2892,7 +2892,7 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       std::fprintf(stderr,
                    "[warn] [cpstate] frame=%llu reg_early_out fetch=%llu "
                    "boolloop=%llu bindless=%llu/%llu drawconsts=%llu/%llu "
-                   "verify_mismatch=%llu\n",
+                   "verify_mismatch=%llu bindless_miss=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
                    (unsigned long long)cpstate_frames,
                    (unsigned long long)reg_early_out_hits_[0],
                    (unsigned long long)reg_early_out_hits_[1],
@@ -2900,7 +2900,12 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                    (unsigned long long)bindless_cache_calls_,
                    (unsigned long long)draw_consts_hits_,
                    (unsigned long long)draw_consts_calls_,
-                   (unsigned long long)draw_consts_verify_mismatches_);
+                   (unsigned long long)draw_consts_verify_mismatches_,
+                   (unsigned long long)bindless_cache_miss_[0], (unsigned long long)bindless_cache_miss_[1],
+                   (unsigned long long)bindless_cache_miss_[2], (unsigned long long)bindless_cache_miss_[3],
+                   (unsigned long long)bindless_cache_miss_[4], (unsigned long long)bindless_cache_miss_[5],
+                   (unsigned long long)bindless_cache_miss_[6], (unsigned long long)bindless_cache_miss_[7],
+                   (unsigned long long)bindless_cache_miss_[8], (unsigned long long)bindless_cache_miss_[9]);
     }
   }
   if (reg_early_out_active_ != RegEarlyOutRequested()) {
@@ -8120,16 +8125,19 @@ bool MetalCommandProcessor::PopulateBindlessTables(
       }
     }
     const BindlessCacheKey& last = bindless_cache_key_;
-    bool hit = last.valid && last.shared_memory_is_uav == shared_memory_is_uav &&
-               last.use_geometry_emulation == use_geometry_emulation &&
-               last.use_tessellation_emulation == use_tessellation_emulation &&
-               last.shared_memory_usage_bits == cache_key.shared_memory_usage_bits &&
-               last.frame == cache_key.frame &&
-               last.fixed_source_serial == cache_key.fixed_source_serial &&
-               last.encoder == cache_key.encoder && current_render_encoder_ &&
-               last.root_buffer == cache_key.root_buffer &&
-               last.root_serial == cache_key.root_serial &&
-               last.active_cbv_masks == cache_key.active_cbv_masks;
+    int miss = -1;
+    if (!last.valid) miss = 0;
+    else if (last.shared_memory_is_uav != shared_memory_is_uav ||
+             last.use_geometry_emulation != use_geometry_emulation ||
+             last.use_tessellation_emulation != use_tessellation_emulation ||
+             last.shared_memory_usage_bits != cache_key.shared_memory_usage_bits) miss = 1;
+    else if (last.frame != cache_key.frame) miss = 2;
+    else if (last.fixed_source_serial != cache_key.fixed_source_serial) miss = 3;
+    else if (last.encoder != cache_key.encoder || !current_render_encoder_) miss = 4;
+    else if (last.root_buffer != cache_key.root_buffer) miss = 5;
+    else if (last.root_serial != cache_key.root_serial) miss = 6;
+    else if (!(last.active_cbv_masks == cache_key.active_cbv_masks)) miss = 7;
+    bool hit = miss < 0;
     if (hit) {
       for (size_t stage = 0; stage < kStageCount && hit; ++stage) {
         for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
@@ -8138,6 +8146,8 @@ bool MetalCommandProcessor::PopulateBindlessTables(
           if (a.buffer != b.buffer || a.offset != b.offset ||
               a.gpu_address != b.gpu_address) {
             hit = false;
+            miss = 8;
+            ++bindless_cache_cbv_miss_[stage * kCbvSlotCount + cbv < 64 ? stage * kCbvSlotCount + cbv : 63];
             break;
           }
         }
@@ -8171,6 +8181,8 @@ bool MetalCommandProcessor::PopulateBindlessTables(
             !current_bindless_stage_root_valid_[kStagePixel] &&
             !current_bindless_stage_root_serials_[kStagePixel];
     }
+    if (!hit && miss < 0) miss = 9;
+    if (!hit) ++bindless_cache_miss_[miss];
     if (hit) {
       ++bindless_cache_hits_;
       ++backend_telemetry_.bindless_root_reuse_hits[kGraphicsRootStage];
