@@ -621,6 +621,16 @@ void MetalTextureCache::UploadBufferPool::HandleCommandBufferCompleted(
 
 uint32_t MetalTextureCache::GuestRangesForFetchConstant(
     const xenos::xe_gpu_texture_fetch_t& fetch, SharedMemory::Range* ranges_out) {
+  // [cp-two-stage] Stage 1 walks every texture binding of the shaders, including
+  // ones the translated shader never samples, whose fetch constants the game
+  // leaves stale. BindingInfoFromFetchConstant logs a warning for each of those
+  // on every draw; such a constant yields no texture (and no guest read) on the
+  // backend either, so skip it silently.
+  if (fetch.type != xenos::FetchConstantType::kTexture &&
+      !(fetch.type == xenos::FetchConstantType::kInvalidTexture &&
+        REXCVAR_GET(gpu_allow_invalid_fetch_constants))) {
+    return 0;
+  }
   TextureKey key;
   BindingInfoFromFetchConstant(fetch, key, nullptr);
   if (!key.is_valid) {
