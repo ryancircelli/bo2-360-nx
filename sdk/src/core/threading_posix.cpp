@@ -312,19 +312,26 @@ void Sleep(std::chrono::microseconds duration) {
 thread_local bool alertable_state_ = false;
 bool DispatchCurrentThreadUserCallback();
 #if !REX_FAST_WAITS  // the REX_FAST_WAITS version sleeps on the thread's wake word; it is further down
+static int64_t LegacySleepStatsStart();
+static void LegacySleepStatsEnd(int64_t start, bool alerted);
+static void LegacySleepPoll();
 SleepResult AlertableSleep(std::chrono::microseconds duration) {
   alertable_state_ = true;
   auto deadline = std::chrono::steady_clock::now() + duration;
+  const int64_t stat_start = LegacySleepStatsStart();
   while (true) {
     if (DispatchCurrentThreadUserCallback()) {
       alertable_state_ = false;
+      LegacySleepStatsEnd(stat_start, true);
       return SleepResult::kAlerted;
     }
     auto now = std::chrono::steady_clock::now();
     if (now >= deadline) {
       alertable_state_ = false;
+      LegacySleepStatsEnd(stat_start, false);
       return SleepResult::kSuccess;
     }
+    LegacySleepPoll();
     auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now);
     Sleep(std::min(remaining, std::chrono::microseconds(1000)));
   }
@@ -1101,6 +1108,118 @@ class PosixCondition<Timer> : public PosixConditionBase {
 
 #else  // !REX_FAST_WAITS
 
+// ---- Wait statistics (cvar posix_wait_stats, default off): per wait path and thread name, how many waits,
+// how long, how many timed out, how late the wake was after the object's signal, and how many polls found nothing.
+REXCVAR_DEFINE_BOOL(posix_wait_stats, false, "Kernel",
+                    "Count waits per path and thread and log a table every 10 s (diagnostic)");
+struct WaitScope;
+namespace {
+enum WaitPath { kPSingle, kPAny, kPAll, kPAlertSingle, kPAlertAny, kPAlertAll, kPAlertSleep, kPSleep, kPathCount };
+const char* const kPathNames[kPathCount] = {"single", "any", "all", "alert-single", "alert-any", "alert-all",
+                                            "alert-sleep", "sleep"};
+struct WaitPathStats {
+  std::atomic<uint64_t> count{0}, timeouts{0}, apc{0}, wait_ns{0}, late_n{0}, late_ns{0}, late_max_ns{0},
+      late_gt1ms{0}, polls{0}, empty_polls{0};
+};
+struct WaitThreadStats {
+  char name[24] = {};
+  WaitPathStats path[kPathCount];
+};
+std::atomic<int> g_wait_stats_on{-1};
+std::atomic<WaitThreadStats*> g_wait_threads[256];
+std::atomic<int> g_wait_thread_count{0};
+std::atomic<int64_t> g_wait_next_dump_ns{0};
+thread_local WaitThreadStats* t_wait_stats = nullptr;
+thread_local WaitScope* t_scope = nullptr;
+}  // namespace
+static inline bool WaitStatsOn() {
+  int v = g_wait_stats_on.load(std::memory_order_relaxed);
+  if (v < 0) {
+    v = REXCVAR_GET(posix_wait_stats) ? 1 : 0;
+    g_wait_stats_on.store(v, std::memory_order_relaxed);
+  }
+  return v == 1;
+}
+static inline int64_t WaitStatsNow() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+static WaitThreadStats* WaitStatsThread() {
+  if (!t_wait_stats) {
+    auto* t = new WaitThreadStats();
+    pthread_getname_np(pthread_self(), t->name, sizeof(t->name));
+    int i = g_wait_thread_count.fetch_add(1);
+    if (i < 256) g_wait_threads[i].store(t);
+    t_wait_stats = t;
+  }
+  return t_wait_stats;
+}
+static void WaitStatsDump() {
+  int n = std::min(g_wait_thread_count.load(), 256);
+  REXSYS_INFO("waitstats: thread path count timeout apc wait_ms late_n late_avg_us late_max_us late_gt1ms polls empty");
+  for (int i = 0; i < n; ++i) {
+    WaitThreadStats* t = g_wait_threads[i].load();
+    if (!t) continue;
+    for (int p = 0; p < kPathCount; ++p) {
+      WaitPathStats& s = t->path[p];
+      uint64_t c = s.count.load();
+      if (!c) continue;
+      uint64_t ln = s.late_n.load();
+      REXSYS_INFO("waitstats: {} {} {} {} {} {} {} {} {} {} {} {}", t->name, kPathNames[p], c, s.timeouts.load(),
+                  s.apc.load(), s.wait_ns.load() / 1000000, ln, ln ? s.late_ns.load() / ln / 1000 : 0,
+                  s.late_max_ns.load() / 1000, s.late_gt1ms.load(), s.polls.load(), s.empty_polls.load());
+    }
+  }
+}
+// One wait. Finish() records the result; `signal_ns` is the newest last_signal of the waited objects.
+struct WaitScope {
+  int path;
+  int64_t start = 0;
+  explicit WaitScope(int p) : path(p) {
+    if (WaitStatsOn()) start = WaitStatsNow();
+  }
+  void Finish(WaitResult r, int64_t signal_ns) {
+    if (!start) return;
+    int64_t now = WaitStatsNow();
+    WaitPathStats& s = WaitStatsThread()->path[path];
+    s.count.fetch_add(1, std::memory_order_relaxed);
+    s.wait_ns.fetch_add(now - start, std::memory_order_relaxed);
+    if (r == WaitResult::kTimeout) s.timeouts.fetch_add(1, std::memory_order_relaxed);
+    else if (r == WaitResult::kUserCallback) s.apc.fetch_add(1, std::memory_order_relaxed);
+    else if (r == WaitResult::kSuccess && signal_ns >= start) {
+      int64_t late = now - signal_ns;
+      s.late_n.fetch_add(1, std::memory_order_relaxed);
+      s.late_ns.fetch_add(late, std::memory_order_relaxed);
+      if (late > 1000000) s.late_gt1ms.fetch_add(1, std::memory_order_relaxed);
+      uint64_t m = s.late_max_ns.load(std::memory_order_relaxed);
+      while ((uint64_t)late > m && !s.late_max_ns.compare_exchange_weak(m, late)) {}
+    }
+    int64_t nd = g_wait_next_dump_ns.load(std::memory_order_relaxed);
+    if (nd == 0) g_wait_next_dump_ns.compare_exchange_strong(nd, now + 10000000000LL);
+    else if (now >= nd && g_wait_next_dump_ns.compare_exchange_strong(nd, now + 10000000000LL)) WaitStatsDump();
+  }
+  void Poll(bool found) {
+    if (!start) return;
+    WaitPathStats& s = WaitStatsThread()->path[path];
+    s.polls.fetch_add(1, std::memory_order_relaxed);
+    if (!found) s.empty_polls.fetch_add(1, std::memory_order_relaxed);
+  }
+};
+
+static int64_t LegacySleepStatsStart() { return WaitStatsOn() ? WaitStatsNow() : 0; }
+static void LegacySleepStatsEnd(int64_t start, bool alerted) {
+  if (!start) return;
+  WaitScope sc(kPAlertSleep);
+  sc.Finish(alerted ? WaitResult::kUserCallback : WaitResult::kSuccess, 0);
+  // Finish measured from sc's own start; record the real duration.
+  WaitStatsThread()->path[kPAlertSleep].wait_ns.fetch_add(WaitStatsNow() - start, std::memory_order_relaxed);
+}
+static void LegacySleepPoll() {
+  if (!WaitStatsOn()) return;
+  WaitStatsThread()->path[kPAlertSleep].polls.fetch_add(1, std::memory_order_relaxed);
+  WaitStatsThread()->path[kPAlertSleep].empty_polls.fetch_add(1, std::memory_order_relaxed);
+}
+
 class PosixConditionBase {
  public:
   PosixConditionBase() {
@@ -1266,6 +1385,7 @@ class PosixConditionBase {
       }
 
       if (condition_met) {
+        if (t_scope) t_scope->Poll(true);
         if (wait_all) {
           for (size_t i = 0; i < handles.size(); ++i) {
             handles[i]->post_execution();
@@ -1283,6 +1403,7 @@ class PosixConditionBase {
         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
       }
 
+      if (t_scope) t_scope->Poll(false);
       if (timeout == std::chrono::milliseconds::max()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       } else {
@@ -1304,6 +1425,16 @@ class PosixConditionBase {
  protected:
   inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
+  // Wait statistics (cvar posix_wait_stats): when this object last notified its waiters.
+  std::atomic<int64_t> last_signal_ns_{0};
+  inline void StampedNotify_all() { StampSignal(); cond_.notify_all(); }
+  inline void StampedNotify_one() { StampSignal(); cond_.notify_one(); }
+  inline void StampSignal() {
+    if (WaitStatsOn()) last_signal_ns_.store(WaitStatsNow(), std::memory_order_relaxed);
+  }
+ public:
+  int64_t last_signal_ns() const { return last_signal_ns_.load(std::memory_order_relaxed); }
+ protected:
   // How many PulseEvents so far (events only), and how many threads are inside Wait's condition
   // variable wait. Both under mutex_.
   inline virtual uint64_t pulses() const { return 0; }
@@ -1329,7 +1460,7 @@ class PosixCondition<Event> : public PosixConditionBase {
   bool Signal() override {
     auto lock = std::unique_lock<std::mutex>(mutex_);
     signal_ = true;
-    cond_.notify_all();
+    StampedNotify_all();
     return true;
   }
 
@@ -1347,10 +1478,10 @@ class PosixCondition<Event> : public PosixConditionBase {
     if (manual_reset_) {
       ++pulse_count_;
       signal_ = false;
-      cond_.notify_all();
+      StampedNotify_all();
     } else if (waiters_ > 0) {
       signal_ = true;
-      cond_.notify_one();
+      StampedNotify_one();
     } else {
       signal_ = false;
     }
@@ -1386,7 +1517,7 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
       *out_previous_count = count_;
     }
     count_ += release_count;
-    cond_.notify_all();
+    StampedNotify_all();
     return true;
   }
 
@@ -1394,7 +1525,7 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
   inline bool signaled() const override { return count_ > 0; }
   inline void post_execution() override {
     count_--;
-    cond_.notify_all();
+    StampedNotify_all();
   }
   uint32_t count_;
   const uint32_t maximum_count_;
@@ -1418,7 +1549,7 @@ class PosixCondition<Mutant> : public PosixConditionBase {
       --count_;
       // Free to be acquired by another thread
       if (count_ == 0) {
-        cond_.notify_all();
+        StampedNotify_all();
       }
       return true;
     }
@@ -1450,7 +1581,7 @@ class PosixCondition<Timer> : public PosixConditionBase {
   bool Signal() override {
     std::lock_guard<std::mutex> lock(mutex_);
     signal_ = true;
-    cond_.notify_all();
+    StampedNotify_all();
     return true;
   }
 
@@ -1937,7 +2068,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
 
       exit_code_ = exit_code;
       signaled_ = true;
-      cond_.notify_all();
+      StampedNotify_all();
     }
 #endif
     if (is_current_thread) {
@@ -2240,7 +2371,7 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
   return PosixConditionBase::WaitMultiple(conditions, wait_handle_count, wait_all, is_alertable, timeout);
 }
 #else  // !REX_FAST_WAITS
-WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
+static WaitResult WaitImpl(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
@@ -2267,7 +2398,7 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
   }
 }
 
-WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_handle_to_wait_on,
+static WaitResult SignalAndWaitImpl(WaitHandle* wait_handle_to_signal, WaitHandle* wait_handle_to_wait_on,
                          bool is_alertable, std::chrono::milliseconds timeout) {
   auto result = WaitResult::kFailed;
   auto posix_wait_handle_to_signal = dynamic_cast<PosixWaitHandle*>(wait_handle_to_signal);
@@ -2299,7 +2430,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
   }
 }
 
-std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wait_handle_count,
+static std::pair<WaitResult, size_t> WaitMultipleImpl(WaitHandle* wait_handles[], size_t wait_handle_count,
                                            bool wait_all, bool is_alertable,
                                            std::chrono::milliseconds timeout) {
   std::vector<PosixConditionBase*> conditions;
@@ -2332,6 +2463,43 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
   }
 }
 #endif  // REX_FAST_WAITS
+
+
+static int64_t NewestSignal(WaitHandle* const* h, size_t n) {
+  int64_t m = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (auto* p = dynamic_cast<PosixWaitHandle*>(h[i])) m = std::max(m, p->condition().last_signal_ns());
+  }
+  return m;
+}
+WaitResult Wait(WaitHandle* h, bool alertable, std::chrono::milliseconds timeout) {
+  if (!WaitStatsOn()) return WaitImpl(h, alertable, timeout);
+  WaitScope sc(alertable ? kPAlertSingle : kPSingle);
+  t_scope = &sc;
+  auto r = WaitImpl(h, alertable, timeout);
+  t_scope = nullptr;
+  sc.Finish(r, NewestSignal(&h, 1));
+  return r;
+}
+WaitResult SignalAndWait(WaitHandle* a, WaitHandle* b, bool alertable, std::chrono::milliseconds timeout) {
+  if (!WaitStatsOn()) return SignalAndWaitImpl(a, b, alertable, timeout);
+  WaitScope sc(alertable ? kPAlertSingle : kPSingle);
+  t_scope = &sc;
+  auto r = SignalAndWaitImpl(a, b, alertable, timeout);
+  t_scope = nullptr;
+  sc.Finish(r, NewestSignal(&b, 1));
+  return r;
+}
+std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* h[], size_t n, bool all, bool alertable,
+                                           std::chrono::milliseconds timeout) {
+  if (!WaitStatsOn()) return WaitMultipleImpl(h, n, all, alertable, timeout);
+  WaitScope sc(alertable ? (all ? kPAlertAll : kPAlertAny) : (all ? kPAll : kPAny));
+  t_scope = &sc;
+  auto r = WaitMultipleImpl(h, n, all, alertable, timeout);
+  t_scope = nullptr;
+  sc.Finish(r.first, NewestSignal(h, n));
+  return r;
+}
 
 class PosixEvent : public PosixConditionHandle<Event> {
  public:
