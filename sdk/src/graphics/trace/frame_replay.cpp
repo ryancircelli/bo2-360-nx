@@ -721,6 +721,7 @@ void Replayer::RestoreRegisters(uint32_t first, uint32_t count, const uint32_t* 
   count = std::min<uint32_t>(count, RegisterFile::kRegisterCount -
                                         std::min<uint32_t>(first, RegisterFile::kRegisterCount));
   std::memcpy(&regs.values[first], values, count * sizeof(uint32_t));
+  cp_.TraceRegistersRestored(first, count);
   // Route the shader constant and fetch constant ranges through
   // WriteRegister so backends mark their constant buffers and bindings dirty.
   uint32_t lo = std::max<uint32_t>(first, XE_GPU_REG_SHADER_CONSTANT_000_X);
@@ -762,6 +763,7 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
   hooks_.chain = cp_.trace_hooks();
   cp_.set_trace_hooks(&hooks_);
   bool ok = ExecuteCommands(trace);
+  cp_.TraceDrainBackend();
   TextureLoadProbeSlot() = nullptr;
   cp_.set_trace_hooks(hooks_.chain);
   std::fclose(draws_json_);
@@ -807,6 +809,8 @@ void Replayer::RunBench(const std::vector<uint8_t>& trace, BenchPass& pass,
   const uint64_t cpu0 = ThreadCpuNs(), wall0 = WallNs();
   pass.ok = ExecuteCommands(trace);
   EndCpSegment();
+  // Two-stage backends: queued work belongs to this pass (wall time only).
+  cp_.TraceDrainBackend();
   pass.pass_cpu_ns = ThreadCpuNs() - cpu0;
   pass.pass_wall_ns = WallNs() - wall0;
   cp_.set_trace_hooks(hooks_.chain);
