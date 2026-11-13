@@ -205,8 +205,10 @@ bool MetalCommandProcessor::ZpdExecuteEvent(memory::RingBuffer* reader,
   uint32_t initiator = reader->ReadAndSwap<uint32_t>();
   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
 
+  // [cp-two-stage] the guest file: this runs on stage 1 (or in a barrier).
   const uint32_t address =
-      register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR] & kRecordAlignMask;
+      CommandProcessor::register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR] &
+      kRecordAlignMask;
   auto* counts =
       address ? memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
                     address)
@@ -215,7 +217,21 @@ bool MetalCommandProcessor::ZpdExecuteEvent(memory::RingBuffer* reader,
     return true;
   }
   const bool is_end = HasSentinel(counts);
+  if (ts_active_ && TsOnStage1()) {
+    // [cp-two-stage] async ZPD: the guest reads a BEGIN record only after the
+    // matching END result, so stage 1 clears it now and stage 2 does the rest.
+    if (!is_end) {
+      std::memset(counts, 0, sizeof(*counts));
+    }
+    TsAppend(TsOp::kZpd, {address, is_end ? 1u : 0u});
+    return true;
+  }
+  return ZpdExecuteEventTail(address, is_end, false);
+}
 
+bool MetalCommandProcessor::ZpdExecuteEventTail(uint32_t address, bool is_end,
+                                                bool ts_begin_cleared) {
+  auto* counts = memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(address);
   // Draws queued before the event belong before it (the queue also refuses
   // draws while a query is open).
   FlushPreparedDrawQueue(PreparedDrawFlushReason::kQuery);
@@ -242,7 +258,9 @@ bool MetalCommandProcessor::ZpdExecuteEvent(memory::RingBuffer* reader,
     }
     // Xenos writes the running counter here; D3D only reads END - BEGIN, so
     // BEGIN = 0 and END = the count (as the SDK's fake path does).
-    std::memset(counts, 0, sizeof(*counts));
+    if (!ts_begin_cleared) {
+      std::memset(counts, 0, sizeof(*counts));
+    }
     uint32_t id = zpd_next_report_++;
     if (!id) {
       id = zpd_next_report_++;

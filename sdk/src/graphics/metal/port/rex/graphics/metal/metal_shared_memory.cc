@@ -759,6 +759,17 @@ bool MetalSharedMemory::UploadRanges(
     return false;
   }
   uint8_t* xbox_data = static_cast<uint8_t*>(xbox_ram);
+  // [cp-two-stage] UploadCapturedRun: the bytes come from stage 1's snapshot
+  // and stage 1 already owns the validity of these pages.
+  const bool captured_upload = captured_upload_base() != nullptr;
+  if (captured_upload) {
+    xbox_data = const_cast<uint8_t*>(captured_upload_base());
+  }
+  auto make_range_valid = [&](uint32_t start, uint32_t length) {
+    if (!captured_upload) {
+      MakeRangeValid(start, length, false);
+    }
+  };
 
   const uint32_t page_size = 1u << page_size_log2();
   if (!upload_buffer_pool_) {
@@ -766,7 +777,7 @@ bool MetalSharedMemory::UploadRanges(
     return false;
   }
   upload_buffer_pool_->Reclaim(command_processor_.GetCompletedSubmission());
-  if (MemexportReadbackEnabled()) {
+  if (MemexportReadbackEnabled() && !captured_upload) {
     // Bring guest RAM up to date with completed memexport output first, so
     // the re-upload below writes the GPU's data back rather than stale bytes.
     ApplyCompletedMemexportReadbacks(
@@ -956,13 +967,13 @@ bool MetalSharedMemory::UploadRanges(
       // MakeRangeValid re-arms the page write watch first, so a guest write
       // that lands during the copy faults, invalidates the page and is
       // re-uploaded instead of being lost behind a "valid" page.
-      MakeRangeValid(start, size, false);
+      make_range_valid(start, size);
       copy_guest_bytes(shared_buffer_contents + start, start, size);
       swcache::WriteFence();
     } else {
       copy_guest_bytes(shared_buffer_contents + start, start, size);
       swcache::WriteFence();
-      MakeRangeValid(start, size, false);
+      make_range_valid(start, size);
     }
     if (PreserveTraceEnabled()) {
       // Trace-only race counter (FABLE2_DRAW_SKIP_TRACE=1): a run whose
@@ -1025,7 +1036,7 @@ bool MetalSharedMemory::UploadRanges(
       // clamp is a no-op on the default path.
       upload_size = std::min<size_t>(upload_size, remaining);
 
-      MakeRangeValid(offset, static_cast<uint32_t>(upload_size), false);
+      make_range_valid(offset, static_cast<uint32_t>(upload_size));
       copy_guest_bytes(upload_mapping, offset, upload_size);
       encoder->copyFromBuffer(upload_buffer,
                               static_cast<NS::UInteger>(upload_offset), buffer_,
@@ -1084,7 +1095,7 @@ bool MetalSharedMemory::UploadRanges(
       }
       upload_size = std::min<size_t>(upload_size, remaining);
       // Validate before copying (as the staged path and CR-02).
-      MakeRangeValid(offset, static_cast<uint32_t>(upload_size), false);
+      make_range_valid(offset, static_cast<uint32_t>(upload_size));
       copy_guest_bytes(upload_mapping, offset, upload_size);
       encoder->copyFromBuffer(upload_buffer,
                               static_cast<NS::UInteger>(upload_offset), buffer_,
@@ -1129,7 +1140,8 @@ bool MetalSharedMemory::UploadRanges(
 
   // FABLE2_MEMEXPORT_PRESERVE: carve still-valid memexport output out of the
   // upload. Unset, this is a direct call of the unchanged upload path.
-  const bool preserve = MemexportPreserveEnabled() && !preserved_exports_.empty();
+  const bool preserve = MemexportPreserveEnabled() && !captured_upload &&
+                        !preserved_exports_.empty();
   uint64_t preserved_bytes = 0;
   if (preserve) {
     ExpirePreservedExports(PreserveNowUs());
@@ -1166,7 +1178,7 @@ bool MetalSharedMemory::UploadRanges(
       uint32_t skip_start = std::max(cursor, kr.first);
       if (kr.second > skip_start) {
         // GPU data in the shared buffer is newer than guest RAM here.
-        MakeRangeValid(skip_start, kr.second - skip_start, false);
+        make_range_valid(skip_start, kr.second - skip_start);
         preserved_bytes += kr.second - skip_start;
       }
       cursor = std::max(cursor, kr.second);
