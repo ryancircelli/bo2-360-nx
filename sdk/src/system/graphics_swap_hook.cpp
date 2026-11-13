@@ -74,5 +74,38 @@ std::atomic<bool>& CmdcostAllSwitch() {
 }
 bool CmdcostAllRequested() { return CmdcostAllSwitch().load(std::memory_order_relaxed); }
 void RequestCmdcostAll(bool on) { CmdcostAllSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& RegEarlyOutSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_REG_EARLY_OUT");
+    return rex::cvar::Query<bool>("metal_reg_early_out") || (env && env[0] == '1');
+  }()};
+  return requested;
+}
+}
+bool RegEarlyOutRequested() { return RegEarlyOutSwitch().load(std::memory_order_relaxed); }
+void RequestRegEarlyOut(bool on) { RegEarlyOutSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& BindlessCacheSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_BINDLESS_CACHE");
+    return rex::cvar::Query<bool>("metal_bindless_cache") || (env && env[0] == '1');
+  }()};
+  return requested;
+}
+}
+bool BindlessCacheRequested() { return BindlessCacheSwitch().load(std::memory_order_relaxed); }
+void RequestBindlessCache(bool on) { BindlessCacheSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& DrawConstsDirtySwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_DRAW_CONSTS_DIRTY");
+    return rex::cvar::Query<bool>("metal_draw_consts_dirty") || (env && env[0] == '1');
+  }()};
+  return requested;
+}
+}
+bool DrawConstsDirtyRequested() { return DrawConstsDirtySwitch().load(std::memory_order_relaxed); }
+void RequestDrawConstsDirty(bool on) { DrawConstsDirtySwitch().store(on, std::memory_order_relaxed); }
 }  // namespace rex::graphics::metal
 #endif

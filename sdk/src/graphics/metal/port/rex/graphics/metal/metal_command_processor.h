@@ -1706,6 +1706,10 @@ class MetalCommandProcessor final : public CommandProcessor {
   };
   SamplerFastKey sampler_fast_vertex_;
   SamplerFastKey sampler_fast_pixel_;
+  // Command-thread state early-outs (latched at a drained frame boundary).
+  bool reg_early_out_active_ = false;
+  bool bindless_cache_active_ = false;
+  bool draw_consts_dirty_active_ = false;
   uint64_t fetch_value_epoch_ = 1;  // bumped when any fetch dword changes
   std::vector<MTL::Texture*> current_texture_bindless_resources_vertex_;
   std::vector<MTL::Texture*> current_texture_bindless_resources_pixel_;

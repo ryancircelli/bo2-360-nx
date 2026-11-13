@@ -136,6 +136,21 @@ DEFINE_bool(
     "dirty-on-write behavior.",
     "Metal");
 
+DEFINE_bool(
+    metal_reg_early_out, false,
+    "Skip type-0 register writes whose value is unchanged for an allow-list of register families. Runtime-switchable at a drained frame boundary.",
+    "Metal");
+
+DEFINE_bool(
+    metal_bindless_cache, false,
+    "Reuse the previous draw's bindless tables when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
+    "Metal");
+
+DEFINE_bool(
+    metal_draw_consts_dirty, false,
+    "Skip recomputing viewport/scissor/system constants when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
+    "Metal");
+
 // [gpu-capture] Trace-only (docs/native-shaders.md): FABLE2_GPU_CAPTURE_PATH=<x.gputrace>
 // with FABLE2_GPU_CAPTURE_AT_S=<seconds after the first swap> and optional
 // FABLE2_GPU_CAPTURE_FRAMES=<n> (default 1) writes an in-process Metal GPU trace of the
@@ -1334,6 +1349,9 @@ MetalCommandProcessor::MetalCommandProcessor(
   std::fprintf(stderr, "[warn] [cmdcost] all=%s\n",
                cmdcost_all_active_ ? "on" : "off");
   type0_register_batching_active_ = Type0BatchingRequested();
+  reg_early_out_active_ = RegEarlyOutRequested();
+  bindless_cache_active_ = BindlessCacheRequested();
+  draw_consts_dirty_active_ = DrawConstsDirtyRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
       kMaxPendingSharedMemoryWriteCapacity);
@@ -2847,6 +2865,20 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     type0_register_batching_active_ = type0_requested;
     REXLOG_INFO("Metal type0 register batching: {} at drained frame boundary",
                 type0_requested ? "on" : "off");
+  }
+  if (reg_early_out_active_ != RegEarlyOutRequested()) {
+    reg_early_out_active_ = RegEarlyOutRequested();
+    REXLOG_INFO("Metal reg early-out: {} at drained frame boundary", reg_early_out_active_ ? "on" : "off");
+  }
+  if (bindless_cache_active_ != BindlessCacheRequested()) {
+    bindless_cache_active_ = BindlessCacheRequested();
+    // TODO(lever B): invalidate the bindless cache here.
+    REXLOG_INFO("Metal bindless cache: {} at drained frame boundary", bindless_cache_active_ ? "on" : "off");
+  }
+  if (draw_consts_dirty_active_ != DrawConstsDirtyRequested()) {
+    draw_consts_dirty_active_ = DrawConstsDirtyRequested();
+    // TODO(lever C): mark all draw-const inputs dirty here.
+    REXLOG_INFO("Metal draw consts dirty: {} at drained frame boundary", draw_consts_dirty_active_ ? "on" : "off");
   }
   CloseFrameLifetime();
   // Proactive descriptor-pressure trimming: at frame boundaries the GPU has

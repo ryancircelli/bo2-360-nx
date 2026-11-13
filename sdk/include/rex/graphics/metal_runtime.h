@@ -13,5 +13,12 @@ __attribute__((visibility("default"))) void RequestType0Batching(bool on);
 // upload fix, encode thread + xpass). Same request/latch protocol, default false.
 __attribute__((visibility("default"))) bool CmdcostAllRequested();
 __attribute__((visibility("default"))) void RequestCmdcostAll(bool on);
+// Command-thread state early-outs (default false); same request/latch protocol.
+__attribute__((visibility("default"))) bool RegEarlyOutRequested();
+__attribute__((visibility("default"))) void RequestRegEarlyOut(bool on);
+__attribute__((visibility("default"))) bool BindlessCacheRequested();
+__attribute__((visibility("default"))) void RequestBindlessCache(bool on);
+__attribute__((visibility("default"))) bool DrawConstsDirtyRequested();
+__attribute__((visibility("default"))) void RequestDrawConstsDirty(bool on);
 }  // namespace rex::graphics::metal
 #endif
