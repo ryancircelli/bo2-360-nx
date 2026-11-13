@@ -21,6 +21,7 @@ struct Counters {
   uint64_t draws = 0;
   uint64_t jobs_submitted = 0;  // GPU submissions sent so far, this frame's included
   uint64_t tex_new = 0, ns_tex = 0, upload_bytes = 0;  // bo2zm_perf_counters columns
+  uint64_t extra[15] = {};  // ns_upload, upload_runs, up_cat[6], dif_cmp, dif_chg4k, dif_chg64, dif_pages16, dif_same16, dif_nohist
   uint32_t width = 0, height = 0;  // the game's output size
 };
 

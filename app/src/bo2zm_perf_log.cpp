@@ -114,7 +114,7 @@ struct ThreadSampler {
         const std::string& n = it->second.name;
         if (n.rfind("Main XThread", 0) == 0) m += d;
         else if (n.rfind("Server", 0) == 0) sv += d;
-        else if (n.rfind("Worker", 0) == 0 || n.rfind("Job", 0) == 0) w += d;
+        else if (n.rfind("JQ Worker", 0) == 0) w += d;
       }
       mach_port_deallocate(mach_task_self(), t);
     }
@@ -133,6 +133,7 @@ struct Row {
   uint64_t draws = 0;
   double main_ms = 0, server_ms = 0, worker_ms = 0, tex_ms = 0;
   uint64_t tex_new = 0, upload_bytes = 0;
+  uint64_t extra[15] = {};
   uint64_t first_job = 0, last_job = 0;  // its submissions: (first_job, last_job]
   uint64_t jobs_left = 0;
   uint64_t gpu_ns = 0;
@@ -179,6 +180,7 @@ class Log {
       row.tex_new = c.tex_new - previous_.tex_new;
       row.tex_ms = double(c.ns_tex - previous_.ns_tex) / 1e6;
       row.upload_bytes = c.upload_bytes - previous_.upload_bytes;
+      for (int k = 0; k < 14; ++k) row.extra[k] = c.extra[k] - previous_.extra[k];
       if (counters_on_) {
         threads_.Sample();
         row.main_ms = threads_.main_ms; row.server_ms = threads_.server_ms; row.worker_ms = threads_.worker_ms;
@@ -331,7 +333,7 @@ class Log {
     }
     buffer_ += "frame\tt_ms\tframe_ms\tcpu_ms\tgpu_ms\tpresent_wait_ms\tcompile_ms\tdraws";
     if (counters_on_) {
-      buffer_ += "\tmain_ms\tserver_ms\tworker_ms\ttex_new\ttex_ms\tupload_bytes";
+      buffer_ += "\tmain_ms\tserver_ms\tworker_ms\ttex_new\ttex_ms\tupload_bytes\tupload_ms\tupload_ranges\tup_vertex\tup_memexport\tup_index\tup_texture\tup_resolve\tup_other\tdif_cmp\tdif_chg4k\tdif_chg64\tdif_pages16\tdif_same16\tdif_nohist";
     }
     buffer_ += "\n";
     writer_ = std::thread([this] { Writer(); });
@@ -381,6 +383,8 @@ class Log {
       if (counters_on_) {
         fmt::format_to(std::back_inserter(buffer_), "\t{:.3f}\t{:.3f}\t{:.3f}\t{}\t{:.3f}\t{}", r.main_ms, r.server_ms,
                        r.worker_ms, r.tex_new, r.tex_ms, r.upload_bytes);
+        fmt::format_to(std::back_inserter(buffer_), "\t{:.3f}", double(r.extra[0]) / 1e6);
+        for (int k = 1; k < 14; ++k) fmt::format_to(std::back_inserter(buffer_), "\t{}", r.extra[k]);
       }
       buffer_ += '\n';
       rows_.pop_front();
@@ -469,6 +473,7 @@ void InstallSwapHook(std::string_view renderer) {
   static std::string name;
   name = std::string(renderer);
   g_renderer = name.c_str();
+  if (REXCVAR_GET(bo2zm_perf_counters)) rex::graphics::GetPerfStats().diff_enabled.store(true);
   rex::graphics::SetGpuJobHook([](uint64_t order, uint64_t ns, bool measured) { NoteGpuJob(order, ns, measured); });
   rex::graphics::SetSwapHook([](uint32_t width, uint32_t height) {
     // Cumulative counters of the GPU plugin (Metal fills them; the Xenos path leaves them at zero).
@@ -481,6 +486,15 @@ void InstallSwapHook(std::string_view renderer) {
     c.tex_new = st.tex_new.load(std::memory_order_relaxed);
     c.ns_tex = st.ns_tex.load(std::memory_order_relaxed);
     c.upload_bytes = st.upload_bytes.load(std::memory_order_relaxed);
+    c.extra[0] = st.ns_upload.load(std::memory_order_relaxed);
+    c.extra[1] = st.upload_runs.load(std::memory_order_relaxed);
+    for (int k = 0; k < 6; ++k) c.extra[2 + k] = st.up_cat[k].load(std::memory_order_relaxed);
+    c.extra[8] = st.dif_cmp.load(std::memory_order_relaxed);
+    c.extra[9] = st.dif_chg4k.load(std::memory_order_relaxed);
+    c.extra[10] = st.dif_chg64.load(std::memory_order_relaxed);
+    c.extra[11] = st.dif_pages16.load(std::memory_order_relaxed);
+    c.extra[12] = st.dif_same16.load(std::memory_order_relaxed);
+    c.extra[13] = st.dif_nohist.load(std::memory_order_relaxed);
     c.width = width;
     c.height = height;
     OnPresent(c);

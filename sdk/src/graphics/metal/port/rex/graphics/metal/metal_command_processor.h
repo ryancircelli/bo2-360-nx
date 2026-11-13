@@ -212,6 +212,9 @@ class MetalCommandProcessor final : public CommandProcessor {
       TransferRequestSource source = TransferRequestSource::kUnknown);
   void RecordSharedMemoryUploadRoute(SharedMemoryUploadRoute route,
                                      uint64_t bytes);
+  // Perf-log only (PerfStats::diff_enabled): on every 300th frame remembers the uploaded bytes, on the next frame
+  // compares each uploaded range with what was remembered.
+  void PerfSampleUpload(const uint8_t* guest, uint32_t start, uint32_t size);
   void RecordSharedMemoryDirectWriteEligibility(uint64_t direct_bytes,
                                                 uint64_t staged_bytes);
   void RecordSharedMemoryDirectWriteReject(

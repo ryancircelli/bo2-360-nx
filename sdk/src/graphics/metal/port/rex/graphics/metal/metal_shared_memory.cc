@@ -982,6 +982,7 @@ bool MetalSharedMemory::UploadRanges(
             stale_valid.load(std::memory_order_relaxed));
       }
     }
+    command_processor_.PerfSampleUpload(xbox_data, start, size);
     command_processor_.RecordSharedMemoryUploadRoute(
         MetalCommandProcessor::SharedMemoryUploadRoute::kDirectWrite, size);
   };
@@ -1042,6 +1043,7 @@ bool MetalSharedMemory::UploadRanges(
       if (UploadVerifyEnabled()) {
         NoteUploadVerify(offset, static_cast<uint32_t>(upload_size), false);
       }
+      command_processor_.PerfSampleUpload(xbox_data, offset, static_cast<uint32_t>(upload_size));
       command_processor_.RecordSharedMemoryUploadRoute(
           MetalCommandProcessor::SharedMemoryUploadRoute::kStagedBlit,
           upload_size);
@@ -1090,6 +1092,7 @@ bool MetalSharedMemory::UploadRanges(
                               static_cast<NS::UInteger>(upload_offset), buffer_,
                               static_cast<NS::UInteger>(offset),
                               static_cast<NS::UInteger>(upload_size));
+      command_processor_.PerfSampleUpload(xbox_data, offset, static_cast<uint32_t>(upload_size));
       command_processor_.RecordSharedMemoryUploadRoute(
           MetalCommandProcessor::SharedMemoryUploadRoute::kStagedBlit,
           upload_size);

@@ -25,6 +25,7 @@ void NotifyGpuJob(uint64_t order, uint64_t ns, bool measured) {
 }
 
 void NotifySwap(uint32_t width, uint32_t height) {
+  GetPerfStats().swaps.fetch_add(1, std::memory_order_relaxed);
   if (SwapHook hook = g_hook.load(std::memory_order_acquire)) {
     hook(width, height);
   }

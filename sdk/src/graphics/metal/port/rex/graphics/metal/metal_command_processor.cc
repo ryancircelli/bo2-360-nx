@@ -11680,8 +11680,33 @@ bool MetalCommandProcessor::RequestSharedMemoryRanges(
   SharedMemoryRequestReason previous_upload_reason =
       current_shared_memory_upload_reason_;
   current_shared_memory_upload_reason_ = reason;
+  const auto perf_upload_t0 = std::chrono::steady_clock::now();
   const bool success = shared_memory_->RequestRanges(
       request_ranges, request_range_count, &stats);
+  {
+    auto& perf = rex::graphics::GetPerfStats();
+    perf.ns_upload.fetch_add(
+        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::steady_clock::now() - perf_upload_t0)
+                     .count()),
+        std::memory_order_relaxed);
+    if (stats.upload_bytes) {
+      size_t cat = 5;
+      switch (reason) {
+        case SharedMemoryRequestReason::kVertexFetch: cat = 0; break;
+        case SharedMemoryRequestReason::kMemexportStream: cat = 1; break;
+        case SharedMemoryRequestReason::kGuestIndex:
+        case SharedMemoryRequestReason::kShaderPrimitiveIndex:
+        case SharedMemoryRequestReason::kIndexCopySource: cat = 2; break;
+        case SharedMemoryRequestReason::kTextureBase:
+        case SharedMemoryRequestReason::kTextureMips:
+        case SharedMemoryRequestReason::kTextureBaseAndMips: cat = 3; break;
+        case SharedMemoryRequestReason::kResolveCopyDest: cat = 4; break;
+        default: break;
+      }
+      perf.up_cat[cat].fetch_add(stats.upload_bytes, std::memory_order_relaxed);
+    }
+  }
   current_shared_memory_upload_reason_ = previous_upload_reason;
   backend_telemetry_.shared_memory_upload_batch_bytes += stats.upload_bytes;
   if (reason_valid) {
@@ -11840,6 +11865,7 @@ void MetalCommandProcessor::RecordSharedMemoryUploadRoute(
     return;
   }
   rex::graphics::GetPerfStats().upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
+  rex::graphics::GetPerfStats().upload_runs.fetch_add(1, std::memory_order_relaxed);
   ++backend_telemetry_.shared_memory_upload_route_counts[route_index];
   backend_telemetry_.shared_memory_upload_route_bytes[route_index] += bytes;
 }
@@ -13856,4 +13882,98 @@ void rex::graphics::metal::MetalCommandProcessor::FinishRingReinit() {
   // Same effect as the guest writing CP_RB_WPTR = 0 (GraphicsSystem::WriteRegister).
   register_file_->values[0x01C5] = 0;  // CP_RB_WPTR
   UpdateWritePointer(0);
+}
+
+namespace {
+// Shadow of guest bytes uploaded on a sample frame (lazily zero-filled), valid per 4 KiB sub-page.
+struct PerfUploadShadow {
+  uint8_t* data = nullptr;
+  std::vector<uint64_t> valid;  // bit per 4 KiB sub-page
+  uint64_t cleared_for_swap = ~0ull;
+};
+PerfUploadShadow g_perf_shadow;
+}  // namespace
+
+void rex::graphics::metal::MetalCommandProcessor::PerfSampleUpload(
+    const uint8_t* guest, uint32_t start, uint32_t size) {
+  auto& perf = rex::graphics::GetPerfStats();
+  if (!perf.diff_enabled.load(std::memory_order_relaxed) || !size) {
+    return;
+  }
+  constexpr uint32_t kSub = 4096, kPage = 16384;
+  const uint64_t swaps = perf.swaps.load(std::memory_order_relaxed);
+  const uint64_t phase = swaps % 300;
+  if (phase > 1) {
+    return;
+  }
+  PerfUploadShadow& sh = g_perf_shadow;
+  if (!sh.data) {
+    sh.data = static_cast<uint8_t*>(
+        calloc(1, size_t(SharedMemory::kBufferSize)));
+    sh.valid.assign((SharedMemory::kBufferSize / kSub + 63) / 64, 0);
+    if (!sh.data) {
+      return;
+    }
+  }
+  const uint32_t first = start / kSub;
+  const uint32_t last = uint32_t((uint64_t(start) + size - 1) / kSub);
+  if (phase == 0) {
+    if (sh.cleared_for_swap != swaps) {
+      std::fill(sh.valid.begin(), sh.valid.end(), 0);
+      sh.cleared_for_swap = swaps;
+    }
+    for (uint32_t i = first; i <= last; ++i) {
+      std::memcpy(sh.data + size_t(i) * kSub, guest + size_t(i) * kSub, kSub);
+      sh.valid[i / 64] |= 1ull << (i % 64);
+    }
+    return;
+  }
+  // phase == 1: compare, per 16 KiB page.
+  uint64_t cmp = 0, chg4k = 0, chg64 = 0, nohist = 0, pages = 0, same = 0;
+  uint64_t cat_cmp = 0;
+  const uint32_t page_first = first / (kPage / kSub);
+  const uint32_t page_last = last / (kPage / kSub);
+  for (uint32_t pg = page_first; pg <= page_last; ++pg) {
+    bool all_hist = true, all_same = true;
+    for (uint32_t i = pg * (kPage / kSub); i < (pg + 1) * (kPage / kSub); ++i) {
+      if (i < first || i > last) {
+        continue;
+      }
+      if (!(sh.valid[i / 64] >> (i % 64) & 1)) {
+        nohist += kSub;
+        all_hist = false;
+        continue;
+      }
+      cmp += kSub;
+      const uint8_t* a = guest + size_t(i) * kSub;
+      const uint8_t* b = sh.data + size_t(i) * kSub;
+      if (std::memcmp(a, b, kSub) != 0) {
+        chg4k += kSub;
+        all_same = false;
+        for (uint32_t o = 0; o < kSub; o += 64) {
+          if (std::memcmp(a + o, b + o, 64) != 0) {
+            chg64 += 64;
+          }
+        }
+      }
+    }
+    if (all_hist) {
+      ++pages;
+      if (all_same) {
+        ++same;
+      }
+    }
+  }
+  (void)cat_cmp;
+  perf.dif_cmp.fetch_add(cmp, std::memory_order_relaxed);
+  perf.dif_chg4k.fetch_add(chg4k, std::memory_order_relaxed);
+  perf.dif_chg64.fetch_add(chg64, std::memory_order_relaxed);
+  perf.dif_nohist.fetch_add(nohist, std::memory_order_relaxed);
+  perf.dif_pages16.fetch_add(pages, std::memory_order_relaxed);
+  perf.dif_same16.fetch_add(same, std::memory_order_relaxed);
+  static const char* kReason[] = {"unknown", "vertex", "memexport", "guest_index", "shader_prim_index",
+      "index_copy", "tex_base", "tex_mips", "tex_both", "resolve_dest", "draw_material"};
+  const size_t ri = static_cast<size_t>(current_shared_memory_upload_reason_);
+  REXLOG_INFO("[perf-upload-diff] swaps={} reason={} start={:08X} size={} cmp={} chg4k={} chg64={} nohist={} pages16={} same16={}",
+              swaps, ri < 11 ? kReason[ri] : "?", start, size, cmp, chg4k, chg64, nohist, pages, same);
 }

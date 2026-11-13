@@ -22,6 +22,15 @@ struct PerfStats {
   std::atomic<uint64_t> tex_new{0};          // textures created (CreateTexture) so far
   std::atomic<uint64_t> ns_tex{0};           // wall ns in texture creation and guest-memory texture loads so far
   std::atomic<uint64_t> upload_bytes{0};     // shared-memory bytes uploaded to the GPU so far
+  std::atomic<uint64_t> ns_upload{0};        // wall ns on the command thread inside shared-memory RequestRanges
+  std::atomic<uint64_t> upload_runs{0};      // upload copy runs so far
+  // Upload bytes by request reason: vertex, memexport, index, texture, resolve, other.
+  std::atomic<uint64_t> up_cat[6] = {};
+  // Sampled upload-diff (every 300th frame vs the next; see PerfSampleUpload): bytes compared, bytes in 4 KiB
+  // sub-pages that differ, bytes in 64-byte lines that differ, 16 KiB pages compared / identical, bytes with no history.
+  std::atomic<uint64_t> dif_cmp{0}, dif_chg4k{0}, dif_chg64{0}, dif_pages16{0}, dif_same16{0}, dif_nohist{0};
+  std::atomic<uint64_t> swaps{0};            // frames presented so far
+  std::atomic<bool> diff_enabled{false};     // the app turns the sampled upload diff on
 };
 PerfStats& GetPerfStats();
 // Called from a command buffer completion handler: submission number, GPU time in ns.
