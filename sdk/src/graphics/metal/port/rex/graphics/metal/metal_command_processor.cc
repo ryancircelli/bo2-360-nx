@@ -10208,6 +10208,12 @@ bool MetalCommandProcessor::FootprintVariantNeeded(const Shader& shader) {
 
 #if defined(REX_GPU_TRACE)
 void MetalCommandProcessor::TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) {
+  if (ts_active_ && TsOnStage1()) {
+    TsBarrier(TsSync::kTraceReadback, [=, this] {
+      TraceReadbackGuestMemory(physical_address, length);
+    });
+    return;
+  }
   physical_address &= 0x1FFFFFFF;
   if (!length || !shared_memory_ || !shared_memory_->GetBuffer()) {
     return;
