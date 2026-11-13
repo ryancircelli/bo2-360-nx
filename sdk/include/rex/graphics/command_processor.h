@@ -164,6 +164,9 @@ class CommandProcessor {
   // finish their synchronous range/per-register writes before the next packet.
   bool type0_register_batching_active_ = false;
   virtual void WriteRegister(uint32_t index, uint32_t value);
+  // Trace replay writes registers straight into the register file (bypassing
+  // WriteRegister); backends caching state derived from registers must drop it.
+  virtual void OnRegistersRestoredExternally() {}
   uint32_t ReadRegisterValue(uint32_t index) const;
   virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base, uint32_t num_registers);
   virtual void WriteRegisterRangeFromRing(memory::RingBuffer* ring, uint32_t base,

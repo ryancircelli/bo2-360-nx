@@ -494,6 +494,7 @@ class MetalCommandProcessor final : public CommandProcessor {
 #endif
 
   void WriteRegister(uint32_t index, uint32_t value) override;
+  void OnRegistersRestoredExternally() override { ++draw_consts_input_epoch_; }
   void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,
                              uint32_t num_registers) override;
   void WriteRegisterRangeFromRing(rex::memory::RingBuffer* ring, uint32_t base,
@@ -1243,7 +1244,8 @@ class MetalCommandProcessor final : public CommandProcessor {
                                   const draw_util::ViewportInfo& viewport_info,
                                   uint32_t used_texture_mask,
                                   reg::RB_DEPTHCONTROL normalized_depth_control,
-                                  uint32_t normalized_color_mask);
+                                  uint32_t normalized_color_mask,
+                                  bool skip_register_inputs = false);
 
   // Metal device and command queue (from provider)
   MTL::Device* device_ = nullptr;
@@ -1734,6 +1736,38 @@ class MetalCommandProcessor final : public CommandProcessor {
   };
   BindlessCacheKey bindless_cache_key_;
   bool draw_consts_dirty_active_ = false;
+  // Lever C (metal_draw_consts_dirty): every register PrepareDrawConstants /
+  // UpdateSystemConstantValues read. A value-changing write to one bumps the
+  // epoch; a draw whose epoch and non-register inputs match the previous full
+  // computation reuses its results.
+  void BuildDrawConstsInputTable();
+  void NoteDrawConstsInputWrite(uint32_t index, uint32_t old_value,
+                                uint32_t value) {
+    if (index < draw_consts_input_reg_.size() && draw_consts_input_reg_[index] &&
+        old_value != value) {
+      ++draw_consts_input_epoch_;
+    }
+  }
+  std::vector<uint8_t> draw_consts_input_reg_;
+  uint64_t draw_consts_input_epoch_ = 1;
+  struct DrawConstsCache {
+    bool valid = false;
+    uint64_t epoch = 0;
+    uint32_t vp_width = 0, vp_height = 0;
+    uint32_t scale_x = 0, scale_y = 0;
+    bool native_scale = false, writes_depth = false, convert_z = false;
+    bool rasterization_done = false, polygonal = false, shared_memory_uav = false;
+    uint32_t prim_type = 0, path_select = 0;
+    uint32_t line_loop_closing_index = 0, index_endian = 0;
+    float tess_min = 0.0f, tess_max = 0.0f;
+    DrawDynamicState dynamic;
+    draw_util::ViewportInfo viewport_info = {};
+    reg::RB_DEPTHCONTROL depth_control = {};
+  };
+  DrawConstsCache draw_consts_cache_;
+  uint64_t draw_consts_hits_ = 0;
+  uint64_t draw_consts_calls_ = 0;
+  uint64_t draw_consts_verify_mismatches_ = 0;
   uint64_t fetch_value_epoch_ = 1;  // bumped when any fetch dword changes
   std::vector<MTL::Texture*> current_texture_bindless_resources_vertex_;
   std::vector<MTL::Texture*> current_texture_bindless_resources_pixel_;

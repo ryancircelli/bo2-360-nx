@@ -33,6 +33,8 @@ class TraceAccess {
     cp.WriteRegister(index, value);
   }
 
+  static void RegistersRestored(CommandProcessor& cp) { cp.OnRegistersRestoredExternally(); }
+
   // 256 DC_LUT_30_COLOR followed by 3 * 128 DC_LUT_PWL_DATA (Xenia layout).
   static constexpr size_t kGammaRampBytes = sizeof(uint32_t) * 256 + sizeof(uint32_t) * 3 * 128;
 
