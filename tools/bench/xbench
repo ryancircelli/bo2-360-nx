@@ -81,6 +81,9 @@ def main():
                         help="name=on/off; compared with its inverse (repeatable)")
     parser.add_argument("--base-cvar", action="append", default=[],
                         help="name=value applied to every replay (both states), e.g. metal_encode_thread=true")
+    parser.add_argument("--inproc", action="store_true",
+                        help="one process per trace+cvar; flip the cvar between passes (REX_REPLAY_BENCH_AB, "
+                             "off,on,on,off blocks); --repeats = number of 4-pass blocks")
     parser.add_argument("--repeats", type=int, default=5, help="paired A/B repetitions per trace")
     parser.add_argument("--passes", type=int, default=5, help="passes inside each replay; pass 1 is warm-up")
     parser.add_argument("--no-hash", action="store_true", help="skip final-draw color hash")
@@ -107,7 +110,43 @@ def main():
             on_value = "true" if on else "false"
             states = {"on": f"{name}={on_value}", "off": f"{name}={off_value}"}
             samples = {"on": [], "off": []}
-            for repetition in range(args.repeats):
+            if args.inproc:
+                if item.get("timing", True):
+                    with tempfile.TemporaryDirectory(prefix="xbench-") as td:
+                        command = [str(args.replay), str(trace), "-o", td, "--plugin", str(args.plugin),
+                                   "--backend", "any", "--bench", str(1 + 4 * args.repeats),
+                                   "--log-level", "error"]
+                        for base in args.base_cvar:
+                            command += ["--cvar", base]
+                        subprocess.run(command, check=True, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True,
+                                       env=dict(env, REX_REPLAY_BENCH_AB=name))
+                        data = json.loads(pathlib.Path(td, "bench.json").read_text())
+                    frames = data["frames_per_pass"]
+                    steady = data["pass_list"][1:]
+                    for b in range(0, len(steady) - 3, 4):
+                        block = steady[b:b + 4]
+                        for arm, key in ((0, "off"), (1, "on")):
+                            sel = [p for p in block if p["ab_arm"] == arm]
+                            mean = lambda f: statistics.mean(p[f] for p in sel) / frames
+                            samples[key].append({
+                                "command_thread_ms_per_frame": mean("cp_cpu_ms"),
+                                "command_wall_ms_per_frame": mean("cp_wall_ms"),
+                                "pass_wall_ms_per_frame": mean("pass_wall_ms"),
+                                "encode_thread_ms_per_frame": mean("encode_cpu_ms"),
+                                "draws_per_frame": data["draws_per_pass"] / frames,
+                                "frames": frames})
+                else:
+                    with tempfile.TemporaryDirectory(prefix="xbench-") as td:
+                        subprocess.run([str(args.replay), str(trace), "-o", td, "--plugin", str(args.plugin),
+                                        "--backend", "any", "--bench", "2", "--log-level", "error"],
+                                       check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+                        data = json.loads(pathlib.Path(td, "bench.json").read_text())
+                    frames = data["frames_per_pass"]
+                    dummy = {"command_thread_ms_per_frame": 1.0, "draws_per_frame": data["draws_per_pass"] / frames,
+                             "frames": frames}
+                    samples = {"on": [dict(dummy), dict(dummy)], "off": [dict(dummy), dict(dummy)]}
+            for repetition in range(0 if args.inproc else args.repeats):
                 order = ("off", "on") if repetition % 2 == 0 else ("on", "off")
                 for state in order:
                     with tempfile.TemporaryDirectory(prefix="xbench-") as td:
@@ -135,7 +174,8 @@ def main():
                    "picture_match": (hashes.get("on") is not None and hashes.get("on") == hashes.get("off")) if hashes else None,
                    **ratio_summary(log_ratios)}
             rows.append(row)
-            comparisons.append(row)
+            if item.get("timing", True):
+                comparisons.append(row)
             print(f'{item["game"]} {trace.stem} {name}: on/off={row["geometric_mean_on_off"]:.4f} '
                   f'CI95={row["ci95_on_off"]} picture_match={row["picture_match"]}', flush=True)
     games = {}

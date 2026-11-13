@@ -373,6 +373,7 @@ struct BenchPass {
   uint64_t pass_cpu_ns = 0;  // thread CPU of the whole pass
   uint64_t pass_wall_ns = 0;
   uint64_t encode_cpu_ns = 0;
+  int ab_arm = -1;
   uint64_t draws = 0;
   uint64_t packets = 0;
   uint64_t segments = 0;
@@ -1465,7 +1466,17 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
   }
   const char* timeline_path = std::getenv("REX_REPLAY_BENCH_TIMELINE");
   std::vector<ReplayHooks::TimelineEvent> timeline;
+  // REX_REPLAY_BENCH_AB=<bool cvar>: flip the cvar between passes inside this
+  // process (pass 1 warm-up runs off; later passes follow off,on,on,off) so
+  // on/off share one trace load and one warm cache.
+  const char* ab_cvar = std::getenv("REX_REPLAY_BENCH_AB");
   for (uint32_t i = 0; i < passes; ++i) {
+    if (ab_cvar && *ab_cvar) {
+      const uint32_t k = i ? i - 1 : 0;
+      const int arm = i ? (((k & 3) == 1 || (k & 3) == 2) ? 1 : 0) : 0;
+      rex::cvar::SetFlagByName(ab_cvar, arm ? "true" : "false");
+      results[i].ab_arm = arm;
+    }
     if (timeline_path && i + 1 == passes) {
       timeline.reserve(1u << 20);
       g_bench_timeline = &timeline;
@@ -1552,10 +1563,10 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
     const BenchPass& p = results[i];
     json += fmt::format(
         "{}\n    {{\"cp_cpu_ms\": {:.3f}, \"cp_wall_ms\": {:.3f}, \"pass_cpu_ms\": {:.3f}, "
-        "\"pass_wall_ms\": {:.3f}, \"encode_cpu_ms\": {:.3f}, \"cp_cycles\": {}, "
+        "\"pass_wall_ms\": {:.3f}, \"encode_cpu_ms\": {:.3f}, \"ab_arm\": {}, \"cp_cycles\": {}, "
         "\"cp_instructions\": {}, \"draws\": {}, \"segments\": {}}}",
         i ? "," : "", p.cp_cpu_ns / 1e6, p.cp_wall_ns / 1e6, p.pass_cpu_ns / 1e6,
-        p.pass_wall_ns / 1e6, p.encode_cpu_ns / 1e6, p.cp_cycles, p.cp_instructions, p.draws,
+        p.pass_wall_ns / 1e6, p.encode_cpu_ns / 1e6, p.ab_arm, p.cp_cycles, p.cp_instructions, p.draws,
         p.segments);
   }
   json += "\n  ]\n}\n";
