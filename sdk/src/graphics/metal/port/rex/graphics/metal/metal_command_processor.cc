@@ -2028,12 +2028,23 @@ bool MetalCommandProcessor::SetupContext() {
   {
     // [cp-two-stage] every backend object below binds the register file it is
     // given, so pick stage 2's own copy before creating them.
+    // Armed = it may be on at some point (startup request, env override,
+    // explicit switchable mode, or a benchmark A/B factor naming it); only an
+    // armed CP keeps the second file and honours runtime requests, latched at
+    // a drained IssueSwap.
     const char* env = MetalDebugEnv("CP_TWO_STAGE");  // getenv-ok: once
-    const bool requested =
-        env ? env[0] == '1' : REXCVAR_GET(metal_cp_two_stage);
-    if (requested && hle_census_hooks_) {
+    if (env) {
+      RequestCpTwoStage(env[0] == '1');
+    }
+    const bool requested = CpTwoStageRequested();
+    const char* switchable = MetalDebugEnv("CP_TWO_STAGE_SWITCHABLE");  // getenv-ok: once
+    const char* factors = std::getenv("REX_BO2ZM_BENCHMARK_AB_FACTORS");  // getenv-ok: once
+    const bool armed = requested || (switchable && switchable[0] == '1') ||
+                       (factors && std::strstr(factors, "metal_cp_two_stage"));
+    ts_start_requested_ = requested;
+    if (armed && hle_census_hooks_) {
       REXLOG_WARN("[cp-two-stage] off: HLE census/tiling hooks need one thread");
-    } else if (requested) {
+    } else if (armed) {
       ts_register_file_ = std::make_unique<RegisterFile>(*CommandProcessor::register_file_);
       register_file_ = ts_register_file_.get();
     }
@@ -2285,7 +2296,11 @@ bool MetalCommandProcessor::SetupContext() {
   }
   RegisterInitialResidencySetResources();
   if (ts_register_file_) {
-    TsStart();
+    REXLOG_INFO("[cp-two-stage] armed (runtime switch at drained frame boundaries), start {}",
+                ts_start_requested_ ? "on" : "off");
+    if (ts_start_requested_) {
+      TsStart();
+    }
   }
   return true;
 }
@@ -2432,6 +2447,9 @@ void MetalCommandProcessor::ShutdownContext() {
     TsBarrier(TsSync::kShutdown, [this] { ShutdownContext(); });
     TsStop();
     return;
+  }
+  if (TsOnStage1()) {
+    TsStop();  // armed but inactive: the parked stage-2 thread (if any)
   }
   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kManual)) {
     REXLOG_ERROR("Metal ShutdownContext: failed to flush prepared draw queue");
@@ -2804,10 +2822,31 @@ void MetalCommandProcessor::MaybeLogMemReport() {
 void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
-  if (ts_active_ && TsOnStage1()) {
-    TsBarrier(TsSync::kSwap, [=, this] {
+  if (ts_register_file_ && TsOnStage1() && !ts_in_swap_) {
+    // [cp-two-stage] the swap runs on whichever thread owns Metal now; the
+    // mode request is latched only after it has committed the frame.
+    const bool want = CpTwoStageRequested();
+    ts_in_swap_ = true;
+    if (ts_active_) {
+      TsBarrier(TsSync::kSwap, [=, this] {
+        IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+        if (!want) {
+          TsEndFrameWork("cp two-stage switch off");
+        }
+      });
+    } else {
       IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
-    });
+    }
+    ts_in_swap_ = false;
+    if (want != ts_active_) {
+      if (want) {
+        TsStart();
+      } else {
+        ts_active_ = false;
+        TsLogStats("switch off");
+      }
+      REXLOG_INFO("Metal CP two-stage: {} at drained frame boundary", want ? "on" : "off");
+    }
     return;
   }
   {
@@ -10590,6 +10629,11 @@ void MetalCommandProcessor::WriteRegistersFromMem(uint32_t start_index,
     return;
   }
   if (TryWriteKnownRegisterRangeFromMem(start_index, base, num_registers)) {
+    if (ts_register_file_ && TsOnStage1()) {
+      // [cp-two-stage] armed but inactive: the guest file needs the range too.
+      rex::memory::copy_and_swap_32_unaligned(
+          &CommandProcessor::register_file_->values[start_index], base, num_registers);
+    }
     return;
   }
   CommandProcessor::WriteRegistersFromMem(start_index, base, num_registers);
@@ -10602,7 +10646,7 @@ void MetalCommandProcessor::WriteRegisterRangeFromRing(rex::memory::RingBuffer* 
     return;
   }
   if (CanFastWriteRegisterRange(base, num_registers)) {
-    if (ts_active_ && TsOnStage1()) {
+    if (ts_register_file_ && TsOnStage1()) {
       rex::memory::RingBuffer::ReadRange range =
           ring->BeginRead(num_registers * sizeof(uint32_t));
       const uint32_t first_registers =
@@ -10900,7 +10944,9 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   if (!valid_register) {
     return;
   }
-  ApplyRegisterWrite(index, old_value, value);
+  // The stored value (the base may adjust it, e.g. COHER_STATUS_HOST); with an
+  // armed but inactive two-stage CP this mirrors it into stage 2's file.
+  ApplyRegisterWrite(index, old_value, CommandProcessor::register_file_->values[index]);
 }
 
 void MetalCommandProcessor::ApplyRegisterWrite(uint32_t index, uint32_t old_value,
