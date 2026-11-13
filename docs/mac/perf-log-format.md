@@ -59,6 +59,7 @@ for the statistics they feed and optional otherwise.
 | `present_wait_ms` | yes | Time the submit thread was blocked waiting for something outside its control: the next drawable, the vsync, or a frame-in-flight fence. |
 | `compile_ms` | recommended | Time spent compiling a shader or pipeline synchronously inside this frame. The goal of the pipeline prewarm list (`pso-list-format.md`) is that this is `0` in every frame after loading. |
 | `draws` | optional | Draw calls issued. |
+| `cpu2_ms` | optional | Metal two-stage command processor (`metal_cp_two_stage`): CPU time of its second thread (Metal encoding and submission, idle waits excluded) in this frame. `cpu_ms` is then the ring thread's parsing stage only; the frame's CPU cost is `max(cpu_ms, cpu2_ms)` when they overlap and their sum as total work. `0` when off. |
 | `rt_switches` | optional | Render target (pass) changes. |
 | `mem_mb` | optional | Resident memory of the process. |
 
