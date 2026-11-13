@@ -1331,7 +1331,8 @@ MetalCommandProcessor::MetalCommandProcessor(
     : CommandProcessor(graphics_system, kernel_state) {
   cmdcost_all_active_ = CmdcostAllRequested();
   encode_thread_active_ = EncodeThreadRequested() || cmdcost_all_active_;
-  REXLOG_WARN("[cmdcost] all={}", cmdcost_all_active_ ? "on" : "off");
+  std::fprintf(stderr, "[warn] [cmdcost] all=%s\n",
+               cmdcost_all_active_ ? "on" : "off");
   type0_register_batching_active_ = Type0BatchingRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
