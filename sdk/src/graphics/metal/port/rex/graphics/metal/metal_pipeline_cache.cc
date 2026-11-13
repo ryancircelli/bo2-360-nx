@@ -4776,7 +4776,7 @@ MetalPipelineCache::GetOrCreatePipelineState(
   // formats and the rendering key, so an identical input tuple maps to the same
   // cached handle: skip the description build, XXH3 and map lookup.  Handles
   // are never erased except by the full clear that resets last_fast_handle_.
-  const bool fastpath = REXCVAR_GET(metal_draw_fastpath);
+  const bool fastpath = draw_fastpath_all_ || REXCVAR_GET(metal_draw_fastpath);
   if (fastpath && last_fast_handle_ &&
       last_fast_vertex_translation_ == vertex_translation &&
       last_fast_pixel_translation_ == pixel_translation &&

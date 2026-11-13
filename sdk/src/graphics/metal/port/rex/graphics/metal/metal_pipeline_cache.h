@@ -518,6 +518,8 @@ class MetalPipelineCache {
   std::unordered_map<uint64_t, std::unique_ptr<PipelineHandle>> pipeline_cache_;
   // [draw-fastpath] last standard-pipeline lookup (command thread only).
   PipelineHandle* last_fast_handle_ = nullptr;
+  // [cmdcost-all] master latch, set by the command processor at a frame boundary.
+  bool draw_fastpath_all_ = false;
   MetalShader::MetalTranslation* last_fast_vertex_translation_ = nullptr;
   MetalShader::MetalTranslation* last_fast_pixel_translation_ = nullptr;
   PipelineAttachmentFormats last_fast_formats_ = {};
@@ -566,6 +568,11 @@ class MetalPipelineCache {
   std::filesystem::path shader_storage_title_root_;
 
  public:
+  // [cmdcost-all] command thread only; call at a frame boundary.
+  void SetDrawFastpathAll(bool on) {
+    draw_fastpath_all_ = on;
+    last_fast_handle_ = nullptr;
+  }
   const std::filesystem::path& shader_storage_title_root() const {
     return shader_storage_title_root_;
   }

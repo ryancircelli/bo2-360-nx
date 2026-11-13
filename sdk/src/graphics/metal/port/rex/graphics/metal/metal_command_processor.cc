@@ -1329,7 +1329,8 @@ void MergeFetchConstantDwordMask(
 MetalCommandProcessor::MetalCommandProcessor(
     MetalGraphicsSystem* graphics_system, system::KernelState* kernel_state)
     : CommandProcessor(graphics_system, kernel_state) {
-  encode_thread_active_ = EncodeThreadRequested();
+  cmdcost_all_active_ = CmdcostAllRequested();
+  encode_thread_active_ = EncodeThreadRequested() || cmdcost_all_active_;
   type0_register_batching_active_ = Type0BatchingRequested();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
@@ -2113,6 +2114,7 @@ bool MetalCommandProcessor::SetupContext() {
   // management).
   pipeline_cache_ =
       std::make_unique<MetalPipelineCache>(device_, *register_file_);
+  pipeline_cache_->SetDrawFastpathAll(cmdcost_all_active_);
   {
     bool edram_rov_used = false;
     bool gamma_render_target_as_unorm8 =
@@ -2820,7 +2822,20 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // the old command buffer has been committed. Only future encoders see this mode.
   // GPU work may still be in flight, but it has no CPU encoder/recorder state left.
   assert_true(!current_render_encoder_ && !current_command_buffer_);
-  const bool encode_thread_requested = EncodeThreadRequested();
+  const bool cmdcost_all_requested = CmdcostAllRequested();
+  if (cmdcost_all_active_ != cmdcost_all_requested) {
+    cmdcost_all_active_ = cmdcost_all_requested;
+    // Fast-path memo keys were not maintained while off; drop them.
+    sampler_fast_vertex_.valid = false;
+    sampler_fast_pixel_.valid = false;
+    if (pipeline_cache_) {
+      pipeline_cache_->SetDrawFastpathAll(cmdcost_all_active_);
+    }
+    REXLOG_INFO("Metal cmdcost master: {} at drained frame boundary",
+                cmdcost_all_active_ ? "on" : "off");
+  }
+  const bool encode_thread_requested =
+      EncodeThreadRequested() || cmdcost_all_active_;
   if (encode_thread_active_ != encode_thread_requested) {
     encode_thread_active_ = encode_thread_requested;
     REXLOG_INFO("Metal encode thread: {} at drained frame boundary", encode_thread_active_ ? "on" : "off");
@@ -2855,10 +2870,11 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // watch is armed, so unchanged pages are not re-copied every frame. GPU-
   // written pages (resolve/memexport) are unaffected either way. Risk: a CPU
   // write that bypasses the watch is no longer repaired by the frame refresh.
-  static const bool shmem_upload_fix = [] {
+  static const bool shmem_upload_fix_env = [] {
     const char* v = std::getenv("REX_SHMEM_UPLOAD_FIX");
     return v && v[0] == '1';
   }();
+  const bool shmem_upload_fix = shmem_upload_fix_env || cmdcost_all_active_;
   if (shared_memory_ && REXCVAR_GET(clear_memory_page_state) &&
       !shmem_upload_fix) {
     shared_memory_->SetSystemPageBlocksValidWithGpuDataWritten();
@@ -6560,8 +6576,10 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     MTL::RenderPassDescriptor* render_pass_descriptor,
     UniformBufferInfo& uniforms_out, DrawDynamicState& dynamic_state_out) {
   const bool lite2 = DrawPrepLite2Enabled();
-  const bool draw_fastpath = REXCVAR_GET(metal_draw_fastpath);
-  const bool const_fastpath = REXCVAR_GET(metal_const_fastpath) &&
+  const bool draw_fastpath =
+      cmdcost_all_active_ || REXCVAR_GET(metal_draw_fastpath);
+  const bool const_fastpath = (cmdcost_all_active_ ||
+                               REXCVAR_GET(metal_const_fastpath)) &&
                               !REXCVAR_GET(metal_constant_payload_cache);
   // Determine primitive type characteristics
   bool primitive_polygonal = draw_util::IsPrimitivePolygonal(regs);
@@ -13258,8 +13276,8 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
       }
       current_render_pass_trace_ =
           pass_trace::BeginRender(current_command_buffer_, pass_descriptor, "draw");
-      if (REXCVAR_GET(metal_encode_thread) &&
-          REXCVAR_GET(metal_encode_thread_xpass)) {
+      if (encode_thread_active_ &&
+          (cmdcost_all_active_ || REXCVAR_GET(metal_encode_thread_xpass))) {
         // Cross-pass encode thread: the worker creates the encoder.
         pass_trace::SetEncodeBarrier([](MTL::CommandBuffer*) {
           if (g_xpass_recorder) g_xpass_recorder->Barrier();

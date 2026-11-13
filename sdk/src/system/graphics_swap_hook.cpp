@@ -61,5 +61,13 @@ std::atomic<bool>& Type0BatchingSwitch() {
 }
 bool Type0BatchingRequested() { return Type0BatchingSwitch().load(std::memory_order_relaxed); }
 void RequestType0Batching(bool on) { Type0BatchingSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& CmdcostAllSwitch() {
+  static std::atomic<bool> requested{rex::cvar::Query<bool>("metal_cmdcost_all")};
+  return requested;
+}
+}
+bool CmdcostAllRequested() { return CmdcostAllSwitch().load(std::memory_order_relaxed); }
+void RequestCmdcostAll(bool on) { CmdcostAllSwitch().store(on, std::memory_order_relaxed); }
 }  // namespace rex::graphics::metal
 #endif
