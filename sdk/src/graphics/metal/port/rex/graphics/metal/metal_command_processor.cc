@@ -136,6 +136,21 @@ DEFINE_bool(
     "dirty-on-write behavior.",
     "Metal");
 
+DEFINE_bool(
+    metal_reg_early_out, false,
+    "Skip type-0 register writes whose value is unchanged for an allow-list of register families. Runtime-switchable at a drained frame boundary.",
+    "Metal");
+
+DEFINE_bool(
+    metal_bindless_cache, false,
+    "Reuse the previous draw's bindless tables when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
+    "Metal");
+
+DEFINE_bool(
+    metal_draw_consts_dirty, false,
+    "Skip recomputing viewport/scissor/system constants when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
+    "Metal");
+
 // [gpu-capture] Trace-only (docs/native-shaders.md): FABLE2_GPU_CAPTURE_PATH=<x.gputrace>
 // with FABLE2_GPU_CAPTURE_AT_S=<seconds after the first swap> and optional
 // FABLE2_GPU_CAPTURE_FRAMES=<n> (default 1) writes an in-process Metal GPU trace of the
@@ -1337,12 +1352,38 @@ MetalCommandProcessor::MetalCommandProcessor(
   std::fprintf(stderr, "[warn] [encode-nosync] %s\n",
                encode_nosync_active_ ? "on" : "off");
   type0_register_batching_active_ = Type0BatchingRequested();
+  reg_early_out_active_ = RegEarlyOutRequested();
+  bindless_cache_active_ = BindlessCacheRequested();
+  draw_consts_dirty_active_ = DrawConstsDirtyRequested();
+  BuildDrawConstsInputTable();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
       kMaxPendingSharedMemoryWriteCapacity);
 }
 
 MetalCommandProcessor::~MetalCommandProcessor() {
+  if (reg_early_out_active_ || bindless_cache_active_ ||
+      draw_consts_dirty_active_) {
+    std::fprintf(stderr,
+                 "[warn] [cpstate] final reg_early_out(%s) fetch=%llu "
+                 "boolloop=%llu bindless(%s)=%llu/%llu drawconsts(%s)=%llu/%llu "
+                 "verify_mismatch=%llu bindless_miss=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                 reg_early_out_active_ ? "on" : "off",
+                 (unsigned long long)reg_early_out_hits_[0],
+                 (unsigned long long)reg_early_out_hits_[1],
+                 bindless_cache_active_ ? "on" : "off",
+                 (unsigned long long)bindless_cache_hits_,
+                 (unsigned long long)bindless_cache_calls_,
+                 draw_consts_dirty_active_ ? "on" : "off",
+                 (unsigned long long)draw_consts_hits_,
+                 (unsigned long long)draw_consts_calls_,
+                 (unsigned long long)draw_consts_verify_mismatches_,
+                 (unsigned long long)bindless_cache_miss_[0], (unsigned long long)bindless_cache_miss_[1],
+                 (unsigned long long)bindless_cache_miss_[2], (unsigned long long)bindless_cache_miss_[3],
+                 (unsigned long long)bindless_cache_miss_[4], (unsigned long long)bindless_cache_miss_[5],
+                 (unsigned long long)bindless_cache_miss_[6], (unsigned long long)bindless_cache_miss_[7],
+                 (unsigned long long)bindless_cache_miss_[8], (unsigned long long)bindless_cache_miss_[9]);
+  }
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
   // End any active render encoder before releasing
@@ -1408,6 +1449,7 @@ MetalCommandProcessor::~MetalCommandProcessor() {
   render_encoder_bindless_table_bind_mesh_path_ = false;
   render_encoder_bindless_table_bind_tessellation_ = false;
   current_bindless_stage_root_arguments_ = {};
+  bindless_cache_key_.valid = false;
 }
 
 void MetalCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
@@ -2856,6 +2898,44 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     type0_register_batching_active_ = type0_requested;
     REXLOG_INFO("Metal type0 register batching: {} at drained frame boundary",
                 type0_requested ? "on" : "off");
+  }
+  if (reg_early_out_active_ || bindless_cache_active_ ||
+      draw_consts_dirty_active_) {
+    static uint64_t cpstate_frames = 0;
+    if ((++cpstate_frames % 600) == 0) {
+      std::fprintf(stderr,
+                   "[warn] [cpstate] frame=%llu reg_early_out fetch=%llu "
+                   "boolloop=%llu bindless=%llu/%llu drawconsts=%llu/%llu "
+                   "verify_mismatch=%llu bindless_miss=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                   (unsigned long long)cpstate_frames,
+                   (unsigned long long)reg_early_out_hits_[0],
+                   (unsigned long long)reg_early_out_hits_[1],
+                   (unsigned long long)bindless_cache_hits_,
+                   (unsigned long long)bindless_cache_calls_,
+                   (unsigned long long)draw_consts_hits_,
+                   (unsigned long long)draw_consts_calls_,
+                   (unsigned long long)draw_consts_verify_mismatches_,
+                   (unsigned long long)bindless_cache_miss_[0], (unsigned long long)bindless_cache_miss_[1],
+                   (unsigned long long)bindless_cache_miss_[2], (unsigned long long)bindless_cache_miss_[3],
+                   (unsigned long long)bindless_cache_miss_[4], (unsigned long long)bindless_cache_miss_[5],
+                   (unsigned long long)bindless_cache_miss_[6], (unsigned long long)bindless_cache_miss_[7],
+                   (unsigned long long)bindless_cache_miss_[8], (unsigned long long)bindless_cache_miss_[9]);
+    }
+  }
+  if (reg_early_out_active_ != RegEarlyOutRequested()) {
+    reg_early_out_active_ = RegEarlyOutRequested();
+    REXLOG_INFO("Metal reg early-out: {} at drained frame boundary (hits so far: fetch {}, bool/loop {})", reg_early_out_active_ ? "on" : "off", reg_early_out_hits_[0], reg_early_out_hits_[1]);
+  }
+  if (bindless_cache_active_ != BindlessCacheRequested()) {
+    bindless_cache_active_ = BindlessCacheRequested();
+    bindless_cache_key_.valid = false;
+    REXLOG_INFO("Metal bindless cache: {} at drained frame boundary (hits so far: {}/{})", bindless_cache_active_ ? "on" : "off", bindless_cache_hits_, bindless_cache_calls_);
+  }
+  if (draw_consts_dirty_active_ != DrawConstsDirtyRequested()) {
+    draw_consts_dirty_active_ = DrawConstsDirtyRequested();
+    ++draw_consts_input_epoch_;
+    draw_consts_cache_.valid = false;
+    REXLOG_INFO("Metal draw consts dirty: {} at drained frame boundary (hits so far: {}/{}, verify mismatches {})", draw_consts_dirty_active_ ? "on" : "off", draw_consts_hits_, draw_consts_calls_, draw_consts_verify_mismatches_);
   }
   CloseFrameLifetime();
   // Proactive descriptor-pressure trimming: at frame boundaries the GPU has
@@ -6603,10 +6683,6 @@ bool MetalCommandProcessor::PrepareDrawConstants(
                             1280, 720, vp_width, vp_height);
   draw_util::ViewportInfo viewport_info;
   auto depth_control = draw_util::GetNormalizedDepthControl(regs);
-  auto dynamic_depth_control = depth_control;
-  if (!is_rasterization_done) {
-    dynamic_depth_control.value = 0;
-  }
   constexpr uint32_t kViewportBoundsMax = 32767;
   bool host_render_targets_used = true;
   bool convert_z_to_float24 = host_render_targets_used &&
@@ -6621,6 +6697,65 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   if (pass_native_scale) {
     draw_resolution_scale_x = 1;
     draw_resolution_scale_y = 1;
+  }
+  // Lever C (metal_draw_consts_dirty): viewport info, scissor, dynamic state
+  // and the register-derived system constants are pure functions of the
+  // registers in draw_consts_input_reg_ (tracked by epoch) plus the values
+  // keyed below. When all match the previous full computation, reuse it.
+  const bool dc_active = draw_consts_dirty_active_;
+  const uint32_t dc_prim_type = uint32_t(regs.Get<reg::VGT_DRAW_INITIATOR>().prim_type);
+  const uint32_t dc_path_select = uint32_t(regs.Get<reg::VGT_OUTPUT_PATH_CNTL>().path_select);
+  const bool dc_writes_depth = pixel_shader && pixel_shader->writes_depth();
+  bool dc_hit = false;
+  bool dc_verify = false;
+  float dc_tess_min = 0.0f, dc_tess_max = 0.0f;
+  draw_util::ViewportInfo dc_verify_viewport_info = {};
+  DrawDynamicState dc_verify_dynamic;
+  DxbcShaderTranslator::SystemConstants dc_verify_sysconsts;
+  if (dc_active) {
+    ++draw_consts_calls_;
+    GetTessellationFactorRange(regs, dc_tess_min, dc_tess_max);
+    const DrawConstsCache& k = draw_consts_cache_;
+    dc_hit = k.valid && k.epoch == draw_consts_input_epoch_ &&
+             k.vp_width == vp_width && k.vp_height == vp_height &&
+             k.scale_x == draw_resolution_scale_x &&
+             k.scale_y == draw_resolution_scale_y &&
+             k.native_scale == pass_native_scale &&
+             k.writes_depth == dc_writes_depth &&
+             k.convert_z == convert_z_to_float24 &&
+             k.rasterization_done == is_rasterization_done &&
+             k.polygonal == primitive_polygonal &&
+             k.shared_memory_uav == shared_memory_is_uav &&
+             k.prim_type == dc_prim_type && k.path_select == dc_path_select &&
+             k.line_loop_closing_index ==
+                 primitive_processing_result.line_loop_closing_index &&
+             k.index_endian ==
+                 uint32_t(primitive_processing_result.host_shader_index_endian) &&
+             k.tess_min == dc_tess_min && k.tess_max == dc_tess_max &&
+             !(render_target_cache_ && render_target_cache_->RtShrinkVerify());
+    static const bool verify_env = [] {
+      const char* v = MetalDebugEnv("DRAW_CONSTS_VERIFY");
+      return v && v[0] == '1';
+    }();
+    if (dc_hit && verify_env) {
+      dc_verify = true;
+      dc_hit = false;
+    }
+  }
+  if (dc_hit) {
+    ++draw_consts_hits_;
+    viewport_info = draw_consts_cache_.viewport_info;
+    const DrawDynamicState& cd = draw_consts_cache_.dynamic;
+    dynamic_state_out.viewport = cd.viewport;
+    dynamic_state_out.scissor = cd.scissor;
+    dynamic_state_out.viewport_info = cd.viewport_info;
+    dynamic_state_out.depth_control = cd.depth_control;
+    dynamic_state_out.primitive_polygonal = cd.primitive_polygonal;
+    dynamic_state_out.rasterization_enabled = cd.rasterization_enabled;
+  } else {
+  auto dynamic_depth_control = depth_control;
+  if (!is_rasterization_done) {
+    dynamic_depth_control.value = 0;
   }
   draw_util::GetViewportInfoArgs gviargs{};
   gviargs.Setup(
@@ -6683,11 +6818,67 @@ bool MetalCommandProcessor::PrepareDrawConstants(
 
   // Update full system constants from GPU registers.
   // normalized_color_mask was already computed above for render target update.
+  }  // !dc_hit
+  if (dc_verify) {
+    // Reference = cached register part + this draw's texture part.
+    UpdateSystemConstantValues(
+        shared_memory_is_uav, primitive_polygonal,
+        primitive_processing_result.line_loop_closing_index,
+        primitive_processing_result.host_shader_index_endian, viewport_info,
+        used_texture_mask, depth_control, normalized_color_mask, true);
+    dc_verify_sysconsts = system_constants_;
+  }
   UpdateSystemConstantValues(
       shared_memory_is_uav, primitive_polygonal,
       primitive_processing_result.line_loop_closing_index,
       primitive_processing_result.host_shader_index_endian, viewport_info,
-      used_texture_mask, depth_control, normalized_color_mask);
+      used_texture_mask, depth_control, normalized_color_mask, dc_hit);
+  if (dc_active && !dc_hit) {
+    DrawConstsCache& k = draw_consts_cache_;
+    if (dc_verify) {
+      const DrawDynamicState& cd = k.dynamic;
+      if (std::memcmp(&cd.viewport, &dynamic_state_out.viewport,
+                      sizeof(cd.viewport)) != 0 ||
+          std::memcmp(&cd.scissor, &dynamic_state_out.scissor,
+                      sizeof(cd.scissor)) != 0 ||
+          std::memcmp(&k.viewport_info, &viewport_info, sizeof(viewport_info)) !=
+              0 ||
+          cd.depth_control.value != dynamic_state_out.depth_control.value ||
+          std::memcmp(&dc_verify_sysconsts, &system_constants_,
+                      sizeof(system_constants_)) != 0) {
+        if (draw_consts_verify_mismatches_++ < 8) {
+          REXLOG_WARN("[draw-consts-dirty] verify mismatch #{} (cached result != recomputed; a register writer was missed)", draw_consts_verify_mismatches_);
+        }
+      }
+    }
+    k.valid = true;
+    k.epoch = draw_consts_input_epoch_;
+    k.vp_width = vp_width;
+    k.vp_height = vp_height;
+    k.scale_x = draw_resolution_scale_x;
+    k.scale_y = draw_resolution_scale_y;
+    k.native_scale = pass_native_scale;
+    k.writes_depth = dc_writes_depth;
+    k.convert_z = convert_z_to_float24;
+    k.rasterization_done = is_rasterization_done;
+    k.polygonal = primitive_polygonal;
+    k.shared_memory_uav = shared_memory_is_uav;
+    k.prim_type = dc_prim_type;
+    k.path_select = dc_path_select;
+    k.line_loop_closing_index =
+        primitive_processing_result.line_loop_closing_index;
+    k.index_endian =
+        uint32_t(primitive_processing_result.host_shader_index_endian);
+    k.tess_min = dc_tess_min;
+    k.tess_max = dc_tess_max;
+    k.viewport_info = viewport_info;
+    k.dynamic.viewport = dynamic_state_out.viewport;
+    k.dynamic.scissor = dynamic_state_out.scissor;
+    k.dynamic.viewport_info = dynamic_state_out.viewport_info;
+    k.dynamic.depth_control = dynamic_state_out.depth_control;
+    k.dynamic.primitive_polygonal = dynamic_state_out.primitive_polygonal;
+    k.dynamic.rasterization_enabled = dynamic_state_out.rasterization_enabled;
+  }
 
   // Diagnostic (FABLE2_DIAG_TEX_VS=<vs hash hex>): log the texture fetch
   // constants and the resolution-scaled flag of draws with this vertex shader,
@@ -7915,6 +8106,104 @@ bool MetalCommandProcessor::PopulateBindlessTables(
   }
 
   constexpr size_t kGraphicsRootStage = kStageVertex;
+  // Lever B (metal_bindless_cache): when every input and every piece of derived
+  // state is identical to the previous completed call on this encoder, the full
+  // path below is a no-op (entries diff empty -> root reuse, same CBV arrays,
+  // serial-skipped resource sets, binds already applied), so return early.
+  BindlessCacheKey cache_key;
+  const bool cache_enabled = bindless_cache_active_;
+  if (cache_enabled) {
+    ++bindless_cache_calls_;
+    cache_key.valid = true;
+    cache_key.shared_memory_is_uav = shared_memory_is_uav;
+    cache_key.use_geometry_emulation = use_geometry_emulation;
+    cache_key.use_tessellation_emulation = use_tessellation_emulation;
+    cache_key.shared_memory_usage_bits =
+        MetalResourceUsageBits(shared_memory_usage);
+    cache_key.frame = frame_current_;
+    cache_key.fixed_source_serial =
+        GetBindlessFixedResourceSourceSerial(shared_memory_usage);
+    cache_key.encoder = current_render_encoder_;
+    const StageRootArgumentAllocation& cache_root =
+        current_bindless_stage_root_arguments_[kGraphicsRootStage];
+    cache_key.root_buffer = cache_root.valid ? cache_root.buffer : nullptr;
+    cache_key.root_serial = current_bindless_stage_root_serials_[kGraphicsRootStage];
+    for (size_t stage = 0; stage < kStageCount; ++stage) {
+      cache_key.active_cbv_masks[stage] = uniforms.active_cbv_masks[stage];
+      for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
+        const UniformBufferInfo::Cbv& u = uniforms.cbvs[stage][cbv];
+        const bool active = uniforms.active_cbv_masks[stage] & (uint32_t(1) << cbv);
+        cache_key.cbvs[stage][cbv] = {active ? u.buffer : nullptr,
+                                      active ? uint64_t(u.offset) : 0,
+                                      active ? u.gpu_address : 0};
+      }
+    }
+    const BindlessCacheKey& last = bindless_cache_key_;
+    int miss = -1;
+    if (!last.valid) miss = 0;
+    else if (last.shared_memory_is_uav != shared_memory_is_uav ||
+             last.use_geometry_emulation != use_geometry_emulation ||
+             last.use_tessellation_emulation != use_tessellation_emulation ||
+             last.shared_memory_usage_bits != cache_key.shared_memory_usage_bits) miss = 1;
+    else if (last.frame != cache_key.frame) miss = 2;
+    else if (last.fixed_source_serial != cache_key.fixed_source_serial) miss = 3;
+    else if (last.encoder != cache_key.encoder || !current_render_encoder_) miss = 4;
+    else if (last.root_buffer != cache_key.root_buffer) miss = 5;
+    else if (last.root_serial != cache_key.root_serial) miss = 6;
+    else if (!(last.active_cbv_masks == cache_key.active_cbv_masks)) miss = 7;
+    bool hit = miss < 0;
+    if (hit) {
+      for (size_t stage = 0; stage < kStageCount && hit; ++stage) {
+        for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
+          const auto& a = last.cbvs[stage][cbv];
+          const auto& b = cache_key.cbvs[stage][cbv];
+          if (a.buffer != b.buffer || a.offset != b.offset ||
+              a.gpu_address != b.gpu_address) {
+            hit = false;
+            miss = 8;
+            ++bindless_cache_cbv_miss_[stage * kCbvSlotCount + cbv < 64 ? stage * kCbvSlotCount + cbv : 63];
+            break;
+          }
+        }
+      }
+    }
+    if (hit) {
+      const uint64_t graphics_root_serial =
+          current_bindless_stage_root_serials_[kGraphicsRootStage];
+      const bool use_mesh = use_geometry_emulation || use_tessellation_emulation;
+      hit = current_bindless_stage_root_valid_[kGraphicsRootStage] &&
+            current_bindless_stage_root_entries_valid_[kGraphicsRootStage] &&
+            current_bindless_stage_root_arguments_[kGraphicsRootStage].valid &&
+            current_bindless_shared_memory_is_uav_ == shared_memory_is_uav &&
+            heap_binds_set_on_encoder_ &&
+            render_encoder_bindless_fixed_resources_serial_ ==
+                current_bindless_fixed_resource_set_.serial &&
+            render_encoder_bindless_texture_resources_serial_ ==
+                current_bindless_texture_resource_set_.serial &&
+            render_encoder_bindless_root_resources_serial_ ==
+                current_bindless_root_resource_set_.serial &&
+            current_bindless_fixed_resource_set_.serial &&
+            current_bindless_texture_resource_set_.serial &&
+            current_bindless_root_resource_set_.serial &&
+            render_encoder_bindless_stage_root_bind_serials_[kStageVertex] ==
+                graphics_root_serial &&
+            render_encoder_bindless_stage_root_bind_serials_[kStagePixel] ==
+                graphics_root_serial &&
+            render_encoder_bindless_table_bind_mesh_path_ == use_mesh &&
+            render_encoder_bindless_table_bind_tessellation_ ==
+                use_tessellation_emulation &&
+            !current_bindless_stage_root_valid_[kStagePixel] &&
+            !current_bindless_stage_root_serials_[kStagePixel];
+    }
+    if (!hit && miss < 0) miss = 9;
+    if (!hit) ++bindless_cache_miss_[miss];
+    if (hit) {
+      ++bindless_cache_hits_;
+      ++backend_telemetry_.bindless_root_reuse_hits[kGraphicsRootStage];
+      return true;
+    }
+    bindless_cache_key_.valid = false;
+  }
   const bool bindless_shared_memory_uav_mismatch =
       current_bindless_shared_memory_is_uav_ != shared_memory_is_uav;
   StageRootArgumentEntries entries = BuildGraphicsRootArgumentEntries(
@@ -8298,6 +8587,17 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     }
   }
 
+  if (cache_enabled) {
+    // Re-capture root identity after the (possible) root rebuild above.
+    const StageRootArgumentAllocation& root_after =
+        current_bindless_stage_root_arguments_[kGraphicsRootStage];
+    cache_key.root_buffer = root_after.valid ? root_after.buffer : nullptr;
+    cache_key.root_serial =
+        current_bindless_stage_root_serials_[kGraphicsRootStage];
+    cache_key.fixed_source_serial =
+        GetBindlessFixedResourceSourceSerial(shared_memory_usage);
+    bindless_cache_key_ = cache_key;
+  }
   return true;
 }
 
@@ -10577,6 +10877,40 @@ bool RegisterRangeOverlaps(uint32_t start, uint32_t end, uint32_t range_start,
 
 }  // namespace
 
+void MetalCommandProcessor::BuildDrawConstsInputTable() {
+  // Every register read by PrepareDrawConstants (viewport info, scissor,
+  // normalized depth control, rasterization/polygon queries) and
+  // UpdateSystemConstantValues. VGT_DRAW_INITIATOR is deliberately absent: it is
+  // rewritten by every draw, only prim_type is read and it is keyed directly,
+  // as is VGT_OUTPUT_PATH_CNTL.path_select.
+  draw_consts_input_reg_.assign(RegisterFile::kRegisterCount, 0);
+  const uint32_t regs[] = {
+      XE_GPU_REG_PA_CL_CLIP_CNTL, XE_GPU_REG_PA_CL_VTE_CNTL,
+      XE_GPU_REG_PA_SU_SC_MODE_CNTL, XE_GPU_REG_PA_SU_VTX_CNTL,
+      XE_GPU_REG_PA_CL_VPORT_XSCALE, XE_GPU_REG_PA_CL_VPORT_YSCALE,
+      XE_GPU_REG_PA_CL_VPORT_ZSCALE, XE_GPU_REG_PA_CL_VPORT_XOFFSET,
+      XE_GPU_REG_PA_CL_VPORT_YOFFSET, XE_GPU_REG_PA_CL_VPORT_ZOFFSET,
+      XE_GPU_REG_PA_SC_WINDOW_OFFSET, XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL,
+      XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR, XE_GPU_REG_PA_SC_SCREEN_SCISSOR_TL,
+      XE_GPU_REG_PA_SC_SCREEN_SCISSOR_BR, XE_GPU_REG_RB_SURFACE_INFO,
+      XE_GPU_REG_RB_DEPTH_INFO, XE_GPU_REG_RB_MODECONTROL,
+      XE_GPU_REG_RB_DEPTHCONTROL, XE_GPU_REG_RB_ALPHA_REF,
+      XE_GPU_REG_RB_COLORCONTROL, XE_GPU_REG_RB_COLOR_INFO,
+      XE_GPU_REG_RB_COLOR1_INFO, XE_GPU_REG_RB_COLOR2_INFO,
+      XE_GPU_REG_RB_COLOR3_INFO, XE_GPU_REG_VGT_INDX_OFFSET,
+      XE_GPU_REG_VGT_MAX_VTX_INDX, XE_GPU_REG_VGT_MIN_VTX_INDX,
+      XE_GPU_REG_VGT_HOS_MIN_TESS_LEVEL, XE_GPU_REG_VGT_HOS_MAX_TESS_LEVEL,
+      XE_GPU_REG_PA_SU_POINT_MINMAX, XE_GPU_REG_PA_SU_POINT_SIZE,
+      XE_GPU_REG_RB_BLEND_RED, XE_GPU_REG_RB_BLEND_GREEN,
+      XE_GPU_REG_RB_BLEND_BLUE, XE_GPU_REG_RB_BLEND_ALPHA};
+  for (uint32_t r : regs) {
+    draw_consts_input_reg_[r] = 1;
+  }
+  for (uint32_t i = 0; i < 24; ++i) {  // PA_CL_UCP_0_X .. PA_CL_UCP_5_W
+    draw_consts_input_reg_[XE_GPU_REG_PA_CL_UCP_0_X + i] = 1;
+  }
+}
+
 void MetalCommandProcessor::WriteRegistersFromMem(uint32_t start_index,
                                                   uint32_t* base,
                                                   uint32_t num_registers) {
@@ -10665,6 +10999,13 @@ bool MetalCommandProcessor::TryWriteKnownRegisterRangeFromMem(
     return true;
   }
 
+  if (draw_consts_dirty_active_) {
+    for (uint32_t i = 0; i < num_registers; ++i) {
+      NoteDrawConstsInputWrite(
+          start_index + i, register_file_->values[start_index + i],
+          rex::memory::load_and_swap<uint32_t>(base + i));
+    }
+  }
   rex::memory::copy_and_swap_32_unaligned(&register_file_->values[start_index], base,
                                  num_registers);
   if (hle_census::TilingTraceActive(frame_log::CurrentFrame())) {
@@ -10855,6 +11196,28 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   bool valid_register = index < RegisterFile::kRegisterCount;
   if (valid_register) {
     old_value = register_file_->values[index];
+    if (draw_consts_dirty_active_) {
+      NoteDrawConstsInputWrite(index, old_value, value);
+    }
+  }
+  // [reg-early-out] Allow-list: an unchanged write to these families has no
+  // side effect in CommandProcessor::WriteRegister (only COHER_STATUS_HOST,
+  // SCRATCH_REG0-7 and DC_LUT_* do, none of which are listed). Fetch constants:
+  // dirty marks and texture-binding checks persist until consumed, and the value
+  // (so every derived binding) is identical to the one already seen. Bool/loop
+  // constants: the CBV is only invalidated by the write; an identical value
+  // leaves its contents identical.
+  if (reg_early_out_active_ && valid_register && value == old_value) {
+    if (index >= XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 &&
+        index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5) {
+      ++reg_early_out_hits_[0];
+      return;
+    }
+    if (index >= XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031 &&
+        index <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31) {
+      ++reg_early_out_hits_[1];
+      return;
+    }
   }
   CommandProcessor::WriteRegister(index, value);
   if (!valid_register) {
@@ -13612,7 +13975,7 @@ void MetalCommandProcessor::UpdateSystemConstantValues(
     uint32_t line_loop_closing_index, xenos::Endian index_endian,
     const draw_util::ViewportInfo& viewport_info, uint32_t used_texture_mask,
     reg::RB_DEPTHCONTROL normalized_depth_control,
-    uint32_t normalized_color_mask) {
+    uint32_t normalized_color_mask, bool skip_register_inputs) {
   const RegisterFile& regs = *register_file_;
   auto pa_cl_clip_cntl = regs.Get<reg::PA_CL_CLIP_CNTL>();
   auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
@@ -13636,6 +13999,49 @@ void MetalCommandProcessor::UpdateSystemConstantValues(
     dirty |= (x ^ y);
   };
 
+  // Texture signedness / resolution scaling (mirror D3D12 logic).
+  // Always update textures_resolution_scaled, even when used_texture_mask is 0,
+  // to avoid stale values from previous draws.
+  uint32_t textures_resolution_scaled = 0;
+  uint32_t textures_remaining = used_texture_mask;
+  uint32_t texture_index;
+  while (rex::bit_scan_forward(textures_remaining, &texture_index)) {
+    textures_remaining &= ~(uint32_t(1) << texture_index);
+    if (texture_cache_) {
+      uint32_t& texture_signs_uint =
+          system_constants_.texture_swizzled_signs[texture_index >> 2];
+      uint32_t texture_signs_shift = (texture_index & 3) * 8;
+      uint8_t texture_signs =
+          texture_cache_->GetActiveTextureSwizzledSigns(texture_index);
+      uint32_t texture_signs_shifted = uint32_t(texture_signs)
+                                       << texture_signs_shift;
+      uint32_t texture_signs_mask = uint32_t(0xFF) << texture_signs_shift;
+      update_dirty_uint32_cmp((texture_signs_uint & texture_signs_mask),
+                              texture_signs_shifted);
+      texture_signs_uint =
+          (texture_signs_uint & ~texture_signs_mask) | texture_signs_shifted;
+      textures_resolution_scaled |=
+          uint32_t(
+              texture_cache_->IsActiveTextureResolutionScaled(texture_index))
+          << texture_index;
+    }
+  }
+  update_dirty_uint32_cmp(system_constants_.textures_resolution_scaled,
+                          textures_resolution_scaled);
+  system_constants_.textures_resolution_scaled = textures_resolution_scaled;
+  // [ssmask] FABLE2_EFFECTS_FOOTPRINT_VARIANT check: a draw given the variant
+  // without the footprint code must have no scaled texture behind an offset
+  // fetch of a non-depth format (tr_n_fp_variant_miss stays 0).
+  if (!fp_variant_chosen_ &&
+      (textures_resolution_scaled & fp_variant_check_mask_)) {
+    ++UploadTrace().fp_variant_miss;
+  }
+  fp_variant_check_mask_ = 0;
+  fp_variant_chosen_ = false;
+
+  // Register-derived constants: skipped when the draw-consts cache proved
+  // every input identical to the previous full computation.
+  if (!skip_register_inputs) {
   // Get color info for each render target
   reg::RB_COLOR_INFO color_infos[4];
   for (uint32_t i = 0; i < 4; ++i) {
@@ -13813,46 +14219,6 @@ void MetalCommandProcessor::UpdateSystemConstantValues(
         point_screen_diameter_to_ndc_radius_y;
   }
 
-  // Texture signedness / resolution scaling (mirror D3D12 logic).
-  // Always update textures_resolution_scaled, even when used_texture_mask is 0,
-  // to avoid stale values from previous draws.
-  uint32_t textures_resolution_scaled = 0;
-  uint32_t textures_remaining = used_texture_mask;
-  uint32_t texture_index;
-  while (rex::bit_scan_forward(textures_remaining, &texture_index)) {
-    textures_remaining &= ~(uint32_t(1) << texture_index);
-    if (texture_cache_) {
-      uint32_t& texture_signs_uint =
-          system_constants_.texture_swizzled_signs[texture_index >> 2];
-      uint32_t texture_signs_shift = (texture_index & 3) * 8;
-      uint8_t texture_signs =
-          texture_cache_->GetActiveTextureSwizzledSigns(texture_index);
-      uint32_t texture_signs_shifted = uint32_t(texture_signs)
-                                       << texture_signs_shift;
-      uint32_t texture_signs_mask = uint32_t(0xFF) << texture_signs_shift;
-      update_dirty_uint32_cmp((texture_signs_uint & texture_signs_mask),
-                              texture_signs_shifted);
-      texture_signs_uint =
-          (texture_signs_uint & ~texture_signs_mask) | texture_signs_shifted;
-      textures_resolution_scaled |=
-          uint32_t(
-              texture_cache_->IsActiveTextureResolutionScaled(texture_index))
-          << texture_index;
-    }
-  }
-  update_dirty_uint32_cmp(system_constants_.textures_resolution_scaled,
-                          textures_resolution_scaled);
-  system_constants_.textures_resolution_scaled = textures_resolution_scaled;
-  // [ssmask] FABLE2_EFFECTS_FOOTPRINT_VARIANT check: a draw given the variant
-  // without the footprint code must have no scaled texture behind an offset
-  // fetch of a non-depth format (tr_n_fp_variant_miss stays 0).
-  if (!fp_variant_chosen_ &&
-      (textures_resolution_scaled & fp_variant_check_mask_)) {
-    ++UploadTrace().fp_variant_miss;
-  }
-  fp_variant_check_mask_ = 0;
-  fp_variant_chosen_ = false;
-
   // Sample count log2 for alpha to mask
   uint32_t sample_count_log2_x =
       rb_surface_info.msaa_samples >= xenos::MsaaSamples::k4X ? 1 : 0;
@@ -13916,6 +14282,8 @@ void MetalCommandProcessor::UpdateSystemConstantValues(
   system_constants_.edram_blend_constant[1] = blend_green;
   system_constants_.edram_blend_constant[2] = blend_blue;
   system_constants_.edram_blend_constant[3] = blend_alpha;
+
+  }
 
   dirty |= ArchFloatMaskSignbit(dirty_float_mask);
   cbuffer_binding_system_.up_to_date &= !dirty;

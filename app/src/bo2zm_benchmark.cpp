@@ -43,7 +43,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "summary in the log ('[benchmark]'). Use with bo2zm_test_god")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(bo2zm_benchmark_ab_factors, "", "BO2",
-                      "Up to two named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all")
+                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all,metal_reg_early_out,metal_bindless_cache,metal_draw_consts_dirty")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_settle_s, 3, "BO2",
                      "Seconds excluded after each A/B arm change (also recorded in perf abarm events)")
@@ -195,10 +195,14 @@ const Factor kFactors[] = {
     {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
     {"metal_cmdcost_all", &rex::graphics::metal::CmdcostAllRequested, &rex::graphics::metal::RequestCmdcostAll},
     {"metal_encode_nosync", &rex::graphics::metal::EncodeNosyncRequested, &rex::graphics::metal::RequestEncodeNosync},
+    {"metal_reg_early_out", &rex::graphics::metal::RegEarlyOutRequested, &rex::graphics::metal::RequestRegEarlyOut},
+    {"metal_bindless_cache", &rex::graphics::metal::BindlessCacheRequested, &rex::graphics::metal::RequestBindlessCache},
+    {"metal_draw_consts_dirty", &rex::graphics::metal::DrawConstsDirtyRequested, &rex::graphics::metal::RequestDrawConstsDirty},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };
 std::vector<SelectedFactor> g_factors;
+int FactorBits() { return g_factors.size() > 2 ? 3 : 2; }
 int g_applied_arm = -1;
 int64_t g_arm_changed_ns = 0;
 
@@ -242,7 +246,7 @@ std::atomic<uint64_t> g_frames_seen{0};  // every frame AnnotateFrame sees, rout
 std::atomic<bool> g_off{false};          // Disable(): no benchmark in this start after all
 std::mutex g_mutex;
 std::vector<float> g_ms;           // frame times inside the window
-std::vector<float> g_arm_ms[4];    // A/B: the same, per arm (without each arm's settle interval)
+std::vector<float> g_arm_ms[8];    // A/B: the same, per arm (without each arm's settle interval)
 Clock::time_point g_earlier{};
 bool g_summarized = false;
 
@@ -363,6 +367,13 @@ int ArmAt(double t, double* into_span) {
   if (into_span) {
     *into_span = t - double(span) * seconds;
   }
+  if (g_factors.size() > 2) {
+    // Full factorial over 2^n arms: walk 0..N-1, then back N-1..0, so every arm is visited equally and the order
+    // alternates between cycles.
+    const int n = 1 << g_factors.size();
+    const int pos = span % n;
+    return (span / n) % 2 ? n - 1 - pos : pos;
+  }
   return (span + int(t / 60.0)) % 4;
 }
 
@@ -472,7 +483,7 @@ struct ArmCpu {
   std::map<std::string, uint64_t> ticks;
   uint64_t elapsed = 0;
 };
-ArmCpu g_arm_cpu[4];
+ArmCpu g_arm_cpu[8];
 
 // The system tick (cntpct_el0, 19.2 MHz: the unit of the threads' CPU ticks); switch.h stays out of this file.
 uint64_t SystemTick() {
@@ -490,7 +501,7 @@ void SampleArmCpu(int arm_ended) {
   static uint64_t last_tick = 0;
   const size_t n = RexSwitchPerfThreadTicks(handles, names, ticks, kMax);
   const uint64_t now = SystemTick();
-  if (arm_ended >= 0 && arm_ended < 4 && last_tick != 0) {
+  if (arm_ended >= 0 && arm_ended < 8 && last_tick != 0) {
     ArmCpu& a = g_arm_cpu[arm_ended];
     a.elapsed += now - last_tick;
     for (size_t i = 0; i < n; ++i) {
@@ -508,10 +519,10 @@ void SampleArmCpu(int arm_ended) {
 }
 
 void SummarizeArmCpu() {
-  for (int bit = 0; bit < 2; ++bit) {
+  for (int bit = 0; bit < FactorBits(); ++bit) {
     std::map<std::string, uint64_t> on, off;
     uint64_t on_elapsed = 0, off_elapsed = 0;
-    for (int arm = 0; arm < 4; ++arm) {
+    for (int arm = 0; arm < (1 << FactorBits()); ++arm) {
       const bool is_on = (arm >> bit) & 1;
       for (const auto& [name, t] : g_arm_cpu[arm].ticks) {
         (is_on ? on : off)[name] += t;
@@ -582,15 +593,15 @@ void ApplyAbPriorities(int arm) {
 }
 
 void SummarizeAb() {
-  for (int arm = 0; arm < 4; ++arm) {
+  for (int arm = 0; arm < (1 << FactorBits()); ++arm) {
     const Line l = Describe(g_arm_ms[arm]);
-    REXLOG_INFO("[benchmark] A/B arm {} (factor 1 {}, factor 2 {}): {} frames, {:.1f} FPS, median {:.1f} ms, "
+    REXLOG_INFO("[benchmark] A/B arm {} (factor 1 {}, factor 2 {}, factor 3 {}): {} frames, {:.1f} FPS, median {:.1f} ms, "
                 "p90 {:.1f} ms, p99 {:.1f} ms",
-                arm, (arm & 1) ? "on" : "off", (arm & 2) ? "on" : "off", l.frames, l.fps, l.median, l.p90, l.p99);
+                arm, (arm & 1) ? "on" : "off", (arm & 2) ? "on" : "off", (arm & 4) ? "on" : "off", l.frames, l.fps, l.median, l.p90, l.p99);
   }
-  for (int bit = 0; bit < 2; ++bit) {
+  for (int bit = 0; bit < FactorBits(); ++bit) {
     std::vector<float> on, off;
-    for (int arm = 0; arm < 4; ++arm) {
+    for (int arm = 0; arm < (1 << FactorBits()); ++arm) {
       std::vector<float>& to = (arm >> bit) & 1 ? on : off;
       to.insert(to.end(), g_arm_ms[arm].begin(), g_arm_ms[arm].end());
     }
@@ -615,9 +626,9 @@ void SummarizeSoFar(double seconds) {
   char part[160];
   std::snprintf(part, sizeof(part), "%.1f FPS (%zu frames)", all.fps, all.frames);
   line += part;
-  for (int bit = 0; AbSeconds() > 0 && bit < 2; ++bit) {
+  for (int bit = 0; AbSeconds() > 0 && bit < FactorBits(); ++bit) {
     std::vector<float> on, off;
-    for (int arm = 0; arm < 4; ++arm) {
+    for (int arm = 0; arm < (1 << FactorBits()); ++arm) {
       std::vector<float>& to = (arm >> bit) & 1 ? on : off;
       to.insert(to.end(), g_arm_ms[arm].begin(), g_arm_ms[arm].end());
     }
@@ -685,9 +696,9 @@ void InitializeFactors() {
       name = first == name.npos ? std::string_view{} : name.substr(first, last - first + 1);
       const Factor* found = nullptr;
       for (const auto& f : kFactors) if (name == f.name) found = &f;
-      if (!found || g_factors.size() >= 2 ||
+      if (!found || g_factors.size() >= 3 ||
           std::any_of(g_factors.begin(), g_factors.end(), [&](const auto& f) { return f.factor == found; })) {
-        throw std::runtime_error(fmt::format("Invalid bo2zm_benchmark_ab_factors entry '{}': expected up to two distinct registered switches", name));
+        throw std::runtime_error(fmt::format("Invalid bo2zm_benchmark_ab_factors entry '{}': expected up to three distinct registered switches", name));
       }
       g_factors.push_back({found, found->get()});
       if (comma == rest.npos) break;

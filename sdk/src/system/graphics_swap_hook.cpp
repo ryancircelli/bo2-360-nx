@@ -86,5 +86,41 @@ std::atomic<bool>& EncodeNosyncSwitch() {
 }
 bool EncodeNosyncRequested() { return EncodeNosyncSwitch().load(std::memory_order_relaxed); }
 void RequestEncodeNosync(bool on) { EncodeNosyncSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& RegEarlyOutSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_REG_EARLY_OUT");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_reg_early_out");
+  }()};
+  return requested;
+}
+}
+bool RegEarlyOutRequested() { return RegEarlyOutSwitch().load(std::memory_order_relaxed); }
+void RequestRegEarlyOut(bool on) { RegEarlyOutSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& BindlessCacheSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_BINDLESS_CACHE");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_bindless_cache");
+  }()};
+  return requested;
+}
+}
+bool BindlessCacheRequested() { return BindlessCacheSwitch().load(std::memory_order_relaxed); }
+void RequestBindlessCache(bool on) { BindlessCacheSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& DrawConstsDirtySwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_DRAW_CONSTS_DIRTY");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_draw_consts_dirty");
+  }()};
+  return requested;
+}
+}
+bool DrawConstsDirtyRequested() { return DrawConstsDirtySwitch().load(std::memory_order_relaxed); }
+void RequestDrawConstsDirty(bool on) { DrawConstsDirtySwitch().store(on, std::memory_order_relaxed); }
 }  // namespace rex::graphics::metal
 #endif

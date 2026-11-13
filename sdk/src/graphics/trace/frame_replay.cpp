@@ -721,6 +721,7 @@ void Replayer::RestoreRegisters(uint32_t first, uint32_t count, const uint32_t* 
   count = std::min<uint32_t>(count, RegisterFile::kRegisterCount -
                                         std::min<uint32_t>(first, RegisterFile::kRegisterCount));
   std::memcpy(&regs.values[first], values, count * sizeof(uint32_t));
+  TraceAccess::RegistersRestored(cp_);
   // Route the shader constant and fetch constant ranges through
   // WriteRegister so backends mark their constant buffers and bindings dirty.
   uint32_t lo = std::max<uint32_t>(first, XE_GPU_REG_SHADER_CONSTANT_000_X);
