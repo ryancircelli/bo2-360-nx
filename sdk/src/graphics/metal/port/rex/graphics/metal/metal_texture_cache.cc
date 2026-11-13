@@ -9,6 +9,8 @@
  */
 
 #include "rex/graphics/metal/metal_hitch.h"
+#include <rex/graphics/swap_hook.h>
+#include <chrono>
 #include "rex/graphics/metal/metal_texture_cache.h"
 #include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_encoder_trim.h"
@@ -175,6 +177,15 @@ namespace graphics {
 namespace metal {
 
 namespace {
+// Perf log: wall time of texture creation and guest-memory loads, counted in PerfStats.
+struct PerfTexScope {
+  std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+  ~PerfTexScope() {
+    rex::graphics::GetPerfStats().ns_tex.fetch_add(
+        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()),
+        std::memory_order_relaxed);
+  }
+};
 // [draw-prep-lite2] FABLE2_DRAW_PREP_LITE2 (default on), same switch as
 // MetalCommandProcessor::DrawPrepLite2Enabled.
 bool DrawPrepLite2On() {
@@ -5735,6 +5746,8 @@ uint32_t MetalTextureCache::GetMaxHostTextureDepthOrArraySize(
 std::unique_ptr<TextureCache::Texture> MetalTextureCache::CreateTexture(
     TextureKey key) {
   SCOPE_profile_cpu_f("gpu");
+  PerfTexScope perf_tex_scope;
+  rex::graphics::GetPerfStats().tex_new.fetch_add(1, std::memory_order_relaxed);
 
   MTL::PixelFormat metal_format = GetPixelFormatForKey(key);
   if (metal_format == MTL::PixelFormatInvalid) {
@@ -5952,6 +5965,7 @@ bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
                                                           bool load_base,
                                                           bool load_mips) {
   SCOPE_profile_cpu_f("gpu");
+  PerfTexScope perf_tex_scope;
   if (!load_base && !load_mips) {
     return true;
   }

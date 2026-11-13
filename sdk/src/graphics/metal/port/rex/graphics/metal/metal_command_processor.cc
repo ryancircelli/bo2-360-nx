@@ -12387,6 +12387,7 @@ void MetalCommandProcessor::RecordSharedMemoryUploadRoute(
   if (route_index >= kSharedMemoryUploadRouteCount) {
     return;
   }
+  rex::graphics::GetPerfStats().upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
   ++backend_telemetry_.shared_memory_upload_route_counts[route_index];
   backend_telemetry_.shared_memory_upload_route_bytes[route_index] += bytes;
 }

@@ -20,6 +20,9 @@ struct PerfStats {
   std::atomic<uint64_t> draws{0};
   std::atomic<uint64_t> jobs_submitted{0};   // main command buffers committed so far
   std::atomic<uint64_t> ns_encode_wait{0};   // submit thread blocked draining the Metal encode thread (part of ns_working)
+  std::atomic<uint64_t> tex_new{0};          // textures created (CreateTexture) so far
+  std::atomic<uint64_t> ns_tex{0};           // wall ns in texture creation and guest-memory texture loads so far
+  std::atomic<uint64_t> upload_bytes{0};     // shared-memory bytes uploaded to the GPU so far
 };
 PerfStats& GetPerfStats();
 // Called from a command buffer completion handler: submission number, GPU time in ns.
