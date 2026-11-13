@@ -167,6 +167,10 @@ DEFINE_int32(metal_shader_seed_threads, 2,
              "seed pipeline can take a few hundred ms on a cold macOS shader "
              "cache). 0 = no limit.",
              "Metal");
+DEFINE_bool(metal_shader_seed_background, true,
+            "Create shader seed pipelines at background QoS (efficiency "
+            "cores) so they never take CPU time from the game.",
+            "Metal");
 DEFINE_int32(metal_pipeline_wait_budget_ms, 10,
              "Per-frame time a draw may wait for a pipeline still being "
              "created when its shaders are already translated (instead of "

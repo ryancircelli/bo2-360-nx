@@ -5476,10 +5476,26 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     PipelineHandle* handle = request.handle;
     bool optimized = false;
     bool vertex_native = false;
+    // Seed work runs at background QoS (efficiency cores; Metal passes the
+    // QoS on to its compiler service), so precreating pipelines nobody needs
+    // yet never takes CPU time from the game's own threads.
+    const bool seed_background =
+        seed_job && REXCVAR_GET(metal_shader_seed_background);
+    qos_class_t saved_qos = QOS_CLASS_UNSPECIFIED;
+    if (seed_background) {
+      saved_qos = qos_class_self();
+      pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
+    }
     MTL::RenderPipelineState* pipeline = CreatePipelineFromHandle(
         handle, handle->pending_vertex_translation,
         handle->pending_pixel_translation, &optimized, nullptr,
         &vertex_native);
+    if (seed_background) {
+      pthread_set_qos_class_self_np(saved_qos == QOS_CLASS_UNSPECIFIED
+                                        ? QOS_CLASS_DEFAULT
+                                        : saved_qos,
+                                    0);
+    }
     handle->ns_vs_native.store(vertex_native, std::memory_order_release);
     if (pipeline && handle->ns_pixel_translation) {
       if (optimized) {

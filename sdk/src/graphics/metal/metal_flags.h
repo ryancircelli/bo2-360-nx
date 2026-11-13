@@ -74,6 +74,7 @@ DECLARE_double(metal_shader_prep_timeout_s);
 DECLARE_string(metal_shader_seed);
 DECLARE_int32(metal_pipeline_wait_budget_ms);
 DECLARE_int32(metal_shader_seed_threads);
+DECLARE_bool(metal_shader_seed_background);
 DECLARE_bool(metal_ssm_merge);
 DECLARE_bool(metal_tile_resolve);
 DECLARE_string(metal_title_quirks);
