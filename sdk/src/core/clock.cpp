@@ -43,7 +43,7 @@ std::pair<uint64_t, uint64_t> guest_tick_ratio_ = std::make_pair(1, 1);
 // 3.2 % of the Backend's (pthread_mutex_lock <- UpdateGuestClock <- sub_8284AFB8). It also added up each read's
 // delta rounded down, so a read lost up to one guest tick and the guest clock ran slower the more often it was
 // read: at the Switch's 125/48 (19.2 MHz host, 50 MHz guest) by up to a tick per read; on Linux (ns host clock,
-// 1/20) four threads reading in a loop measured -22.5 % (the guest_clock test in app/src/bo2zm_test_waits.cpp).
+// 1/20) four threads reading in a loop measured -22.5 % (the guest_clock test in games/bo2/src/bo2zm_test_waits.cpp).
 //
 // How: guest ticks are a function of the host tick count, from an anchor (host and guest count at the last ratio
 // change, and the ratio) published through one pointer. A read is one atomic load, the counter read and integer

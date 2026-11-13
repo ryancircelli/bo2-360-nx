@@ -2,7 +2,7 @@
 
 The campaign lives in `default.xex`, a separate program from `default_mp.xex` (multiplayer and Zombies). This folder
 recompiles the TU18 `default.xex` as `bo2cp`, for Windows and the Switch, with the Zombies program's native renderer and
-native code built in from `app/src`.
+native code built in from `games/bo2/src` and `core`.
 
 ```
 REXGLUE_BIN=sdk/out/win-amd64 bash campaign/codegen.sh                # code generator + fix-ups
@@ -16,7 +16,7 @@ How the Zombies code builds here unchanged:
 
 - `src/native/bo2cp_game_remap.h` is forced into those files and renames each default_mp function they hook to the
   campaign's function that does the same job.
-- Numeric addresses are written `BO2_GAME_ADDR(zombies, campaign)` (`app/src/bo2zm_game.h`).
+- Numeric addresses are written `BO2_GAME_ADDR(zombies, campaign)` (`games/bo2/src/bo2zm_game.h`).
 - `src/native/bo2cp_native_stubs.cpp` stands in for the Zombies-only systems (cheats, presets, credits, the benchmark).
 
 On the Switch, `bo2cp.nro`, `bo2cp.toml` and `bo2cp_shaders.spvpack` go next to `bo2zm.nro` in `/switch/bo2zm`. Back on

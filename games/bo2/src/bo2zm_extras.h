@@ -1,4 +1,4 @@
-// The port's own settings in the Extras menu (app/src/ui/menus.lua): the FPS counter and the cheats the game has no
+// The port's own settings in the Extras menu (games/bo2/src/ui/menus.lua): the FPS counter and the cheats the game has no
 // working dvar for (god mode, noclip, UFO, collision, the fly combo, jump height, the hidden HUD, third person;
 // bo2zm_cheats.cpp).
 // The game's built-in cheats (its cheat-protected dvars) are held by bo2zm_cheats.cpp. The port turns sv_cheats on as

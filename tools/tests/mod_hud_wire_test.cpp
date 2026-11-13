@@ -1,11 +1,11 @@
-// The System Link mod menu tables (app/src/bo2zm_mod_hud_wire.h): encoding, every refusal of a malformed body, and
+// The System Link mod menu tables (games/bo2/src/bo2zm_mod_hud_wire.h): encoding, every refusal of a malformed body, and
 // which element records match an entry.
 #include <array>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 
-#include "../../app/src/bo2zm_mod_hud_wire.h"
+#include "../../games/bo2/src/bo2zm_mod_hud_wire.h"
 
 namespace wire = bo2zm::mod_hud_wire;
 

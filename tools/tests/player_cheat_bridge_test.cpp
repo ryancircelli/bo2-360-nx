@@ -15,8 +15,8 @@
 #include <tuple>
 #include <vector>
 #include <rex/ppc/context.h>
-#include "../../app/src/bo2zm_pad.h"
-#include "../../app/src/bo2zm_bots.h"
+#include "../../games/bo2/src/bo2zm_pad.h"
+#include "../../games/bo2/src/bo2zm_bots.h"
 // CORE_STATE_HEADER
 // BOT_REGISTRATION_CONSTANTS
 

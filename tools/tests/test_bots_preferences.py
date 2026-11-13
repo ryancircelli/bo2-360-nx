@@ -19,6 +19,7 @@ struct Registrar {
 }
 #define REXCVAR_DEFINE_INT32(name, value, ...) int32_t name = value; static auto name##_registration = test::Registrar{}
 #define REXCVAR_GET(name) name
+#define REXCVAR_ALIAS(alias, name) static_assert(true)
 """,
     "logging.h": "#pragma once\n#define REXLOG_WARN(...) ((void)0)\n#define REXLOG_INFO(...) ((void)0)\n",
     "runtime.h": r"""#pragma once
@@ -50,8 +51,8 @@ def main():
         for campaign in (False, True):
             executable = temporary / ("campaign.exe" if campaign else "zombies.exe")
             command = [compiler, "-std=c++20", "-Wall", "-Wextra", "-pthread",
-                       "-I" + str(includes.parent), str(ROOT / "tools/tests/bots_preferences_test.cpp"),
-                       str(ROOT / "app/src/bo2zm_bots.cpp"), str(ROOT / "app/src/bo2zm_settings.cpp"),
+                       "-I" + str(includes.parent), "-I" + str(ROOT / "core"), str(ROOT / "tools/tests/bots_preferences_test.cpp"),
+                       str(ROOT / "games/bo2/src/bo2zm_bots.cpp"), str(ROOT / "core/bo2zm_settings.cpp"),
                        "-o", str(executable)]
             if campaign:
                 command.append("-DBO2_GAME_CAMPAIGN=1")

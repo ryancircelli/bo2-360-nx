@@ -1,5 +1,5 @@
 // CPU checks for the presentation-only composition boundary; no SDK or game data.
-#include "../../app/src/native/render/bo2zm_native_frontbuffer.h"
+#include "../../games/bo2/src/native/render/bo2zm_native_frontbuffer.h"
 
 #include <array>
 #include <cassert>

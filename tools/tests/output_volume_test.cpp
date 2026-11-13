@@ -1,5 +1,5 @@
 // The same policy is used by both executables; Switch ignores PC attenuation.
-#include "../../app/src/bo2zm_output_volume.h"
+#include "../../core/bo2zm_output_volume.h"
 using bo2zm::audio::OutputVolumePercent;
 #if defined(__SWITCH__)
 static_assert(OutputVolumePercent(-1) == 100);

@@ -59,7 +59,7 @@ OTHER_LANGUAGE = re.compile(r"^(bp|fj|fr|ge|it|ja|ms|po|ru|sp)_")
 ANY_LANGUAGE = re.compile(r"^(en|bp|fj|fr|ge|it|ja|ms|po|ru|sp)_")
 BOTS_PACK = "bo2zm_bots.gscpack"
 # The most shaders one library holds: the packer and the game's loader both refuse more
-# (kMaxShaders in app/src/native/render/bo2zm_shader_library.cpp).
+# (kMaxShaders in games/bo2/src/native/render/bo2zm_shader_library.cpp).
 MAX_SHADERS = 65536
 
 # What the source copy leaves out: a checkout's git-ignored folders and its top-level dot folders (a kit has none).

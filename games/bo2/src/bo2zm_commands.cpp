@@ -1,4 +1,4 @@
-// The port's own console commands, all named "bo2zm_*", through which the menu scripts (app/src/ui/menus.lua) reach
+// The port's own console commands, all named "bo2zm_*", through which the menu scripts (games/bo2/src/ui/menus.lua) reach
 // the program:
 //   bo2zm_preset <lowest|...|custom|0-5>          sets the graphics preset (the Graphics Settings menu)
 //   bo2zm_gfx_<option> <level|index>              one graphics option; the preset becomes custom (bo2zm_preset.cpp)

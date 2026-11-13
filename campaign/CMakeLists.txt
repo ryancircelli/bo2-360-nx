@@ -17,15 +17,16 @@ set(BO2CP_SOURCES
     src/main.cpp
     src/bo2cp_relaunch.cpp
     src/bo2cp_autoexec.cpp
-    ../app/src/bo2zm_launch_options.cpp
-    ../app/src/bo2zm_heap_track.cpp
+    ../games/bo2/src/bo2zm_launch_options.cpp
+    ../core/bo2zm_heap_track.cpp
 )
 
-# The native renderer (B3): the Zombies program's renderer and its D3D marker, built from app/src unchanged, with the
+# The native renderer (B3): the Zombies program's renderer and its D3D marker, built from games/bo2/src and core unchanged, with the
 # campaign's addresses forced in (src/native/bo2cp_game_remap.h) and the Zombies-only systems it calls replaced by
 # src/native/bo2cp_native_stubs.cpp. Off: the emulated GPU only.
 option(BO2CP_NATIVE "Build the native renderer into bo2cp" ON)
-set(BO2ZM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../app/src")
+set(BO2ZM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../games/bo2/src")
+set(BO2ZM_CORE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../core")
 if(BO2CP_NATIVE)
     set(BO2CP_NATIVE_SOURCES
         ${BO2ZM_SRC}/native/render/bo2zm_native_render.cpp
@@ -44,12 +45,12 @@ if(BO2CP_NATIVE)
         ${BO2ZM_SRC}/native/bo2zm_native_system.cpp
         ${BO2ZM_SRC}/native/bo2zm_render_stubs.cpp
         ${BO2ZM_SRC}/bo2zm_d3d_marker.cpp
-        ${BO2ZM_SRC}/bo2zm_page_writes.cpp
-        ${BO2ZM_SRC}/bo2zm_memcpy_callers.cpp
-        ${BO2ZM_SRC}/bo2zm_pc_profiler.cpp
+        ${BO2ZM_CORE_SRC}/bo2zm_page_writes.cpp
+        ${BO2ZM_CORE_SRC}/bo2zm_memcpy_callers.cpp
+        ${BO2ZM_CORE_SRC}/bo2zm_pc_profiler.cpp
         ${BO2ZM_SRC}/bo2zm_test_pad.cpp
         ${BO2ZM_SRC}/bo2zm_preset.cpp
-        ${BO2ZM_SRC}/bo2zm_settings.cpp
+        ${BO2ZM_CORE_SRC}/bo2zm_settings.cpp
         ${BO2ZM_SRC}/bo2zm_dvars.cpp
         ${BO2ZM_SRC}/bo2zm_controllers.cpp
         ${BO2ZM_SRC}/bo2zm_pad.cpp
@@ -77,7 +78,7 @@ if(BO2CP_NATIVE)
         ${REXSDK_DIR}/src/graphics/pipeline/shader/interpreter.cpp
         ${REXSDK_DIR}/src/graphics/format/ucode.cpp
         ${REXSDK_DIR}/src/graphics/register_file.cpp)
-    # The menu changes (app/src/ui/menus.lua, the Zombies program's file: it leaves its Zombies-only parts out in the
+    # The menu changes (games/bo2/src/ui/menus.lua, the Zombies program's file: it leaves its Zombies-only parts out in the
     # campaign) go into the program as text; bo2zm_ui.cpp runs them inside the game's menu Lua.
     set(BO2CP_UI_LUA "${BO2ZM_SRC}/ui/menus.lua")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BO2CP_UI_LUA}")
@@ -114,30 +115,30 @@ endif()
 rexglue_setup_target(bo2cp GPU_PLUGINS xenos)
 
 # Switch, as for bo2zm (app/CMakeLists.txt): contended host mutexes and the C heap's lock spin briefly before sleeping
-# (app/src/bo2zm_switch_mutex.cpp), and the default display's id for VSYNC's refresh signal (bo2zm_switch.cpp).
+# (games/bo2/src/bo2zm_switch_mutex.cpp), and the default display's id for VSYNC's refresh signal (bo2zm_switch.cpp).
 if(REXGLUE_PLATFORM_SWITCH AND BO2CP_NATIVE)
     target_sources(bo2cp PRIVATE ${BO2ZM_SRC}/bo2zm_switch_mutex.cpp)
     target_link_options(bo2cp PRIVATE "-Wl,--wrap=pthread_mutex_lock" "-Wl,--wrap=__malloc_lock,--wrap=__malloc_unlock"
                         "-Wl,--wrap=viOpenDisplay")
 endif()
 
-# How the generated code reaches guest memory: the Zombies program's header (app/src/bo2zm_guest_memory.h), appended to
+# How the generated code reaches guest memory: the Zombies program's header (core/bo2zm_guest_memory.h), appended to
 # its precompiled header, defines REX_GUEST_BARRIER() for the lines tools/guest_barriers.py places; with
 # BO2CP_GUEST_MEMORY_PLAIN (build_switch.sh turns it on, as for bo2zm) the guest loads and stores are plain accesses.
 option(BO2CP_GUEST_MEMORY_PLAIN "Generated code: plain guest loads and stores, with compiler barriers on guest memory"
        OFF)
 if(TARGET bo2cp_recomp)
-    target_precompile_headers(bo2cp_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../app/src/bo2zm_guest_memory.h")
+    target_precompile_headers(bo2cp_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core/bo2zm_guest_memory.h")
     if(BO2CP_GUEST_MEMORY_PLAIN)
         target_compile_definitions(bo2cp_recomp PRIVATE BO2ZM_GUEST_MEMORY_PLAIN=1)
     endif()
 endif()
 
-# Switch test build: the C heap's live bytes by caller in the log every minute (app/src/bo2zm_heap_track.cpp, as in the
+# Switch test build: the C heap's live bytes by caller in the log every minute (core/bo2zm_heap_track.cpp, as in the
 # Zombies program). On with BO2_HEAP_TRACK=1 bash campaign/build_switch.sh; never in a player build.
 option(BO2CP_HEAP_TRACK "Switch test build: log the C heap's live bytes by caller every minute" OFF)
 if(REXGLUE_PLATFORM_SWITCH AND BO2CP_HEAP_TRACK)
-    set_source_files_properties(../app/src/bo2zm_heap_track.cpp PROPERTIES COMPILE_DEFINITIONS BO2ZM_HEAP_TRACK=1
+    set_source_files_properties(../core/bo2zm_heap_track.cpp PROPERTIES COMPILE_DEFINITIONS BO2ZM_HEAP_TRACK=1
                                 COMPILE_OPTIONS -fno-omit-frame-pointer)
     target_link_options(bo2cp PRIVATE "-Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc,--wrap=memalign"
                         "-Wl,--wrap=aligned_alloc,--wrap=posix_memalign")
@@ -162,7 +163,7 @@ endif()
 
 if(BO2CP_NATIVE)
     target_compile_definitions(bo2cp PRIVATE BO2CP_NATIVE=1)
-    target_include_directories(bo2cp PRIVATE "${BO2ZM_SRC}" "${BO2ZM_SRC}/native" "${REXSDK_DIR}/src/ui/shaders"
+    target_include_directories(bo2cp PRIVATE "${BO2ZM_SRC}" "${BO2ZM_CORE_SRC}" "${BO2ZM_SRC}/native" "${REXSDK_DIR}/src/ui/shaders"
                                "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
     find_path(BO2CP_XXHASH_INCLUDE xxhash.h HINTS "${REXSDK_DIR}/thirdparty/xxHash" NO_CMAKE_FIND_ROOT_PATH REQUIRED)
     target_include_directories(bo2cp PRIVATE "${BO2CP_XXHASH_INCLUDE}")

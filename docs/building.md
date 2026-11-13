@@ -172,9 +172,9 @@ your files, and is game-derived: it stays in `$BO2_DATA/shaders/` and is never c
 3. **Pack** them into the library the renderer loads:
 
    ```bash
-   clang++ -std=c++23 -O2 -w -Iapp/src/native/render -Isdk/thirdparty/xxHash \
-     tools/xenosrecomp/bo2zm_pack.cpp app/src/native/render/bo2zm_shader_library.cpp \
-     app/src/native/render/bo2zm_shader_index.cpp -o work/xenosrecomp/bo2zm_pack.exe
+   clang++ -std=c++23 -O2 -w -Igames/bo2/src/native/render -Isdk/thirdparty/xxHash \
+     tools/xenosrecomp/bo2zm_pack.cpp games/bo2/src/native/render/bo2zm_shader_library.cpp \
+     games/bo2/src/native/render/bo2zm_shader_index.cpp -o work/xenosrecomp/bo2zm_pack.exe
    work/xenosrecomp/bo2zm_pack.exe "$BO2_DATA/shaders/unique" "$BO2_DATA/shaders/spirv/spirv" "$BO2_DATA/shaders/bo2zm_shaders.spvpack"
    work/xenosrecomp/bo2zm_pack.exe --index "$BO2_DATA/shaders/bo2zm_shaders.spvpack"
    ```

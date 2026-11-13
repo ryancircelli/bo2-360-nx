@@ -443,9 +443,9 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_deferred_reports, true, "BO2",
 #include "bo2zm_microcode_versions.h"
 #include "../../bo2zm_preset.h"  // outside a match: the menu blur reuse
 #include "../../bo2zm_benchmark.h"
-#include "../../bo2zm_memcpy_callers.h"
-#include "../../bo2zm_page_writes.h"
-#include "../../bo2zm_pc_profiler.h"
+#include "bo2zm_memcpy_callers.h"
+#include "bo2zm_page_writes.h"
+#include "bo2zm_pc_profiler.h"
 #include "../../bo2zm_perf_log.h"
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_im_load_without_memcmp, true, "BO2",

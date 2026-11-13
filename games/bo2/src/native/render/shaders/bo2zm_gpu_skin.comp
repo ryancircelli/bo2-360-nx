@@ -1,6 +1,6 @@
 #version 450
 // GPU skinning (bo2zm_gpu_skin): the game's three CPU skinning kernels (sub_82912D78, sub_82913378,
-// sub_82913B50; see app/src/bo2zm_native_skin.cpp for what they do, and bo2zm_gpu_skin.h for how a call becomes a
+// sub_82913B50; see games/bo2/src/bo2zm_native_skin.cpp for what they do, and bo2zm_gpu_skin.h for how a call becomes a
 // job) as one compute shader. One invocation per vertex. It writes the 32 bytes the kernel would have written, as
 // the renderer's vertex copy would have put them in the upload buffer (k8in32: each big-endian word as its value).
 //

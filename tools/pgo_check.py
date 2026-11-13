@@ -122,9 +122,9 @@ def check_generated(a):
 def check_native(a):
     total_read = total_trained = 0
     for gcda in sorted(glob.glob(os.path.join(a.pgo, APP_PREFIX + "*.gcda"))):
-        rel = os.path.basename(gcda)[len(APP_PREFIX):-len(".gcda")].replace("#", "/")  # src/native/...cpp
+        rel = os.path.basename(gcda)[len(APP_PREFIX):-len(".gcda")].replace("#", "/")  # __/games/bo2/src/native/...cpp (CMake spells ../ as __/)
         n_trained = trained(gcda)
-        if n_trained == 0 or not os.path.isfile(os.path.join(ROOT, "app", rel)):
+        if n_trained == 0 or not os.path.isfile(os.path.join(ROOT, "app", rel.replace("__/", "../"))):
             continue
         n = reading(a.build, a.pgo, f"CMakeFiles/bo2zm.dir/{rel}.obj")
         if n is None:

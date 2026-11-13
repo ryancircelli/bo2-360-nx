@@ -1,6 +1,6 @@
 -- Authored pause/popup fixtures run the complete menu overrides without loading game data.
 -- Run with Lua 5.1 from the repository root, optionally passing a different menus.lua path.
-local source = arg[1] or "app/src/ui/menus.lua"
+local source = arg[1] or "games/bo2/src/ui/menus.lua"
 local function run(zombies, leader)
   local logs, effects = {}, {}
   local clients = {[leader] = 0, [leader == 0 and 1 or 0] = 1}

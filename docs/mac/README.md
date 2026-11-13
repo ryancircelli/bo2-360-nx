@@ -75,7 +75,7 @@ Under load, run through `tools/mac/bench_quiet.sh` (mac-port) and quote the load
 Existing cvars already cover input and the benchmark (`bo2zm_test_start`, `bo2zm_test_buttons[_p2.._p4]`,
 `bo2zm_test_god`, `bo2zm_benchmark`). Done:
 
-* `bo2zm_perf_log` (env `REX_BO2ZM_PERF_LOG`, `app/src/bo2zm_perf_log.cpp`): the log in `perf-log-format.md`, from
+* `bo2zm_perf_log` (env `REX_BO2ZM_PERF_LOG`, `games/bo2/src/bo2zm_perf_log.cpp`): the log in `perf-log-format.md`, from
   the native renderer. `segment` and `route_end` come from the benchmark route (`bo2zm_benchmark`); the `route` and
   `players` header lines from `BO2ZM_ROUTE` and `BO2ZM_PLAYERS`, which `boot_test.sh` exports. Without the cvar the
   harness falls back to the `[benchmark]` line (average, median, p99 only).

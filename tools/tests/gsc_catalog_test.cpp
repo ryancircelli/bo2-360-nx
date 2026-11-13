@@ -1,5 +1,5 @@
 // Filesystem fixtures use synthetic metadata, with no game-derived bytecode.
-#include "../../app/src/bo2zm_gsc_catalog.h"
+#include "../../games/bo2/src/bo2zm_gsc_catalog.h"
 #include <cassert>
 #include <chrono>
 #include <iostream>

@@ -14,7 +14,7 @@ clang++ -std=c++23 -O1 -w \
   -include "$TR/pch_min.h" -include "$HERE/assert_throw.h" \
   -DFMT_HEADER_ONLY -DXXH_INLINE_ALL -DBO2ZM_RECOMP -D_CRT_SECURE_NO_WARNINGS \
   "$HERE/bo2zm_hlsl.cpp" "$TR/shader_recompiler.cpp" -o "$OUT/bo2zm_hlsl.exe"
-clang++ -std=c++23 -O2 "-I$ROOT/app/src/native/render" "-I$TP/xxHash" \
-  "$HERE/bo2zm_pack.cpp" "$ROOT/app/src/native/render/bo2zm_shader_library.cpp" \
-  "$ROOT/app/src/native/render/bo2zm_shader_index.cpp" -o "$OUT/bo2zm_pack.exe"
+clang++ -std=c++23 -O2 "-I$ROOT/games/bo2/src/native/render" "-I$TP/xxHash" \
+  "$HERE/bo2zm_pack.cpp" "$ROOT/games/bo2/src/native/render/bo2zm_shader_library.cpp" \
+  "$ROOT/games/bo2/src/native/render/bo2zm_shader_index.cpp" -o "$OUT/bo2zm_pack.exe"
 echo "shader tools: $OUT"

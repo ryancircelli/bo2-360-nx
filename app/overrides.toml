@@ -28,7 +28,7 @@ longjmp_address = 0x82919E50
 # one std::recursive_mutex shared by every thread. On the Switch (Town at 0-4 fps
 # in the first hardware profiles) the game threads spent ~70% of their samples
 # blocked in svcArbitrateLock on it, even with a spin-first lock
-# (src/bo2zm_switch_mutex.cpp). The atomicity those loops need comes from
+# (games/bo2/src/bo2zm_switch_mutex.cpp). The atomicity those loops need comes from
 # lwarx/stwcx., which the codegen emits as compare-and-swap; on the 360 turning
 # interrupts off never excluded the other cores. So the lock goes: mfmsr/mtmsrd
 # become no-ops.
@@ -126,7 +126,7 @@ vector_scratch_as_local = true
 # --- Native C library functions ([rexcrt]) -----------------------------------
 # The codegen drops each function listed here and calls rexcrt_<key> instead,
 # from direct calls and from the dispatch table alike. The keys are ours
-# (bo2zm_*), implemented in app/src/bo2zm_crt.cpp, not the SDK's memcpy/memset:
+# (bo2zm_*), implemented in games/bo2/src/bo2zm_crt.cpp, not the SDK's memcpy/memset:
 # the SDK's versions return r3 = host pointer - base, which on PC is 0x1000 too
 # high for destinations at 0xE0000000+ (PhysicalHostOffset), and MSVC callers
 # may use memcpy's return value. Ours leave r3 alone (it already holds dst).

@@ -1,6 +1,6 @@
 -- Authored stock-menu semantics exercised against the actual overrides; no game data is loaded.
 -- Run with Lua 5.1 from the repository root, optionally passing a different menus.lua path.
-local source = arg[1] or "app/src/ui/menus.lua"
+local source = arg[1] or "games/bo2/src/ui/menus.lua"
 local ready, sessionMode, gameMode = 1, 0, 2
 local owned, hidden, updates, purchases, writes, logs = {}, {}, 0, 0, {}, {}
 local selections = 0

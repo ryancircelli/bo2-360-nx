@@ -1,4 +1,4 @@
-// This project's changes to the game's menus (see bo2zm_ui.cpp and app/src/ui/menus.lua).
+// This project's changes to the game's menus (see bo2zm_ui.cpp and games/bo2/src/ui/menus.lua).
 
 #pragma once
 

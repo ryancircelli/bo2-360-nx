@@ -103,8 +103,8 @@ def generated_functions(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--source", type=Path, default=ROOT/"app/src/bo2zm_mod_hud_fit.cpp",
-                        help="bo2zm_mod_hud_fit.cpp to test (default: the one in app/src)")
+    parser.add_argument("--source", type=Path, default=ROOT/"games/bo2/src/bo2zm_mod_hud_fit.cpp",
+                        help="bo2zm_mod_hud_fit.cpp to test (default: the one in games/bo2/src)")
     arguments = parser.parse_args()
     source = arguments.source.resolve()
     compiler = os.environ.get("CXX") or shutil.which("clang++") or "C:/Program Files/LLVM/bin/clang++.exe"
@@ -126,7 +126,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
         common = [compiler, "-std=c++23", "-O2", "-pthread", "-msse4.1", "-DFMT_HEADER_ONLY", "-D_CRT_SECURE_NO_WARNINGS",
-                  "-Wall", "-Wextra", "-Werror", "-I"+str(directory/"include"), "-I"+str(ROOT/"app/src"),
+                  "-Wall", "-Wextra", "-Werror", "-I"+str(directory/"include"), "-I"+str(ROOT/"games/bo2/src"), "-I"+str(ROOT/"core"),
                   "-I"+str(ROOT/"sdk/include"), "-I"+str(ROOT/"sdk/thirdparty/simde"),
                   "-I"+str(ROOT/"sdk/thirdparty/fmt/include")]
         for name in ("mod_hud_fit", "mod_hud_wire", "mod_hud_loader", "mod_hud_campaign_crt"):

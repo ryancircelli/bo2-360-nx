@@ -113,7 +113,7 @@ C	<key>	<cs>	<uses>
 
 The native renderer already had its own binary list and driver cache in one file (`bo2zm_native_pipelines.bin`, the
 list plus `vkGetPipelineCacheData`) and a precompile that runs behind a progress screen before the game starts when
-the build, driver or shader pack changed (`app/src/native/render/bo2zm_native_precompile.h`). The text list sits on
+the build, driver or shader pack changed (`games/bo2/src/native/render/bo2zm_native_precompile.h`). The text list sits on
 top of that:
 
 * `--bo2zm_pso_record=<path>` or `REX_BO2ZM_PSO_RECORD` writes every pipeline the session creates, once, flushed

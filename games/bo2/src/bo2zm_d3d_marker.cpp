@@ -28,7 +28,7 @@
 //     - the marker is intact in memory (its header, magic and sequence words).
 //   So a DrawIndexedVertices sends one or two markers instead of several type-0 packets, their padding and the
 //   fetch flush write. That write (0x5000-0x5002) is left out on the marker path: the native renderer stores
-//   those registers and never reads them (no use in app/src/native).
+//   those registers and never reads them (no use in games/bo2/src/native).
 //
 // THE GUARD
 //   - Watching: every dump runs as the game's, then (1) here, the packets it wrote must be exactly the spans

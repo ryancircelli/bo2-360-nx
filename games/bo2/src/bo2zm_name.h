@@ -1,4 +1,4 @@
-// The player's name: EDIT USERNAME in Extras (the home menu only, app/src/ui/menus.lua). The game takes the console
+// The player's name: EDIT USERNAME in Extras (the home menu only, games/bo2/src/ui/menus.lua). The game takes the console
 // profile's name as the gamertag (XamUserGetName, XamUserGetSigninInfo) and shows it in lobbies and matches; the SDK
 // names the profile "User". The port keeps the player's pick as user_name in bo2zm_settings.txt and gives it to the
 // profile at start-up, before the game signs in. Editing opens the SDK's text input (rex/kernel/xam/text_input.h: a

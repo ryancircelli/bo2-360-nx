@@ -1,5 +1,5 @@
 """Draws the home screen's credits line, "Ported by: AlvaroEPena" with GitHub's mark beside it, as the two images the
-program draws over the home menu (app/src/bo2zm_credits.cpp): app/src/ui/credits/credits_720.png for screens up to
+program draws over the home menu (games/bo2/src/bo2zm_credits.cpp): games/bo2/src/ui/credits/credits_720.png for screens up to
 900 lines tall (handheld) and credits_1080.png for taller ones (docked), each drawn at one pixel per pixel.
 
 usage: python -I tools/make_credits.py [--font PATH] [--out DIR] [--preview PATH]
@@ -203,7 +203,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--font", default=os.path.join(ROOT, "sdk", "thirdparty", "imgui", "misc", "fonts",
                                                   "Roboto-Medium.ttf"))
-    p.add_argument("--out", default=os.path.join(ROOT, "app", "src", "ui", "credits"))
+    p.add_argument("--out", default=os.path.join(ROOT, "games", "bo2", "src", "ui", "credits"))
     p.add_argument("--preview", help="also write the two images over a grey backdrop to this PNG")
     args = p.parse_args()
     os.makedirs(args.out, exist_ok=True)

@@ -30,7 +30,7 @@ def main():
     stubs = "\n".join(
         f"void {name}(PPCContext& ctx, uint8_t* base) {{ Fake(0x{address}, ctx, base); }}"
         for name, address in dependencies)
-    production = (ROOT / "app/src/bo2zm_player_projection.cpp").read_text(encoding="utf-8")
+    production = (ROOT / "games/bo2/src/bo2zm_player_projection.cpp").read_text(encoding="utf-8")
     for include in ('#include <rex/hook.h>', '#include "bo2zm_cheats.h"', '#include "bo2zm_guest.h"'):
         production = production.replace(include, "")
     fixture = (ROOT / "tools/tests/player_projection_test.cpp").read_text(encoding="utf-8")

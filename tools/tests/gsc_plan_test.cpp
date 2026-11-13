@@ -1,5 +1,5 @@
 // Authored metadata exercises composition; no game bytecode is used.
-#include "../../app/src/bo2zm_gsc_plan.h"
+#include "../../games/bo2/src/bo2zm_gsc_plan.h"
 #include <cassert>
 #include <iostream>
 using namespace bo2zm::gsc;

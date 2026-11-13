@@ -107,7 +107,7 @@ static constexpr DeclUsageLocation USAGE_LOCATIONS[] =
 };
 
 // BO2ZM_RECOMP: inputs given, in this order, to vertex fetches without an element in the container. Keep in step
-// with kUndeclaredFetchUses in app/src/native/render/bo2zm_shader_index.cpp.
+// with kUndeclaredFetchUses in games/bo2/src/native/render/bo2zm_shader_index.cpp.
 static constexpr std::pair<DeclUsage, uint32_t> UNDECLARED_FETCH_USES[] =
 {
     { DeclUsage::Position, 0 },

@@ -1,6 +1,6 @@
 // Exercise the production lobby bot manager with isolated guest/controller state.
-#include "../../app/src/bo2zm_bots.h"
-#include "../../app/src/bo2zm_settings.h"
+#include "../../games/bo2/src/bo2zm_bots.h"
+#include "../../core/bo2zm_settings.h"
 #include <rex/ppc.h>
 #include <filesystem>
 #include <fstream>

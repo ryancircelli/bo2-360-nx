@@ -1,4 +1,4 @@
-"""Compiler barriers at the generated code's labels and ordering instructions (see app/src/bo2zm_guest_memory.h).
+"""Compiler barriers at the generated code's labels and ordering instructions (see core/bo2zm_guest_memory.h).
 
 With the CMake option BO2ZM_GUEST_MEMORY_PLAIN the generated code's guest loads and stores are not volatile. What
 kept a guest spin loop rereading its flag, and stores in order across a sync, is then this barrier: a line

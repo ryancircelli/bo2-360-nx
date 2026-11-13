@@ -1,4 +1,4 @@
-// Cheats for the Zombies modes, driven by the Extras menu (app/src/ui/menus.lua; the saved settings are in
+// Cheats for the Zombies modes, driven by the Extras menu (games/bo2/src/ui/menus.lua; the saved settings are in
 // bo2zm_extras.cpp). bo2zm_cheats.cpp explains how each one works; in short:
 //   - God mode: the primary local actor takes no damage at all (the game's damage function skips them, so nothing kills them, not
 //     even leaving the playable area), and the game's own invulnerability flag is kept set.

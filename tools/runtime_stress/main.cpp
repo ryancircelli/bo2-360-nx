@@ -1,4 +1,4 @@
-// Linux runner for app/src/bo2zm_test_waits.cpp (see build.sh).
+// Linux runner for games/bo2/src/bo2zm_test_waits.cpp (see build.sh).
 #include <cstdio>
 #include <cstdlib>
 #include <string>

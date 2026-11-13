@@ -58,7 +58,7 @@ The rest of FFmpeg and libmspack is the unmodified upstream source at the commit
 
 ## Artwork in the program
 
-The home screen's credits line (`app/src/ui/credits`, drawn by `tools/make_credits.py`; details in its README):
+The home screen's credits line (`games/bo2/src/ui/credits`, drawn by `tools/make_credits.py`; details in its README):
 
 | Part | Source | License / terms |
 |---|---|---|

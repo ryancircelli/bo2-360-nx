@@ -1,5 +1,5 @@
 -- Exercise the actual menu overrides with small LUI fixtures. Rendering remains a game/hardware check.
-local source = arg[1] or "app/src/ui/menus.lua"
+local source = arg[1] or "games/bo2/src/ui/menus.lua"
 -- Optional negative-control selector: omit to run both retained review regressions.
 local reviewCase = arg[2]
 assert(reviewCase == nil or reviewCase == "bot_focus" or reviewCase == "hud_scope", "unknown review case")

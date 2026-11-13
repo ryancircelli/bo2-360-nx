@@ -53,7 +53,7 @@
 // Feather fall: after a normal movement step in the air, the selected player falls no faster than kFeatherFall and the stick
 // steers them (up to kGlideSpeed), so a high jump becomes a glide.
 //
-// Hidden HUD: the menu script (app/src/ui/menus.lua) hides the HUD menu itself; this file only keeps the setting.
+// Hidden HUD: the menu script (games/bo2/src/ui/menus.lua) hides the HUD menu itself; this file only keeps the setting.
 //
 // Third person: the game's own, the byte at client + 132 that the script method setclientthirdperson sets. We keep it
 // at 1 every frame and hold r_dof_enable at 0 meanwhile (aiming blurs the scene behind the sights, which in third

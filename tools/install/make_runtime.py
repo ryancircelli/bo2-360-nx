@@ -138,10 +138,10 @@ def main():
          "-DFMT_HEADER_ONLY", "-DXXH_INLINE_ALL", "-DBO2ZM_RECOMP", "-D_CRT_SECURE_NO_WARNINGS",
          os.path.join(ROOT, "tools", "xenosrecomp", "bo2zm_hlsl.cpp"), os.path.join(tr, "shader_recompiler.cpp"),
          "-o", os.path.join(host, "bo2zm_hlsl.exe")],
-        [clang, "-std=c++23", "-O2", "-w", f"-I{ROOT}/app/src/native/render", f"-I{tp}/xxHash",
+        [clang, "-std=c++23", "-O2", "-w", f"-I{ROOT}/games/bo2/src/native/render", f"-I{tp}/xxHash",
          os.path.join(ROOT, "tools", "xenosrecomp", "bo2zm_pack.cpp"),
-         os.path.join(ROOT, "app", "src", "native", "render", "bo2zm_shader_library.cpp"),
-         os.path.join(ROOT, "app", "src", "native", "render", "bo2zm_shader_index.cpp"),
+         os.path.join(ROOT, "games", "bo2", "src", "native", "render", "bo2zm_shader_library.cpp"),
+         os.path.join(ROOT, "games", "bo2", "src", "native", "render", "bo2zm_shader_index.cpp"),
          "-o", os.path.join(host, "bo2zm_pack.exe")],
     ):
         r = subprocess.run(cmd)

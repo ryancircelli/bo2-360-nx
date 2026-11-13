@@ -114,7 +114,7 @@ inline bool DumpSpan(uint32_t reg_index, uint32_t count) {
 // always takes the game's path: with the Xenos emulation nobody would understand the marker.
 void ActivateConsumerMarkers(bool active);
 // Every CP_RB_WPTR write (the game publishing ring words to the ring thread), counted by the native system. BO2's
-// marker producer (app/src/bo2zm_d3d_marker.cpp) only extends a marker it wrote if nothing has been published since.
+// marker producer (games/bo2/src/bo2zm_d3d_marker.cpp) only extends a marker it wrote if nothing has been published since.
 inline std::atomic<uint32_t> g_publications_ring{0};
 // Ring thread only, when reading a check marker: whether the register state matches the marker. A
 // difference (or a malformed marker) turns the marker path off for the rest of the session.

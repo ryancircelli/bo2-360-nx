@@ -1,4 +1,4 @@
-// CHECK FOR UPDATES on the home screen (app/src/ui/menus.lua), in builds for development consoles: it asks the PC that
+// CHECK FOR UPDATES on the home screen (games/bo2/src/ui/menus.lua), in builds for development consoles: it asks the PC that
 // serves their builds what it stages for this console and compares that with the files here, without downloading
 // anything (no update server set up, no server answered, up to date, or an update with its build and size). The
 // download itself runs at the next start of the game, before the game exists, because the running game keeps files

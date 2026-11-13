@@ -4,7 +4,7 @@
 #include <cassert>
 #include <cstdio>
 #include <rex/ppc/context.h>
-#include "../../app/src/bo2zm_crt.cpp"
+#include "../../games/bo2/src/bo2zm_crt.cpp"
 namespace bo2zm::page_writes {
 std::atomic<bool> g_enabled{false};
 void MarkPhysical(uint32_t, uint32_t) { assert(false); }

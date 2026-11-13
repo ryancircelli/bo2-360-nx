@@ -51,7 +51,7 @@ case "${BO2_PGO:-}" in
   "") PGO_ARGS=("-DBO2ZM_PGO=") ;;
   *) echo "BO2_PGO must be generate or use" >&2; exit 1 ;;
 esac
-# Plain guest loads and stores in the generated code (app/src/bo2zm_guest_memory.h), on by default for the Switch
+# Plain guest loads and stores in the generated code (core/bo2zm_guest_memory.h), on by default for the Switch
 # (about +5.8 % on the console, measured together with the code generation changes that came with it).
 # BO2_GUEST_MEMORY_PLAIN=0 builds the volatile form.
 GUEST_ARGS=("-DBO2ZM_GUEST_MEMORY_PLAIN=$([ "${BO2_GUEST_MEMORY_PLAIN:-1}" = "1" ] && echo ON || echo OFF)")
@@ -90,7 +90,7 @@ cp "$OUT/switch.specs" "$(cygpath -u "$SPECS")"
 # register-locals fix.
 "${PYTHON:-python}" "$APP/../tools/direct_calls.py" --check --gen "$APP/generated/default_mp"
 "${PYTHON:-python}" "$APP/../tools/setjmp_locals.py" --verify --gen "$APP/generated/default_mp"
-# Plain guest memory is only safe with the barriers in place (app/src/bo2zm_guest_memory.h).
+# Plain guest memory is only safe with the barriers in place (core/bo2zm_guest_memory.h).
 if [ "${BO2_GUEST_MEMORY_PLAIN:-1}" = "1" ]; then
   "${PYTHON:-python}" "$APP/../tools/guest_barriers.py" --check --gen "$APP/generated/default_mp"
 fi

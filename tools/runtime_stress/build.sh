@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and runs the waits stress test (app/src/bo2zm_test_waits.cpp) on Linux, against the SDK's own
+# Builds and runs the waits stress test (games/bo2/src/bo2zm_test_waits.cpp) on Linux, against the SDK's own
 # threading_posix.cpp. Run it inside WSL (or any Linux with g++ 13+):
 #
 #   tools/runtime_stress/build.sh [fast|original] [scale] [out_dir]
@@ -23,10 +23,10 @@ fi
 EXE="$OUT/test_waits_$VARIANT"
 g++ -std=c++20 -O2 -g -pthread -Wall -Wextra -Wno-unused-parameter "${DEFS[@]}" \
   -DBO2ZM_TEST_WAITS_STANDALONE -include rex/assert.h \
-  -I "$HERE/stub" -I "$SDK/include" -I "$ROOT/app/src" \
+  -I "$HERE/stub" -I "$SDK/include" -I "$ROOT/games/bo2/src" -I "$ROOT/core" \
   "$SDK/src/core/threading_posix.cpp" "$SDK/src/core/threading.cpp" "$SDK/src/core/timer_queue.cpp" \
   "$SDK/src/core/clock.cpp" "$SDK/src/core/clock_posix.cpp" \
-  "$ROOT/app/src/bo2zm_test_waits.cpp" "$HERE/main.cpp" \
+  "$ROOT/games/bo2/src/bo2zm_test_waits.cpp" "$HERE/main.cpp" \
   -o "$EXE"
 echo "built $EXE"
 "$EXE" "$SCALE"

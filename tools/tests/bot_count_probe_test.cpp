@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 #include <rex/ppc/context.h>
-#include "../../app/src/bo2zm_bots.h"
+#include "../../games/bo2/src/bo2zm_bots.h"
 
 // PRODUCTION_DVAR_CONSTANTS
 

@@ -24,7 +24,7 @@ def between(source, start, end):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=ROOT / "app/src/bo2zm_preset.cpp")
+    parser.add_argument("--source", type=Path, default=ROOT / "games/bo2/src/bo2zm_preset.cpp")
     args = parser.parse_args()
     source = args.source.read_text(encoding="utf-8")
     compiler = os.environ.get("CXX") or shutil.which("g++")

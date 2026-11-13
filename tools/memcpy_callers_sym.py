@@ -1,4 +1,4 @@
-# Sums the "[memcpy_callers]" lines of a BO2_MEMCPY_CALLERS test build's log (app/src/bo2zm_memcpy_callers.cpp) by
+# Sums the "[memcpy_callers]" lines of a BO2_MEMCPY_CALLERS test build's log (core/bo2zm_memcpy_callers.cpp) by
 # call site and names each one with addr2line -i: the inlined function the call is in, and the outermost function's
 # file:line (an ELF with line tables of the same commit: a BO2_DEBUG_LINES=1 build).
 # usage: python tools/memcpy_callers_sym.py bo2zm_NNN.log bo2zm_<commit>_lines.elf [--top N]

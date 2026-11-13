@@ -6,7 +6,7 @@
 
 namespace bo2zm::debug {
 
-// The DEBUG page (app/src/ui/menus.lua, Extras): switches that help find the cause of a bug, kept between runs by the
+// The DEBUG page (games/bo2/src/ui/menus.lua, Extras): switches that help find the cause of a bug, kept between runs by the
 // settings in bo2zm_extras.cpp. See bo2zm_debug_options.cpp.
 
 // The renderer shortcuts the page can turn off (any thread). Off falls back to the full path, the one the benchmark's

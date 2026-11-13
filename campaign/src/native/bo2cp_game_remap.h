@@ -1,5 +1,5 @@
 // The campaign's addresses for the native renderer's game hooks (forced into the renderer's and the marker's sources
-// from app/src by campaign/CMakeLists.txt, so those files build for this program unchanged).
+// from games/bo2/src by campaign/CMakeLists.txt, so those files build for this program unchanged).
 //
 // The renderer and bo2zm_d3d_marker.cpp name default_mp's functions; each define below turns a name into the
 // campaign's function that does the same job, and the marker's return addresses into the campaign's. Every pair was
@@ -51,7 +51,7 @@
 #define __imp__sub_824BFC78 __imp__sub_823E40E8
 
 // bo2zm_waits.cpp and bo2zm_jobs.h: the job system's blocking waits; their numeric addresses come from BO2_GAME_ADDR
-// (app/src/bo2zm_game.h).
+// (games/bo2/src/bo2zm_game.h).
 #define BO2_GAME_CAMPAIGN 1
 #define sub_8284AED8 sub_8262DF88            // picker
 #define __imp__sub_8284AED8 __imp__sub_8262DF88

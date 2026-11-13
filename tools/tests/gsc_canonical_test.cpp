@@ -1,5 +1,5 @@
 // Authored field names exercise the boundary without game data or a runtime.
-#include "../../app/src/bo2zm_gsc_canonical.h"
+#include "../../games/bo2/src/bo2zm_gsc_canonical.h"
 #include <cassert>
 #include <iostream>
 

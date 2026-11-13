@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
-    source = (ROOT / "app/src/bo2zm_local_order.cpp").read_text(encoding="utf-8")
+    source = (ROOT / "games/bo2/src/bo2zm_local_order.cpp").read_text(encoding="utf-8")
     # Keep every production function body. Replace only hook/log/guest-call
     # plumbing, whose authored implementation is in the fixture.
     for include in ('#include <rex/hook.h>', '#include <rex/logging.h>', '#include "bo2zm_guest.h"'):

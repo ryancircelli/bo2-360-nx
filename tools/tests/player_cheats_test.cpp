@@ -1,5 +1,5 @@
 // Exercise the real core, hooks, preferences and queues with authored memory.
-#include "../../app/src/bo2zm_cheats.cpp"
+#include "../../games/bo2/src/bo2zm_cheats.cpp"
 
 #include <cassert>
 #include <csetjmp>

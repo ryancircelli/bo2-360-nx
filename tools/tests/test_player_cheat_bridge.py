@@ -44,13 +44,13 @@ def define(name, arguments, body, result):
 
 
 def main():
-    extras = (ROOT / "app/src/bo2zm_extras.cpp").read_text(encoding="utf-8")
-    commands = (ROOT / "app/src/bo2zm_commands.cpp").read_text(encoding="utf-8")
-    pad = (ROOT / "app/src/bo2zm_pad.cpp").read_text(encoding="utf-8")
-    gsc = (ROOT / "app/src/bo2zm_gsc_mods.cpp").read_text(encoding="utf-8")
-    core = ROOT / "app/src/bo2zm_player_cheat_state.h"
+    extras = (ROOT / "games/bo2/src/bo2zm_extras.cpp").read_text(encoding="utf-8")
+    commands = (ROOT / "games/bo2/src/bo2zm_commands.cpp").read_text(encoding="utf-8")
+    pad = (ROOT / "games/bo2/src/bo2zm_pad.cpp").read_text(encoding="utf-8")
+    gsc = (ROOT / "games/bo2/src/bo2zm_gsc_mods.cpp").read_text(encoding="utf-8")
+    core = ROOT / "games/bo2/src/bo2zm_player_cheat_state.h"
     if not core.is_file():
-        core = ROOT.parent / "player-cheats/app/src/bo2zm_player_cheat_state.h"
+        core = ROOT.parent / "player-cheats/games/bo2/src/bo2zm_player_cheat_state.h"
     if not core.is_file():
         raise SystemExit("integrate the player-cheats core or provide its sibling worktree first")
 
@@ -97,8 +97,8 @@ def main():
                     "// PRODUCTION_EXTRAS_CODE": "\n\n".join(fragments),
                     "// PRODUCTION_COMMANDS_CODE": command_code, "// PRODUCTION_PAD_CODE": pad_code,
                     "// PRODUCTION_LIFECYCLE_CODE": lifecycle,
-                    '../../app/src/bo2zm_pad.h': (ROOT / "app/src/bo2zm_pad.h").as_posix()}
-    replacements['../../app/src/bo2zm_bots.h'] = (ROOT / "app/src/bo2zm_bots.h").as_posix()
+                    '../../games/bo2/src/bo2zm_pad.h': (ROOT / "games/bo2/src/bo2zm_pad.h").as_posix()}
+    replacements['../../games/bo2/src/bo2zm_bots.h'] = (ROOT / "games/bo2/src/bo2zm_bots.h").as_posix()
     for marker, value in replacements.items():
         fixture = fixture.replace(marker, value)
     compiler = os.environ.get("CXX") or shutil.which("clang++") or shutil.which("g++")

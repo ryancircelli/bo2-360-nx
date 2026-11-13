@@ -1,4 +1,4 @@
-// Internet play from the home menu (ZOMBIES MULTIPLAYER / MULTIPLAYER, app/src/ui/menus.lua). The SDK does the
+// Internet play from the home menu (ZOMBIES MULTIPLAYER / MULTIPLAYER, games/bo2/src/ui/menus.lua). The SDK does the
 // networking (rex/system/online_link.h: the router's port forwarding by UPnP, the public address by STUN, hole
 // punching through the matchmaking relay in rex/system/online_relay.h, and the System Link layer's online addresses);
 // this module runs the menu's commands and tells the menu where things stand.

@@ -1,4 +1,4 @@
-// The home screen's credits line: "Ported by: AlvaroEPena" with GitHub's mark beside it (app/src/ui/credits, drawn by
+// The home screen's credits line: "Ported by: AlvaroEPena" with GitHub's mark beside it (games/bo2/src/ui/credits, drawn by
 // tools/make_credits.py), in the bottom-right corner of the Zombies home menu, on the row of its button prompts.
 //
 // It is this port's own layer, not part of the game's UI: the native renderer draws it over the finished image in

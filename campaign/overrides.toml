@@ -46,7 +46,7 @@ vector_scratch_as_local = true
 # --- Native C library functions ([rexcrt]) -----------------------------------
 # As in the Zombies program (app/overrides.toml): the codegen drops each
 # function listed here and calls rexcrt_<key> instead, implemented in
-# app/src/bo2zm_crt.cpp. The campaign's copies of the same routines are
+# games/bo2/src/bo2zm_crt.cpp. The campaign's copies of the same routines are
 # memcpy and memmove byte for byte, the others equal apart from call targets.
 [rexcrt]
 bo2zm_memcpy = 0x826E94D0

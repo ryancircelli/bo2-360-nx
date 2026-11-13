@@ -1,3 +1,3 @@
 # Hot leaf functions copied with their ctx registers as C++ locals (tools/localize.py, run by tools/codegen.sh).
-# Each one is checked against the original by app/src/bo2zm_native_audio.cpp before it runs alone.
+# Each one is checked against the original by games/bo2/src/bo2zm_native_audio.cpp before it runs alone.
 sub_8258B208  # biquad filter on a 4-sample block (sd_mix_master)

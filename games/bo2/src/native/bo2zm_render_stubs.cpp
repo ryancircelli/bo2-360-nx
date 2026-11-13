@@ -46,6 +46,6 @@ std::string Summary() { return {}; }
 
 namespace bo2zm::native {
 // ActivateConsumerMarkers and AnnotateCheckMarker are implemented by BO2's marker producer
-// (app/src/bo2zm_d3d_marker.cpp). WarnProgressRing wakes the Backend thread's "wait for the ring to drain"
-// (app/src/bo2zm_waits.cpp).
+// (games/bo2/src/bo2zm_d3d_marker.cpp). WarnProgressRing wakes the Backend thread's "wait for the ring to drain"
+// (games/bo2/src/bo2zm_waits.cpp).
 }  // namespace bo2zm::native

@@ -4,7 +4,7 @@
 // The containers are the blobs from tools/inspect/ff_shaders.py (<kind>_<sha1>.bin)
 // and the SPIR-V comes from tools/xenosrecomp/run.sh (<p|v>_<kind>_<sha1>.spv).
 // Only containers whose SPIR-V compiled and validated are packed; the rest are
-// listed. Packing uses the renderer's own code (app/src/native/render/
+// listed. Packing uses the renderer's own code (games/bo2/src/native/render/
 // bo2zm_shader_library.cpp), and every container is looked up again afterwards.
 //
 // usage: bo2zm_pack <container folder> <spirv folder> <new output file>
@@ -14,7 +14,7 @@
 // A base pack's entries are retained byte for byte. Coverage lists the unpatched microcode hashes;
 // pixel shader hashes can be compared directly with the renderer's unidentified-shader warnings.
 // --index writes the pack's index (by default <pack> with .spvidx, where the game looks for it) with the
-// renderer's own code (app/src/native/render/bo2zm_shader_index.cpp), byte for byte what the game would write on
+// renderer's own code (games/bo2/src/native/render/bo2zm_shader_index.cpp), byte for byte what the game would write on
 // its first start, so an install that ships it starts without making it.
 // The output is game-derived: never commit it.
 

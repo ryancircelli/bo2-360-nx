@@ -7,7 +7,7 @@ something else can see them.
 The code generator keeps r0-r13, f0-f13 and the vector registers v0-v13, v32-v63 in the PPCContext struct (ctx);
 the non-volatile ones are already locals (non_volatile_as_local in app/overrides.toml). GCC cannot keep a ctx field
 in a host register across a guest load or store: guest memory is reached through may_alias pointers
-(app/src/bo2zm_guest_memory.h) or volatile ones, which may point anywhere, ctx included (ctx is __restrict, but it is
+(core/bo2zm_guest_memory.h) or volatile ones, which may point anywhere, ctx included (ctx is __restrict, but it is
 handed to every callee; a __restrict base as well changed nothing: 0.4 % fewer instructions in one file). So every
 write of such a register is a store to ctx, and every read after a guest store reloads it: in the hot loop of
 sub_824D74D0, 7 of ~28 instructions per pass were stores to ctx of registers that the next pass overwrote.

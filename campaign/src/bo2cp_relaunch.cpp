@@ -1,4 +1,4 @@
-// Title relaunch (XLaunchNewImage) for the recompiled campaign, the counterpart of app/src/bo2zm_relaunch.cpp.
+// Title relaunch (XLaunchNewImage) for the recompiled campaign, the counterpart of games/bo2/src/bo2zm_relaunch.cpp.
 //
 // Choosing Zombies or Multiplayer, the campaign's sub_821F5FF8 writes the mode into a 1000-byte launch block
 // (byte 860: 1 = Zombies, 0 = Multiplayer), stores it with XamLoaderSetLaunchData and calls sub_825C09D0
@@ -7,16 +7,16 @@
 // programs share (user/relaunch_pending.bin, the same format) and the application restarts through the system
 // (appletRestartProgram): its NRO, bo2zm.nro, takes the pending file, or hands it back to this one from its first
 // constructor when it is for the campaign. Chain-loading straight from the running game is only the fallback: it
-// leaves the game's threads in hbloader's process (app/src/bo2zm_relaunch.cpp). Coming from Zombies, the pending file
+// leaves the game's threads in hbloader's process (games/bo2/src/bo2zm_relaunch.cpp). Coming from Zombies, the pending file
 // is handed to XAM at start, as after a console title reboot.
 //
-// Only installed modes are started (app/src/bo2zm_launch_options.h, InstalledModes): a request for Zombies or
+// Only installed modes are started (games/bo2/src/bo2zm_launch_options.h, InstalledModes): a request for Zombies or
 // Multiplayer when that mode's files or bo2zm are missing is dropped and the campaign goes on, and a campaign started
 // without its own files hands over to bo2zm when that has an installed mode.
 
 #include "bo2cp_relaunch.h"
-#include "../../app/src/bo2zm_launch_options.h"
-#include "../../app/src/bo2zm_relaunch.h"
+#include "../../games/bo2/src/bo2zm_launch_options.h"
+#include "../../games/bo2/src/bo2zm_relaunch.h"
 
 #include <atomic>
 #include <cstdio>

@@ -7,7 +7,7 @@
 #include <vector>
 #include <fmt/format.h>
 void FixtureLog(std::string) {}
-#include "../../app/src/bo2zm_gsc_mods.cpp"
+#include "../../games/bo2/src/bo2zm_gsc_mods.cpp"
 
 namespace {
 std::array<uint8_t, 1024 * 1024> memory{};

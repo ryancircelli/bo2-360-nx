@@ -52,7 +52,7 @@ uint32_t FixtureProtection(uint32_t at) {
 #define FIXTURE_SYSTEM_HEAP_ALLOC(size, alignment) FixtureSystemHeapAlloc(size, alignment)
 #define FIXTURE_PROTECTION(at) FixtureProtection(at)
 #include <fixture_mod_hud_fit_source.h>
-#include "../../app/src/bo2zm_crt.cpp"
+#include "../../games/bo2/src/bo2zm_crt.cpp"
 
 // Big-endian guest halves, as the payloads hold them.
 int16_t Short(const uint8_t* data, uint32_t offset) {

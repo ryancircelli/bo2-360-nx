@@ -1,4 +1,4 @@
-// The DEBUG page (Extras > DEBUG, app/src/ui/menus.lua): switches a player can be asked to turn on to help track a bug
+// The DEBUG page (Extras > DEBUG, games/bo2/src/ui/menus.lua): switches a player can be asked to turn on to help track a bug
 // down, and the page's tools for logs and debug files.
 //
 // Renderer shortcuts. Each one skips work the full path would do: texture rechecks by write stamps, copying only the

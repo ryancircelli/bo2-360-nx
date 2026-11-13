@@ -1,4 +1,4 @@
-// The Zombies program's systems that the native renderer and the menus' files call (app/src/native/render,
+// The Zombies program's systems that the native renderer and the menus' files call (games/bo2/src/native/render,
 // bo2zm_d3d_marker.cpp, bo2zm_extras.cpp, bo2zm_debug_options.cpp), for the campaign: each gives the answer of the
 // feature turned off, until the campaign has its own. The features behind
 // them hook default_mp's functions (cheats, the lighting volume's writer, the benchmark) or draw the Zombies

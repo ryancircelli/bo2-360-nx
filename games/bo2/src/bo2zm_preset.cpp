@@ -13,7 +13,7 @@
 // every few seconds so that a level script resetting a dvar does not undo it. Each dvar in the table was checked on the
 // PC: it exists, the "set" takes (read back from the dvar after the command), and it changes the image or the cost.
 //
-// The Graphics Settings menu has a GRAPHICS PRESET option (app/src/ui/menus.lua): it shows the game dvar
+// The Graphics Settings menu has a GRAPHICS PRESET option (games/bo2/src/ui/menus.lua): it shows the game dvar
 // bo2zm_preset_ui (0-5, kept in sync from here) and changes the preset with the console command "bo2zm_preset N"
 // (bo2zm_commands.cpp); each option shows bo2zm_gfx_<option>_ui and changes with "bo2zm_gfx_<option> N". The chosen
 // preset is saved in <user folder>/bo2zm_settings.txt (bo2zm_settings.cpp) and loaded at start-up, unless bo2zm.toml,

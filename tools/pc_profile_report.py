@@ -1,4 +1,4 @@
-"""Reads a PC profile written by bo2zm_pc_profile (app/src/bo2zm_pc_profiler.cpp) and prints, for each sampled thread,
+"""Reads a PC profile written by bo2zm_pc_profile (core/bo2zm_pc_profiler.cpp) and prints, for each sampled thread,
 its CPU and the functions with the most samples: "self" (the leaf: where the CPU was) and "total" (anywhere in the
 stack). Addresses in bo2zm.exe are symbolized with llvm-symbolizer; other modules show as module+offset.
 

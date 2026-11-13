@@ -2,7 +2,7 @@
 # Runs the PC build against the game files in the data folder (tools/data_dir.sh: $BO2_DATA, bo2_data.txt or data/; layout in docs/building.md).
 # usage: [LOG_LEVEL=debug] [BO2_VOLUME=percent] [BO2_FOREGROUND=1] app/run_windows.sh [seconds] [extra --cvar=value ...]
 # LOG_LEVEL=none leaves --log_level out, so the log follows DEBUG as with a player's toml (the quiet log,
-# app/src/bo2zm_debug_options.cpp); BO2_NUMBERED_LOGS=1 leaves --log_file out: the SDK's numbered logs, as on the
+# games/bo2/src/bo2zm_debug_options.cpp); BO2_NUMBERED_LOGS=1 leaves --log_file out: the SDK's numbered logs, as on the
 # Switch, in app/out/win*/logs. Both are for testing those two features; leave them unset otherwise.
 # Test runs stay out of the way of whoever is using the PC: the window opens on the second monitor when there is one
 # (--monitor=2) without taking the focus. Sound: 0 % while the file gaming.flag exists in the data folder (create it

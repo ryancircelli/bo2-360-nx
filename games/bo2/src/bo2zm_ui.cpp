@@ -1,4 +1,4 @@
-// Runs the port's Lua (app/src/ui/menus.lua) inside the game's menu system.
+// Runs the port's Lua (games/bo2/src/ui/menus.lua) inside the game's menu system.
 //
 // BO2 builds its menus in Lua (HavokScript) loaded from its fastfiles, and the executable carries the Lua compiler
 // (the base library's loadstring). So instead of changing game files, the port keeps its menu changes as Lua source,
@@ -39,7 +39,7 @@
 #include <rex/system/xmemory.h>
 
 #include "bo2zm_game.h"
-#include "bo2zm_ui_lua.h"  // generated from app/src/ui/menus.lua (app/CMakeLists.txt)
+#include "bo2zm_ui_lua.h"  // generated from games/bo2/src/ui/menus.lua (app/CMakeLists.txt)
 
 REXCVAR_DEFINE_BOOL(bo2zm_ui_changes, true, "BO2",
                     "Applies mode-specific home menus, Extras and graphics settings. Online and System Link "
@@ -211,7 +211,7 @@ bool InstallIn(PPCContext& ctx, uint8_t* base, uint32_t L) {
   }
   g_installed_state = L;
   g_attempts = 0;
-  REXLOG_INFO("[ui] menu changes installed in the menu Lua state {:08X} (app/src/ui/menus.lua)", L);
+  REXLOG_INFO("[ui] menu changes installed in the menu Lua state {:08X} (games/bo2/src/ui/menus.lua)", L);
   return true;
 }
 

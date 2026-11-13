@@ -1,5 +1,5 @@
 // Authored linker metadata only; no executable or game-derived script bytes.
-#include "../../app/src/bo2zm_gsc_bundle.h"
+#include "../../games/bo2/src/bo2zm_gsc_bundle.h"
 #include <cassert>
 #include <chrono>
 #include <iostream>

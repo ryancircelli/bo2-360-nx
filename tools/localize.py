@@ -12,7 +12,7 @@ all generated code), a copy named local_sub_X that:
   - reads and writes guest memory with plain (non-volatile) accesses, which the compiler may keep in registers and
     combine.
 The operations are the generated code's own, compiled in the same target with the same flags and precompiled header,
-so the results are the same; app/src/bo2zm_native_audio.cpp still checks every rewrite against the original before
+so the results are the same; games/bo2/src/bo2zm_native_audio.cpp still checks every rewrite against the original before
 it runs alone. A function is refused (and the build fails) when it hands ctx to anything but a plain call, or when it
 is not found.
 

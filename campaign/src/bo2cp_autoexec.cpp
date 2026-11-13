@@ -1,5 +1,5 @@
 // Console commands run once after start-up, so a test can reach a mission without anyone at the controls, the
-// counterpart of the Zombies program's bo2zm_autoexec (app/src/bo2zm_autoexec.cpp).
+// counterpart of the Zombies program's bo2zm_autoexec (games/bo2/src/bo2zm_autoexec.cpp).
 //
 // sub_822239E8, the client's render step, runs once per frame on the main thread in both of the campaign's frame paths:
 // the main loop's (sub_82371400, which also calls sub_8236EBB8, the only use of "code_warning_fps", as default_mp's
@@ -20,9 +20,9 @@
 // registration gets default 1 and loses flags 0x40 and 0x10 for that name, as the Zombies program does, so the
 // campaign's cheat commands (god, ufo, give...) work.
 //
-// The graphics presets (app/src/bo2zm_preset.cpp, built as it is) get their per-frame call from the render step and
+// The graphics presets (games/bo2/src/bo2zm_preset.cpp, built as it is) get their per-frame call from the render step and
 // their bool dvars from the bool registration sub_823CFE40 (default_mp's sub_82498550); the other three registrations
-// are hooked in that file. The menu changes (app/src/ui/menus.lua: Options > Graphics, EXTRAS) get their per-frame
+// are hooked in that file. The menu changes (games/bo2/src/ui/menus.lua: Options > Graphics, EXTRAS) get their per-frame
 // call here too (bo2zm_ui.cpp), and so do the Extras settings (bo2zm_extras.cpp: the FPS cap waits before the frame)
 // and EDIT USERNAME (bo2zm_name.cpp).
 //

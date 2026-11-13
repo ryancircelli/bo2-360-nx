@@ -1,5 +1,5 @@
 // Standalone linker-metadata checks; fixtures contain no game bytecode.
-#include "../../app/src/bo2zm_gsc_object.h"
+#include "../../games/bo2/src/bo2zm_gsc_object.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>

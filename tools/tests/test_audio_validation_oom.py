@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=ROOT / "app/src/bo2zm_native_audio.cpp")
+    parser.add_argument("--source", type=Path, default=ROOT / "games/bo2/src/bo2zm_native_audio.cpp")
     args = parser.parse_args()
     source = args.source.read_text(encoding="utf-8")
 

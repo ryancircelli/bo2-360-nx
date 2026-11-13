@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finds what blinks in a test spot's burst of screenshots (bo2zm_test_spot, app/src/bo2zm_benchmark.cpp).
+"""Finds what blinks in a test spot's burst of screenshots (bo2zm_test_spot, games/bo2/src/bo2zm_benchmark.cpp).
 
 The test stands the player still with no zombies, so in a correct image almost nothing changes from one screenshot to
 the next. This compares the burst pixel by pixel:

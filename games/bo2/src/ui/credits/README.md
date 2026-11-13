@@ -1,7 +1,7 @@
 # The home screen's credits line
 
 `credits_720.png` (handheld) and `credits_1080.png` (docked) are the line "Ported by: AlvaroEPena" with GitHub's
-mark, drawn bottom right on the Zombies home menu by `app/src/bo2zm_credits.cpp` and embedded by CMake
+mark, drawn bottom right on the Zombies home menu by `games/bo2/src/bo2zm_credits.cpp` and embedded by CMake
 (`bo2zm_credits_png.h.in`). Regenerate them after changing the text or sizes:
 
 ```bash

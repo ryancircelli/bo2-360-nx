@@ -9,9 +9,9 @@
 #    Stops on a finding that is not in its KNOWN list.
 # 3. tools/setjmp_locals.py --fix: register locals restored after the game's longjmp (Com_Error recovery).
 # 4. tools/direct_calls.py: direct calls to the game functions that have no hook.
-#    tools/guest_barriers.py: compiler barriers after labels and ordering instructions (app/src/bo2zm_guest_memory.h)
+#    tools/guest_barriers.py: compiler barriers after labels and ordering instructions (core/bo2zm_guest_memory.h)
 #    tools/localize.py: copies of the hot leaf functions in app/locals.txt with their ctx registers as locals
-#    (app/src/bo2zm_native_audio.cpp checks them against the originals before they run alone).
+#    (games/bo2/src/bo2zm_native_audio.cpp checks them against the originals before they run alone).
 # 5. tools/codegen_stats.py: what the generated code looks like now.
 # New unresolved tail-branch targets (codegen errors) are a job for tools/codegen_fix_unresolved.py first.
 #

@@ -52,7 +52,7 @@
 #include "../../bo2zm_perf_log.h"  // bo2zm_perf_log: synchronous compiles
 #include "../../bo2zm_debug_options.h"  // the DEBUG page turns shortcuts off
 #include "../../bo2zm_debug_watch.h"
-#include "../../bo2zm_page_writes.h"  // write stamps for the vertex cache  // PC diagnostics, who writes the lighting volume
+#include "bo2zm_page_writes.h"  // write stamps for the vertex cache  // PC diagnostics, who writes the lighting volume
 #include "../../bo2zm_volume_writes.h"  // the lighting volume's writer, hooked
 #include "../../bo2zm_gpu_skin.h"  // GPU skinning, the skinning hooks' jobs
 #include "../../bo2zm_cheats.h"  // in a match or not, for the pipeline cache's saves

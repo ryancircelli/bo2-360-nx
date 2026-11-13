@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
-    source = (ROOT / "app/src/bo2zm_ui.cpp").read_text(encoding="utf-8")
+    source = (ROOT / "games/bo2/src/bo2zm_ui.cpp").read_text(encoding="utf-8")
     # Keep the production function bodies and constants. Only their external
     # guest entry points, logging and PPC context are supplied by the fixture.
     names = ("kGameLock", "kStateGlobal", "kGlobalCompilerSettings", "kGlobalSecurityMode",

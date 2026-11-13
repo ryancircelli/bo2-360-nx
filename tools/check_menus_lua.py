@@ -1,4 +1,4 @@
-"""Checks app/src/ui/menus.lua with the Lua 5.1 compiler (the game's HavokScript reads Lua 5.1 source) before a run:
+"""Checks games/bo2/src/ui/menus.lua with the Lua 5.1 compiler (the game's HavokScript reads Lua 5.1 source) before a run:
 
 - its syntax (luac -p);
 - the globals it writes: none may be (the menu system refuses new globals: "Tried to create global variable");
@@ -41,7 +41,7 @@ def top_level_names(text):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "app", "src", "ui", "menus.lua")
+    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "games", "bo2", "src", "ui", "menus.lua")
     compiler = luac()
     ok = True
     r = subprocess.run([compiler, "-p", path], capture_output=True, text=True)

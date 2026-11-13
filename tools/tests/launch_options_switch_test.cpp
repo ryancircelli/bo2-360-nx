@@ -1,6 +1,6 @@
 // Host simulation of Switch argv-based preferences, before Runtime exists.
 // Compile this and bo2zm_launch_options.cpp with -D__SWITCH__=1; no libnx or SDK needed.
-#include "../../app/src/bo2zm_launch_options.h"
+#include "../../games/bo2/src/bo2zm_launch_options.h"
 
 #include <chrono>
 #include <filesystem>

@@ -1,5 +1,5 @@
 // Authored controller-routing cases; no runtime, game, or physical controller needed.
-#include "../../app/src/bo2zm_test_pad_assignment.h"
+#include "../../core/bo2zm_test_pad_assignment.h"
 
 #include <cassert>
 

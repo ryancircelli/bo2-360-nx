@@ -10,7 +10,7 @@ only for a complete scan of unique, non-generic names within the loader path pol
 MODE is zombies or multiplayer; it is supplied explicitly, never inferred. Nothing
 is written. An unavailable recommendation also exits 1.
 
-Header fields follow app/src/bo2zm_gsc_object.h: magic at 0, code offset at
+Header fields follow games/bo2/src/bo2zm_gsc_object.h: magic at 0, code offset at
 0x14, exports at 0x1c, stored code size at 0x2c, and u16 name offset at 0x30.
 This inspects metadata only; it does not validate tables, bytecode or compatibility.
 Routing hints preserve embedded names and flag the known Studio placeholder. They

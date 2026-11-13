@@ -1,5 +1,5 @@
 -- Exercise the actual bot-lobby patch with authored layout bounds; no game data or rendering.
-local file = assert(io.open(arg[1] or "app/src/ui/menus.lua", "rb"))
+local file = assert(io.open(arg[1] or "games/bo2/src/ui/menus.lua", "rb"))
 local source = file:read("*a"):gsub("\r\n", "\n")
 file:close()
 local patch = assert(source:match("(local PatchBotsLobby\n;%(%s*function%(%)\n.-)\nlocal function WrapLobbyPopulate"))

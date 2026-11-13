@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
-    source = (ROOT / "app/src/bo2zm_gsc_mods.cpp").read_text(encoding="utf-8")
+    source = (ROOT / "games/bo2/src/bo2zm_gsc_mods.cpp").read_text(encoding="utf-8")
     constants = []
     for name in ("kFindDvar", "kDvarString", "kRegisterInt", "kSetInt"):
         constants.append(re.search(r"^constexpr uint32_t " + name + r" = .*?;", source, re.M).group())
@@ -22,7 +22,7 @@ def main():
     fixture = fixture.replace("// PRODUCTION_BOT_DVAR_FUNCTIONS", "\n\n".join(functions))
     # Preserve the fixture's repository-relative include after moving its generated
     # translation unit into a temporary directory.
-    fixture = fixture.replace('../../app/src/bo2zm_bots.h', (ROOT / 'app/src/bo2zm_bots.h').as_posix())
+    fixture = fixture.replace('../../games/bo2/src/bo2zm_bots.h', (ROOT / 'games/bo2/src/bo2zm_bots.h').as_posix())
     compiler = os.environ.get("CXX") or shutil.which("clang++") or shutil.which("g++")
     if not compiler and Path("C:/Program Files/LLVM/bin/clang++.exe").is_file():
         compiler = "C:/Program Files/LLVM/bin/clang++.exe"

@@ -1,5 +1,5 @@
 // CPU checks for depth resolves whose EDRAM rows span multiple host images.
-#include "../../app/src/native/render/bo2zm_native_depth_resolve.h"
+#include "../../games/bo2/src/native/render/bo2zm_native_depth_resolve.h"
 
 #include <cassert>
 #include <iostream>

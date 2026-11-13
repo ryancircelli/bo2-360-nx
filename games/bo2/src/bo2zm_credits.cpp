@@ -11,7 +11,7 @@
 #include <rex/logging.h>
 #include <rex/ui/image_decode.h>
 
-#include "bo2zm_credits_png.h"  // generated from app/src/ui/credits (app/CMakeLists.txt)
+#include "bo2zm_credits_png.h"  // generated from games/bo2/src/ui/credits (app/CMakeLists.txt)
 
 namespace bo2zm::credits {
 namespace {

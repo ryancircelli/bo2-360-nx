@@ -102,7 +102,7 @@ def main():
     run(["bash", os.path.join(ROOT, "tools", "xenosrecomp", "run.sh"), unique, recomp])
 
     packer = os.path.join(work, "bo2zm_pack")
-    render = os.path.join(ROOT, "app", "src", "native", "render")
+    render = os.path.join(ROOT, "games", "bo2", "src", "native", "render")
     run([os.environ.get("CXX", "clang++"), "-std=c++23", "-O2", "-w", f"-I{render}",
          f"-I{os.path.join(ROOT, 'sdk', 'thirdparty', 'xxHash')}",
          os.path.join(ROOT, "tools", "xenosrecomp", "bo2zm_pack.cpp"),

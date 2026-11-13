@@ -553,7 +553,7 @@ std::mutex& WaitAllMutex() {
 
 }  // namespace
 
-// Lost wake-ups found so far (the stress test in app/src/bo2zm_test_waits.cpp reads it).
+// Lost wake-ups found so far (the stress test in games/bo2/src/bo2zm_test_waits.cpp reads it).
 uint64_t FastWaitLostWakeups() {
   return lost_wakeups_.load(std::memory_order_relaxed);
 }
@@ -2047,7 +2047,7 @@ bool DispatchCurrentThreadUserCallback() {
 }
 
 #if REX_FAST_WAITS
-// For the stress test (app/src/bo2zm_test_waits.cpp): how many threads wait on handle right now, so it can pulse
+// For the stress test (games/bo2/src/bo2zm_test_waits.cpp): how many threads wait on handle right now, so it can pulse
 // only once they are all inside the wait.
 uint32_t FastWaitWaiters(WaitHandle* handle) {
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(handle);

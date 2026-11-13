@@ -93,7 +93,7 @@ The ReXGlue SDK (`sdk/`) carries Xenia's implementation of the 360's kernel and 
 - **Memory**: Horizon has no sparse memory and cannot change permissions on mirrored memory, so the guest window is
   reserved empty, committed in chunks and mapped into every view on first access; the exception handler emulates
   accesses to unmapped pages (`sdk/src/core/guest_memory_switch.h`).
-- **Threads**: each guest thread is a Horizon thread. The game's job system is mapped in `app/src/bo2zm_waits.cpp`,
+- **Threads**: each guest thread is a Horizon thread. The game's job system is mapped in `games/bo2/src/bo2zm_waits.cpp`,
   where its polling loops sleep instead of spinning.
 - **Fourth core**: from a four-core forwarder, the game wraps the kernel's core-mask and priority calls and places
   threads by rule (the Server on all four cores, the mixer and XMA decoder alone on core 3). A failsafe returns to
@@ -150,11 +150,11 @@ ordinary System Link game over the internet:
    before the game sees them.
 4. **Manual forwarding** of UDP 31000-31002 to the host stays the last resort.
 
-The code is in `sdk/src/system/online_relay.cpp`, `online_link.cpp` and `xsocket.cpp`, and `app/src/bo2zm_online.cpp`.
+The code is in `sdk/src/system/online_relay.cpp`, `online_link.cpp` and `xsocket.cpp`, and `games/bo2/src/bo2zm_online.cpp`.
 
 ## The game's own systems
 
-- **Menus** are HavokScript (Lua 5.1) in the fastfiles; the game's own Lua compiler builds `app/src/ui/menus.lua` at
+- **Menus** are HavokScript (Lua 5.1) in the fastfiles; the game's own Lua compiler builds `games/bo2/src/ui/menus.lua` at
   start to add the port's pages. `tools/inspect/hks_dis.py` disassembles the game's menus.
 - **Settings**: presets set the game's own dvars, and hooks hold the ones it forces back every frame.
 - **Cheats and Extras** drive the game's script engine (notifies, function calls, field reads) on the Server thread,

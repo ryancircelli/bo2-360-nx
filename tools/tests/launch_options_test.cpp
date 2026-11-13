@@ -1,6 +1,6 @@
 // Standalone preference and launch-policy tests; no SDK, guest image or game process.
-// c++ -std=c++20 -pthread tools/tests/launch_options_test.cpp app/src/bo2zm_launch_options.cpp -o launch_options_test
-#include "../../app/src/bo2zm_launch_options.h"
+// c++ -std=c++20 -pthread tools/tests/launch_options_test.cpp games/bo2/src/bo2zm_launch_options.cpp -o launch_options_test
+#include "../../games/bo2/src/bo2zm_launch_options.h"
 
 #include <chrono>
 #include <climits>

@@ -1,5 +1,5 @@
 // Authored script-pad boundary cases. Compile the production driver, not a model.
-#include "../../app/src/bo2zm_test_pad.cpp"
+#include "../../games/bo2/src/bo2zm_test_pad.cpp"
 
 #include <cassert>
 #include <iostream>

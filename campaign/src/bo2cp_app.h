@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "../../app/src/bo2zm_output_volume.h"
+#include "../../core/bo2zm_output_volume.h"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>

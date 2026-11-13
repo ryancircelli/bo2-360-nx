@@ -1,6 +1,6 @@
 // Standalone texture-detail checks; no GPU, SDK or game data required.
 // clang++ -std=c++20 tools/tests/native_texture_mips.cpp -o native_texture_mips
-#include "../../app/src/native/render/bo2zm_native_texture_mips.h"
+#include "../../games/bo2/src/native/render/bo2zm_native_texture_mips.h"
 
 #include <array>
 #include <cassert>
