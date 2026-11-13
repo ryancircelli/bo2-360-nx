@@ -34,6 +34,7 @@
 #include <zlib.h>
 #include <time.h>
 #if defined(__APPLE__)
+#include <mach/mach.h>
 #include <mach/mach_time.h>
 #endif
 
@@ -371,6 +372,7 @@ struct BenchPass {
   uint64_t cp_wall_ns = 0;   // wall time in packet execution
   uint64_t pass_cpu_ns = 0;  // thread CPU of the whole pass
   uint64_t pass_wall_ns = 0;
+  uint64_t encode_cpu_ns = 0;
   uint64_t draws = 0;
   uint64_t packets = 0;
   uint64_t segments = 0;
@@ -1402,6 +1404,52 @@ double Median(std::vector<double> v) {
   return n & 1 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
 }
 
+std::map<uint64_t, uint64_t> EncodeThreadCpuTimes() {
+  std::map<uint64_t, uint64_t> result;
+#if defined(__APPLE__)
+  thread_act_array_t threads = nullptr;
+  mach_msg_type_number_t count = 0;
+  if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) {
+    return result;
+  }
+  for (mach_msg_type_number_t i = 0; i < count; ++i) {
+    thread_extended_info_data_t extended{};
+    mach_msg_type_number_t size = THREAD_EXTENDED_INFO_COUNT;
+    if (thread_info(threads[i], THREAD_EXTENDED_INFO,
+                    reinterpret_cast<thread_info_t>(&extended), &size) == KERN_SUCCESS &&
+        std::strcmp(extended.pth_name, "GPU Encode") == 0) {
+      thread_identifier_info_data_t identifier{};
+      size = THREAD_IDENTIFIER_INFO_COUNT;
+      thread_basic_info_data_t basic{};
+      mach_msg_type_number_t basic_size = THREAD_BASIC_INFO_COUNT;
+      if (thread_info(threads[i], THREAD_IDENTIFIER_INFO,
+                      reinterpret_cast<thread_info_t>(&identifier), &size) == KERN_SUCCESS &&
+          thread_info(threads[i], THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&basic),
+                      &basic_size) == KERN_SUCCESS) {
+        result[identifier.thread_id] =
+            uint64_t(basic.user_time.seconds + basic.system_time.seconds) * 1000000000ull +
+            uint64_t(basic.user_time.microseconds + basic.system_time.microseconds) * 1000ull;
+      }
+    }
+    mach_port_deallocate(mach_task_self(), threads[i]);
+  }
+  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads), count * sizeof(*threads));
+#endif
+  return result;
+}
+
+uint64_t EncodeThreadCpuDelta(const std::map<uint64_t, uint64_t>& before,
+                              const std::map<uint64_t, uint64_t>& after) {
+  uint64_t total = 0;
+  for (const auto& [id, end] : after) {
+    auto start = before.find(id);
+    if (start != before.end() && end >= start->second) {
+      total += end - start->second;
+    }
+  }
+  return total;
+}
+
 // Replays the trace several times on the command processor thread, each pass
 // with a fresh Replayer (guest memory and registers are rebuilt from the
 // trace; the GPU caches stay warm, so pass 1 is reported apart). Writes
@@ -1422,6 +1470,7 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
       timeline.reserve(1u << 20);
       g_bench_timeline = &timeline;
     }
+    auto encode_before = EncodeThreadCpuTimes();
     std::promise<void> done;
     auto finished = done.get_future();
     graphics_system->command_processor()->CallInThread([&, i]() {
@@ -1430,6 +1479,7 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
       done.set_value();
     });
     finished.get();
+    results[i].encode_cpu_ns = EncodeThreadCpuDelta(encode_before, EncodeThreadCpuTimes());
     g_bench_timeline = nullptr;
     if (timeline_path && i + 1 == passes) {
       mach_timebase_info_data_t tb;
@@ -1502,10 +1552,11 @@ int BenchTrace(GraphicsSystem* graphics_system, const RexGpuTraceReplayOptions& 
     const BenchPass& p = results[i];
     json += fmt::format(
         "{}\n    {{\"cp_cpu_ms\": {:.3f}, \"cp_wall_ms\": {:.3f}, \"pass_cpu_ms\": {:.3f}, "
-        "\"pass_wall_ms\": {:.3f}, \"cp_cycles\": {}, \"cp_instructions\": {}, "
-        "\"draws\": {}, \"segments\": {}}}",
+        "\"pass_wall_ms\": {:.3f}, \"encode_cpu_ms\": {:.3f}, \"cp_cycles\": {}, "
+        "\"cp_instructions\": {}, \"draws\": {}, \"segments\": {}}}",
         i ? "," : "", p.cp_cpu_ns / 1e6, p.cp_wall_ns / 1e6, p.pass_cpu_ns / 1e6,
-        p.pass_wall_ns / 1e6, p.cp_cycles, p.cp_instructions, p.draws, p.segments);
+        p.pass_wall_ns / 1e6, p.encode_cpu_ns / 1e6, p.cp_cycles, p.cp_instructions, p.draws,
+        p.segments);
   }
   json += "\n  ]\n}\n";
   std::filesystem::path out_dir(options.output_dir ? options.output_dir : "replay_out");
