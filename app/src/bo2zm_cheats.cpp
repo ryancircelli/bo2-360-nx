@@ -4437,14 +4437,17 @@ static void ScaleMoveSpeed(uint8_t* base, uint32_t pm) {
 }
 
 namespace {
-// Test helper (bo2zm_test_goto "x y z", or "log"): scripted test routes need the player at fixed places of a map (for
-// example across TranZit's area borders, where the game swaps the area's texture pack). For 0.3 s every movement step
-// (the server's and the client's prediction) starts from the given origin with no velocity; from the first command on,
-// the origin and yaw are logged every 2 s so a route can be read back from a log.
+// Test helper (bo2zm_test_goto "x y z [yaw pitch]", or "log"): scripted test routes need the player at fixed places
+// of a map (for example across TranZit's area borders, where the game swaps the area's texture pack). For 0.3 s every
+// movement step (the server's and the client's prediction) starts from the given origin with no velocity and, when
+// supplied, the requested view. From the first command on, the origin and view are logged every 2 s.
 std::atomic<bool> g_test_move{false};
 std::atomic<int64_t> g_test_goto_until{0};
 std::mutex g_test_goto_mutex;
 Vec3 g_test_goto_at{};
+float g_test_goto_yaw = 0.0f;
+float g_test_goto_pitch = 0.0f;
+bool g_test_goto_has_angles = false;
 
 int64_t TestNowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -4457,9 +4460,23 @@ void TestMove(uint8_t* base, uint32_t pm) {
   const int64_t now = TestNowNs();
   if (now < g_test_goto_until.load(std::memory_order_relaxed)) {
     Vec3 at;
-    { std::lock_guard lock(g_test_goto_mutex); at = g_test_goto_at; }
+    float yaw, pitch;
+    bool has_angles;
+    {
+      std::lock_guard lock(g_test_goto_mutex);
+      at = g_test_goto_at;
+      yaw = g_test_goto_yaw;
+      pitch = g_test_goto_pitch;
+      has_angles = g_test_goto_has_angles;
+    }
     StoreVec(base, ps + kPsOrigin, at);
     StoreVec(base, ps + kPsVelocity, Vec3{0.0f, 0.0f, 0.0f});
+    if (has_angles) {
+      const Vec3 view = LoadVec(base, ps + kPsViewAngles);
+      const Vec3 delta = LoadVec(base, ps + kPsDeltaAngles);
+      StoreVec(base, ps + kPsDeltaAngles, {delta.x + pitch - view.x, delta.y + yaw - view.y, delta.z});
+      StoreVec(base, ps + kPsViewAngles, {pitch, yaw, view.z});
+    }
   }
   static std::atomic<int64_t> next_log{0};
   int64_t due = next_log.load(std::memory_order_relaxed);
@@ -4819,13 +4836,24 @@ void bo2zm::cheats::PlayRemoteBlast(const float at[3]) {
 
 void bo2zm::cheats::TestGoto(std::string_view argument) {
   g_test_move.store(true, std::memory_order_relaxed);
-  float x = 0, y = 0, z = 0;
+  float x = 0, y = 0, z = 0, yaw = 0, pitch = 0;
   const std::string text(argument);
-  if (std::sscanf(text.c_str(), "%f %f %f", &x, &y, &z) != 3) {
+  const int count = std::sscanf(text.c_str(), "%f %f %f %f %f", &x, &y, &z, &yaw, &pitch);
+  if (count != 3 && count != 5) {
     REXLOG_INFO("[test-pos] logging the player's origin (bo2zm_test_goto {})", text);
     return;
   }
-  { std::lock_guard lock(g_test_goto_mutex); g_test_goto_at = Vec3{x, y, z}; }
+  {
+    std::lock_guard lock(g_test_goto_mutex);
+    g_test_goto_at = Vec3{x, y, z};
+    g_test_goto_yaw = yaw;
+    g_test_goto_pitch = pitch;
+    g_test_goto_has_angles = count == 5;
+  }
   g_test_goto_until.store(TestNowNs() + 300000000ll, std::memory_order_relaxed);
-  REXLOG_INFO("[test-pos] goto ({:.0f} {:.0f} {:.0f})", x, y, z);
+  if (count == 5) {
+    REXLOG_INFO("[test-pos] goto ({:.0f} {:.0f} {:.0f}) yaw {:.1f} pitch {:.1f}", x, y, z, yaw, pitch);
+  } else {
+    REXLOG_INFO("[test-pos] goto ({:.0f} {:.0f} {:.0f})", x, y, z);
+  }
 }
