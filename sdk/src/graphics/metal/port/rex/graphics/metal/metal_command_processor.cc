@@ -1359,6 +1359,23 @@ MetalCommandProcessor::MetalCommandProcessor(
 }
 
 MetalCommandProcessor::~MetalCommandProcessor() {
+  if (reg_early_out_active_ || bindless_cache_active_ ||
+      draw_consts_dirty_active_) {
+    std::fprintf(stderr,
+                 "[warn] [cpstate] final reg_early_out(%s) fetch=%llu "
+                 "boolloop=%llu bindless(%s)=%llu/%llu drawconsts(%s)=%llu/%llu "
+                 "verify_mismatch=%llu\n",
+                 reg_early_out_active_ ? "on" : "off",
+                 (unsigned long long)reg_early_out_hits_[0],
+                 (unsigned long long)reg_early_out_hits_[1],
+                 bindless_cache_active_ ? "on" : "off",
+                 (unsigned long long)bindless_cache_hits_,
+                 (unsigned long long)bindless_cache_calls_,
+                 draw_consts_dirty_active_ ? "on" : "off",
+                 (unsigned long long)draw_consts_hits_,
+                 (unsigned long long)draw_consts_calls_,
+                 (unsigned long long)draw_consts_verify_mismatches_);
+  }
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
   // End any active render encoder before releasing
