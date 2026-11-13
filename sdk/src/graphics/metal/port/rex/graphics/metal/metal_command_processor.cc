@@ -1364,7 +1364,7 @@ MetalCommandProcessor::~MetalCommandProcessor() {
     std::fprintf(stderr,
                  "[warn] [cpstate] final reg_early_out(%s) fetch=%llu "
                  "boolloop=%llu bindless(%s)=%llu/%llu drawconsts(%s)=%llu/%llu "
-                 "verify_mismatch=%llu\n",
+                 "verify_mismatch=%llu bindless_miss=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
                  reg_early_out_active_ ? "on" : "off",
                  (unsigned long long)reg_early_out_hits_[0],
                  (unsigned long long)reg_early_out_hits_[1],
@@ -1374,7 +1374,12 @@ MetalCommandProcessor::~MetalCommandProcessor() {
                  draw_consts_dirty_active_ ? "on" : "off",
                  (unsigned long long)draw_consts_hits_,
                  (unsigned long long)draw_consts_calls_,
-                 (unsigned long long)draw_consts_verify_mismatches_);
+                 (unsigned long long)draw_consts_verify_mismatches_,
+                 (unsigned long long)bindless_cache_miss_[0], (unsigned long long)bindless_cache_miss_[1],
+                 (unsigned long long)bindless_cache_miss_[2], (unsigned long long)bindless_cache_miss_[3],
+                 (unsigned long long)bindless_cache_miss_[4], (unsigned long long)bindless_cache_miss_[5],
+                 (unsigned long long)bindless_cache_miss_[6], (unsigned long long)bindless_cache_miss_[7],
+                 (unsigned long long)bindless_cache_miss_[8], (unsigned long long)bindless_cache_miss_[9]);
   }
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
