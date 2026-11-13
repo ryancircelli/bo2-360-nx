@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdlib>
 
 #include <rex/graphics/swap_hook.h>
 #include <rex/graphics/metal_runtime.h>
@@ -63,7 +64,11 @@ bool Type0BatchingRequested() { return Type0BatchingSwitch().load(std::memory_or
 void RequestType0Batching(bool on) { Type0BatchingSwitch().store(on, std::memory_order_relaxed); }
 namespace {
 std::atomic<bool>& CmdcostAllSwitch() {
-  static std::atomic<bool> requested{rex::cvar::Query<bool>("metal_cmdcost_all")};
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_CMDCOST_ALL");
+    return rex::cvar::Query<bool>("metal_cmdcost_all") ||
+           (env && env[0] == '1');
+  }()};
   return requested;
 }
 }

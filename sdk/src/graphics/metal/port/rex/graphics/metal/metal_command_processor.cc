@@ -2833,7 +2833,8 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     if (pipeline_cache_) {
       pipeline_cache_->SetDrawFastpathAll(cmdcost_all_active_);
     }
-    REXLOG_WARN("[cmdcost] all={}", cmdcost_all_active_ ? "on" : "off");
+    std::fprintf(stderr, "[cmdcost] all=%s\n",
+                 cmdcost_all_active_ ? "on" : "off");
   }
   const bool encode_thread_requested =
       EncodeThreadRequested() || cmdcost_all_active_;
