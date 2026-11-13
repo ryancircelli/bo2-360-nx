@@ -69,6 +69,7 @@ DECLARE_double(metal_shader_prep_timeout_s);
 DECLARE_bool(metal_ssm_merge);
 DECLARE_bool(metal_tile_resolve);
 DECLARE_string(metal_title_quirks);
+DECLARE_bool(metal_pacing_clock);
 DECLARE_bool(metal_vsync_phase_lock);
 DECLARE_int32(metal_warmup_threads);
 

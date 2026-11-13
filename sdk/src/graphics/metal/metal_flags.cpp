@@ -144,6 +144,10 @@ DEFINE_bool(metal_occlusion_real, true,
             "Metal");
 DEFINE_bool(metal_vsync_phase_lock, true,
             "Phase-lock presentation to the display refresh.", "Metal");
+DEFINE_bool(metal_pacing_clock, false,
+            "Guest vblank clock fitted to the measured display refresh, plus timed presents "
+            "(vblank + 12.5 ms) on 120 Hz displays. Runtime-switchable for A/B.",
+            "Metal");
 DEFINE_int32(metal_present_drawables, 2,
              "CAMetalLayer maximumDrawableCount: 2 (lower latency) or 3 "
              "(0 also means 3).",

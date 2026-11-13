@@ -33,6 +33,7 @@ set(REXGPU_METAL_SOURCES
   port/rex/graphics/metal/metal_frame_dump.cc
   port/rex/graphics/metal/metal_frame_log.cc
   port/rex/graphics/metal/metal_vsync_lock.cc
+  port/rex/graphics/metal/metal_pacing_clock.cc
   port/rex/graphics/metal/metal_readiness.cc
   port/rex/graphics/metal/metal_trace.cc
   port/rex/graphics/metal/metal_pass_trace.cc

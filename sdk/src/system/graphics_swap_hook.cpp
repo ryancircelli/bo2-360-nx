@@ -53,5 +53,13 @@ std::atomic<bool>& Type0BatchingSwitch() {
 }
 bool Type0BatchingRequested() { return Type0BatchingSwitch().load(std::memory_order_relaxed); }
 void RequestType0Batching(bool on) { Type0BatchingSwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& PacingClockSwitch() {
+  static std::atomic<bool> requested{rex::cvar::Query<bool>("metal_pacing_clock")};
+  return requested;
+}
+}
+bool PacingClockRequested() { return PacingClockSwitch().load(std::memory_order_relaxed); }
+void RequestPacingClock(bool on) { PacingClockSwitch().store(on, std::memory_order_relaxed); }
 }  // namespace rex::graphics::metal
 #endif

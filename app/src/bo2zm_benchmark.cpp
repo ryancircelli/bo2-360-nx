@@ -192,6 +192,7 @@ const Factor kFactors[] = {
 #if defined(__APPLE__)
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
     {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
+    {"metal_pacing_clock", &rex::graphics::metal::PacingClockRequested, &rex::graphics::metal::RequestPacingClock},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };

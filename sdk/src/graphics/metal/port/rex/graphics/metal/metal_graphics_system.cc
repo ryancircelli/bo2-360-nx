@@ -27,6 +27,7 @@
 #include "rex/ui/windowed_app_context.h"
 #include "rex/graphics/flags.h"
 #include "rex/graphics/metal/metal_vsync_lock.h"
+#include "rex/graphics/metal/metal_pacing_clock.h"
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/kernel/xboxkrnl/video.h>
@@ -97,8 +98,9 @@ void MetalGraphicsSystem::StartPhaseLockedVblankWorker() {
         kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
         const double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
         const uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
-        const int64_t vsync_interval_ticks =
+        const int64_t nominal_interval_ticks =
             std::max(int64_t(1), int64_t(double(guest_tick_frequency) / refresh_rate_hz));
+        int64_t vsync_interval_ticks = nominal_interval_ticks;
         const int64_t no_vsync_interval_ticks = std::max(int64_t(1), int64_t(guest_tick_frequency / 1000));
         mach_timebase_info_data_t tb;
         mach_timebase_info(&tb);
@@ -132,10 +134,18 @@ void MetalGraphicsSystem::StartPhaseLockedVblankWorker() {
           if (correction_ns && vsync && !scaled) {
             last_frame_time += int64_t(std::llround(double(correction_ns) * 1e-9 * ticks_per_second));
           }
+          // metal_pacing_clock: the interval follows the fitted display period (slewed; nominal without a fit).
+          vsync_interval_ticks =
+              std::max(int64_t(1), int64_t(std::llround(double(nominal_interval_ticks) * pacing::NextIntervalScale())));
           const int64_t interval_ticks = vsync ? vsync_interval_ticks : no_vsync_interval_ticks;
           int64_t current_time = int64_t(chrono::Clock::QueryGuestTickCount());
+          bool first_tick = true;
           while (current_time - last_frame_time >= interval_ticks) {
             const double before = vsync_lock::NowSeconds();
+            if (first_tick && vsync && !scaled) {
+              pacing::NoteTick(before, double(current_time - last_frame_time - interval_ticks) / ticks_per_second);
+            }
+            first_tick = false;
             MarkVblank();
             const double after = vsync_lock::NowSeconds();
             vsync_lock::NoteVblank(before);

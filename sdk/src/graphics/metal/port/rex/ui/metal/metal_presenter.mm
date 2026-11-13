@@ -3,6 +3,7 @@
 #include "rex/graphics/metal/metal_frame_log.h"
 #include "rex/graphics/metal/metal_trace.h"
 #include "rex/graphics/metal/metal_vsync_lock.h"
+#include "rex/graphics/metal/metal_pacing_clock.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -1124,7 +1125,26 @@ Presenter::PaintResult MetalPresenter::PaintAndPresentImpl(bool execute_ui_drawe
       }
     }];
   }
-  [command_buffer presentDrawable:drawable];
+  if (vsync_lock_on) {
+    static std::atomic<uint64_t> pacing_last_frame{0};
+    const uint64_t pf = draw_guest_output && guest_output_mailbox_index != UINT32_MAX
+                            ? VsyncLockFrameId(guest_output_mailbox_index) : 0;
+    const bool new_frame_flag = pf && pf != pacing_last_frame.exchange(pf, std::memory_order_relaxed);
+    double timed_at = 0;
+    if (graphics::metal::pacing::TimedPresentTarget(graphics::metal::vsync_lock::LastVblank(),
+                                                    graphics::metal::vsync_lock::NowSeconds(), &timed_at)) {
+      [command_buffer presentDrawable:drawable atTime:timed_at];
+    } else {
+      timed_at = 0;
+      [command_buffer presentDrawable:drawable];
+    }
+    const double requested = timed_at;
+    [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
+      graphics::metal::pacing::OnPresented(shown.presentedTime, requested, new_frame_flag);
+    }];
+  } else {
+    [command_buffer presentDrawable:drawable];
+  }
   [command_buffer commit];
 
   return PaintResult::kPresented;
@@ -1212,6 +1232,7 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
         auto update_refresh = [ns_window] {
           NSScreen* screen = ns_window.screen ? ns_window.screen : [NSScreen mainScreen];
           graphics::metal::vsync_lock::SetDisplayRefreshHz(screen ? double(screen.maximumFramesPerSecond) : 60.0);
+          graphics::metal::pacing::SetNominalRefreshHz(screen ? double(screen.maximumFramesPerSecond) : 60.0);
         };
         update_refresh();
         static bool vsync_lock_observing = false;

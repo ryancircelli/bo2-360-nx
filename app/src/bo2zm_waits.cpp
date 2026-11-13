@@ -386,7 +386,7 @@ bool GroupOwn() {
   return on;
 }
 std::atomic<bool>& FenceWakeSwitch() {
-  static std::atomic<bool> on{REXCVAR_GET(bo2zm_waits_fence_wake)};
+  static std::atomic<bool> on{false};
   return on;
 }
 bool FenceWake() {
@@ -653,21 +653,6 @@ namespace bo2zm::waits {
 bool FenceWake() { return ::FenceWake(); }
 void SetFenceWake(bool on) { FenceWakeSwitch().store(on, std::memory_order_relaxed); }
 }  // namespace bo2zm::waits
-
-// --- Fence writes from the SDK command processor (the Metal and Vulkan renderers) ---------------------------------
-// The SDK writes a D3D fence (EVENT_WRITE_SHD) as it reads the ring; the native renderer warns on its own above. Told
-// as ring progress: the put-back and ring-poll sleepers already wait for that reason.
-namespace {
-void WarnFenceWritten() {
-  if (FenceWake()) {  // off: the put-back sleeps are as before (the A arm of an A/B)
-    Warn(tr::kWarningRing);
-  }
-}
-[[maybe_unused]] const bool g_fence_hook_set = [] {
-  rex::graphics::SetGuestWriteHook(&WarnFenceWritten);
-  return true;
-}();
-}  // namespace
 
 // --- The picker: sub_8284AED8(slot, filter, record out, flag) returns 1 with a job, or yields and returns 0 --------
 REX_HOOK_RAW(sub_8284AED8) {
