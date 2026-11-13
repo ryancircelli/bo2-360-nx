@@ -1433,12 +1433,20 @@ void MetalCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {
 }
 
 void MetalCommandProcessor::ClearCaches() {
+  if (ts_active_ && TsOnStage1()) {
+    TsBarrier(TsSync::kMaintenance, [this] { ClearCaches(); });
+    return;
+  }
   CommandProcessor::ClearCaches();
   // TODO(wmarti): Add cache_clear_requested_ flag like D3D12 for deferred
   // clearing of pipeline caches, texture caches, etc.
 }
 
 void MetalCommandProcessor::InvalidateGpuMemory() {
+  if (ts_active_ && TsOnStage1()) {
+    TsBarrier(TsSync::kMaintenance, [this] { InvalidateGpuMemory(); });
+    return;
+  }
   if (shared_memory_) {
     shared_memory_->InvalidateAllPages();
   }
@@ -1916,6 +1924,13 @@ void MetalCommandProcessor::RegisterInitialResidencySetResources() {
   AddResidencySetResource(system_view_tables_);
 }
 
+bool MetalCommandProcessor::CollectVertexFetchRangesNoLog(
+    const RegisterFile& regs, const Shader& vertex_shader, SharedMemory::Range* ranges,
+    uint32_t max_ranges, uint32_t* range_count) {
+  return CollectMetalVertexFetchSharedMemoryRanges(regs, vertex_shader, ranges, max_ranges,
+                                                   range_count, false);
+}
+
 bool MetalCommandProcessor::SetupContext() {
   // FABLE2_GPU_CMD_QOS (default on, =0 off; docs/weak-mac-perf-20261008.md): SetupContext
   // runs on the GPU Commands worker. It is the CPU critical path (translation + Metal
@@ -2007,6 +2022,19 @@ bool MetalCommandProcessor::SetupContext() {
   mesh_shader_supported_ = supports_apple7 || supports_mac2;
 
   // Initialize shared memory
+  {
+    // [cp-two-stage] every backend object below binds the register file it is
+    // given, so pick stage 2's own copy before creating them.
+    const char* env = MetalDebugEnv("CP_TWO_STAGE");  // getenv-ok: once
+    const bool requested =
+        env ? env[0] == '1' : REXCVAR_GET(metal_cp_two_stage);
+    if (requested && hle_census_hooks_) {
+      REXLOG_WARN("[cp-two-stage] off: HLE census/tiling hooks need one thread");
+    } else if (requested) {
+      ts_register_file_ = std::make_unique<RegisterFile>(*CommandProcessor::register_file_);
+      register_file_ = ts_register_file_.get();
+    }
+  }
   shared_memory_ = std::make_unique<MetalSharedMemory>(*this, *memory_);
   if (!shared_memory_->Initialize()) {
     REXLOG_ERROR("Failed to initialize shared memory");
@@ -2253,6 +2281,9 @@ bool MetalCommandProcessor::SetupContext() {
     }
   }
   RegisterInitialResidencySetResources();
+  if (ts_register_file_) {
+    TsStart();
+  }
   return true;
 }
 
@@ -2323,6 +2354,12 @@ void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
 }
 
 void MetalCommandProcessor::PrepareForWait() {
+  if (ts_active_ && TsOnStage1()) {
+    // [cp-two-stage] a sleeping WAIT_REG_MEM: the guest may wait on memory
+    // stage 2 writes, so stage 2 must catch up and submit first.
+    TsBarrier(TsSync::kWaitRegMem, [this] { PrepareForWait(); });
+    return;
+  }
   if (REXCVAR_GET(metal_async_idle_submission)) {
     // Submit before sleeping so guest polling can make forward progress. Use
     // the normal asynchronous submission path: resource reclamation remains
@@ -2354,6 +2391,10 @@ void MetalCommandProcessor::PrepareForWait() {
 }
 
 void MetalCommandProcessor::ReturnFromWait() {
+  if (ts_active_ && TsOnStage1()) {
+    TsAppend(TsOp::kReturnFromWait, {});
+    return;
+  }
   if (hitch_idle_open_) {
     hitch::End();
     hitch_idle_open_ = false;
@@ -2383,6 +2424,12 @@ void MetalCommandProcessor::WaitForPendingCompletionHandlers() {
 }
 
 void MetalCommandProcessor::ShutdownContext() {
+  if (ts_active_ && TsOnStage1()) {
+    // [cp-two-stage] tear down on stage 2 (its autorelease pools), then stop.
+    TsBarrier(TsSync::kShutdown, [this] { ShutdownContext(); });
+    TsStop();
+    return;
+  }
   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kManual)) {
     REXLOG_ERROR("Metal ShutdownContext: failed to flush prepared draw queue");
   }
@@ -2664,6 +2711,12 @@ IRDescriptorTableEntry* MetalCommandProcessor::GetSamplerBindlessHeapEntry(
 
 void MetalCommandProcessor::InitializeShaderStorage(
     const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
+  if (ts_active_ && TsOnStage1()) {
+    TsBarrier(TsSync::kMaintenance, [=, this] {
+      InitializeShaderStorage(cache_root, title_id, blocking);
+    });
+    return;
+  }
   CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking);
   if (pipeline_cache_) {
     // [xfer-prewarm] Start before the shader storage init: on a first launch
@@ -2748,6 +2801,12 @@ void MetalCommandProcessor::MaybeLogMemReport() {
 void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
+  if (ts_active_ && TsOnStage1()) {
+    TsBarrier(TsSync::kSwap, [=, this] {
+      IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+    });
+    return;
+  }
   {
     // Perf log: command processor thread CPU time since the previous swap, and the submissions so far.
     static thread_local uint64_t perf_last_cpu_ns = 0;
@@ -2953,6 +3012,16 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
 }
 
 void MetalCommandProcessor::OnPrimaryBufferEnd() {
+  if (ts_active_ && !TsOnStage1()) {
+    // [cp-two-stage] stage 2: the submission part only; stage 1 notified.
+    if (!current_command_buffer_ || !REXCVAR_GET(submit_on_primary_buffer_end) ||
+        !CanEndSubmissionImmediately()) {
+      return;
+    }
+    ++UploadTrace().cbend_pbe;
+    EndCommandBuffer();
+    return;
+  }
   // [ring-wait] The read-pointer writeback follows as soon as this returns.
   struct NotifyOnExit {
     ~NotifyOnExit() {
@@ -2961,6 +3030,11 @@ void MetalCommandProcessor::OnPrimaryBufferEnd() {
       }
     }
   } notify_on_exit;
+  if (ts_active_) {
+    TsAppend(TsOp::kPrimaryBufferEnd, {});
+    TsPublish();
+    return;
+  }
   if (!current_command_buffer_) {
     return;
   }
@@ -3000,6 +3074,14 @@ bool MetalCommandProcessor::CanEndSubmissionImmediately() {
 // summary every 600 calls, so the audit can tell whether Fable II uses them.
 bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
     memory::RingBuffer* reader, uint32_t packet, uint32_t count) {
+  if (ts_active_ && TsOnStage1() && !(ts_zpd_async_ && zpd_real_)) {
+    // [cp-two-stage] stage 1 is parked, so stage 2 may read the ring.
+    bool result = true;
+    TsBarrier(TsSync::kZpd, [&] {
+      result = ExecutePacketType3_EVENT_WRITE_ZPD(reader, packet, count);
+    });
+    return result;
+  }
   static const bool stats = [] {
     const char* v = MetalDebugEnv("ZPD_STATS");
     return v && v[0] == '1';
@@ -3008,7 +3090,7 @@ bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
     static uint64_t begins = 0, ends = 0, no_addr = 0;
     const uint32_t kQueryFinished = rex::byte_swap(0xFFFFFEED);
     auto* counts = memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
-        register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]);
+        CommandProcessor::register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]);
     if (!counts) {
       ++no_addr;
     } else if (counts->ZPass_A == kQueryFinished || counts->ZPass_B == kQueryFinished ||
@@ -3037,7 +3119,7 @@ bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
   if (zero) {
     const uint32_t kQueryFinished = rex::byte_swap(0xFFFFFEED);
     if (auto* c = memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
-            register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR])) {
+            CommandProcessor::register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR])) {
       end_query = c->ZPass_A == kQueryFinished || c->ZPass_B == kQueryFinished ||
                   c->ZFail_A == kQueryFinished || c->ZFail_B == kQueryFinished;
     }
@@ -3046,7 +3128,7 @@ bool MetalCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
       CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(reader, packet, count);
   if (zero && end_query) {
     if (auto* c = memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
-            register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR])) {
+            CommandProcessor::register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR])) {
       c->ZPass_A = 0;
       c->Total_A = 0;
     }
@@ -3716,8 +3798,11 @@ bool MetalCommandProcessor::TryAliasClearDraw(
   if (vf.type != xenos::FetchConstantType::kVertex || vf.size < 21) {
     return fail("vertex fetch", u.ac_fb_state);
   }
-  const auto* vdata = reinterpret_cast<const uint32_t*>(
-      memory_->TranslatePhysical(uint32_t(vf.address) << 2));
+  // [cp-two-stage] stage 1 copied the 21 dwords when it queued the draw.
+  const auto* vdata = ts_alias_clear_vertices_
+                          ? ts_alias_clear_vertices_
+                          : reinterpret_cast<const uint32_t*>(
+                                memory_->TranslatePhysical(uint32_t(vf.address) << 2));
   if (!vdata) {
     return fail("vertex memory", u.ac_fb_state);
   }
@@ -4026,7 +4111,7 @@ void MetalCommandProcessor::OnType3PacketForCensus(uint32_t packet,
               opcode, count, packet & 1, skipped ? 1 : 0, data);
 }
 
-bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
+bool MetalCommandProcessor::IssueDrawBackend(xenos::PrimitiveType primitive_type,
                                       uint32_t index_count,
                                       IndexBufferInfo* index_buffer_info,
                                       bool major_mode_explicit) {
@@ -10073,6 +10158,12 @@ bool MetalCommandProcessor::FootprintVariantNeeded(const Shader& shader) {
 
 #if defined(REX_GPU_TRACE)
 void MetalCommandProcessor::TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) {
+  if (ts_active_ && TsOnStage1()) {
+    TsBarrier(TsSync::kTraceReadback, [=, this] {
+      TraceReadbackGuestMemory(physical_address, length);
+    });
+    return;
+  }
   physical_address &= 0x1FFFFFFF;
   if (!length || !shared_memory_ || !shared_memory_->GetBuffer()) {
     return;
@@ -10468,6 +10559,18 @@ void MetalCommandProcessor::WriteRegistersFromMem(uint32_t start_index,
   if (!num_registers) {
     return;
   }
+  if (ts_active_ && TsOnStage1()) {
+    // [cp-two-stage] same split as TryWriteKnownRegisterRangeFromMem: plain
+    // ranges go to the guest file and the log as one op; the rest per register.
+    if (CanFastWriteRegisterRange(start_index, num_registers)) {
+      rex::memory::copy_and_swap_32_unaligned(
+          &CommandProcessor::register_file_->values[start_index], base, num_registers);
+      TsLogRegisterRange(start_index, base, num_registers);
+      return;
+    }
+    CommandProcessor::WriteRegistersFromMem(start_index, base, num_registers);
+    return;
+  }
   if (TryWriteKnownRegisterRangeFromMem(start_index, base, num_registers)) {
     return;
   }
@@ -10481,6 +10584,23 @@ void MetalCommandProcessor::WriteRegisterRangeFromRing(rex::memory::RingBuffer* 
     return;
   }
   if (CanFastWriteRegisterRange(base, num_registers)) {
+    if (ts_active_ && TsOnStage1()) {
+      rex::memory::RingBuffer::ReadRange range =
+          ring->BeginRead(num_registers * sizeof(uint32_t));
+      const uint32_t first_registers =
+          range.second ? static_cast<uint32_t>(range.first_length / sizeof(uint32_t))
+                       : num_registers;
+      WriteRegistersFromMem(base, reinterpret_cast<uint32_t*>(const_cast<uint8_t*>(range.first)),
+                            first_registers);
+      if (range.second) {
+        WriteRegistersFromMem(
+            base + first_registers,
+            reinterpret_cast<uint32_t*>(const_cast<uint8_t*>(range.second)),
+            num_registers - first_registers);
+      }
+      ring->EndRead(range);
+      return;
+    }
     WriteFastRegisterRangeFromRing(ring, base, num_registers);
     return;
   }
@@ -10727,6 +10847,34 @@ void MetalCommandProcessor::DirtyFetchConstantDwords(
 void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   uint32_t old_value = 0;
   bool valid_register = index < RegisterFile::kRegisterCount;
+  if (ts_active_) {
+    // [cp-two-stage] the guest-visible write (scratch writeback, gamma
+    // tables...) happens here on stage 1; stage 2 applies the stored value.
+    if (TsOnStage1()) {
+      CommandProcessor::WriteRegister(index, value);
+      if (valid_register) {
+        TsLogRegister(index);
+      }
+      return;
+    }
+    if (valid_register) {
+      old_value = register_file_->values[index];
+    }
+    if (!ts_in_barrier_) {
+      // Stage 2 outside a barrier must not touch the guest file.
+      if (valid_register) {
+        ApplyRegisterWrite(index, old_value, value);
+      }
+      return;
+    }
+    // Stage 2 inside a barrier (ZPD, swap): stage 1 is parked, update both.
+    CommandProcessor::WriteRegister(index, value);
+    if (valid_register) {
+      ApplyRegisterWrite(index, old_value,
+                         CommandProcessor::register_file_->values[index]);
+    }
+    return;
+  }
   if (valid_register) {
     old_value = register_file_->values[index];
   }
@@ -10734,6 +10882,13 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   if (!valid_register) {
     return;
   }
+  ApplyRegisterWrite(index, old_value, value);
+}
+
+void MetalCommandProcessor::ApplyRegisterWrite(uint32_t index, uint32_t old_value,
+                                               uint32_t value) {
+  // With two-stage off register_file_ is the guest file the base already wrote.
+  register_file_->values[index] = value;
   if (hle_census_hooks_ && (index < XE_GPU_REG_SHADER_CONSTANT_000_X ||
                             index > XE_GPU_REG_SHADER_CONSTANT_LOOP_31) &&
       hle_census::TilingTraceActive(frame_log::CurrentFrame())) {
@@ -11693,6 +11848,30 @@ bool MetalCommandProcessor::RequestSharedMemoryRanges(
     }
   }
 
+  if (ts_async_draw_) {
+    // [cp-two-stage] an async draw on stage 2: stage 1 snapshotted (and marked
+    // valid) everything it knew the draw reads, and those runs were uploaded
+    // before the draw. A page invalid now was either rewritten by the guest
+    // after stage 1 passed this draw (live RAM is too new for it) or one stage
+    // 1 did not predict; never upload live RAM here, count it as a miss.
+    // Real validity (not the snapshot view) so the miss counters stay
+    // meaningful; nothing is uploaded either way.
+    SharedMemory::SetThreadSnapshotView(false);
+    for (uint32_t i = 0; i < request_range_count; ++i) {
+      const SharedMemory::Range& range = request_ranges[i];
+      if (range.length && !shared_memory_->IsRangeValid(range.start, range.length)) {
+        TsNoteStage2Upload(uint32_t(reason_index), range.length);
+        if (ts_log_misses_ && ts_logged_misses_ < 64) {
+          ++ts_logged_misses_;
+          std::fprintf(stderr, "[cp-two-stage] miss reason %u range %08X+%X (draw %llu)\n",
+                       uint32_t(reason_index), range.start, range.length,
+                       (unsigned long long)ts_stats_.stage2_draws);
+        }
+      }
+    }
+    SharedMemory::SetThreadSnapshotView(true);
+    return true;
+  }
   SharedMemory::RequestRangeStats stats;
   SharedMemoryRequestReason previous_upload_reason =
       current_shared_memory_upload_reason_;
