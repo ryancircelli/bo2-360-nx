@@ -1,5 +1,7 @@
 [
-  {"game": "bo2", "scene": "town4-spawn", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/town4-spawn.xtr"},
-  {"game": "bo2", "scene": "town4-midgame", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/town4-midgame.xtr"},
-  {"game": "bo2", "scene": "menu", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/menu-4685.xtr"}
+  {"game": "bo2", "scene": "town4-spawn-30f", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/town4-spawn-30f.xtr"},
+  {"game": "bo2", "scene": "town4-mid-30f", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/town4-mid-30f.xtr"},
+  {"game": "bo2", "scene": "town1-30f", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/town1-30f.xtr"},
+  {"game": "bo2", "scene": "nuketown4-30f", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/nuketown4-30f.xtr"},
+  {"game": "bo2", "scene": "menu", "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/bo2/menu-4685.xtr", "timing": false, "hash": true}
 ]
