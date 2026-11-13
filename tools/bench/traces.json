@@ -30,6 +30,14 @@
   "game": "nfsmw",
   "scene": "title-logo",
   "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/nfsmw/title-4600.xtr",
-  "hash": true
+  "hash": true,
+  "class": "menu"
+ },
+ {
+  "game": "fh1",
+  "scene": "title-press-start",
+  "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/fh1/title-press-start.xtr",
+  "hash": true,
+  "class": "menu"
  }
 ]
