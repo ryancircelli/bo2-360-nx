@@ -20,6 +20,7 @@ struct Counters {
   uint64_t ns_present_wait = 0;  // blocked outside the renderer: output fence, swapchain, frames in flight
   uint64_t draws = 0;
   uint64_t jobs_submitted = 0;  // GPU submissions sent so far, this frame's included
+  uint64_t ns_encode_wait = 0;  // of ns_working, waiting for the Metal encode thread to drain
   uint32_t width = 0, height = 0;  // the game's output size
 };
 

@@ -59,6 +59,7 @@ for the statistics they feed and optional otherwise.
 | `present_wait_ms` | yes | Time the submit thread was blocked waiting for something outside its control: the next drawable, the vsync, or a frame-in-flight fence. |
 | `compile_ms` | recommended | Time spent compiling a shader or pipeline synchronously inside this frame. The goal of the pipeline prewarm list (`pso-list-format.md`) is that this is `0` in every frame after loading. |
 | `draws` | optional | Draw calls issued. |
+| `enc_wait_ms` | optional | Of `cpu_ms`, time the submit thread was blocked waiting for the Metal encode thread to drain (`metal_cmdcost_all` / `metal_encode_thread`). `0` when the encode thread is off or on renderers without one. |
 | `rt_switches` | optional | Render target (pass) changes. |
 | `mem_mb` | optional | Resident memory of the process. |
 
