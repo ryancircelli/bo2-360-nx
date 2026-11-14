@@ -171,6 +171,22 @@ DEFINE_bool(
     "start of every draw, to emulate a slower command thread. Env "
     "REX_METAL_CMD_PAD=0/1 overrides.",
     "Metal");
+DEFINE_bool(
+    metal_idle_spin, false,
+    "When the command thread runs out of guest commands, busy-wait up to "
+    "metal_idle_spin_us after submitting instead of sleeping, so the core stays "
+    "busy and Low Power does not clock it down. Env REX_METAL_IDLE_SPIN=0/1.",
+    "Metal");
+REXCVAR_DEFINE_UINT32(metal_idle_spin_us, 3000, "Metal",
+                      "Busy-wait budget in microseconds for metal_idle_spin.");
+DEFINE_bool(
+    metal_idle_defer_submit, false,
+    "When the command thread runs out of guest commands, wait up to "
+    "metal_idle_defer_us for more before ending and submitting the open "
+    "command buffer. Env REX_METAL_IDLE_DEFER_SUBMIT=0/1.",
+    "Metal");
+REXCVAR_DEFINE_UINT32(metal_idle_defer_us, 300, "Metal",
+                      "Spin budget in microseconds for metal_idle_defer_submit.");
 REXCVAR_DEFINE_UINT32(metal_cmd_pad_ns, 210, "Metal",
                       "Per-draw busy-wait in nanoseconds for metal_cmd_pad.");
 
@@ -525,6 +541,7 @@ void SampleThreadCpu() {
   frame_log::Record("tr_n_ts_draw", f, u.ts_draw);
   frame_log::Record("tr_n_cbend_pbe", f, u.cbend_pbe);
   frame_log::Record("tr_n_cbend_idle", f, u.cbend_idle);
+  frame_log::Record("tr_n_idle_deferred", f, u.idle_deferred);
   frame_log::Record("tr_n_cbend_dep", f, u.cbend_dep);
   frame_log::Record("tr_n_cbend_wait", f, u.cbend_wait);
   frame_log::Record("tr_n_xfp_clear", f, u.xfp_clear);
@@ -2422,7 +2439,36 @@ void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
   }
 }
 
+bool MetalCommandProcessor::IdleSpinUntilWork(uint32_t budget_us) {
+  // [mct] Busy-wait for guest commands without sleeping. Returns true when
+  // work (ring advance or a queued function) arrived within the budget.
+  if (!budget_us) return false;
+  const auto end =
+      std::chrono::steady_clock::now() + std::chrono::microseconds(budget_us);
+  uint32_t n = 0;
+  for (;;) {
+    const uint32_t w = write_ptr_index_.load(std::memory_order_acquire);
+    if (!worker_running_ || !pending_fns_.empty() ||
+        (w != 0xBAADF00D && w != read_ptr_index_)) {
+      return true;
+    }
+#if defined(__aarch64__)
+    __builtin_arm_isb(15);
+#endif
+    if ((++n & 63) == 0 && std::chrono::steady_clock::now() >= end) {
+      return false;
+    }
+  }
+}
+
 void MetalCommandProcessor::PrepareForWait() {
+  if (REXCVAR_GET(metal_async_idle_submission) && IdleDeferSubmitRequested() &&
+      current_command_buffer_ &&
+      IdleSpinUntilWork(REXCVAR_GET(metal_idle_defer_us))) {
+    // More guest commands arrived quickly: keep the command buffer open.
+    ++UploadTrace().idle_deferred;
+    return;
+  }
   if (REXCVAR_GET(metal_async_idle_submission)) {
     // Submit before sleeping so guest polling can make forward progress. Use
     // the normal asynchronous submission path: resource reclamation remains
@@ -2431,6 +2477,9 @@ void MetalCommandProcessor::PrepareForWait() {
     if (current_command_buffer_) ++UploadTrace().cbend_idle;
     EndCommandBuffer();
     CommandProcessor::PrepareForWait();
+    if (IdleSpinRequested()) {
+      IdleSpinUntilWork(REXCVAR_GET(metal_idle_spin_us));
+    }
     gpu_time_trace::idle_start_us = gpu_time_trace::Now();
     if (!hitch_idle_open_ && hitch::Enabled()) {
       hitch::Begin(hitch::kIdle);

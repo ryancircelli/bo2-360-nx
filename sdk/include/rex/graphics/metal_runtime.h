@@ -37,6 +37,11 @@ __attribute__((visibility("default"))) void RequestEncodeSpin(bool on);
 __attribute__((visibility("default"))) bool Type0BatchConstsOnlyRequested();
 __attribute__((visibility("default"))) void RequestType0BatchConstsOnly(bool on);
 // [mct] Diagnostic per-draw command-thread pad (metal_cmd_pad_ns).
+// [mct] Command-thread idle handling (metal_idle_spin, metal_idle_defer_submit).
+__attribute__((visibility("default"))) bool IdleSpinRequested();
+__attribute__((visibility("default"))) void RequestIdleSpin(bool on);
+__attribute__((visibility("default"))) bool IdleDeferSubmitRequested();
+__attribute__((visibility("default"))) void RequestIdleDeferSubmit(bool on);
 __attribute__((visibility("default"))) bool CmdPadRequested();
 __attribute__((visibility("default"))) void RequestCmdPad(bool on);
 }  // namespace rex::graphics::metal

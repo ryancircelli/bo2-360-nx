@@ -122,6 +122,7 @@ struct UploadTraceCounters {
   // [cb-end] main command buffers ended, by cause (tr_n_cbend_*): PM4 primary buffer
   // end, worker idle (PrepareForWait), shared-memory read dependency, explicit wait.
   uint32_t cbend_pbe = 0, cbend_idle = 0, cbend_dep = 0, cbend_wait = 0;
+  uint32_t idle_deferred = 0;
   // [tile-edram] separate transfer/clear render passes by kind (tr_n_xfp_*):
   // resolve clear only, transfers with a self-source host depth (need
   // rt_depth_store), other transfers; estimated attachment KB loaded + stored
