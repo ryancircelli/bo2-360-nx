@@ -1671,6 +1671,11 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD(memory::RingBuffer* reader, ui
   uint32_t size_dwords = start_size & 0xFFFF;  // dwords
   assert_true(start == 0);
 
+  // The ucode lives in guest memory, not in the packet: a trace must record it
+  // or a replay loads whatever the replay memory holds there (zeros).
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnMemoryRead(addr & 0x1FFFFFFF, size_dwords * sizeof(uint32_t));
+  }
   auto shader =
       LoadShader(shader_type, addr, memory_->TranslatePhysical<uint32_t*>(addr), size_dwords);
   switch (shader_type) {

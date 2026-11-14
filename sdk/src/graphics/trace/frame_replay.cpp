@@ -1297,7 +1297,11 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
   bool in_window = !options_.draw_count || (index >= options_.first_draw &&
                                             index - options_.first_draw < options_.draw_count);
   bool first_target = true;
-  if (in_window && draw.succeeded && modecontrol.edram_mode == xenos::EdramMode::kColorDepth) {
+  // Depth-only passes (EdramMode::kDepthOnly, z prepasses and shadow maps)
+  // write depth too, so they get a depth readback; colour only in kColorDepth.
+  bool color_depth = modecontrol.edram_mode == xenos::EdramMode::kColorDepth;
+  if (in_window && draw.succeeded &&
+      (color_depth || modecontrol.edram_mode == xenos::EdramMode::kDepthOnly)) {
     auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
     auto scissor_br = regs.Get<reg::PA_SC_WINDOW_SCISSOR_BR>();
     uint32_t pitch = surface_info.surface_pitch;
@@ -1317,7 +1321,7 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
     };
 
     auto color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
-    if ((options_.flags & kRexGpuTraceReplayReadbackColor) && ps && width) {
+    if (color_depth && (options_.flags & kRexGpuTraceReplayReadbackColor) && ps && width) {
       for (uint32_t rt = 0; rt < xenos::kMaxColorRenderTargets; ++rt) {
         if (!ps->writes_color_target(rt) || !((color_mask >> (4 * rt)) & 0xF)) {
           continue;
