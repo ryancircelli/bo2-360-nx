@@ -9,7 +9,8 @@ rest is written for this project. No game data is ever written inside the reposi
 
   --build    the folder tools/build_mac.sh leaves ($BO2_BUILD/out/mac-arm64): bo2zm, its librex*.dylib files and
              the vulkan/ runtime (loader, MoltenVK, icd file). With --binary a bare executable instead.
-  --shaders  folder with bo2zm_shaders.spvpack and bo2zm_shaders.spvidx
+  --shaders  folder with bo2zm_shaders.spvpack and bo2zm_shaders.spvidx; its optional bo2zm_pso.psolist and
+             shader_seed/ (tools/mac/shader_seed.py: Metal pipelines precreated in the background) go in too
   --data     the data folder (game/, update/, content/; tools/data_dir.sh). Not needed with --data-mode external.
   --data-mode clone     (default with --data) cp -c clones of the data into Contents/Resources/data: no extra
                         space on the same APFS volume, a plain copy elsewhere
@@ -20,7 +21,7 @@ Layout of the app:
   Contents/MacOS/Black Ops II       the launcher (tools/mac/app/launcher.c), CFBundleExecutable
   Contents/MacOS/bo2zm              the game; the SDK finds beside it the shader library, bo2zm.toml, librexgpu-*.dylib
   Contents/MacOS/*.dylib            the build's own libraries (the GPU plugin is loaded from here)
-  Contents/MacOS/vulkan, bo2zm_shaders.spvpack/.spvidx, bo2zm.toml
+  Contents/MacOS/vulkan, bo2zm_shaders.spvpack/.spvidx, shader_seed/, bo2zm.toml
                                     relative links into Resources/runtime (codesign refuses plain data files in
                                     MacOS/); the SDK finds all of them beside the executable
   Contents/Frameworks/              any other non-system library the binaries linked (copied, install names fixed)
@@ -282,8 +283,8 @@ def pack(a):
     shaders = Path(a.shaders).resolve() if a.shaders else None
     shader_files = []
     if shaders:
-        for f in ('bo2zm_shaders.spvpack', 'bo2zm_shaders.spvidx', 'bo2zm_pso.psolist'):
-            if (shaders / f).is_file():
+        for f in ('bo2zm_shaders.spvpack', 'bo2zm_shaders.spvidx', 'bo2zm_pso.psolist', 'shader_seed'):
+            if (shaders / f).exists():
                 shader_files.append(shaders / f)
             elif f.endswith('spvpack'):
                 raise SystemExit(f'no {f} in {shaders}')

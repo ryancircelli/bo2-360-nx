@@ -154,6 +154,34 @@ DEFINE_string(metal_shader_prep, "",
               "Metal");
 DEFINE_double(metal_shader_prep_timeout_s, 1800.0,
               "Guard timeout of metal_shader_prep, seconds.", "Metal");
+DEFINE_string(metal_shader_seed, "",
+              "Folder of a shipped shader seed (<title>.xsh and "
+              "<title>.metal.xpso, the shader storage format). Its pipelines "
+              "the local storage lacks are created in the background at "
+              "startup, behind the game's own. Empty = shader_seed beside the "
+              "executable, 'off' = none.",
+              "Metal");
+DEFINE_int32(metal_shader_seed_threads, 2,
+             "Most pipeline creation threads the shipped shader seed may use "
+             "at once once gameplay is live, so the game's own pipelines never queue behind it (each "
+             "seed pipeline can take a few hundred ms on a cold macOS shader "
+             "cache). 0 = no limit.",
+             "Metal");
+DEFINE_int32(metal_shader_seed_live_draws, 1000,
+             "Draws per frame (30 frames in a row) that mark gameplay as live. "
+             "Before that the shader seed uses every creation thread at "
+             "normal priority; after it, metal_shader_seed_threads and "
+             "metal_shader_seed_background apply. 0 = always live.",
+             "Metal");
+DEFINE_bool(metal_shader_seed_background, true,
+            "Once gameplay is live, create shader seed pipelines at background "
+            "QoS so they take as little CPU time from the game as possible.",
+            "Metal");
+DEFINE_int32(metal_pipeline_wait_budget_ms, 10,
+             "Per-frame time a draw may wait for a pipeline still being "
+             "created when its shaders are already translated (instead of "
+             "skipping the draw). 0 = never wait.",
+             "Metal");
 DEFINE_string(metal_res_scale, "",
               "Draw resolution scale: empty = native 1x, 1 to 3 = both axes, "
               "'cvar' = follow draw_resolution_scale_x/y.",

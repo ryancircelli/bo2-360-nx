@@ -2806,6 +2806,7 @@ void MetalCommandProcessor::MaybeLogMemReport() {
 void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
+  pipeline_wait_us_frame_ = 0;
   {
     // Perf log: command processor thread CPU time since the previous swap, and the submissions so far.
     static thread_local uint64_t perf_last_cpu_ns = 0;
@@ -2816,6 +2817,12 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     }
     perf_last_cpu_ns = cpu_now;
     perf.jobs_submitted.store(submission_current_, std::memory_order_relaxed);
+    static thread_local uint64_t seed_last_draws = 0;
+    const uint64_t draws_now = perf.draws.load(std::memory_order_relaxed);
+    if (pipeline_cache_) {
+      pipeline_cache_->NoteFrameDraws(draws_now - seed_last_draws);
+    }
+    seed_last_draws = draws_now;
   }
   rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
   ZpdMaybeLogStats();
@@ -5594,6 +5601,31 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
         pipeline = pipeline_cache_->WaitForPipeline(pipeline_handle);
         if (frame_log::Enabled()) frame_log::Record(
             "pipeline_wait", frame_log::CurrentFrame(), frame_log::NowUs() - wait_start);
+      }
+      // Shaders already translated: what is left is a pipeline build of a few
+      // milliseconds. Wait for it within a per-frame budget rather than drop
+      // the draw for a frame (a skipped colour pass after its depth pass
+      // shows black). Untranslated shaders still skip: those take 100+ ms.
+      auto translated = [](MetalShader::MetalTranslation* t) {
+        return !t || t->is_native_primary() || t->is_valid();
+      };
+      const uint64_t wait_budget_us =
+          uint64_t(std::max(REXCVAR_GET(metal_pipeline_wait_budget_ms), 0)) *
+          1000;
+      if (!pipeline && REXCVAR_GET(async_shader_compilation) &&
+          pipeline_wait_us_frame_ < wait_budget_us &&
+          !pipeline_handle->creation_complete.load(std::memory_order_acquire) &&
+          translated(vertex_translation) && translated(pixel_translation)) {
+        const auto wait_start = std::chrono::steady_clock::now();
+        pipeline = pipeline_cache_->WaitForPipeline(
+            pipeline_handle, wait_budget_us - pipeline_wait_us_frame_);
+        const uint64_t waited_us = uint64_t(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - wait_start)
+                .count());
+        pipeline_wait_us_frame_ += waited_us;
+        if (frame_log::Enabled()) frame_log::Record(
+            "pipeline_wait_bounded", frame_log::CurrentFrame(), waited_us);
       }
     }
     if (!pipeline) {
