@@ -253,6 +253,29 @@ void TextureCache::ClearCache() {
   DestroyAllTextures();
 }
 
+size_t TextureCache::GetTextureCountCreatedBefore(uint64_t submission) const {
+  size_t count = 0;
+  for (const auto& entry : textures_) {
+    if (entry.second->creation_submission_index() <= submission) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+size_t TextureCache::GetTextureCountCreatedBeforeAndUsedAfter(
+    uint64_t submission) const {
+  size_t count = 0;
+  for (const auto& entry : textures_) {
+    const Texture& texture = *entry.second;
+    if (texture.creation_submission_index() <= submission &&
+        texture.last_usage_submission_index() > submission) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_index) {
   // If memory usage is too high, destroy unused textures.
   uint64_t current_time = rex::chrono::Clock::QueryHostUptimeMillis();
@@ -641,6 +664,7 @@ TextureCache::Texture::Texture(TextureCache& texture_cache, const TextureKey& ke
       key_(key),
       guest_layout_(key.GetGuestLayout()),
       last_usage_submission_index_(texture_cache.current_submission_index_),
+      creation_submission_index_(texture_cache.current_submission_index_),
       last_usage_time_(texture_cache.current_submission_time_),
       used_previous_(track_usage ? texture_cache.texture_used_last_ : nullptr),
       used_next_(nullptr),

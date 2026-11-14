@@ -1454,6 +1454,8 @@ class MetalCommandProcessor final : public CommandProcessor {
   std::unique_ptr<MetalSharedMemory> shared_memory_;
   std::unique_ptr<MetalPrimitiveProcessor> primitive_processor_;
   bool frame_open_ = false;
+  bool texture_cache_clear_requested_ = false;
+  uint64_t texture_cache_clear_request_submission_ = 0;
 
   bool saw_swap_ = false;
   // [hitch] the idle scope opened in PrepareForWait (closed in ReturnFromWait).

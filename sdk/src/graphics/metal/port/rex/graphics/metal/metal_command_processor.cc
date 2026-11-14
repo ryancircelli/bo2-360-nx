@@ -1434,8 +1434,25 @@ void MetalCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {
 
 void MetalCommandProcessor::ClearCaches() {
   CommandProcessor::ClearCaches();
-  // TODO(wmarti): Add cache_clear_requested_ flag like D3D12 for deferred
-  // clearing of pipeline caches, texture caches, etc.
+  static const bool clear_texture_cache = [] {
+    const char* value = MetalDebugEnv("TEX_CACHE_CLEAR_ON_REQUEST");
+    return value && value[0] != '\0' && value[0] != '0';
+  }();
+  const size_t texture_count =
+      texture_cache_ ? texture_cache_->GetTextureCount() : 0;
+  texture_cache_clear_request_submission_ = GetCurrentSubmission();
+  const size_t old_texture_count =
+      texture_cache_ ? texture_cache_->GetTextureCountCreatedBefore(
+                           texture_cache_clear_request_submission_)
+                     : 0;
+  REXLOG_INFO(
+      "[texture-cache-clear] ClearCaches requested at submission {}, texture "
+      "entries {}, entries created before request {}, diagnostic flush {}",
+      texture_cache_clear_request_submission_, texture_count,
+      old_texture_count, clear_texture_cache ? "enabled" : "disabled");
+  if (clear_texture_cache) {
+    texture_cache_clear_requested_ = true;
+  }
 }
 
 void MetalCommandProcessor::InvalidateGpuMemory() {
@@ -2808,6 +2825,22 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   DrainCommandBufferAutoreleasePool();
 
   CloseFrameLifetime();
+  if (texture_cache_clear_requested_) {
+    texture_cache_clear_requested_ = false;
+    const size_t texture_count_before =
+        texture_cache_ ? texture_cache_->GetTextureCount() : 0;
+    const size_t old_entries_used_after_request =
+        texture_cache_ ? texture_cache_->GetTextureCountCreatedBeforeAndUsedAfter(
+                             texture_cache_clear_request_submission_)
+                       : 0;
+    if (texture_cache_) {
+      texture_cache_->ClearCache();
+    }
+    REXLOG_INFO(
+        "[texture-cache-clear] applied after swap: destroyed {} texture "
+        "entries, old entries used after request {}",
+        texture_count_before, old_entries_used_after_request);
+  }
   // Proactive descriptor-pressure trimming: at frame boundaries the GPU has
   // likely completed prior submissions, so retired descriptor indices can be
   // reclaimed and the texture cache can be trimmed before we start the next

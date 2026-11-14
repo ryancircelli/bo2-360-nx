@@ -75,6 +75,9 @@ class TextureCache {
   }
 
   virtual void ClearCache();
+  size_t GetTextureCount() const { return textures_.size(); }
+  size_t GetTextureCountCreatedBefore(uint64_t submission) const;
+  size_t GetTextureCountCreatedBeforeAndUsedAfter(uint64_t submission) const;
 
   virtual void CompletedSubmissionUpdated(uint64_t completed_submission_index);
   virtual void BeginSubmission(uint64_t new_submission_index);
@@ -215,6 +218,7 @@ class TextureCache {
     uint64_t GetHostMemoryUsage() const { return host_memory_usage_; }
 
     uint64_t last_usage_submission_index() const { return last_usage_submission_index_; }
+    uint64_t creation_submission_index() const { return creation_submission_index_; }
     uint64_t last_usage_time() const { return last_usage_time_; }
     static constexpr uint32_t kOutdatedBitBase = UINT32_C(1) << 0;
     static constexpr uint32_t kOutdatedBitMips = UINT32_C(1) << 1;
@@ -257,6 +261,7 @@ class TextureCache {
     uint64_t host_memory_usage_ = 0;
 
     uint64_t last_usage_submission_index_;
+    uint64_t creation_submission_index_;
     uint64_t last_usage_time_;
     Texture* used_previous_;
     Texture* used_next_;
