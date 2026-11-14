@@ -136,6 +136,15 @@ int main(int argc, char** argv) {
     // An explicit REX_METAL_NO_DRAW_QUEUE in the environment wins.
     setenv("REX_METAL_NO_DRAW_QUEUE", "1", 0);
   }
+  if (flags & kRexGpuTraceReplayRace) {
+    // Race mode moves recorded guest writes earlier (into texture load
+    // windows). A write moved ahead of a memexport whose range it overlaps
+    // is then overwritten by the Metal plugin's memexport readback (GPU
+    // buffer copied back to guest RAM), which the game never saw: guest
+    // memory diverges from the trace and the check reports false stales.
+    // An explicit REX_METAL_MEMEXPORT_READBACK in the environment wins.
+    setenv("REX_METAL_MEMEXPORT_READBACK", "0", 0);
+  }
 
   char arg0[] = "rexgpu-replay";
   char* fake_argv[] = {arg0, nullptr};

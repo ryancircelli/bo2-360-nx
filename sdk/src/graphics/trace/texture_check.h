@@ -115,6 +115,7 @@ class TextureCheck : public TextureLoadProbe {
   uint64_t HashGuest(uint32_t address, uint32_t size) const;
   bool OverlapsGpuWritten(uint32_t address, uint32_t size) const;
   void NoteOrigin(uint64_t hash, uint32_t address, uint32_t size, const Position& at);
+  bool RecordedWrite(uint64_t hash) const;
   std::string OriginText(uint64_t hash) const;
 
   memory::Memory* memory_;
@@ -138,6 +139,7 @@ class TextureCheck : public TextureLoadProbe {
   uint64_t gpu_skipped_ = 0;
   uint64_t race_injections_ = 0;
   uint64_t race_misses_ = 0;
+  uint64_t mixed_ = 0;
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> stale_distinct_;
 };
 

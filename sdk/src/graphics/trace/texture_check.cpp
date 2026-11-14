@@ -51,6 +51,11 @@ void TextureCheck::NoteOrigin(uint64_t hash, uint32_t address, uint32_t size,
   origins_.try_emplace(hash, Origin{address, size, at});
 }
 
+bool TextureCheck::RecordedWrite(uint64_t hash) const {
+  auto it = origins_.find(hash);
+  return it != origins_.end() && it->second.written;
+}
+
 std::string TextureCheck::OriginText(uint64_t hash) const {
   auto it = origins_.find(hash);
   if (it == origins_.end()) {
@@ -266,6 +271,17 @@ void TextureCheck::CheckDraw(const RegisterFile& regs, Shader* vs, Shader* ps,
             stale_base = stale_mips = false;
           } else if (stale_base || stale_mips) {
             state = "stale";
+            if (race_ && !RecordedWrite(stale_base ? entry->base.hash : entry->mips.hash) &&
+                !RecordedWrite(stale_base ? cur_base : cur_mips)) {
+              // Race mode only: neither the loaded bytes nor the current
+              // guest bytes are a version the game ever wrote. Early-applied
+              // writes from overlapping ranges left memory in a state the
+              // game never had, so this is a replay artifact, not a cache
+              // result. Counted as "mixed", never as stale.
+              state = "mixed";
+              ++mixed_;
+              stale_base = stale_mips = false;
+            }
           }
         }
       }
@@ -336,9 +352,10 @@ void TextureCheck::CheckDraw(const RegisterFile& regs, Shader* vs, Shader* ps,
 std::string TextureCheck::SummaryJson() const {
   return fmt::format(
       "{{\"race\":{},\"loads\":{},\"checked\":{},\"stale\":{},\"stale_distinct\":{},"
-      "\"unloaded\":{},\"gpu_written_skipped\":{},\"race_injections\":{},\"race_misses\":{}}}",
+      "\"unloaded\":{},\"gpu_written_skipped\":{},\"race_injections\":{},\"race_misses\":{},"
+      "\"mixed\":{}}}",
       race_ ? "true" : "false", loads_, checked_, stale_, stale_distinct_.size(), unloaded_,
-      gpu_skipped_, race_injections_, race_misses_);
+      gpu_skipped_, race_injections_, race_misses_, mixed_);
 }
 
 }  // namespace rex::graphics::trace
