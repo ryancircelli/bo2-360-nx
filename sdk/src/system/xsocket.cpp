@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <rex/instance_env.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -257,7 +258,7 @@ void MakeXnAddr(uint32_t ip, uint8_t* xnaddr) {
 bool TitleAddress(uint32_t* ip) {
   // Local multi-copy mode gives each guest a distinct address. These guest
   // identities are translated to the host's configured 127.0.0.1 by XSocket.
-  if (const char* value = std::getenv("BO2_INSTANCE")) {
+  if (const char* value = rex::InstanceEnv()) {
     char* end = nullptr;
     const long instance = std::strtol(value, &end, 10);
     if (end && *end == '\0' && instance >= 0 && instance < 16) {
@@ -288,7 +289,7 @@ uint16_t HostPort(uint16_t guest_port) {
   const int offset = REXCVAR_GET(net_system_port_offset);
   if (guest_port && guest_port < 1024 && offset) return uint16_t(guest_port + offset);
   if (guest_port == 3074) {
-    if (const char* value = std::getenv("BO2_INSTANCE")) {
+    if (const char* value = rex::InstanceEnv()) {
       char* end = nullptr;
       const long instance = std::strtol(value, &end, 10);
       if (end && *end == '\0' && instance >= 0 && instance < 16) return uint16_t(3074 + instance * 16);
@@ -1129,7 +1130,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* guest_name, int name_len) {
   N_XSOCKADDR_IN moved = *guest_name;
   const uint32_t guest_ip = uint32_t(moved.sin_addr);
   const bool instance_address = guest_ip >= 0x7F000101u && guest_ip <= 0x7F000110u;
-  if (std::getenv("BO2_INSTANCE") && (!moved.sin_addr || instance_address) && guest_name->sin_port &&
+  if (rex::InstanceEnv() && (!moved.sin_addr || instance_address) && guest_name->sin_port &&
       (guest_name->sin_port < 1024 || guest_name->sin_port == 3074)) {
     // Guest XNADDRs use a per-copy loopback identity, but macOS only exposes
     // 127.0.0.1 on lo0 by default. Port blocks keep these host binds distinct.
@@ -1395,7 +1396,7 @@ int LocalInstance(uint32_t address) {
 }
 
 int ConfiguredInstance() {
-  const char* value = std::getenv("BO2_INSTANCE");
+  const char* value = rex::InstanceEnv();
   if (!value) return -1;
   char* end = nullptr;
   const long instance = std::strtol(value, &end, 10);
@@ -1503,7 +1504,7 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
   // unique loopback address and port block. This stays entirely local.
   if (to && IsBroadcast(ntohl(nto.sin_addr.s_addr)) && to->sin_port &&
       (to->sin_port < 1024 || to->sin_port == 3074) &&
-      std::getenv("BO2_INSTANCE")) {
+      rex::InstanceEnv()) {
     for (int instance = 0; instance < 16; ++instance) {
       if (instance == ConfiguredInstance()) continue;
       sockaddr_in copy = nto;

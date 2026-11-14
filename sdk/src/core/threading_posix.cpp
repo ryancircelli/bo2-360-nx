@@ -434,7 +434,7 @@ AddressWait WaitOnAddress(void* address, uint32_t expected, int64_t timeout_ns) 
     // Anything else would make the callers spin; say so once.
     static std::atomic<bool> reported{false};
     if (!reported.exchange(true)) {
-      REXSYS_WARN("bo2-zm-nx waits: svcWaitForAddress failed with {:#x}", rc);
+      REXSYS_WARN("waits: svcWaitForAddress failed with {:#x}", rc);
     }
   }
   return AddressWait::kChanged;
@@ -518,7 +518,7 @@ void NoteLostWakeup(const char* what, std::chrono::steady_clock::time_point star
   if (lost_wakeup_lines_.fetch_add(1, std::memory_order_relaxed) < kWaitLogLimit) {
     // A real lost wake-up, unless the thread woken instead of this one has not run for a whole check interval.
     REXSYS_WARN(
-        "bo2-zm-nx waits: possible lost wake-up #{}: thread '{}' found its {} signaled after {} ms without "
+        "waits: possible lost wake-up #{}: thread '{}' found its {} signaled after {} ms without "
         "being woken (it took it and went on)",
         count, CurrentThreadName(), what, MillisecondsSince(start));
   }
@@ -530,7 +530,7 @@ void NoteLongWait(const char* what, std::chrono::steady_clock::time_point start,
   }
   *reported = true;
   if (long_wait_lines_.fetch_add(1, std::memory_order_relaxed) < kWaitLogLimit) {
-    REXSYS_INFO("bo2-zm-nx waits: thread '{}' has waited {} ms for {} (still waiting; logged once per wait)",
+    REXSYS_INFO("waits: thread '{}' has waited {} ms for {} (still waiting; logged once per wait)",
                 CurrentThreadName(), MillisecondsSince(start), what);
   }
 }

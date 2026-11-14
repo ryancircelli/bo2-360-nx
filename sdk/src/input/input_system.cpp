@@ -71,7 +71,7 @@ REXCVAR_DEFINE_INT32(hid_virtual_pads, 0, "Input",
     .range(0, 4);
 REXCVAR_DEFINE_STRING(hid_virtual_pad_script, "", "Input",
                       "File of virtual pad scripts: \"pad1 = 25:down,27:a\" lines up to pad4 "
-                      "(a bo2 .route file works as is). Sets the pad count when "
+                      "(a BO2 .route file works as is). Sets the pad count when "
                       "hid_virtual_pads is 0");
 REXCVAR_DEFINE_STRING(hid_virtual_pad1, "", "Input",
                       "Virtual pad 1 script: \"25:a,60-90:stick_up+look_right,100-105:disconnect\" "

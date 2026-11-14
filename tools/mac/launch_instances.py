@@ -125,8 +125,8 @@ def main(argv):
         env = os.environ.copy()
         if os.environ.get("RUNQ_JOB"):
             env.setdefault("REX_AUDIO_MUTE", "true")  # test runs stay silent; owner launches keep sound
-        env["BO2_INSTANCE"] = str(instance)
-        env["BO2_INSTANCE_COUNT"] = str(count)
+        env["REX_INSTANCE"] = env["BO2_INSTANCE"] = str(instance)  # old name kept for older builds
+        env["REX_INSTANCE_COUNT"] = env["BO2_INSTANCE_COUNT"] = str(count)
         env["BO2_LOG_DIR"] = str(capture_root / f"instance-{instance}")
         env["REX_BO2ZM_CAPTURE_EVERY_S"] = "10"
         env["REX_BO2ZM_CAPTURE_MAX"] = "30"

@@ -11,6 +11,7 @@
  * @remarks     Derived from Xenia's window_win.cc (Ben Vanik, 2020).
  */
 
+#include <rex/instance_env.h>
 #include <rex/ui/window_sdl.h>
 
 #include <algorithm>
@@ -83,8 +84,8 @@ uint32_t ResolveWindowHeight(uint32_t requested_height) {
 }
 
 bool TileInstanceWindow(SDL_Window* window) {
-  const char* instance_value = std::getenv("BO2_INSTANCE");
-  const char* count_value = std::getenv("BO2_INSTANCE_COUNT");
+  const char* instance_value = rex::InstanceEnv();
+  const char* count_value = rex::InstanceCountEnv();
   if (!instance_value || !count_value) {
     return false;
   }
@@ -97,14 +98,14 @@ bool TileInstanceWindow(SDL_Window* window) {
   if (parsed_instance.ec != std::errc{} || parsed_instance.ptr != instance_text.data() + instance_text.size() ||
       parsed_count.ec != std::errc{} || parsed_count.ptr != count_text.data() + count_text.size() ||
       count < 2 || count > 4 || instance < 0 || instance >= count) {
-    REXLOG_WARN("Ignoring invalid BO2 instance window tile ({}/{})", instance_value, count_value);
+    REXLOG_WARN("Ignoring invalid instance window tile ({}/{})", instance_value, count_value);
     return false;
   }
 
   const SDL_DisplayID display = SDL_GetPrimaryDisplay();
   SDL_Rect bounds{};
   if (!display || !SDL_GetDisplayBounds(display, &bounds) || bounds.w <= 0 || bounds.h <= 0) {
-    REXLOG_WARN("Could not read the main display bounds for BO2 instance tiling: {}", SDL_GetError());
+    REXLOG_WARN("Could not read the main display bounds for instance tiling: {}", SDL_GetError());
     return false;
   }
 
@@ -121,7 +122,7 @@ bool TileInstanceWindow(SDL_Window* window) {
   const int bottom = bounds.y + (row + 1) * bounds.h / rows;
   SDL_SetWindowSize(window, right - left, bottom - top);
   SDL_SetWindowPosition(window, left, top);
-  REXLOG_INFO("Tiled BO2 instance {}/{} at {},{} {}x{} on the main display", instance, count, left, top,
+  REXLOG_INFO("Tiled instance {}/{} at {},{} {}x{} on the main display", instance, count, left, top,
               right - left, bottom - top);
   return true;
 }

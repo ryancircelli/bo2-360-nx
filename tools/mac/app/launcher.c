@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
     snprintf(opt, sizeof opt, "--game_data_root=%s/game", data); push(opt);
     snprintf(opt, sizeof opt, "--update_data_root=%s/update", data); push(opt);
     snprintf(opt, sizeof opt, "--user_data_root=%s", support); push(opt);
-    const char *instance = getenv("BO2_INSTANCE");
+    const char *instance = getenv("REX_INSTANCE") ? getenv("REX_INSTANCE") : getenv("BO2_INSTANCE");
     char instance_log[96];
     char *instance_end = NULL;
     long instance_number = instance ? strtol(instance, &instance_end, 10) : -1;
@@ -264,9 +264,9 @@ int main(int argc, char **argv) {
     int has_offset = getenv("REX_NET_SYSTEM_PORT_OFFSET") != NULL;
     for (int i = base; i < g_argc && !has_offset; i++)
         if (!strncmp(g_argv[i], "--net_system_port_offset", 24) && (g_argv[i][24] == '=' || !g_argv[i][24])) has_offset = 1;
-    // BO2_INSTANCE selects a disjoint title-port block in the app. Do not
+    // REX_INSTANCE (or BO2_INSTANCE) selects a disjoint title-port block in the app. Do not
     // inject the legacy 1000-port fallback on top of that assignment.
-    if (!has_offset && !getenv("BO2_INSTANCE") && !(udp_free(31000) && udp_free(31001))) {
+    if (!has_offset && !getenv("REX_INSTANCE") && !getenv("BO2_INSTANCE") && !(udp_free(31000) && udp_free(31001))) {
         int chosen = 0;
         for (int k = 1; k <= 20 && !chosen; k++) {
             int off = 30000 + 1000 * k;

@@ -350,7 +350,7 @@ std::atomic<int> g_hog_seconds{2};
 std::atomic<bool> g_tripped{false};
 
 void MeterMain(void*) {
-  RexSwitchPerfSetThreadName(threadGetCurHandle(), "BO2 core 3 meter");
+  RexSwitchPerfSetThreadName(threadGetCurHandle(), "core 3 meter");
   u64 last_tick = armGetSystemTick(), last_idle = IdleHere(), last_ours = OursOnCore3();
   u64 window_elapsed = 0, window_busy = 0, window_ours = 0;
   u32 window_worst = 0;

@@ -15,7 +15,7 @@ namespace rex::input::sdl {
 std::string MakePadIdentity(std::string_view guid, std::string_view serial,
                             std::string_view path);
 
-/// Coordinates up to eight pads between BO2_INSTANCE processes. If the
+/// Coordinates up to eight pads between REX_INSTANCE (or BO2_INSTANCE) processes. If the
 /// environment variable is absent, ownership is disabled and all pads pass.
 class PadOwnership {
  public:

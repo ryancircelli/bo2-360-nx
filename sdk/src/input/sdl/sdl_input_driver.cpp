@@ -549,7 +549,7 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
                                                                   : state.path;
   const auto identity = MakePadIdentity(guid_text, state.serial, stable_path);
   if (!pad_ownership_.Owns(identity)) {
-    REXLOG_INFO("SDL OnControllerDeviceAdded: pad is assigned to another BO2 instance or the shared pad limit is full (GUID {}, path \"{}\").",
+    REXLOG_INFO("SDL OnControllerDeviceAdded: pad is assigned to another instance or the shared pad limit is full (GUID {}, path \"{}\").",
                 guid_text, state.path);
     SDL_CloseGamepad(controller);
     return;

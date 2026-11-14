@@ -1,4 +1,5 @@
 #include <rex/input/sdl/pad_ownership.h>
+#include <rex/instance_env.h>
 
 #include <charconv>
 #include <cstdlib>
@@ -163,7 +164,7 @@ std::string MakePadIdentity(std::string_view guid, std::string_view serial,
 
 PadOwnership::PadOwnership() {
   registry_path_ = RegistryPath();
-  const char* value = std::getenv("BO2_INSTANCE");
+  const char* value = rex::InstanceEnv();
   if (!value) return;
   const std::string text(value);
   int instance = -1;

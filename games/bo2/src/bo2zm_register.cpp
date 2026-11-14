@@ -3,6 +3,7 @@
 // former Bo2zmApp overrides ran them.
 
 
+#include <rex/instance_env.h>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -43,7 +44,7 @@
 namespace {
 
 std::optional<int> Bo2InstanceIndex() {
-  const char* value = std::getenv("BO2_INSTANCE");
+  const char* value = rex::InstanceEnv();
   if (!value) {
     return std::nullopt;
   }
@@ -51,13 +52,13 @@ std::optional<int> Bo2InstanceIndex() {
   int index = -1;
   const auto result = std::from_chars(text.data(), text.data() + text.size(), index);
   if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || index < 0 || index > 15) {
-    throw std::runtime_error("BO2_INSTANCE must be an integer from 0 to 15");
+    throw std::runtime_error("REX_INSTANCE (or BO2_INSTANCE) must be an integer from 0 to 15");
   }
   return index;
 }
 
 std::optional<int> Bo2InstanceCount() {
-  const char* value = std::getenv("BO2_INSTANCE_COUNT");
+  const char* value = rex::InstanceCountEnv();
   if (!value) {
     return std::nullopt;
   }
@@ -65,7 +66,7 @@ std::optional<int> Bo2InstanceCount() {
   int count = 0;
   const auto result = std::from_chars(text.data(), text.data() + text.size(), count);
   if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || count < 2 || count > 4) {
-    throw std::runtime_error("BO2_INSTANCE_COUNT must be an integer from 2 to 4");
+    throw std::runtime_error("REX_INSTANCE_COUNT (or BO2_INSTANCE_COUNT) must be an integer from 2 to 4");
   }
   return count;
 }
@@ -181,7 +182,7 @@ void rex::RegisterGame(rex::GameApi& api) {
     if (const auto count = Bo2InstanceCount()) {
       const auto instance = Bo2InstanceIndex();
       if (!instance || *instance >= *count) {
-        throw std::runtime_error("BO2_INSTANCE must be less than BO2_INSTANCE_COUNT");
+        throw std::runtime_error("REX_INSTANCE must be less than REX_INSTANCE_COUNT");
       }
       // WindowSDL tiles this instance as it creates its own window. Disable
       // the default fullscreen mode so SDL can size and place the window.

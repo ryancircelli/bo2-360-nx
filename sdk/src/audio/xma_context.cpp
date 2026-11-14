@@ -53,13 +53,13 @@ extern "C" {
 // https://github.com/koolkdev/libertyv/blob/master/libav_wrapper/xma2dec.c
 
 REXCVAR_DEFINE_BOOL(apu_xma_cache, true, "Audio",
-                    "bo2-zm-nx: decoded XMA frames are kept by the hash of the frame and of the one before it (the "
+                    "decoded XMA frames are kept by the hash of the frame and of the one before it (the "
                     "decoder's only state between frames) and reused when a sound plays again; checked against a real "
                     "decode (the first 2,000 reuses, then 1 in 256), off for the session after a difference. "
                     "false = every frame decoded");
 // 64 MB by default. In a round 15 benchmark a 16 MB cache (8,128 frames) served ~70 % of the frames and
 // the decoder used ~15-17 % of a core; at 64 MB it serves ~88-90 % and the decoder uses ~10 %.
-REXCVAR_DEFINE_INT32(apu_xma_cache_mb, 64, "Audio", "bo2-zm-nx: size of the decoded XMA frame cache, in MB")
+REXCVAR_DEFINE_INT32(apu_xma_cache_mb, 64, "Audio", "size of the decoded XMA frame cache, in MB")
     .range(1, 256)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(audio_dump_xma_s, 0, "Audio",
