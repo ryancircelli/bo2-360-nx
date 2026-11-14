@@ -60,6 +60,15 @@ struct EmitContext {
     if (referenced)
       referenced->emplace(name);
   }
+
+  /// Prefix for the emitted function's own name (reference copies are emitted
+  /// as `ref_sub_X` beside `sub_X`); calls inside the body are not prefixed.
+  std::string namePrefix;
+
+  /// Set to true by the emission of an instruction a reference copy cannot
+  /// carry (a store the macros do not cover, an atomic, a call): the writer
+  /// then drops the copy. Null when not emitting a reference.
+  bool* referenceBlocked = nullptr;
 };
 
 //=============================================================================

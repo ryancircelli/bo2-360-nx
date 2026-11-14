@@ -114,6 +114,15 @@ struct BuilderContext {
    */
   bool localizeNonVolatiles() const;
 
+  /// True while emitting a `ref_` reference copy for the lockstep verifier.
+  bool isReferenceCopy() const;
+  /// `__savegprlr_N`, `__restfpr_N` and the other register save/restore helpers.
+  static bool isSaveRestoreHelper(std::string_view name);
+  /// Emit a save/restore helper's body with this function's locals in place of
+  /// the registers it stores or loads (`return;` after it when tail-called).
+  void inlineSaveRestoreHelper(const rex::codegen::FunctionNode& helper, std::string_view indent,
+                               bool tail);
+
   /**
    * @brief Get expression for general-purpose register access.
    * @param index Register index (0-31)

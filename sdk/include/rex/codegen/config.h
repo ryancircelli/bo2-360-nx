@@ -101,6 +101,20 @@ struct RecompilerConfig {
   /// r0/r2/r11/r12 and f0 (r12 is __savevmx_N's base).
   bool vectorScratchRegistersAsLocalVariables = false;
   bool generateExceptionHandlers = false;  ///< Generate SEH exception handler wrappers
+  /// Functions also emitted a second time as `ref_sub_X` with the reference
+  /// options (every register in ctx, no folding, calls through the thunk), so
+  /// a host verifier can run both on cloned state and compare (lockstep
+  /// verify; rex/ppc/reference.h).
+  std::vector<uint32_t> referenceFunctions;
+  /// Also take every Nth leaf function (no calls) of at least four
+  /// instructions as a reference function, 0 for none: a broad sample without
+  /// a hand list.
+  uint32_t referenceSampleEvery = 0;
+  /// Test builds: wrap every direct and indirect guest call in REX_ABI_POISON_PRE
+  /// and REX_ABI_POISON_POST, which check that the callee preserved the PowerPC
+  /// non-volatile registers and poison the volatile ones dead at a return
+  /// (rex/ppc/abi_poison.h).
+  bool abiPoisonChecks = false;
 
   // === Analysis tuning (optional) ===
   uint32_t maxJumpExtension = 65536;  ///< Max bytes to extend function for jump table targets

@@ -477,6 +477,7 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
   } else {
     name = fmt::format("sub_{:08X}", base());
   }
+  name = ctx.namePrefix + name;
 
   // Function signature with weak/alias pattern
   emit_println(out, "DEFINE_REX_FUNC({}) {{", name);
@@ -587,9 +588,29 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
           builderCtx.emit_mid_asm_hook();
         }
 
+        const size_t bodyBefore = body.size();
         if (!DispatchInstruction(id, builderCtx)) {
           REXCODEGEN_WARN("Unrecognized instruction at 0x{:X}: {}", blockBase, insn.opcode->name);
           allRecompiled = false;
+        }
+        if (ctx.referenceBlocked) {
+          // A reference copy must be rolled back by its store log alone: no
+          // stores outside the macros, no atomics, no calls, no global state.
+          const std::string_view mnemonic = insn.opcode->name;
+          const std::string_view added(body.data() + bodyBefore, body.size() - bodyBefore);
+          if (mnemonic.starts_with("stwcx") ||
+              mnemonic.starts_with("stdcx") || mnemonic.starts_with("dcbz") || mnemonic == "sc" ||
+              mnemonic.starts_with("mtmsr") || added.find("REX_MM_STORE") != std::string_view::npos ||
+              added.find("(ctx, base);") != std::string_view::npos ||
+              added.find("REX_CALL_INDIRECT") != std::string_view::npos ||
+              added.find("GLOBAL_LOCK") != std::string_view::npos ||
+              added.find("ppc_setjmp") != std::string_view::npos ||
+              added.find("ppc_longjmp") != std::string_view::npos ||
+              added.find("simde_mm_store_si128((simde__m128i*)REX_RAW_ADDR") !=
+                  std::string_view::npos ||
+              added.find("memset(") != std::string_view::npos) {
+            *ctx.referenceBlocked = true;
+          }
         }
 
         // Check for mid-asm hook AFTER instruction

@@ -24,6 +24,9 @@ struct ProjectRecompilerOptions {
   std::vector<std::string> targets;  // empty = all
   bool force = false;
   bool enableExceptionHandlers = false;
+  /// Emit the ABI poison checks around guest calls in every module
+  /// (RecompilerConfig::abiPoisonChecks), for a checking build.
+  bool abiPoisonChecks = false;
   ProgressReporter* reporter = nullptr;
 
   /// Bypass the stamp gate and regenerate every targeted module.

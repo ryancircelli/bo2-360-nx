@@ -13,6 +13,8 @@
 #include "helpers.h"
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_map>
 
 #include <rex/codegen/binary_view.h>
 #include <rex/logging.h>
@@ -46,6 +48,108 @@ const FunctionGraph& BuilderContext::graph() const {
 // An SEH funclet does not: it inherits its owner's live registers through ctx.
 bool BuilderContext::localizeNonVolatiles() const {
   return config().nonVolatileRegistersAsLocalVariables && !fn.sharesRegisters();
+}
+
+bool BuilderContext::isReferenceCopy() const {
+  return emitCtx.namePrefix == "ref_";
+}
+
+bool BuilderContext::isSaveRestoreHelper(std::string_view name) {
+  return name.find("__rest") == 0 || name.find("__save") == 0;
+}
+
+// A localized function keeps the registers a save/restore helper would store
+// or load in locals the helper cannot see, so the helper's body is inlined
+// with the caller's locals in place of ctx: the frame holds exactly what the
+// guest code expects, and the restore leaves the locals at their entry values
+// for the publish at return. A reference copy (lockstep verify) inlines the
+// helpers as they are, so their stack stores go through the logged macros and
+// the copy can be rolled back; a call would write the frame behind the log's
+// back. The helper's own generated body is the source, rendered once and
+// cached, so every helper variant is covered.
+void BuilderContext::inlineSaveRestoreHelper(const rex::codegen::FunctionNode& helper,
+                                             std::string_view indent, bool tail) {
+  static std::mutex cacheMutex;
+  static std::unordered_map<std::string, std::vector<std::string>> cache;
+  std::vector<std::string> lines;
+  {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    // Reference copies render the helper with their own options.
+    const std::string key = emitCtx.namePrefix + helper.name();
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+      rex::codegen::EmitContext sub = emitCtx;
+      sub.referenced = nullptr;
+      sub.referenceBlocked = nullptr;
+      const std::string body = helper.emitCpp(sub);
+      size_t pos = 0;
+      while (pos < body.size()) {
+        size_t end = body.find('\n', pos);
+        if (end == std::string::npos)
+          end = body.size();
+        std::string_view line(body.data() + pos, end - pos);
+        pos = end + 1;
+        size_t first = line.find_first_not_of('\t');
+        if (first == std::string_view::npos)
+          continue;
+        std::string_view code = line.substr(first);
+        if (code.starts_with("//") || code.starts_with("DEFINE_REX_FUNC") ||
+            code.starts_with("REX_FUNC_PROLOGUE") || code == "}" || code == "return;" ||
+            code.starts_with("PPC") || code.starts_with("uint32_t ea"))
+          continue;
+        lines.emplace_back(code);
+      }
+      it = cache.emplace(key, std::move(lines)).first;
+    }
+    lines = it->second;
+  }
+  for (const std::string& line : lines) {
+    std::string rewritten;
+    size_t pos = 0;
+    while (pos < line.size()) {
+      size_t at = line.find("ctx.", pos);
+      if (at == std::string::npos) {
+        rewritten.append(line, pos, std::string::npos);
+        break;
+      }
+      rewritten.append(line, pos, at - pos);
+      size_t p = at + 4;
+      char kind = p < line.size() ? line[p] : 0;
+      size_t q = p + 1;
+      while (q < line.size() && std::isdigit(static_cast<unsigned char>(line[q])))
+        ++q;
+      if ((kind == 'r' || kind == 'f' || kind == 'v') && q > p + 1 &&
+          (q == line.size() || !std::isalnum(static_cast<unsigned char>(line[q])))) {
+        size_t index = std::stoul(std::string(line.substr(p + 1, q - p - 1)));
+        std::string name;
+        if (kind == 'r' && index >= 14)
+          name = r(index);
+        else if (kind == 'f' && index >= 14)
+          name = f(index);
+        else if (kind == 'v' && ((index >= 14 && index < 32) || index >= 64))
+          name = v(index);
+        if (!name.empty()) {
+          rewritten += name;
+          pos = q;
+          continue;
+        }
+      }
+      rewritten.append("ctx.");
+      pos = at + 4;
+    }
+    if (rewritten.find("ea") != std::string::npos)
+      (void)ea();
+    if (rewritten.find("temp") != std::string::npos)
+      (void)temp();
+    // The marker tells the lockstep verifier that a local written here only
+    // takes its entry value back (a restore), which ctx still holds.
+    if (rewritten.starts_with("ctx.fpscr."))
+      println("{}{}", indent, rewritten);  // the flush-mode pass matches these lines exactly
+    else
+      println("{}{}  // nv-helper", indent, rewritten);
+  }
+  if (tail)
+    println("{}return;", indent);
 }
 
 std::string BuilderContext::r(size_t index) {
@@ -215,6 +319,15 @@ void BuilderContext::emit_function_call(uint32_t address) {
         return;
       }
 
+      // A reference copy (lockstep verify) inlines the helpers as they are,
+      // so their stack stores go through the logged macros and the copy can
+      // be rolled back; a call would write the frame behind the log's back.
+      // A tail branch's return; comes from the caller (build_b).
+      if (isReferenceCopy() && isSaveRestoreHelper(name)) {
+        inlineSaveRestoreHelper(*targetFn, "\t", false);
+        return;
+      }
+
       // An SEH funclet runs on its owner's frame and reads whatever non-volatiles
       // the owner left live, so hand it the localized copies through ctx and take
       // them back afterwards. Only registers already localized here can be live at
@@ -231,8 +344,16 @@ void BuilderContext::emit_function_call(uint32_t address) {
         return;
       }
 
+      // The save/restore helpers take the frame pointer in r12 and are not
+      // ABI calls, so the checks skip them.
+      const bool poison = cfg.abiPoisonChecks &&
+                          !(name.find("__rest") == 0 || name.find("__save") == 0);
       emitCtx.reference(name);
+      if (poison)
+        println("\tREX_ABI_POISON_PRE(0x{:08X});", base);
       println("\t{}(ctx, base);", name);
+      if (poison)
+        println("\tREX_ABI_POISON_POST(0x{:08X});", base);
       return;
     }
 
@@ -263,7 +384,11 @@ void BuilderContext::emit_function_call(uint32_t address) {
       }
 
       emitCtx.reference(func_name);
+      if (cfg.abiPoisonChecks)
+        println("\tREX_ABI_POISON_PRE(0x{:08X});", base);
       println("\t{}(ctx, base);", func_name);
+      if (cfg.abiPoisonChecks)
+        println("\tREX_ABI_POISON_POST(0x{:08X});", base);
       return;
     }
 

@@ -118,6 +118,8 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
             hasBool("vector_scratch_as_local"), "vector_scratch_as_local");
   MergeBool(cfg.generateExceptionHandlers, toml["generate_exception_handlers"].value_or(false),
             hasBool("generate_exception_handlers"), "generate_exception_handlers");
+  MergeBool(cfg.abiPoisonChecks, toml["abi_poison_checks"].value_or(false),
+            hasBool("abi_poison_checks"), "abi_poison_checks");
   if (hasBool("is_dll")) {
     cfg.isDll = toml["is_dll"].value_or(false);
   }
@@ -130,6 +132,16 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
   if (auto v = toml["setjmp_address"].value<int64_t>()) {
     uint32_t addr = static_cast<uint32_t>(*v);
     MergeScalar(cfg.setJmpAddress, addr, "setjmp_address");
+  }
+  if (auto every = toml["reference_sample_every"].value<int64_t>()) {
+    cfg.referenceSampleEvery = static_cast<uint32_t>(*every);
+  }
+  if (auto references = toml["reference_functions"].as_array()) {
+    for (const auto& elem : *references) {
+      if (auto val = elem.value<int64_t>()) {
+        cfg.referenceFunctions.push_back(static_cast<uint32_t>(*val));
+      }
+    }
   }
 
   // --- [analysis] section scalars ---

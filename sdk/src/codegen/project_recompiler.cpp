@@ -81,6 +81,9 @@ std::string FingerprintModule(const RecompilerConfig& cfg,
                               std::string_view sdkVersion) {
   std::vector<std::string> flags{
       fmt::format("templates={}", EmbeddedTemplatesHash()),
+      fmt::format("abi_poison_checks={}", cfg.abiPoisonChecks),
+      fmt::format("reference_functions={}", cfg.referenceFunctions.size()),
+      fmt::format("reference_sample_every={}", cfg.referenceSampleEvery),
       fmt::format("generate_exception_handlers={}", cfg.generateExceptionHandlers),
       fmt::format("max_jump_extension={}", cfg.maxJumpExtension),
       fmt::format("data_region_threshold={}", cfg.dataRegionThreshold),
@@ -313,6 +316,8 @@ Result<void> ProjectRecompiler::Run(const ProjectRecompilerOptions& opts) {
     RecompilerConfig cfg = std::move(targeted[0].config);
     if (opts.enableExceptionHandlers)
       cfg.generateExceptionHandlers = true;
+    if (opts.abiPoisonChecks)
+      cfg.abiPoisonChecks = true;
 
     auto ctx = CodegenContext::Create(std::move(bv), std::move(cfg));
     ctx.setResolver(resolver);
@@ -336,6 +341,8 @@ Result<void> ProjectRecompiler::Run(const ProjectRecompilerOptions& opts) {
     RecompilerConfig cfg = std::move(targeted[i + 1].config);
     if (opts.enableExceptionHandlers)
       cfg.generateExceptionHandlers = true;
+    if (opts.abiPoisonChecks)
+      cfg.abiPoisonChecks = true;
 
     auto ctx = CodegenContext::Create(std::move(bv), std::move(cfg));
     ctx.setResolver(resolver);
