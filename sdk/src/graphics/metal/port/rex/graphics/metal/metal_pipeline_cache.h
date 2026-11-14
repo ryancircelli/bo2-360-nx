@@ -37,6 +37,7 @@
 #include "rex/graphics/metal/metal_shader.h"
 #include "rex/graphics/metal/metal_shader_converter.h"
 #include "rex/graphics/metal/metal_stage_compile_cache.h"
+#include "rex/graphics/metal/metal_shader_prebuild.h"
 #include "rex/graphics/primitive_processor.h"
 #include "rex/graphics/register_file.h"
 #include "rex/graphics/registers.h"
@@ -604,6 +605,10 @@ class MetalPipelineCache {
 
  private:
   std::filesystem::path artifact_store_path_;
+  // Shipped build-time shader state (shader_prebuild in the bundle): staged
+  // into the cache keyed by the ABI tag, served to CompileNativeXlate and the
+  // pipeline archive sets (metal_shader_prebuild.h).
+  std::unique_ptr<ShaderPrebuild> prebuild_;
   // One archive set per pixel-shader flavour: [0] plain pipelines (shared
   // with FABLE2_NATIVE_SHADERS off), [1] pipelines with an optimized pixel
   // shader (".ns1" key, only used when the switch is on).
