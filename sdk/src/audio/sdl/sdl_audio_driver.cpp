@@ -315,6 +315,46 @@ void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
 
   std::memcpy(output_frame, input_frame, frame_samples_ * sizeof(float));
 
+  {
+    // Proof statistics on what the guest submits (before the device mute): peak, sum of squares, frames with signal.
+    float peak = 0.0f;
+    double sum_sq = 0.0;
+    for (size_t i = 0; i < frame_samples_; ++i) {
+      uint32_t bits;
+      std::memcpy(&bits, &input_frame[i], 4);
+      bits = __builtin_bswap32(bits);
+      float v;
+      std::memcpy(&v, &bits, 4);
+      if (!(v == v)) {
+        continue;
+      }
+      peak = std::max(peak, std::fabs(v));
+      sum_sq += double(v) * double(v);
+    }
+    static float win_peak = 0.0f;
+    static double win_sq = 0.0;
+    static uint64_t win_frames = 0, win_loud = 0, total_frames = 0, total_loud = 0;
+    static auto win_start = std::chrono::steady_clock::now();
+    win_peak = std::max(win_peak, peak);
+    win_sq += sum_sq;
+    ++win_frames;
+    ++total_frames;
+    if (peak > 1.0f / 32768.0f) {
+      ++win_loud;
+      ++total_loud;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - win_start >= std::chrono::seconds(10)) {
+      REXAPU_INFO("[audio] submitted mix in 10 s: {} frames, {} with signal, peak {:.5f}, rms {:.5f} (total {} of {} with signal)",
+                  win_frames, win_loud, win_peak, std::sqrt(win_sq / double(std::max<uint64_t>(win_frames, 1) * frame_samples_)),
+                  total_loud, total_frames);
+      win_peak = 0.0f;
+      win_sq = 0.0;
+      win_frames = win_loud = 0;
+      win_start = now;
+    }
+  }
+
   static uint32_t sdl_submit_count = 0;
   if (sdl_submit_count < 10) {
     REXAPU_DEBUG("SDLAudioDriver::SubmitFrame: frame_ptr={:08X} queued_count={}", frame_ptr,
