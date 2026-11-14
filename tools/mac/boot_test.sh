@@ -96,6 +96,7 @@ exedir="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"; rm -r
 # ---- launch ----
 echo "route $rname, ${duration}s, out $out"
 start=$(date +%s)
+perl -MTime::HiRes=time -e 'printf "%.3f\n", time' > "$out/launch_time.txt"   # the scene timeline's zero
 if [ -n "$app" ] && [ "$useopen" = 1 ]; then
   oargs=(); for e in "${fullenv[@]}"; do oargs+=(--env "$e"); done
   open -g -j -n "${oargs[@]}" "$app" || { echo "open failed" >&2; exit 2; }
@@ -108,10 +109,30 @@ else
 fi
 [ -n "${pid:-}" ] || { echo "the game did not start" >&2; exit 3; }
 # wait for the run: the duration, or an early exit
-crashed=0; early=0
+crashed=0; early=0; ended=0
 mkdir -p "$out/shots"
+# END_ON_LOG: end the run (as a pass) once the game log has END_ON_LOG_COUNT (default 1) lines containing this
+# text, END_GRACE_S (default 2) seconds later; short scenes end on their last capture instead of the full duration.
+# END_ON_CMD: each time the game logs a new capture, run this command; exit 0 ends the run the same way.
+ncap=0
 for ((i = 0; i < duration; i++)); do
   sleep 1
+  if [ -n "${END_ON_CMD:-}" ]; then
+    elog="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"
+    n=0; [ -n "$elog" ] && n="$(grep -cF -- '[capture] /' "$elog" 2>/dev/null)"; n="${n:-0}"
+    if [ "$n" -gt "$ncap" ]; then
+      ncap=$n
+      if /bin/sh -c "$END_ON_CMD" >>"$out/end_on_cmd.txt" 2>&1; then
+        sleep "${END_GRACE_S:-2}"; ended=1; echo "ended on END_ON_CMD after $n captures at ${i} s"; break
+      fi
+    fi
+  fi
+  if [ -n "${END_ON_LOG:-}" ]; then
+    elog="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"
+    if [ -n "$elog" ] && [ "$(grep -cF -- "$END_ON_LOG" "$elog")" -ge "${END_ON_LOG_COUNT:-1}" ]; then
+      sleep "${END_GRACE_S:-2}"; ended=1; echo "ended on the log line \"$END_ON_LOG\" at ${i} s"; break
+    fi
+  fi
   # a screenshot every SHOT_EVERY_S seconds (default 20) and one just before the end; needs Screen Recording permission
   if [ $((i % ${SHOT_EVERY_S:-20})) = 5 ] || [ "$i" = "$((duration - 2))" ]; then screencapture -x -t jpg "$out/shots/t$(printf %04d $i).jpg" 2>/dev/null; fi
   if ! kill -0 "$pid" 2>/dev/null && ! pgrep -f "$pat" >/dev/null 2>&1; then
@@ -123,7 +144,11 @@ if [ "$keep" = 0 ]; then
   kill_game -TERM; for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(game_pids)" ] && break; sleep 1; done
   kill_game -KILL
 fi
-[ -d "$exedir/captures" ] && cp -R "$exedir/captures/." "$out/captures/" && echo "captures: $(ls "$out/captures" | wc -l) in $out/captures"
+# builds since early November write captures under the log dir (BO2_LOG_DIR/captures), older ones next to the exe
+for c in "$exedir/captures" "$out/logs/captures"; do
+  [ -d "$c" ] && cp -R "$c/." "$out/captures/"
+done
+echo "captures: $(ls "$out/captures" | grep -c '\.png$') png in $out/captures"
 log="$(ls -t "$out"/logs/*.log 2>/dev/null | head -1)"; [ -n "$log" ] && cp "$log" "$out/game.log"
 for r in ~/Library/Logs/DiagnosticReports/*bo2zm* ~/Library/Logs/DiagnosticReports/*Black*Ops*; do
   [ -f "$r" ] || continue

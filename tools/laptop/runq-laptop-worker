@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""runq laptop pull worker (runs on the drawer laptop, WSL). Polls the Mac runq queue over ssh, claims one CPU-only job
+at a time, copies its inputs, runs it, copies the outputs back into the Mac job folder, reports the exit.
+Commands in laptop jobs must be valid on the laptop; {OUT} and {IN} are laptop paths under ~/bo2-worker/runq/<id>/.
+Env: RUNQ_MAC (default ryanc@100.107.164.35), RUNQ_MAC_CMD (the Mac runq invocation), RUNQ_POLL_S (default 20)."""
+import json, os, shlex, signal, subprocess, sys, time
+
+MAC = os.environ.get('RUNQ_MAC', 'ryanc@100.107.164.35')
+MAC_CMD = os.environ.get('RUNQ_MAC_CMD', 'python3 -I $HOME/Games/Xbox360/bo2-build/runq/bin/runq')
+WORKER = os.environ.get('RUNQ_WORKER', 'drawer-laptop')
+ROOT = os.path.expanduser('~/bo2-worker/runq')
+POLL_S = int(os.environ.get('RUNQ_POLL_S', '20'))
+BEAT_S = 15
+SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=3', MAC]
+
+
+def mac(args, timeout=60):
+    r = subprocess.run(SSH + [MAC_CMD + ' ' + ' '.join(shlex.quote(a) for a in args)],
+                       capture_output=True, text=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError(f'mac {args[0]} rc {r.returncode}: {r.stderr.strip()[:200]}')
+    return r.stdout.strip()
+
+
+def rsync(src, dst, extra=()):
+    subprocess.run(['rsync', '-a', '-e', 'ssh -o BatchMode=yes', *extra, src, dst], check=True, timeout=1800)
+
+
+def load():
+    try:
+        return str(os.getloadavg()[0])
+    except OSError:
+        return '0'
+
+
+def run_job(j):
+    jid = j['id']
+    out = os.path.join(ROOT, jid)
+    ind = os.path.join(out, 'in')
+    os.makedirs(ind, exist_ok=True)
+    t0 = time.time()
+    how, code = 'exit', 1
+    log = open(os.path.join(out, 'laptop.log'), 'w')
+    try:
+        for ip in j.get('inputs') or []:
+            rsync(f'{MAC}:{ip.rstrip("/")}', ind + '/')
+        cmd = [a.replace('{OUT}', out).replace('{IN}', ind) for a in j['cmd']]
+        env = dict(os.environ, RUNQ_HOST='laptop', RUNQ_JOB=jid, RUNQ_OUT=out, **{k: str(v) for k, v in (j.get('env') or {}).items()})
+        print(f'run {jid} {cmd}', flush=True)
+        p = subprocess.Popen(cmd, cwd=out, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        limit = j.get('timeout_s') or 1800
+        last = 0
+        while p.poll() is None:
+            time.sleep(1)
+            if time.time() - last >= BEAT_S:
+                last = time.time()
+                try:
+                    st = mac(['_remote-beat', WORKER, jid, load()])
+                except Exception as e:
+                    print('beat failed:', e, flush=True)   # Mac unreachable: keep running, lease decides
+                    st = 'ok'
+                if st in ('cancel', 'lost'):
+                    how = 'cancelled' if st == 'cancel' else 'lost'
+                    os.killpg(p.pid, signal.SIGTERM)
+                    break
+            if time.time() - t0 > limit:
+                how = 'timeout'
+                os.killpg(p.pid, signal.SIGTERM)
+                break
+        try:
+            code = p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            code = p.wait()
+        if how == 'exit' and code < 0:
+            how = 'killed'
+    except Exception as e:
+        print('job error:', e, flush=True)
+        how, code = 'killed', 1
+    log.close()
+    if how == 'lost':
+        return
+    try:
+        if how in ('exit', 'cancelled'):
+            import threading
+            done_up = threading.Event()
+            def keep_beating():
+                while not done_up.wait(15):
+                    try:
+                        mac(['_remote-beat', WORKER, jid, load()])
+                    except Exception as e:
+                        print('beat failed:', e, flush=True)
+            th = threading.Thread(target=keep_beating, daemon=True)
+            th.start()
+            try:
+                rsync(out + '/', f'{MAC}:{j["out"]}/', ['--exclude', 'in/', '--exclude', 'job.json', '--exclude', 'result.*'])
+            finally:
+                done_up.set()
+                th.join()
+        print('finish', how, code, mac(['_remote-finish', WORKER, jid, str(code), f'{time.time() - t0:.1f}', how]), flush=True)
+    except Exception as e:
+        print('finish failed (lease will requeue):', e, flush=True)
+
+
+def main():
+    os.makedirs(ROOT, exist_ok=True)
+    while True:
+        try:
+            raw = mac(['_remote-claim', WORKER, load()])
+            if raw:
+                run_job(json.loads(raw))
+                continue
+        except Exception as e:
+            print('poll:', e, flush=True)
+        time.sleep(POLL_S)
+
+
+if __name__ == '__main__':
+    main()
