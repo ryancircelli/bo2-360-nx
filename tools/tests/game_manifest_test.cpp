@@ -36,7 +36,7 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
 }  // namespace rex::cvar
 
 int main(int argc, char** argv) {
-  assert(argc == 3);
+  assert(argc == 3 || argc == 6);
   std::ifstream file(argv[1]);
   std::stringstream text;
   text << file.rdbuf();
@@ -106,6 +106,30 @@ int main(int argc, char** argv) {
   assert(!rex::LoadGameManifest("[renderer]\nquirks = \"fable2\"\n", bad, &error));
   assert(bad.short_name == "bo2zm" && bad.title_ids == bo2.title_ids);
 
-  std::puts("game manifest: BO2 values, renderer profile, defaults-only-when-default, partial and bad manifests passed");
+  // BO2 has no development disc fallback; the other packs name theirs.
+  assert(bo2.local_data_root.empty());
+  assert(rex::LoadGameManifest("[game]\nlocal_data_root = \"~/Games/Xbox360/x/disc\"\n", partial, &error) &&
+         partial.local_data_root == "~/Games/Xbox360/x/disc");
+
+  // The other title packs (games/nfsmw, fh1, bo1): default.xex, one title id, Metal by default.
+  const std::pair<const char*, uint32_t> packs[] = {{"nfsmw", 0x454107D9u}, {"fh1", 0x4D5309C9u}, {"bo1", 0x41560855u}};
+  for (int i = 3; i < argc; ++i) {
+    std::ifstream pack_file(argv[i]);
+    std::stringstream pack_text;
+    pack_text << pack_file.rdbuf();
+    rex::GameInfo pack;
+    if (!rex::LoadGameManifest(pack_text.str(), pack, &error)) {
+      std::fprintf(stderr, "%s: %s\n", argv[i], error.c_str());
+      return 1;
+    }
+    const auto& [name, title] = packs[i - 3];
+    assert(pack.short_name == name && pack.title_ids.size() == 1 && pack.title_ids[0] == title);
+    assert(pack.executable == "game:\\default.xex");
+    assert(pack.local_data_root == std::string("~/Games/Xbox360/") + name + "/disc");
+    assert(pack.default_cvars.size() == 1 && pack.default_cvars[0].first == "gpu_plugin" &&
+           pack.default_cvars[0].second == "metal");
+  }
+
+  std::puts("game manifest: BO2 values, renderer profile, defaults-only-when-default, partial and bad manifests, other title packs passed");
   return 0;
 }
