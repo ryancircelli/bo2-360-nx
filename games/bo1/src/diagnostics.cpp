@@ -43,3 +43,27 @@ REX_EXTERN(__imp__sub_823C2EB8);
 REX_HOOK_RAW(sub_823C2EB8) { LogLeaveTitle("sub_823C2EB8", ctx, base); __imp__sub_823C2EB8(ctx, base); }
 REX_EXTERN(__imp__sub_824D0D50);
 REX_HOOK_RAW(sub_824D0D50) { LogLeaveTitle("sub_824D0D50", ctx, base); __imp__sub_824D0D50(ctx, base); }
+
+// Concurrency detector for the script tokenizer (diagnostic only): do two guest threads run it at once?
+#include <atomic>
+#include <thread>
+#include <functional>
+static std::atomic<int> g_tok_depth{0};
+static std::atomic<uint64_t> g_tok_owner{0};
+static std::atomic<int> g_tok_logs{0};
+static uint64_t TokTid() { return std::hash<std::thread::id>()(std::this_thread::get_id()); }
+#define TOK_HOOK(ADDR)                                                                         \
+  REX_EXTERN(__imp__sub_##ADDR);                                                               \
+  REX_HOOK_RAW(sub_##ADDR) {                                                                   \
+    uint64_t me = TokTid();                                                                    \
+    { static std::atomic<uint64_t> seen[64]; int c = 0; uint32_t cpu = *(base + ctx.r13.u32 + 268); uint64_t key = (me << 8) | cpu | 0x100000000000000ull; for (auto& x : seen) { uint64_t v = x.load(); if (v == key) { c = 1; break; } if (v == 0 && x.compare_exchange_strong(v, key)) { REXLOG_ERROR("BO1 tokenizer-user {} host_tid={:x} cpu={} r13={:08X}", #ADDR, me, cpu, ctx.r13.u32); c = 1; break; } } (void)c; } \
+    int d = g_tok_depth.fetch_add(1);                                                          \
+    uint64_t prev = g_tok_owner.exchange(me);                                                  \
+    if (d > 0 && prev != me && g_tok_logs.fetch_add(1) < 50)                                   \
+      REXLOG_ERROR("BO1 tokenizer {} CONCURRENT depth={} me={:x} prev={:x} lr={:08X}", #ADDR,  \
+                   d, me, prev, static_cast<uint32_t>(ctx.lr));                                \
+    __imp__sub_##ADDR(ctx, base);                                                              \
+    g_tok_depth.fetch_sub(1);                                                                  \
+  }
+TOK_HOOK(8239EAA8)
+TOK_HOOK(8239EB20)

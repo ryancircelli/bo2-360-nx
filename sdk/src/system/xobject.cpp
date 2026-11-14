@@ -241,6 +241,10 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
   XThread::CheckTitleTermination();
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
   XThread::CheckTitleTermination();
+  if (result != rex::thread::WaitResult::kSuccess) {
+    static std::atomic<int> wn{0};
+    if (wn.fetch_add(1) < 600) REXSYS_INFO("[waittrace] tid={} res={} timeout_ms={} alertable={}", XThread::GetCurrentThread() ? XThread::GetCurrentThread()->thread_id() : 0, int(result), opt_timeout ? int64_t(timeout_ms.count()) : -1, int(alertable));
+  }
   switch (result) {
     case rex::thread::WaitResult::kSuccess:
       WaitCallback();

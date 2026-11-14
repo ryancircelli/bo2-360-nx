@@ -1,3 +1,4 @@
+#include <atomic>
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -163,6 +164,21 @@ u32 NtAllocateVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_si
     was_commited = heap->QueryRegionInfo(adjusted_base, &prev_alloc_info) &&
                    (prev_alloc_info.state & memory::kMemoryAllocationCommit) != 0;
 
+    uint64_t committed_in_range = 0;
+    if (alloc_type & X_MEM_COMMIT) {
+      uint32_t cur = adjusted_base;
+      uint32_t end = adjusted_base + adjusted_size;
+      while (cur < end) {
+        memory::HeapAllocationInfo ci = {};
+        if (!heap->QueryRegionInfo(cur, &ci) || !ci.region_size) break;
+        uint32_t span = std::min<uint32_t>(ci.region_size - (cur - ci.base_address), end - cur);
+        if (ci.state & memory::kMemoryAllocationCommit) committed_in_range += span;
+        cur += span;
+      }
+      static std::atomic<int> nlog{0};
+      if (committed_in_range && nlog.fetch_add(1) < 200)
+        REXKRNL_ERROR("[allocdiag] COMMIT over already-committed pages: base={:08X} size={:X} committed_in_range={:X} was_commited(first)={} nozero={}", adjusted_base, adjusted_size, committed_in_range, was_commited, !!(alloc_type & X_MEM_NOZERO));
+    }
     if (heap->AllocFixed(adjusted_base, adjusted_size, page_size, allocation_type, protect)) {
       address = adjusted_base;
     }
