@@ -424,6 +424,11 @@ class Replayer {
     bool applied_early;
   };
   void ScanWrites(const std::vector<uint8_t>& trace);
+  // Sets scratch_ to a 32 MiB region that no trace memory record and no game
+  // resolve destination touches: the requested address if it is free, else
+  // (when none was requested) the first free candidate. Returns false if the
+  // requested region is in use or nothing is free.
+  bool ChooseScratch(const std::vector<uint8_t>& trace);
   const uint8_t* DecodeRecord(const uint8_t* trace, const WriteRecord& record);
   bool DecodeBlock(MemoryEncodingFormat encoding, const uint8_t* data, uint32_t encoded_length,
                    uint32_t decoded_length, std::vector<uint8_t>& out);
@@ -495,6 +500,195 @@ bool Replayer::DecodeBlock(MemoryEncodingFormat encoding, const uint8_t* data,
   }
   uLongf length = decoded_length;
   return uncompress(out.data(), &length, data, encoded_length) == Z_OK && length == decoded_length;
+}
+
+bool Replayer::ChooseScratch(const std::vector<uint8_t>& trace) {
+  // Mark every 64 KiB granule a trace memory record (CPU-written data the
+  // GPU read, or GPU writes) touches. Readback resolves into any of them
+  // would overwrite data later draws sample.
+  constexpr uint32_t kGranuleShift = 16;
+  constexpr uint32_t kPhysicalSize = 0x20000000;
+  std::vector<bool> used(kPhysicalSize >> kGranuleShift, false);
+  auto mark = [&](uint32_t address, uint32_t length) {
+    if (!length) {
+      return;
+    }
+    address &= 0x1FFFFFFF;
+    uint64_t last = std::min<uint64_t>(uint64_t(address) + length - 1, kPhysicalSize - 1);
+    for (uint64_t g = address >> kGranuleShift; g <= (last >> kGranuleShift); ++g) {
+      used[size_t(g)] = true;
+    }
+  };
+  // Game resolves write guest memory without a trace memory record, so also
+  // mark every resolve destination the command stream programs. The size is
+  // pitch x height at 16 bytes per pixel (the widest resolve format).
+  uint32_t copy_dest_base = 0;
+  uint32_t copy_dest_pitch = 0;
+  auto mark_resolve = [&]() {
+    if (!copy_dest_base) {
+      return;
+    }
+    const uint32_t pitch = copy_dest_pitch & 0x3FFF;
+    const uint32_t height = (copy_dest_pitch >> 16) & 0x3FFF;
+    uint64_t length = uint64_t(pitch) * height * 16;
+    if (!length) {
+      length = 16u << 20;
+    }
+    mark(copy_dest_base, uint32_t(std::min<uint64_t>(length, 64u << 20)));
+  };
+  auto write_reg = [&](uint32_t index, uint32_t value) {
+    if (index == XE_GPU_REG_RB_COPY_DEST_BASE) {
+      copy_dest_base = value;
+      mark_resolve();
+    } else if (index == XE_GPU_REG_RB_COPY_DEST_PITCH) {
+      copy_dest_pitch = value;
+      mark_resolve();
+    }
+  };
+  // One PM4 packet as captured (guest big-endian dwords).
+  auto scan_packet = [&](const uint8_t* data, uint32_t dwords) {
+    auto dword = [&](uint32_t i) {
+      uint32_t v;
+      std::memcpy(&v, data + size_t(i) * 4, 4);
+      return std::byteswap(v);
+    };
+    const uint32_t header = dword(0);
+    const uint32_t count = ((header >> 16) & 0x3FFF) + 1;
+    switch (header >> 30) {
+      case 0: {
+        const uint32_t first = header & 0x7FFF;
+        const bool one_reg = (header >> 15) & 1;
+        for (uint32_t i = 0; i < count && i + 1 < dwords; ++i) {
+          write_reg(one_reg ? first : first + i, dword(i + 1));
+        }
+        break;
+      }
+      case 1:
+        if (dwords >= 3) {
+          write_reg(header & 0x7FF, dword(1));
+          write_reg((header >> 11) & 0x7FF, dword(2));
+        }
+        break;
+      case 3:
+        if (((header >> 8) & 0x7F) == xenos::PM4_SET_CONSTANT && dwords >= 2) {
+          const uint32_t offset_type = dword(1);
+          if (((offset_type >> 16) & 0xFF) == 4) {
+            const uint32_t first = (offset_type & 0x7FF) + 0x2000;
+            for (uint32_t i = 0; i + 1 < count && i + 2 < dwords; ++i) {
+              write_reg(first + i, dword(i + 2));
+            }
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  };
+  const uint8_t* base = trace.data();
+  const uint8_t* ptr = base + sizeof(TraceHeader);
+  const uint8_t* end = base + trace.size();
+  while (size_t(end - ptr) >= sizeof(uint32_t)) {
+    TraceCommandType type;
+    std::memcpy(&type, ptr, sizeof(type));
+    size_t step = 0;
+    switch (type) {
+      case TraceCommandType::kPrimaryBufferStart:
+        step = sizeof(PrimaryBufferStartCommand);
+        break;
+      case TraceCommandType::kPrimaryBufferEnd:
+        step = sizeof(PrimaryBufferEndCommand);
+        break;
+      case TraceCommandType::kIndirectBufferStart:
+        step = sizeof(IndirectBufferStartCommand);
+        break;
+      case TraceCommandType::kIndirectBufferEnd:
+        step = sizeof(IndirectBufferEndCommand);
+        break;
+      case TraceCommandType::kPacketStart: {
+        const uint32_t count = reinterpret_cast<const PacketStartCommand*>(ptr)->count;
+        step = sizeof(PacketStartCommand) + size_t(count) * 4;
+        if (count && size_t(end - ptr) >= step) {
+          scan_packet(reinterpret_cast<const uint8_t*>(ptr) + sizeof(PacketStartCommand), count);
+        }
+        break;
+      }
+      case TraceCommandType::kPacketEnd:
+        step = sizeof(PacketEndCommand);
+        break;
+      case TraceCommandType::kMemoryRead:
+      case TraceCommandType::kMemoryWrite: {
+        if (size_t(end - ptr) < sizeof(MemoryCommand)) {
+          step = sizeof(MemoryCommand);
+          break;
+        }
+        auto cmd = reinterpret_cast<const MemoryCommand*>(ptr);
+        mark(cmd->base_ptr, cmd->decoded_length);
+        step = sizeof(*cmd) + cmd->encoded_length;
+        break;
+      }
+      case TraceCommandType::kEdramSnapshot:
+        step = sizeof(EdramSnapshotCommand) +
+               reinterpret_cast<const EdramSnapshotCommand*>(ptr)->encoded_length;
+        break;
+      case TraceCommandType::kEvent:
+        step = sizeof(EventCommand);
+        break;
+      case TraceCommandType::kRegisters:
+        step = sizeof(RegistersCommand) +
+               reinterpret_cast<const RegistersCommand*>(ptr)->encoded_length;
+        break;
+      case TraceCommandType::kGammaRamp:
+        step = sizeof(GammaRampCommand) +
+               reinterpret_cast<const GammaRampCommand*>(ptr)->encoded_length;
+        break;
+      default:
+        step = size_t(end - ptr);
+        break;
+    }
+    if (size_t(end - ptr) < step) {
+      break;
+    }
+    ptr += step;
+  }
+  auto is_free = [&](uint32_t address) {
+    if (uint64_t(address) + kScratchSize > kPhysicalSize) {
+      return false;
+    }
+    for (uint32_t g = address >> kGranuleShift; g < (address + kScratchSize) >> kGranuleShift;
+         ++g) {
+      if (used[g]) {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (options_.scratch_address) {
+    scratch_ = options_.scratch_address & 0x1FFFFFFF;
+    if (!is_free(scratch_)) {
+      REXGPU_ERROR(
+          "replay: --scratch 0x{:08X} overlaps memory the trace uses; readbacks there would "
+          "overwrite it. Omit --scratch to pick a free region",
+          scratch_);
+      return false;
+    }
+    return true;
+  }
+  if (is_free(kDefaultScratchAddress)) {
+    scratch_ = kDefaultScratchAddress;
+    return true;
+  }
+  // Highest free 16 MiB-aligned region first, keeping clear of low memory.
+  for (uint32_t address = kPhysicalSize - kScratchSize; address >= 0x01000000;
+       address -= 0x01000000) {
+    if (is_free(address)) {
+      scratch_ = address;
+      REXGPU_INFO("replay: scratch region 0x{:08X} (default 0x{:08X} is used by the trace)",
+                  scratch_, kDefaultScratchAddress);
+      return true;
+    }
+  }
+  REXGPU_ERROR("replay: no free 32 MiB scratch region; the trace uses all candidates");
+  return false;
 }
 
 const uint8_t* Replayer::DecodeRecord(const uint8_t* trace, const WriteRecord& record) {
@@ -738,8 +932,8 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
     REXGPU_ERROR("replay: cannot create {}: {}", out_dir_.string(), ec.message());
     return 1;
   }
-  if (options_.scratch_address) {
-    scratch_ = options_.scratch_address & 0x1FFFFFFF;
+  if (!ChooseScratch(trace)) {
+    return 1;
   }
   draws_json_ = std::fopen((out_dir_ / "draws.jsonl").string().c_str(), "wb");
   if (!draws_json_) {
@@ -786,8 +980,11 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
   REXGPU_INFO("replay: {} frame(s), {} draw(s), {} readback(s) ({} failed) -> {}", frame_index_,
               draw_index_, readbacks_, failed_readbacks_, out_dir_.string());
   if (scratch_conflict_) {
-    REXGPU_WARN("replay: trace touched the scratch region 0x{:08X}; pass a different one",
-                scratch_);
+    // ChooseScratch rules this out; reaching here means the trace scan and
+    // the replay disagree. The readbacks may have corrupted later draws.
+    REXGPU_ERROR("replay: trace touched the scratch region 0x{:08X}; results are not valid",
+                 scratch_);
+    return 1;
   }
   return ok ? 0 : 1;
 }
@@ -1371,6 +1568,14 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
     }
   }
   json += "]";
+  if (modecontrol.edram_mode == xenos::EdramMode::kCopy) {
+    // A game resolve into the scratch region: readbacks there would clobber
+    // what the game wrote (resolve outputs never appear as trace records).
+    const uint32_t dest = regs[XE_GPU_REG_RB_COPY_DEST_BASE] & 0x1FFFFFFF;
+    if (dest >= scratch_ && dest < scratch_ + kScratchSize) {
+      scratch_conflict_ = true;
+    }
+  }
   if (texcheck_) {
     if (modecontrol.edram_mode == xenos::EdramMode::kCopy) {
       draw_util::ResolveInfo info;
