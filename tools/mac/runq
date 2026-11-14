@@ -1484,6 +1484,12 @@ class Daemon:
                     interleave_active = self.build_interleave_active()
                     compiler_busy = (outside_compile_procs() if self.perf_batch else compile_procs()) != 0
                     builds_busy = active_builds() > 0
+                    if not self.perf_batch or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
+                        self.perf_seen = time.time()
+                    starved = time.time() - getattr(self, 'perf_seen', time.time()) > PERF_STARVE_S
+                    if starved and not getattr(self, 'starve_logged', False):
+                        self.log(f'speed batch starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
+                    self.starve_logged = starved
                     jobs_per_owner = []
                     for qf in q:
                         job = rjson(os.path.join(D['queue'], qf)) or {}
@@ -1493,7 +1499,7 @@ class Daemon:
                             continue
                         if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
                             continue
-                        if not allowed_during_perf_batch(job, self.perf_batch, interleave_active):
+                        if not allowed_during_perf_batch(job, self.perf_batch, interleave_active, starved):
                             continue
                         if not self.perf_batch and job_class(job) == CLASSES['perf']:
                             continue
@@ -1591,14 +1597,21 @@ def bumped_perf_jobs(qjobs, power_eligible):
             if j.get('id') in power_eligible and job_class(j) == CLASSES['perf'] and j.get('bump')}
 
 
-def allowed_during_perf_batch(job, selected, interleave_active):
-    """Preserve class order during a speed batch: higher classes may pass, lower classes wait."""
+PERF_STARVE_S = 600   # checks may pass an open speed batch this long after speed work last ran; then they wait
+
+
+def allowed_during_perf_batch(job, selected, interleave_active, starved=False):
+    """Preserve class order during a speed batch: higher classes may pass, lower classes wait. Once the batch has gone
+    PERF_STARVE_S without a speed run (starved), proof and sweep jobs wait too: a steady stream of checks kept speed
+    runs from ever starting (2026-11-13, 35 min after a restart with 13 speed jobs queued)."""
     if not selected or interleave_active:
         return True
     klass = job_class(job)
     if klass > CLASSES['perf']:
         return False
-    return klass != CLASSES['perf'] or job.get('id') in selected
+    if klass != CLASSES['perf']:
+        return not (starved and klass > CLASSES['harness'])
+    return job.get('id') in selected
 
 
 def history_wall():
