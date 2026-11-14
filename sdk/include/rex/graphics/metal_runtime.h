@@ -36,5 +36,8 @@ __attribute__((visibility("default"))) void RequestEncodeSpin(bool on);
 // [mct] Type-0 batching split: batch only whole shader-constant ranges.
 __attribute__((visibility("default"))) bool Type0BatchConstsOnlyRequested();
 __attribute__((visibility("default"))) void RequestType0BatchConstsOnly(bool on);
+// [mct] Diagnostic per-draw command-thread pad (metal_cmd_pad_ns).
+__attribute__((visibility("default"))) bool CmdPadRequested();
+__attribute__((visibility("default"))) void RequestCmdPad(bool on);
 }  // namespace rex::graphics::metal
 #endif

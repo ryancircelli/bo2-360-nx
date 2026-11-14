@@ -139,6 +139,14 @@ std::atomic<bool>& EncodeSpinSwitch() {
   }()};
   return requested;
 }
+std::atomic<bool>& CmdPadSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_CMD_PAD");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_cmd_pad");
+  }()};
+  return requested;
+}
 std::atomic<bool>& Type0BatchConstsOnlySwitch() {
   static std::atomic<bool> requested{[] {
     const char* env = std::getenv("REX_METAL_TYPE0_BATCH_CONSTS_ONLY");
@@ -150,6 +158,8 @@ std::atomic<bool>& Type0BatchConstsOnlySwitch() {
 }
 bool Type0BatchConstsOnlyRequested() { return Type0BatchConstsOnlySwitch().load(std::memory_order_relaxed); }
 void RequestType0BatchConstsOnly(bool on) { Type0BatchConstsOnlySwitch().store(on, std::memory_order_relaxed); }
+bool CmdPadRequested() { return CmdPadSwitch().load(std::memory_order_relaxed); }
+void RequestCmdPad(bool on) { CmdPadSwitch().store(on, std::memory_order_relaxed); }
 bool XpassLazyBarrierRequested() { return XpassLazyBarrierSwitch().load(std::memory_order_relaxed); }
 void RequestXpassLazyBarrier(bool on) { XpassLazyBarrierSwitch().store(on, std::memory_order_relaxed); }
 bool EncodeSpinRequested() { return EncodeSpinSwitch().load(std::memory_order_relaxed); }
