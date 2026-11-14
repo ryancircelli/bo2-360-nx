@@ -2442,6 +2442,34 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
     StoreResult(instr.result, res);
     return;
   }
+  if (instr.opcode == FetchOpcode::kGetTextureComputedLod) {
+    // getCompTexLOD: the mip level the texture unit would pick for this
+    // coordinate, in x (the DXBC translator forces linear mip filtering for it
+    // and uses the `lod` instruction). Needs pixel-shader derivatives; 2D only
+    // here (1D / 3D / stacked / cube fetches yield 0 until a shader needs them).
+    if (is_pixel_shader() && instr.dimension == xenos::FetchOpDimension::k2D &&
+        (nonzero & 1)) {
+      uint32_t ctf = instr.operands[1].storage_index;
+      Operand ccoord = LoadOperand(instr.operands[0]);
+      std::string cxy = NewTemp("clc");
+      Line("float2 {} = {}.xy;", cxy, ccoord.Vec());
+      if (instr.attributes.unnormalized_coordinates) {
+        Line("{} = {} / float2(uint2(extract_bits({}, 0, 13), "
+             "extract_bits({}, 13, 13)) + 1u);",
+             cxy, cxy, FetchWord(ctf, 2), FetchWord(ctf, 2));
+      }
+      uint32_t csmp = FindSamplerBinding(
+          ctf, instr.attributes.mag_filter, instr.attributes.min_filter,
+          xenos::TextureFilter::kLinear, xenos::AnisoFilter::kDisabled);
+      std::string csv = NewTemp("smp");
+      Line("sampler {} = xe_tl.smp[xe_desc[{}]].s;", csv, csmp);
+      uint32_t ctex = FindTextureBinding(ctf, instr.dimension, false);
+      Line("{}.x = xe_tl.t2d[xe_desc[{}]].t.calculate_unclamped_lod({}, {});",
+           res, ctex, csv, cxy);
+    }
+    StoreResult(instr.result, res);
+    return;
+  }
   if (instr.opcode != FetchOpcode::kTextureFetch &&
       instr.opcode != FetchOpcode::kGetTextureWeights) {
     Fail(fmt::format("unsupported fetch opcode {}", uint32_t(instr.opcode)));
