@@ -132,6 +132,20 @@ inline bool AbiPoisonVolatilesEnabled() {
   return enabled;
 }
 
+// REX_ABI_POISON_VMX_LOW=0 skips the v14-v31 comparison. The NFSMW and FH1
+// compilers treat v14-v31 as scratch: no caller emits __savevmx_14..31, and
+// leaf functions (NFSMW sub_8263CE30 vmsum4fp128 -> v26-v31, FH1 sub_82A7B3C4
+// v14-v31) write them without saving. Every reported site is a chain above
+// such a leaf, so the hits are title ABI, not recompiler bugs. BO1/BO2 keep
+// the check (they are clean).
+inline bool AbiPoisonVmxLowEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_ABI_POISON_VMX_LOW");
+    return !(value && value[0] == '0');
+  }();
+  return enabled;
+}
+
 // host_local_lr (NEAR_NATIVE_RESEARCH.md NN-1.3): a function that keeps its LR
 // save slot in the `rex_saved_lr` local writes this value to the guest slot
 // instead of the return address, so a reader the generator's LR-slot scan
@@ -212,7 +226,7 @@ inline void AbiPoisonPostCall(::PPCContext& ctx, uint32_t site) {
         AbiPoisonReport(site, "f", 14 + i, before.fpr[i], after.fpr[i]);
       }
     }
-    if (before.vr_low != after.vr_low) {
+    if (AbiPoisonVmxLowEnabled() && before.vr_low != after.vr_low) {
       AbiPoisonReport(site, "v14-v31 hash", 0, before.vr_low, after.vr_low);
     }
     if (before.vr_high != after.vr_high) {
