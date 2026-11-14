@@ -1,0 +1,11 @@
+# Forza Horizon (Xbox 360, USA) title manifest (rex/game_info.h, LoadGameManifest).
+# Compiled into the executable by rexglue_game_manifest() (games/fh1/CMakeLists.txt); edit and rebuild to change.
+
+[game]
+name = "fh1"                          # config file stem
+title_ids = ["4D5309C9"]
+executable = "game:\\default.xex"     # the disc's default.xex, recompiled from games/fh1/fh1_manifest.toml
+local_data_root = "~/Games/Xbox360/fh1/disc"  # read-only extracted disc; --game_data_root wins
+
+[defaults]
+gpu_plugin = "metal"                     # the native Metal renderer; --gpu_plugin or a config file still wins
