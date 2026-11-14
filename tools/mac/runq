@@ -1480,16 +1480,20 @@ class Daemon:
                                 if self.c.get('count_outside_games', True) else [])
                 free = self.c['slots'] - len(self.outside)
                 solo_running = any(is_solo(j['job']) for j in self.jobs.values())
+                # Speed-run starvation clock. It restarts while a speed job runs or none is waiting; a hold (outside
+                # build, power) neither restarts it nor counts as starved, so checks keep flowing during a hold.
+                perf_waiting = any(job_class(j) == CLASSES['perf'] and j.get('id') in power_eligible for _, j in qjobs)
+                if not perf_waiting or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
+                    self.perf_seen = time.time()
+                starved = perf_starved(getattr(self, 'perf_seen', 0.0), time.time(), bool(self.perf_batch),
+                                       self.perf_hold)
+                if starved and not getattr(self, 'starve_logged', False):
+                    self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
+                self.starve_logged = starved
                 while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
                     interleave_active = self.build_interleave_active()
                     compiler_busy = (outside_compile_procs() if self.perf_batch else compile_procs()) != 0
                     builds_busy = active_builds() > 0
-                    if not self.perf_batch or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
-                        self.perf_seen = time.time()
-                    starved = time.time() - getattr(self, 'perf_seen', time.time()) > PERF_STARVE_S
-                    if starved and not getattr(self, 'starve_logged', False):
-                        self.log(f'speed batch starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
-                    self.starve_logged = starved
                     jobs_per_owner = []
                     for qf in q:
                         job = rjson(os.path.join(D['queue'], qf)) or {}
@@ -1600,18 +1604,24 @@ def bumped_perf_jobs(qjobs, power_eligible):
 PERF_STARVE_S = 600   # checks may pass an open speed batch this long after speed work last ran; then they wait
 
 
+def perf_starved(last_perf_t, now, batch_open, perf_hold):
+    return bool(batch_open) and not perf_hold and now - last_perf_t > PERF_STARVE_S
+
+
 def allowed_during_perf_batch(job, selected, interleave_active, starved=False):
     """Preserve class order during a speed batch: higher classes may pass, lower classes wait. Once the batch has gone
     PERF_STARVE_S without a speed run (starved), proof and sweep jobs wait too: a steady stream of checks kept speed
     runs from ever starting (2026-11-13, 35 min after a restart with 13 speed jobs queued)."""
-    if not selected or interleave_active:
+    if not selected:
         return True
     klass = job_class(job)
+    if starved and CLASSES['harness'] < klass < CLASSES['perf']:
+        return False   # also inside a build window: a 400 s check started there outlasts it and blocks the solo run
+    if interleave_active:
+        return True
     if klass > CLASSES['perf']:
         return False
-    if klass != CLASSES['perf']:
-        return not (starved and klass > CLASSES['harness'])
-    return job.get('id') in selected
+    return klass != CLASSES['perf'] or job.get('id') in selected
 
 
 def history_wall():
