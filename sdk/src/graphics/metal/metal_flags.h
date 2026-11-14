@@ -68,6 +68,7 @@ DECLARE_bool(metal_occlusion_real);
 DECLARE_int32(metal_present_drawables);
 DECLARE_string(metal_res_scale);
 DECLARE_bool(metal_resolve_to_texture);
+DECLARE_int32(metal_resolve_readback_max_bytes);
 DECLARE_bool(metal_retina);
 DECLARE_string(metal_shader_prep);
 DECLARE_double(metal_shader_prep_timeout_s);

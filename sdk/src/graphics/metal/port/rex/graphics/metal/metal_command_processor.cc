@@ -10630,6 +10630,32 @@ bool MetalCommandProcessor::IssueCopy() {
         static_cast<const uint8_t*>(buffer->contents()) + written_address;
     std::memcpy(destination, source, written_length);
     NoteMorphReadback(source, written_address, written_length, false);
+  } else if (written_length &&
+             written_length <= uint32_t(std::max(
+                                   0, REXCVAR_GET(metal_resolve_readback_max_bytes)))) {
+    // The CPU reads some resolve results (NFSMW: the 64x64 luminance
+    // resolve that drives auto-exposure). Copy them back to guest RAM once
+    // this command buffer completes, as memexport results are; until then the
+    // CPU sees the previous result, like readback_resolve=fast elsewhere.
+    static uint32_t logged = 0;
+    if (logged < 16) {
+      ++logged;
+      REXLOG_INFO("[resolve-readback] 0x{:08X} bytes={} format={}{}",
+                  written_address, written_length,
+                  uint32_t(copy_info.copy_dest_format),
+                  logged == 16 ? " (further resolves not logged)" : "");
+    }
+    if (texture_cache_->IsDrawResolutionScaled() && !resolve_plan.native) {
+      const FormatInfo* format_info =
+          FormatInfo::Get(uint32_t(copy_info.copy_dest_format));
+      if (!MorphReadbackScaled(written_address, written_length,
+                               format_info ? format_info->bits_per_pixel : 32)) {
+        return false;
+      }
+    } else {
+      shared_memory_->NoteMemexportReadback(written_address, written_length,
+                                            submission_current_);
+    }
   }
 
   return true;
@@ -11418,7 +11444,8 @@ void MetalCommandProcessor::ProcessCompletedSubmissions() {
     // Before the readback, which may legitimately change guest RAM.
     shared_memory_->VerifyCompletedUploads(completed);
   }
-  if (shared_memory_ && MetalSharedMemory::MemexportReadbackEnabled()) {
+  if (shared_memory_ && (MetalSharedMemory::MemexportReadbackEnabled() ||
+                         REXCVAR_GET(metal_resolve_readback_max_bytes) > 0)) {
     shared_memory_->ApplyCompletedMemexportReadbacks(completed);
   }
   PruneCompletedSharedMemoryWrites(completed);
