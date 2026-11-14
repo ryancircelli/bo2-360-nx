@@ -107,6 +107,12 @@ REXCVAR_DEFINE_BOOL(bo2zm_waits_own_locks, true, "BO2",
                     "notifier takes only the locks of the threads it wakes. false = one lock for every sleeper and "
                     "notifier, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// A pushed job is one job: waking every idle worker for it costs the pushing thread (mostly Main) one condition
+// signal per sleeper, and all but one of them find nothing and sleep again.
+REXCVAR_DEFINE_BOOL(bo2zm_waits_wake_one_per_job, false, "BO2",
+                    "Blocking job-system waits with locks of their own: a pushed job wakes one sleeper that wants it "
+                    "(one not already woken) instead of every one. false = wake them all, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(bo2zm_waits_own_locks_ab, false, "BO2",
                     "Test, with bo2zm_benchmark_ab_s: A/B factor 1 is bo2zm_waits_own_locks for the sleeps that start "
                     "in each arm (on = a lock of their own)")
@@ -284,6 +290,11 @@ bool OwnLocks() {
   return on;
 }
 
+bool WakeOnePerJob() {
+  static const bool on = REXCVAR_GET(bo2zm_waits_wake_one_per_job);
+  return on;
+}
+
 // This thread's slot: taken at its first sleep, kept for the thread's life. -1: none left (the shared lock).
 int MySlot() {
   thread_local int slot = -2;
@@ -354,6 +365,9 @@ void Warn(tr::Reason m, uint32_t key = 0) {
     if (wake) {
       s.cv.notify_one();
       g_slot_wakes.fetch_add(1, std::memory_order_relaxed);
+      if (m == tr::kWarningJob && WakeOnePerJob()) {
+        break;
+      }
     }
   }
   if (g_shared_sleepers.load(std::memory_order_seq_cst) == 0) {

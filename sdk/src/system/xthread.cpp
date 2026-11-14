@@ -50,6 +50,11 @@ REXCVAR_DEFINE_BOOL(ignore_thread_priorities, true, "Kernel",
 REXCVAR_DEFINE_BOOL(ignore_thread_affinities, true, "Kernel",
                     "Ignores game-specified thread affinities");
 
+REXCVAR_DEFINE_BOOL(ppc_fpu_flush_denormals, false, "CPU",
+                    "Keep flush-to-zero on for scalar FPU code as well as VMX, so the generated code's flush "
+                    "mode switches do not write the host FP control register (a measurable share of busy game "
+                    "threads on Apple Silicon). Scalar denormals become zero. Read when a guest thread starts.");
+
 #if REX_PLATFORM_SWITCH
 REXCVAR_DEFINE_STRING(switch_audio_guest_threads, "", "Kernel",
                       "Switch: guest threads that run at the audio priority (0x2B) instead of the guest one (0x3B): "
@@ -749,6 +754,7 @@ void XThread::Execute() {
   if (args.size() > 7)
     ctx->r10.u64 = args[7];
 
+  rex::ppc::g_flush_denormals_always = REXCVAR_GET(ppc_fpu_flush_denormals);
   ctx->fpscr.InitHost();
 
   // Convert this host thread to a fiber so SwitchTo works bidirectionally.

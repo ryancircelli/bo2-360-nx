@@ -144,6 +144,13 @@ constexpr uint32_t kRoundUp = 0x02;
 constexpr uint32_t kRoundDown = 0x03;
 constexpr uint32_t kRoundMask = 0x03;
 
+// The ppc_fpu_flush_denormals setting, read once before guest threads start. The generated code turns
+// flush-to-zero on before VMX math (VMX flushes denormals) and off before scalar FPU math, and each switch
+// is a write to FPCR/MXCSR (about 22 ns on Apple M5, so up to 5% of a busy game thread). When true, flush-to-
+// zero stays on for scalar FPU math too: disableFlushMode never writes the register. Scalar denormals then
+// read and compute as zero, which the PowerPC FPU would keep.
+inline bool g_flush_denormals_always = false;
+
 struct FPSCRRegister {
   uint32_t csr;
 
@@ -201,6 +208,9 @@ struct FPSCRRegister {
 
   inline void disableFlushMode() noexcept {
     if ((csr & FlushMask) != 0) [[unlikely]] {
+      if (g_flush_denormals_always) {
+        return;
+      }
       csr &= ~FlushMask;
       setcsr(csr);
     }
@@ -209,6 +219,9 @@ struct FPSCRRegister {
   inline void InitHost() noexcept {
     csr = getcsr();
     Platform::InitHostExceptions(csr);
+    if (g_flush_denormals_always) {
+      csr |= FlushMask;
+    }
     setcsr(csr);
   }
 };
