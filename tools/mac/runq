@@ -95,6 +95,7 @@ PERF_BATCH_AGE_S = 30 * 60
 COMPILE_CPU_DELTA_THRESHOLD_S = 0.05
 COMPILER_INVALID_CPU_S = 2.0
 COMPILER_INVALID_WALL_S = 5.0
+COMPILER_IDLE_CPU_S = 0.1   # a driver (ninja, cmake) asleep on its children used no CPU: not a disturbance (job 1113-105152-8747)
 _COMPILER_CPU_LAST = {}
 _PERF_ACTIVITY_CPU_LAST = {}
 PROCESS_SNAPSHOT = []
@@ -534,7 +535,8 @@ def meaningful_compiler_activity(activity):
     used before the freeze is not the run's fault (job 1113-190418-5121, clang 2.47 CPU-s)."""
     return [p for p in activity.values()
             if not p.get('pre_freeze') and (p.get('cpu_delta_s', 0.0) > COMPILER_INVALID_CPU_S or
-            p.get('observed_s', 0.0) > COMPILER_INVALID_WALL_S)]
+            (p.get('observed_s', 0.0) > COMPILER_INVALID_WALL_S and
+             p.get('cpu_delta_s', 0.0) >= COMPILER_IDLE_CPU_S))]
 
 
 def freeze_late_buildq_compilers(j, owned, now_mono, start_mono, kill=os.kill):
@@ -2699,6 +2701,8 @@ def main():
         observe_compiler_activity([running], frozen_prev, frozen_activity, 876.0, {})
         observe_compiler_activity([running], frozen_prev, frozen_activity, 882.0, {})
         assert frozen_activity[53949]['observed_s'] == 6.0
+        assert meaningful_compiler_activity(frozen_activity) == []   # awake but 0 CPU-s: an idle driver
+        observe_compiler_activity([{**running, 'cpu_s': 0.5}], frozen_prev, frozen_activity, 883.0, {})
         assert len(meaningful_compiler_activity(frozen_activity)) == 1
         stopped = confirmed_stopped_pids([28496, 53916],
                                          [{'pid': 28496, 'state': 'T'}, {'pid': 53916, 'state': 'S'}])
