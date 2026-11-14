@@ -45,6 +45,21 @@
   "scene": "menu",
   "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/nfsmw/menu.xtr",
   "hash": true,
-  "class": "menu"
+  "class": "menu",
+  "timing": false
+ },
+ {
+  "game": "nfsmw",
+  "scene": "race-300",
+  "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/nfsmw/race-300.xtr",
+  "hash": true,
+  "class": "gameplay"
+ },
+ {
+  "game": "fh1",
+  "scene": "drive-300",
+  "trace": "/Users/ryanc/Games/Xbox360/bo2-build/bench-traces/fh1/drive-300.xtr",
+  "hash": true,
+  "class": "gameplay"
  }
 ]
