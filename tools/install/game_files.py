@@ -54,6 +54,7 @@ for path in (os.path.join(TOOLS, "inspect"), TOOLS):
 
 from stfs_extract import Stfs  # noqa: E402
 import install_dlc  # noqa: E402
+import title_packs  # noqa: E402
 import xiso  # noqa: E402
 
 MODES = {"zm": "Zombies", "mp": "Multiplayer", "cp": "Campaign"}
@@ -323,6 +324,17 @@ def is_tu18(stfs):
     return False
 
 
+def other_title(path):
+    """A problem line when the disc folder or image at path is another game (by the title id in its executable),
+    None when it is Black Ops II or names no title. Black Ops also ships a default_mp.xex, so the file name alone
+    is not enough."""
+    title, pack = title_packs.identify(path)
+    if title is None or int(title, 16) == TITLE_ID:
+        return None
+    what = f"games/{pack} in this project" if pack else "a game this project has no title pack for"
+    return f"{path} is not Black Ops II: its title id is {title} ({what})"
+
+
 def scan(folder, skip=(), progress=None):
     """Looks through folder (recursively) for the game, Title Update 18 and DLC packages. skip: folders to leave out
     (the kit's own output)."""
@@ -339,13 +351,20 @@ def scan(folder, skip=(), progress=None):
             xex = os.path.join(dp, lower["default_mp.xex"])
             if progress:
                 progress(f"checking {xex}")
-            found.games.append(Game("folder", dp, sha256(xex) == DISC_XEX_SHA256))
+            other = other_title(dp)
+            if other:
+                found.problems.append(other)
+            else:
+                found.games.append(Game("folder", dp, sha256(xex) == DISC_XEX_SHA256))
         for n in sorted(fn):
             path = os.path.join(dp, n)
             if n.lower().endswith(".iso"):
                 if progress:
                     progress(f"reading {path}")
-                if "default_mp.xex" in xiso.root_names(path):
+                other = other_title(path) if xiso.is_xbox_image(path) else None
+                if other:
+                    found.problems.append(other)
+                elif "default_mp.xex" in xiso.root_names(path):
                     found.games.append(Game("iso", path))
                 elif xiso.is_xbox_image(path):
                     found.problems.append(f"{path} is an Xbox disc image, but not of Black Ops II")
