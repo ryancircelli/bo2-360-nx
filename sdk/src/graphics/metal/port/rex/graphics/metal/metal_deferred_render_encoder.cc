@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 
+#include "rex/graphics/metal/metal_cp_phase.h"
 #include "rex/logging.h"
 
 #ifndef IR_RUNTIME_METALCPP
@@ -215,7 +216,9 @@ void DeferredRenderEncoder::Barrier() {
     return;
   }
   ++stats_.xpass_barrier_drains;
+  cpphase::t_drain_barrier = true;
   Drain();
+  cpphase::t_drain_barrier = false;
   ended_undrained_ = false;
 }
 
@@ -288,6 +291,7 @@ void DeferredRenderEncoder::PublishChunk() {
   if (!current_ || current_->bytes.empty()) {
     return;
   }
+  cpphase::Scope cpphase_publish_scope(cpphase::kEncPublish);
   std::memset(recent_buffers_, 0, sizeof(recent_buffers_));
   bool wake;
   {
@@ -310,6 +314,7 @@ void DeferredRenderEncoder::Drain() {
     return;
   }
   ++stats_.drains;
+  cpphase::DrainScope cpphase_drain_scope;
   auto start = std::chrono::steady_clock::now();
   // Most drains finish within a few microseconds of the last chunk; spin
   // briefly before sleeping.
@@ -349,7 +354,12 @@ void DeferredRenderEncoder::WorkerMain() {
       chunk = std::move(queue_.front());
       queue_.pop_front();
     }
-    Replay(*chunk);
+    {
+      const bool cpphase_on = cpphase::Enabled();
+      const uint64_t cpphase_t0 = cpphase_on ? cpphase::Now() : 0;
+      Replay(*chunk);
+      if (cpphase_on) cpphase::g_enc_busy_ticks.fetch_add(cpphase::Now() - cpphase_t0, std::memory_order_relaxed);
+    }
     for (const NS::Object* object : chunk->retained) {
       const_cast<NS::Object*>(object)->release();
     }

@@ -48,6 +48,10 @@ DEFINE_bool(metal_cmdcost_all, true,
             "thread and cross-pass encode thread. Flippable at run time "
             "(latched at the drained frame boundary). Default on.",
             "Metal");
+DEFINE_bool(metal_cp_phase_timers, false,
+            "Test instrumentation: per-phase timers of the command processor thread, written per swap to cp_phases.tsv. "
+            "Env REX_METAL_CP_PHASE_TIMERS=1.",
+            "Metal");
 DEFINE_bool(metal_const_fastpath, false,
             "Pack changed constant blocks (system, float, bool/loop) straight "
             "into the upload slice instead of packing into a scratch copy, "

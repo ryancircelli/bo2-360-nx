@@ -3,6 +3,7 @@
 #include "rex/graphics/metal/metal_readiness.h"
 #include "rex/graphics/metal/metal_trace.h"
 #include "rex/graphics/metal/metal_hitch.h"
+#include "rex/graphics/metal/metal_cp_phase.h"
 #include "rex/graphics/metal/metal_converter_census.h"
 #include "rex/graphics/metal/metal_air_optimizer.h"
 #include "rex/graphics/metal/metal_ns_specialize.h"
@@ -2270,6 +2271,7 @@ bool MetalCommandProcessor::SetupContext() {
 void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
                                                       const char* context) {
   hitch::Scope hitch_scope(hitch::kSync);
+  cpphase::Scope cpphase_wait_scope(cpphase::kWait);
   // Phase 1: commit the active command buffer and wait for it.
   if (current_command_buffer_) {
     render_encoder_recorder_.Barrier();
@@ -2769,9 +2771,12 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     if (perf_last_cpu_ns) {
       perf.ns_working.fetch_add(cpu_now - perf_last_cpu_ns, std::memory_order_relaxed);
     }
+    cpphase::OnSwap(perf_last_cpu_ns ? cpu_now - perf_last_cpu_ns : 0,
+                    texture_cache_ ? texture_cache_->loaded_texture_data_count() : 0);
     perf_last_cpu_ns = cpu_now;
     perf.jobs_submitted.store(submission_current_, std::memory_order_relaxed);
   }
+  cpphase::Scope cpphase_swap_scope(cpphase::kSwap);
   rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
   ZpdMaybeLogStats();
   if (hle_census::Enabled()) {
@@ -4086,6 +4091,10 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                       IndexBufferInfo* index_buffer_info,
                                       bool major_mode_explicit) {
   rex::graphics::GetPerfStats().draws.fetch_add(1, std::memory_order_relaxed);
+  const bool cpphase_on = cpphase::Enabled();
+  if (cpphase_on) ++cpphase::State().c.draws;
+  cpphase::MaxTimer cpphase_draw_timer(&cpphase::State().c.max_draw_ns, cpphase_on);
+  cpphase::Scope cpphase_draw_misc_scope(cpphase::kDrawMisc);
   if (hle_census::Enabled()) {
     census_draw_site_ = hle_census::CurrentSite();
     if (hle_census::TilingTraceActive(frame_log::CurrentFrame())) {
@@ -4285,7 +4294,12 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     REXLOG_ERROR("IssueDraw: primitive processor is not initialized");
     return false;
   }
-  if (!primitive_processor_->Process(primitive_processing_result)) {
+  bool cpphase_prim_ok;
+  {
+    cpphase::Scope cpphase_scope(cpphase::kVtx);
+    cpphase_prim_ok = primitive_processor_->Process(primitive_processing_result);
+  }
+  if (!cpphase_prim_ok) {
     REXLOG_ERROR("IssueDraw: primitive processing failed");
     return false;
   }
@@ -4524,9 +4538,13 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       }
     }
     render_target_cache_->SetTexSpaceDrawHint(texspace_hint);
-    const bool rt_updated = render_target_cache_->Update(
+    bool rt_updated;
+    {
+      cpphase::Scope cpphase_scope(cpphase::kRt);
+      rt_updated = render_target_cache_->Update(
         is_rasterization_done, normalized_depth_control, normalized_color_mask,
         *vertex_shader);
+    }
     render_target_cache_->SetTexSpaceDrawHint(false);
     if (!rt_updated) {
       REXLOG_ERROR(
@@ -5484,12 +5502,19 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
                     pixel_shader_modification.value, logged, line);
       }
     }
-    auto* pipeline_handle = pipeline_cache_->GetOrCreatePipelineState(
+    decltype(pipeline_cache_->GetOrCreatePipelineState(
+        vertex_translation, pixel_translation, attachment_formats,
+        rendering_key)) pipeline_handle;
+    {
+      cpphase::Scope cpphase_scope(cpphase::kPipe);
+      pipeline_handle = pipeline_cache_->GetOrCreatePipelineState(
         vertex_translation, pixel_translation, attachment_formats,
         rendering_key);
+    }
     spec_pipeline_handle = pipeline_handle;
     if (pipeline_handle) {
       pipeline = pipeline_handle->state.load(std::memory_order_acquire);
+      if (!pipeline) cpphase::Count(&cpphase::Counters::pipe_miss);
       // This game-specific pixel shader generates the morph texture immediately
       // before the 0x12704000 readbacks. Skipping its first draws leaves red
       // high-resolution mips permanently baked into the CPU-compressed texture.
@@ -5643,6 +5668,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     if (!EnsureCommandBuffer()) {
       return false;
     }
+    cpphase::Scope cpphase_tex_scope(cpphase::kTex);
     if (texture_materialization_plan.NeedsTextureUpload()) {
       texture_cache_->RequestTexturesWithoutLoading(
           used_texture_mask, &texture_materialization_plan);
@@ -6065,12 +6091,17 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       return false;
     }
     miplod_ps_mod_ = pixel_shader ? pixel_shader_modification.value : 0;
-    if (!PrepareDrawConstants(regs, vertex_shader, pixel_shader,
+    bool cpphase_const_ok;
+    {
+      cpphase::Scope cpphase_scope(cpphase::kConst);
+      cpphase_const_ok = PrepareDrawConstants(regs, vertex_shader, pixel_shader,
                               metal_vertex_shader, metal_pixel_shader,
                               shared_memory_is_uav, is_rasterization_done,
                               primitive_processing_result, used_texture_mask,
                               normalized_color_mask, draw_pass_descriptor,
-                              uniforms, draw_dynamic_state)) {
+                              uniforms, draw_dynamic_state);
+    }
+    if (!cpphase_const_ok) {
       return false;
     }
   }
@@ -8521,6 +8552,7 @@ bool MetalCommandProcessor::CanQueuePreparedDraw(
 }
 
 bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
+  cpphase::Scope cpphase_scope(cpphase::kEncode);
   // [tile-resolve extent] the rows this draw can write (its scissor, already
   // clamped to the attachments). A pass opened with a shorter render area
   // ends here when the draw needs more rows or transfers are to be drawn,
@@ -8867,6 +8899,7 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
   if (prepared_draw_queue_.empty()) {
     return true;
   }
+  cpphase::MaxTimer cpphase_flush_timer(&cpphase::State().c.max_flush_ns, cpphase::Enabled());
   const size_t reason_index = static_cast<size_t>(reason);
   if (reason_index <
       backend_telemetry_.prepared_draw_queue_flush_reasons.size()) {
@@ -8970,6 +9003,7 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
       flushing_prepared_draw_queue_ = previous_flushing;
       return false;
     }
+    cpphase::Scope cpphase_tex_scope(cpphase::kTex);
     texture_cache_->BeginTextureUploadBatch();
     bool texture_materialization_succeeded = true;
     for (PreparedDrawPtr& draw_ptr : draws) {
@@ -9281,8 +9315,12 @@ bool MetalCommandProcessor::SubmitPreparedDraw(
       EndTexturePrecommit();
       return false;
     }
-    const bool texture_loaded = texture_cache_->ExecuteTextureMaterialization(
+    bool texture_loaded;
+    {
+      cpphase::Scope cpphase_tex_scope(cpphase::kTex);
+      texture_loaded = texture_cache_->ExecuteTextureMaterialization(
         draw.texture_materialization_plan);
+    }
     if (texture_precommit) {
       if (texture_precommit_active_) {
         UploadTrace().tex_pre_ld += uint32_t(
@@ -10194,6 +10232,8 @@ void MetalCommandProcessor::TraceReadbackGuestMemory(uint32_t physical_address, 
 #endif
 
 bool MetalCommandProcessor::IssueCopy() {
+  cpphase::Scope cpphase_scope(cpphase::kResolve);
+  cpphase::Count(&cpphase::Counters::resolves);
   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kIssueCopy)) {
     return false;
   }
@@ -10570,6 +10610,7 @@ bool RegisterRangeOverlaps(uint32_t start, uint32_t end, uint32_t range_start,
 void MetalCommandProcessor::WriteRegistersFromMem(uint32_t start_index,
                                                   uint32_t* base,
                                                   uint32_t num_registers) {
+  cpphase::Scope cpphase_scope(cpphase::kParse);
   if (!num_registers) {
     return;
   }
@@ -10841,6 +10882,7 @@ void MetalCommandProcessor::DirtyFetchConstantDwords(
 }
 
 void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+  cpphase::Scope cpphase_scope(cpphase::kParse);
   uint32_t old_value = 0;
   bool valid_register = index < RegisterFile::kRegisterCount;
   if (valid_register) {
@@ -11052,6 +11094,7 @@ void MetalCommandProcessor::WaitForFrameSlotSubmission(
   const uint64_t trace_wait_start = gpu_time_trace::Now();
   const uint64_t perf_slot_wait_t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
   hitch::Scope hitch_scope(hitch::kSlot);
+  cpphase::Scope cpphase_wait_scope(cpphase::kWait);
   {
     std::unique_lock<std::mutex> lock(completion_mutex_);
     completion_cond_.wait(lock, [&]() {
@@ -11746,6 +11789,7 @@ bool MetalCommandProcessor::RequestSharedMemoryRangeBeforeDrawPass(
 bool MetalCommandProcessor::RequestSharedMemoryRanges(
     SharedMemoryRequestReason reason, const SharedMemory::Range* ranges,
     uint32_t range_count) {
+  cpphase::Scope cpphase_scope(cpphase::kShmem);
   const bool was_active = current_render_encoder_ != nullptr;
   const size_t reason_index = static_cast<size_t>(reason);
   const bool reason_valid = reason_index < kSharedMemoryRequestReasonCount;
@@ -12107,6 +12151,7 @@ void MetalCommandProcessor::CommitStandaloneAndWait(MTL::CommandBuffer* cmd) {
   cmd->commit();
   const uint64_t trace_wait_start = gpu_time_trace::Now();
   hitch::Scope hitch_scope(hitch::kSync);
+  cpphase::Scope cpphase_wait_scope(cpphase::kWait);
   cmd->waitUntilCompleted();
   gpu_time_trace::RecordWait("tr_sync_wait_us", trace_wait_start);
   cmd->release();

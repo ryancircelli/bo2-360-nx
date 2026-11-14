@@ -35,4 +35,9 @@ using GuestWriteHook = void (*)();
 void SetGuestWriteHook(GuestWriteHook hook);
 void NotifyGuestWrite();
 
+// Test instrumentation: called with true/false around every PM4 packet the command processor executes (Metal
+// cp-phase timers). Null when unused.
+using PacketScopeHook = void (*)(bool begin);
+extern PacketScopeHook g_packet_scope_hook;
+
 }  // namespace rex::graphics

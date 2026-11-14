@@ -751,6 +751,15 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+  struct PacketScopeGuard {
+    PacketScopeHook hook = g_packet_scope_hook;
+    PacketScopeGuard() {
+      if (hook) hook(true);
+    }
+    ~PacketScopeGuard() {
+      if (hook) hook(false);
+    }
+  } packet_scope_guard;
   if (trace_hooks_ && trace_hooks_->is_recording()) [[unlikely]] {
     // Report the whole packet (header + payload) before it executes.
     uint32_t header =
