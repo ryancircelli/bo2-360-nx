@@ -55,6 +55,7 @@
 #include "rex/graphics/util/draw.h"
 #include "rex/graphics/flags.h"
 #include "rex/graphics/metal/metal_shader_cache.h"
+#include "rex/graphics/metal/metal_shader_prebuild.h"
 #include "rex/graphics/registers.h"
 #include "rex/graphics/xenos.h"
 
@@ -1658,6 +1659,12 @@ bool MetalPipelineCache::InitializeShaderStorageInternal(
     ns_spec::InitializeStorage(shader_storage_title_root_, title_id);
   }
 
+  // [shader-prebuild] Ship-time shader state (translated libraries + metal-tt
+  // binary archives), staged under the cache root keyed by the ABI tag so it
+  // survives app updates and a new build never reads a stale prebuild.
+  prebuild_ = std::make_unique<ShaderPrebuild>();
+  prebuild_->Initialize(device_, cache_root, GetShaderStorageAbiTag());
+
   artifact_store_path_ = shader_storage_title_root_ /
                          fmt::format("{:08X}.metal.artifacts", title_id);
   if (REXCVAR_GET(metal_shader_disk_cache) && g_metal_artifact_store) {
@@ -1752,6 +1759,41 @@ bool MetalPipelineCache::InitializeShaderStorageInternal(
 
   if (REXCVAR_GET(metal_pipeline_binary_archive)) {
     for (size_t i = 0; i < archive_set_count; ++i) {
+      // [shader-prebuild] Install the shipped metal-tt archive as this set's
+      // first segment when no segment exists yet (first launch for this
+      // device / ABI tag / OS key): covered pipelines become lookups instead
+      // of driver compiles. Metal ignores entries that do not match this GPU
+      // or OS, and a set with no shipped archive keeps the runtime path.
+      if (prebuild_ && prebuild_->enabled()) {
+        const std::filesystem::path gpubin =
+            prebuild_->ArchiveForSet(path_suffixes[i]);
+        if (!gpubin.empty()) {
+          const std::string seg_prefix =
+              archive_prefixes[i].filename().string() + ".seg";
+          bool have_segment = false;
+          std::error_code seg_ec;
+          for (const auto& entry : std::filesystem::directory_iterator(
+                   archive_prefixes[i].parent_path(), seg_ec)) {
+            const std::string name = entry.path().filename().string();
+            if (name.compare(0, seg_prefix.size(), seg_prefix) == 0) {
+              have_segment = true;
+              break;
+            }
+          }
+          if (!have_segment) {
+            const std::filesystem::path dst =
+                archive_prefixes[i].parent_path() /
+                fmt::format("{}{:06}.binarchive", seg_prefix, 1);
+            std::filesystem::copy_file(gpubin, dst, std::filesystem::copy_options::none,
+                                       seg_ec);
+            REXLOG_INFO(
+                "[shader-prebuild] {} installed as archive segment {} ({})",
+                gpubin.filename().string(), dst.filename().string(),
+                seg_ec ? "failed: " + seg_ec.message()
+                       : "lookups hit it this launch");
+          }
+        }
+      }
       InitializePipelineBinaryArchive(archive_prefixes[i], i);
     }
   }
@@ -1784,6 +1826,7 @@ bool MetalPipelineCache::InitializeShaderStorageInternal(
 }
 
 void MetalPipelineCache::ShutdownShaderStorage() {
+  prebuild_.reset();
   {
     MetalPipelineCache* expected = this;
     g_archive_flush_cache.compare_exchange_strong(expected, nullptr);
@@ -2758,11 +2801,14 @@ void MetalPipelineCache::QueueShaderSeed(
 void MetalPipelineCache::NoteSeedPipelineDone() {
   if (seed_pending_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
     REXLOG_INFO("[shader-seed] all {} seeded pipelines created, {:.2f}s after "
-                "storage init",
+                "storage init{}",
                 seed_queued_,
                 std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                               warmup_start_)
-                    .count());
+                    .count(),
+                prebuild_ ? fmt::format(", {} translations from the prebuild",
+                                        prebuild_->lookup_hits())
+                          : std::string());
   }
 }
 
@@ -3707,6 +3753,15 @@ bool MetalPipelineCache::CompileNativeXlate(
     return false;
   }
   const uint64_t hash = translation->shader().ucode_data_hash();
+  // [shader-prebuild] A shipped, build-time-compiled library for this exact
+  // translation (plain variant only: no baked constants / point / rectangle /
+  // tessellation variants) skips the translate + MSL compile entirely.
+  if (baked.empty() && !expand_points && !expand_rects && !points_mesh &&
+      !domain_cpu_pattern && prebuild_ &&
+      prebuild_->LookupLibrary(vertex, hash, translation->modification(),
+                               library_out, function_out, entry_out)) {
+    return true;
+  }
   auto t0 = std::chrono::steady_clock::now();
   MslTranslatorConfig config;
   config.draw_resolution_scale_x = native_xlate_config_.draw_resolution_scale_x;

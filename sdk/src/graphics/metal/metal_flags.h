@@ -73,6 +73,7 @@ DECLARE_bool(metal_retina);
 DECLARE_string(metal_shader_prep);
 DECLARE_double(metal_shader_prep_timeout_s);
 DECLARE_string(metal_shader_seed);
+DECLARE_string(metal_shader_prebuild);
 DECLARE_int32(metal_pipeline_wait_budget_ms);
 DECLARE_int32(metal_shader_seed_threads);
 DECLARE_bool(metal_shader_seed_background);

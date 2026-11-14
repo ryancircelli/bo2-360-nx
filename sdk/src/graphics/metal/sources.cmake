@@ -51,6 +51,7 @@ set(REXGPU_METAL_SOURCES
   port/rex/graphics/metal/metal_pipeline_cache.cc
   port/rex/graphics/metal/metal_upload_buffer_pool.cc
   port/rex/graphics/metal/metal_shader_cache.cc
+  port/rex/graphics/metal/metal_shader_prebuild.cc
   port/rex/graphics/metal/metal_direct_host_resolve.cc
   port/rex/graphics/metal/metal_resolve_to_texture.cc
   port/rex/graphics/metal/metal_tile_resolve.cc

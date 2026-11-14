@@ -161,6 +161,15 @@ DEFINE_string(metal_shader_seed, "",
               "startup, behind the game's own. Empty = shader_seed beside the "
               "executable, 'off' = none.",
               "Metal");
+DEFINE_string(metal_shader_prebuild, "",
+              "Shipped shader prebuild (shader_prebuild folder: translated "
+              "shader libraries and metal-tt binary archives, see "
+              "tools/mac/shader_prebuild.py). Staged into the shader cache "
+              "keyed by the ABI tag, so it survives app updates and a new "
+              "build never reads a stale prebuild. Empty = shader_prebuild "
+              "beside the executable when present, 'off'/'0' = disabled, else "
+              "a folder path used directly (development).",
+              "Metal");
 DEFINE_int32(metal_shader_seed_threads, 2,
              "Most pipeline creation threads the shipped shader seed may use "
              "at once once gameplay is live, so the game's own pipelines never queue behind it (each "
