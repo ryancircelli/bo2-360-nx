@@ -9,3 +9,4 @@ local_data_root = "~/Games/Xbox360/bo1/disc"  # read-only extracted disc; --game
 
 [defaults]
 gpu_plugin = "metal"                     # the native Metal renderer; --gpu_plugin or a config file still wins
+guest_fake_cpu_start = 1                 # BO1 indexes script-parser state by CPU number; default round-robin put the main thread on the CPU the game pins another script thread to (boots died ~65%)

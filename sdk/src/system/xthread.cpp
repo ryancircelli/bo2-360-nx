@@ -281,10 +281,17 @@ void XThread::set_name(const std::string_view name) {
   }
 }
 
+REXCVAR_DEFINE_INT32(guest_fake_cpu_start, 0, "Kernel",
+                     "Starting point of the round-robin CPU number handed to guest threads created "
+                     "without a processor mask. Games that index per-CPU state by CPU number can "
+                     "collide with threads they pin explicitly (BO1: main thread vs thread pinned to 1).");
+
 static uint8_t next_cpu = 0;
 static uint8_t GetFakeCpuNumber(uint8_t proc_mask) {
   // NOTE: proc_mask is logical processors, not physical processors or cores.
   if (!proc_mask) {
+    static const bool init = [] { next_cpu = uint8_t(REXCVAR_GET(guest_fake_cpu_start) % 6); return true; }();
+    (void)init;
     next_cpu = (next_cpu + 1) % 6;
     return next_cpu;  // is this reasonable?
     // TODO(Triang3l): Does the following apply here?
