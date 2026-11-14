@@ -138,6 +138,10 @@ REXCVAR_DEFINE_INT32(bo2zm_benchmark_net_idle_us_b, -1, "BO2",
 #if defined(BO2ZM_PGO_GENERATE)
 // The training build of app/build_switch.sh (BO2_PGO=generate): libgcov's counters, reset when the route starts and
 // written to sdmc:/switch/bo2zm/pgo when it ends, so the profile is the route's gameplay.
+#if defined(BO2ZM_PGO_GENERATE_LLVM)
+extern "C" void __llvm_profile_reset_counters(void);
+extern "C" int __llvm_profile_write_file(void);
+#else
 extern "C" void __gcov_reset(void);
 extern "C" void __gcov_dump(void);
 #include <sys/stat.h>
@@ -159,6 +163,7 @@ extern "C" __attribute__((used)) FILE* __wrap_fopen(const char* name, const char
   }
   return __real_fopen(name, mode);
 }
+#endif
 #endif
 
 namespace bo2zm::benchmark {
@@ -807,9 +812,14 @@ void AnnotateFrame() {
     bo2zm::perf_log::Event("route_end");  // the end of perf_summary.py's window
     Summarize(Duration());
 #if defined(BO2ZM_PGO_GENERATE)
+#if defined(BO2ZM_PGO_GENERATE_LLVM)
+    __llvm_profile_write_file();
+    REXLOG_INFO("[pgo] LLVM profile of the route written");
+#else
     mkdir("/switch/bo2zm/pgo", 0777);
     __gcov_dump();
     REXLOG_INFO("[pgo] profile of the route written to sdmc:/switch/bo2zm/pgo: copy that folder to the PC");
+#endif
 #endif
     lifecycle::OnBenchmarkDone();  // development consoles send the logs (and pgo/) to their PC from here
     return;
@@ -818,7 +828,11 @@ void AnnotateFrame() {
   static bool reset = false;
   if (!reset) {
     reset = true;
+#if defined(BO2ZM_PGO_GENERATE_LLVM)
+    __llvm_profile_reset_counters();
+#else
     __gcov_reset();
+#endif
     REXLOG_INFO("[pgo] counters reset at the start of the route");
   }
 #endif

@@ -23,6 +23,8 @@
 #   BO2_TU    the Title Update 18 package (default: the only file in $BO2_BUILD/TU/), as dumped from a console
 #             (an STFS/LIVE package holding default_mp.xexp). Its default_mp.xexp must be TU18's.
 #   VULKAN_SDK the LunarG Vulkan SDK's macOS folder, for dxc (default: the newest ~/VulkanSDK/*/macOS)
+#   BO2_PGO=generate instruments the generated game code and hot native code; set LLVM_PROFILE_FILE when running it
+#   BO2_PGO=use builds from BO2_PGO_DIR (a merged .profdata file made with llvm-profdata merge)
 # Needs Xcode (clang), and from Homebrew: cmake ninja python3.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -152,13 +154,22 @@ if want app; then
   [ -f "$ROOT/app/generated/default_mp/sources.cmake" ] || { echo "no generated code: run the codegen step" >&2; exit 1; }
   FLAGS="-march=armv8-a"
   RELEASE="-O3 -DNDEBUG"
+  PGO_ARGS=()
+  case "${BO2_PGO:-}" in
+    generate) PGO_ARGS+=("-DBO2ZM_PGO=generate") ;;
+    use)
+      [ -n "${BO2_PGO_DIR:-}" ] || { echo "BO2_PGO=use requires BO2_PGO_DIR to name a merged .profdata file" >&2; exit 1; }
+      PGO_ARGS+=("-DBO2ZM_PGO=use" "-DBO2ZM_PGO_DIR=$BO2_PGO_DIR") ;;
+    "") PGO_ARGS+=("-DBO2ZM_PGO=") ;;
+    *) echo "BO2_PGO must be generate, use or empty" >&2; exit 1 ;;
+  esac
   cmake -S "$ROOT/app" -B "$OUT" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
     -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
     "-DCMAKE_C_FLAGS=$FLAGS" "-DCMAKE_CXX_FLAGS=$FLAGS" \
     "-DCMAKE_C_FLAGS_RELEASE=$RELEASE" "-DCMAKE_CXX_FLAGS_RELEASE=$RELEASE" \
     "-DCMAKE_BUILD_RPATH=@executable_path" \
-    "-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out" \
+    "-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out" "${PGO_ARGS[@]}" \
     -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_METAL=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
     "-DBO2ZM_BUILD_ID=mac-arm64-$(date +%Y%m%d-%H%M%S)" "-DREXSDK_DIR=$ROOT/sdk" > /dev/null
   G="$ROOT/app/generated/default_mp"

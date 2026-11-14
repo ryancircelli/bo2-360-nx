@@ -183,20 +183,19 @@ if(TARGET bo2zm_recomp)
   endif()
 endif()
 
-# Profile-guided optimization of the generated code (app/build_switch.sh, BO2_PGO), and of the app's hot native code
-# (the list below). Not the SDK: a training build that instruments everything, including the SDK's platform layer with
-# its wrapped threadCreate, mutexes and fault handler, hangs at startup on the console, probably from the same
-# thread-local problem described below. The profile file names are the object paths relative to the build folder, in
-# Windows form (GCC compares the prefix with its working directory, which it gets with backslashes), so the training
-# build and the final one look for the same names.
-set(BO2ZM_PGO "" CACHE STRING "Switch: profile-guided optimization of the generated code: generate, use or empty")
-set(BO2ZM_PGO_DIR "" CACHE PATH "Switch, BO2ZM_PGO=use: the folder with the training run's profile")
-if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
+# Profile-guided optimization of generated code and selected hot native code for Switch and macOS builds. The native
+# source list is based on the Switch profile, where the renderer's ring and recorder threads use about 16 ms of CPU
+# per frame. The Switch training build does not instrument the SDK: instrumenting its platform layer, including wrapped
+# threadCreate, mutexes and the fault handler, hangs at startup on the console, probably from the thread-local problem
+# described below. Switch GCC stores profile files under object paths relative to the build folder; the prefix below
+# makes the training build and final build use the same names.
+set(BO2ZM_PGO "" CACHE STRING "Profile-guided optimization: generate, use or empty")
+set(BO2ZM_PGO_DIR "" CACHE PATH "BO2ZM_PGO=use: the folder with the training profile (Switch) or .profdata file (Mac)")
+if((REXGLUE_PLATFORM_SWITCH OR APPLE) AND TARGET bo2zm_recomp AND BO2ZM_PGO)
   file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" _bo2zm_pgo_prefix)
-  # The app's own hot native code takes the same profile: the renderer (its ring and recorder threads use about 16 ms
-  # of CPU per frame on the console), the native game routines, the sound mixer's native stages, skinning, culling and
-  # the page-write stamps. Not the platform layer (bo2zm_switch*, the PC link, the benchmark that writes the
-  # profile), the job system's waits, or anything that runs before the C runtime is up.
+  # The app's own hot native code takes the same profile: the renderer, native game routines, native sound stages,
+  # skinning, culling and page-write stamps. Not the platform layer (bo2zm_switch*, the PC link, the benchmark that
+  # writes the profile), job-system waits, or anything that runs before the C runtime is up.
   set(_bo2zm_pgo_native
       src/native/render/bo2zm_native_render.cpp src/native/render/bo2zm_native_targets.cpp
       src/native/render/bo2zm_native_draws.cpp src/native/render/bo2zm_native_deferred.cpp
@@ -207,6 +206,14 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
       src/bo2zm_native_lzx.cpp src/bo2zm_page_writes.cpp src/bo2zm_volume_writes.cpp src/bo2zm_d3d_marker.cpp
       src/bo2zm_d3d_native.cpp src/bo2zm_crt.cpp)
   if(BO2ZM_PGO STREQUAL "generate")
+    if(APPLE)
+      # Apple Clang uses LLVM instrumentation profiles. LLVM_PROFILE_FILE selects the raw profile destination at
+      # runtime; llvm-profdata merges those files for BO2ZM_PGO=use.
+      target_compile_options(bo2zm_recomp PRIVATE -fprofile-instr-generate)
+      set_property(SOURCE ${_bo2zm_pgo_native} APPEND PROPERTY COMPILE_OPTIONS -fprofile-instr-generate)
+      target_link_options(bo2zm PRIVATE -fprofile-instr-generate)
+      target_compile_definitions(bo2zm PRIVATE BO2ZM_PGO_GENERATE=1 BO2ZM_PGO_GENERATE_LLVM=1)
+    else()
     # -fno-profile-values: devkitA64's prebuilt libgcov reaches its thread-local variables (the indirect-call
     # profiler's) through tpidr_el0, which is 0 on Horizon's threads (libnx keeps its thread data elsewhere), so a
     # training build with value profiling faults at address 0xd68 in __gcov_indirect_call_profiler_v4 on the first
@@ -218,7 +225,16 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
     target_compile_definitions(bo2zm PRIVATE BO2ZM_PGO_GENERATE=1)
     target_link_libraries(bo2zm PRIVATE gcov)
     target_link_options(bo2zm PRIVATE "-Wl,--wrap=fopen")
+    endif()
   elseif(BO2ZM_PGO STREQUAL "use")
+    if(APPLE)
+      if(NOT EXISTS "${BO2ZM_PGO_DIR}")
+        message(FATAL_ERROR "BO2ZM_PGO=use requires BO2ZM_PGO_DIR to name a merged .profdata file")
+      endif()
+      target_compile_options(bo2zm_recomp PRIVATE "-fprofile-instr-use=${BO2ZM_PGO_DIR}" -Wno-profile-instr-unprofiled)
+      set_property(SOURCE ${_bo2zm_pgo_native} APPEND PROPERTY COMPILE_OPTIONS
+                   "-fprofile-instr-use=${BO2ZM_PGO_DIR}" -Wno-profile-instr-unprofiled)
+    else()
     target_compile_options(bo2zm_recomp PRIVATE "-fprofile-use=${BO2ZM_PGO_DIR}"
                            "-fprofile-prefix-path=${_bo2zm_pgo_prefix}" -fprofile-partial-training -fprofile-correction
                            -Wno-missing-profile -Wno-coverage-mismatch)
@@ -226,6 +242,7 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
     set_property(SOURCE ${_bo2zm_pgo_native} APPEND PROPERTY COMPILE_OPTIONS "-fprofile-use=${BO2ZM_PGO_DIR}"
                  "-fprofile-prefix-path=${_bo2zm_pgo_prefix}" -fprofile-partial-training -fprofile-correction
                  -Wno-missing-profile -Wno-coverage-mismatch)
+    endif()
   else()
     message(FATAL_ERROR "BO2ZM_PGO must be generate, use or empty")
   endif()
