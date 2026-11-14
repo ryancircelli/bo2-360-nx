@@ -229,6 +229,11 @@ u32 XamLoaderSetLaunchData_entry(mapped_void data, u32 size) {
   loader_data.launch_data_present = size ? true : false;
   loader_data.launch_data.resize(size);
   std::memcpy(loader_data.launch_data.data(), data, size);
+  {
+    std::string txt;
+    for (uint32_t i = 0; i < size && i < 1000; ++i) { char ch = static_cast<char>(loader_data.launch_data[i]); txt += (ch >= 32 && ch < 127) ? ch : '.'; }
+    REXKRNL_ERROR("XamLoaderSetLaunchData size={} data='{}'", size, txt);
+  }
   return 0;
 }
 
@@ -284,11 +289,25 @@ void XamLoaderLaunchTitle_entry(mapped_string raw_name_ptr, u32 flags) {
     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");
   }
 
+  REXKRNL_ERROR("XamLoaderLaunchTitle -> TerminateTitle");
+  {
+    auto* tstate = rex::system::XThread::GetCurrentThread() ? rex::system::XThread::GetCurrentThread()->thread_state() : nullptr;
+    if (tstate) {
+      PPCContext& c = *tstate->context();
+      std::string sc;
+      for (uint32_t off = 0; off < 1024; off += 4) {
+        uint32_t v = *REX_KERNEL_MEMORY()->TranslateVirtual<rex::be<uint32_t>*>(c.r1.u32 + off);
+        if (v >= 0x82000000u && v < 0x82800000u) sc += fmt::format(" +{:X}:{:08X}", off, v);
+      }
+      REXKRNL_ERROR("XamLoaderLaunchTitle guest lr={:08X} r1={:08X} flags={:08X} path={:08X} stack-code:{}", static_cast<uint32_t>(c.lr), c.r1.u32, flags, uint32_t(raw_name_ptr.guest_address()), sc);
+    }
+  }
   // This function does not return.
   REX_KERNEL_STATE()->TerminateTitle();
 }
 
 void XamLoaderTerminateTitle_entry() {
+  REXKRNL_ERROR("XamLoaderTerminateTitle called by guest thread id={} name='{}'", rex::system::XThread::GetCurrentThread() ? rex::system::XThread::GetCurrentThread()->thread_id() : 0u, rex::system::XThread::GetCurrentThread() ? rex::system::XThread::GetCurrentThread()->name() : std::string("?"));
   // This function does not return.
   REX_KERNEL_STATE()->TerminateTitle();
 }

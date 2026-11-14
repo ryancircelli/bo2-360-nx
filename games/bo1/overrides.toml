@@ -1,0 +1,41 @@
+# Base default.xex: title 41560855, media 0AEB2159, version 0.0.0.3.
+# Addresses verified against cod_bo1-nx's config for this exact pressing and
+# bo1-recomp's 0.0.0.8 config shifted by the corresponding function deltas.
+setjmp_address = 0x825FB3A0
+longjmp_address = 0x825FB7A0
+
+# Keep register-local optimizations off for the first recompile. In particular,
+# setjmp reads the condition registers to save them, which fails the strict
+# read-before-write audit if cr_as_local is enabled.
+skip_msr = true
+
+[functions]
+0x8239C0D0 = { size = 8 }
+0x821B2EC0 = {}
+0x82211198 = {}
+0x82248450 = {}
+0x8239BE80 = { size = 4 }
+0x824F7D00 = { size = 8 }
+0x824FBD68 = { size = 8 }
+0x824FBD70 = { size = 8 }
+0x824FBD78 = { size = 8 }
+0x824FBD88 = { size = 8 }
+0x824FBD90 = { size = 8 }
+0x82501D18 = { size = 8 }
+0x82501D20 = { size = 8 }
+0x82501D30 = { size = 8 }
+0x82501D38 = { size = 8 }
+0x82501D40 = { size = 8 }
+0x82501D48 = { size = 8 }
+0x82501D50 = { size = 8 }
+0x82501D58 = { size = 8 }
+0x82501FF0 = { size = 8 }
+0x82502000 = { size = 8 }
+0x82502008 = { size = 8 }
+0x82502010 = { size = 8 }
+0x825070F8 = { size = 24 }
+0x82507EB0 = { size = 8 }
+0x82508B30 = { size = 8 }
+0x8250B8A0 = {}
+0x8250BB58 = { size = 8 }
+0x8251A7C8 = { size = 8 }

@@ -382,6 +382,11 @@ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
       break;
 
     case TargetKind::Unknown:
+      if (fn.containsAddress(target)) {
+        println("\tif ({}{}.{}) goto loc_{:08X};", not_ ? "!" : "", cr(insn.operands[0]), cond,
+                target);
+        break;
+      }
       REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
       println("\t// ERROR: conditional branch to unknown address 0x{:08X}", target);
       println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
