@@ -144,6 +144,20 @@ target_link_libraries(rexgpu-xenos PRIVATE
     xxHash::xxhash
 )
 
+# GPU frame capture (REX_GPU_TRACE_* env vars) and offline replay
+# (rex_gpu_trace_replay export). See tools/gputest/replay/README.md.
+if(REXGLUE_BUILD_GPUTEST)
+    target_sources(rexgpu-xenos PRIVATE
+        trace/trace_writer.cpp
+        trace/frame_capture.cpp
+        trace/frame_replay.cpp
+        trace/replay_export.cpp
+        trace/texture_check.cpp)
+    target_compile_definitions(rexgpu-xenos PRIVATE REX_GPU_TRACE=1)
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(rexgpu-xenos PRIVATE ZLIB::ZLIB)
+endif()
+
 if(REXGLUE_USE_VULKAN)
     target_link_libraries(rexgpu-xenos PRIVATE
         Vulkan::Headers

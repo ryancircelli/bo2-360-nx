@@ -63,6 +63,9 @@ void TexTrace(const char* name) {
 #include "rex/profiling.h"
 #include "rex/graphics/metal/metal_command_processor.h"
 #include "rex/graphics/metal/metal_shared_memory.h"
+#if REX_GPU_TRACE
+#include "rex/graphics/trace/texture_probe.h"
+#endif
 #include "rex/graphics/shaders/bytecode/metal/texture_load_128bpb_cs.h"
 #include "rex/graphics/shaders/bytecode/metal/texture_load_8bpb_scaled_tex_cs.h"
 #include "rex/graphics/shaders/bytecode/metal/texture_load_16bpb_scaled_tex_cs.h"
@@ -5037,15 +5040,14 @@ static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
   }
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;
+  parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
 
   if (aniso_filter != xenos::AnisoFilter::kDisabled) {
     parameters.mag_linear = 1;
     parameters.min_linear = 1;
-    parameters.mip_linear = 1;
   } else {
     parameters.mag_linear = mag_filter == xenos::TextureFilter::kLinear;
     parameters.min_linear = min_filter == xenos::TextureFilter::kLinear;
-    parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
   }
 
   parameters.mip_base_map = mip_base_map ? 1 : 0;
@@ -5125,7 +5127,8 @@ MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(
   if (parameters.aniso_filter != xenos::AnisoFilter::kDisabled) {
     desc->setMinFilter(MTL::SamplerMinMagFilterLinear);
     desc->setMagFilter(MTL::SamplerMinMagFilterLinear);
-    desc->setMipFilter(MTL::SamplerMipFilterLinear);
+    desc->setMipFilter(parameters.mip_linear ? MTL::SamplerMipFilterLinear
+                                             : MTL::SamplerMipFilterNearest);
     desc->setMaxAnisotropy(1u << (uint32_t(parameters.aniso_filter) - 1));
   } else {
     desc->setMinFilter(parameters.min_linear ? MTL::SamplerMinMagFilterLinear
@@ -5929,6 +5932,9 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     if (load_base) metal_texture->resident_load_pending_[0] = true;
     if (load_mips) metal_texture->resident_load_pending_[1] = true;
   }
+#if REX_GPU_TRACE
+  trace::NotifyTextureLoadWindow(texture, load_base, load_mips, 0);
+#endif
   if (command_processor_) {
     const TextureKey& texture_key = texture.key();
     const uint64_t upload_bytes =
