@@ -71,6 +71,7 @@ bool LoadGameManifest(std::string_view toml_text, GameInfo& info, std::string* e
     if (!ReadString(*game, "name", next.short_name, error) ||
         !ReadString(*game, "executable", next.executable, error) ||
         !ReadString(*game, "data_root", next.data_root, error) ||
+        !ReadString(*game, "local_data_root", next.local_data_root, error) ||
         !ReadString(*game, "shader_pack", next.shader_pack, error) ||
         !ReadString(*game, "pipeline_list", next.pipeline_list, error)) {
       return false;

@@ -297,3 +297,41 @@ function(rexglue_embed_metadata target_name)
     target_sources(${target_name} PRIVATE "${_rexglue_output}")
     message(STATUS "Embedded ${_rexglue_count} metadata asset(s) into ${target_name}")
 endfunction()
+
+#==========================================================
+# rexglue_game_manifest(<target> <game.toml>)
+#
+# Compiles a title manifest (games/<name>/game.toml, read by rex::LoadGameManifest)
+# into the target as text: generates rex_game_manifest.h, which defines
+# rex::kGameManifest, on the target's include path. Reconfigures when the file
+# changes.
+#==========================================================
+function(rexglue_game_manifest target_name manifest_path)
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "rexglue_game_manifest: no target named ${target_name}")
+    endif()
+    get_filename_component(_rexglue_manifest "${manifest_path}" ABSOLUTE)
+    if(NOT EXISTS "${_rexglue_manifest}")
+        message(FATAL_ERROR "rexglue_game_manifest: ${_rexglue_manifest} does not exist")
+    endif()
+    file(READ "${_rexglue_manifest}" _rexglue_manifest_text)
+    if(_rexglue_manifest_text MATCHES "\\)rex_game_manifest\"")
+        message(FATAL_ERROR "rexglue_game_manifest: ${_rexglue_manifest} contains the raw-string delimiter")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_rexglue_manifest}")
+    set(_rexglue_dir "${CMAKE_CURRENT_BINARY_DIR}/${target_name}_game_manifest")
+    set(_rexglue_header "${_rexglue_dir}/rex_game_manifest.h")
+    string(CONCAT _rexglue_content
+        "// Generated from ${_rexglue_manifest} by rexglue_game_manifest(). Do not edit.\n"
+        "#pragma once\n\nnamespace rex {\n"
+        "inline constexpr const char kGameManifest[] = R\"rex_game_manifest(${_rexglue_manifest_text})rex_game_manifest\";\n"
+        "}  // namespace rex\n")
+    set(_rexglue_old "")
+    if(EXISTS "${_rexglue_header}")
+        file(READ "${_rexglue_header}" _rexglue_old)
+    endif()
+    if(NOT _rexglue_old STREQUAL _rexglue_content)
+        file(WRITE "${_rexglue_header}" "${_rexglue_content}")
+    endif()
+    target_include_directories(${target_name} PRIVATE "${_rexglue_dir}")
+endfunction()

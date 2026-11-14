@@ -655,7 +655,6 @@ u32 NtReadFile_entry(u32 file_handle, u32 event_handle, mapped_void apc_routine_
                           &bytes_read, apc_context.guest_address());
       const uint64_t io_end_us = NowUs();
       AnnotateRead(io_end_us - io_start_us, bytes_read, file->path(), offset_bytes);
-      { static std::atomic<int> n{0}; if (n.fetch_add(1) < 4000) REXKRNL_INFO("[readtrace] '{}' off={} len={} got={} st={:08X} tid={}", file->path(), offset_bytes, uint32_t(buffer_length), bytes_read, uint32_t(result), XThread::GetCurrentThread() ? XThread::GetCurrentThread()->thread_id() : 0); }
       MaybeSummaryIo(io_end_us);
       if (io_status_block) {
         io_status_block->status = result;
