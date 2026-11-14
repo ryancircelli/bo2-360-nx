@@ -9,3 +9,4 @@ local_data_root = "~/Games/Xbox360/fh1/disc"  # read-only extracted disc; --game
 
 [defaults]
 gpu_plugin = "metal"                     # the native Metal renderer; --gpu_plugin or a config file still wins
+video_mode_refresh_rate = 120           # game presents every 2nd vblank: 60 Hz caps it at 30 fps, 120 Hz gives ~58 fps at correct sim speed (0->30 mph timing, /tmp/bo2/fh1-speed)
