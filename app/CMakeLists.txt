@@ -63,6 +63,8 @@ set(BO2ZM_SOURCES
     # The entity loops: a read-only scan pass before sub_822FD360, the plane test sub_822FE3B8 natively.
     src/bo2zm_native_entities.cpp
     src/bo2zm_stream_alloc.cpp
+    # The streaming pool's "move generation completed" test, without its race against the render side.
+    src/bo2zm_move_fence.cpp
     src/bo2zm_jobs.cpp
     # BO2's memcpy/memmove/memset as native code ([rexcrt] in overrides.toml)
     src/bo2zm_crt.cpp

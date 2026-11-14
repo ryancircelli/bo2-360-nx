@@ -11,6 +11,7 @@
 #include "rex/graphics/metal/metal_shared_memory.h"
 
 #include <algorithm>
+#include <string>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -46,6 +47,20 @@ uint64_t PreserveNowUs() {
   return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count());
+}
+// [memexport-hole] REX_METAL_MEMEXPORT_PENDING_KEEP=1: an upload leaves out
+// every export range whose readback is still pending and whose guest bytes
+// are unchanged since the export draw (guest RAM is older than the buffer).
+bool MemexportPendingKeepEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_PENDING_KEEP");
+    const bool on = v && v[0] == '1';
+    REXLOG_INFO("[memexport-hole] pending-keep {} "
+                "(REX_METAL_MEMEXPORT_PENDING_KEEP={})",
+                on ? "on" : "off", v ? v : "unset");
+    return on;
+  }();
+  return enabled;
 }
 bool PreserveTraceEnabled() {
   static const bool enabled = [] {
@@ -202,9 +217,89 @@ bool MetalSharedMemory::MemexportReadbackEnabled() {
   return enabled;
 }
 
+bool MetalSharedMemory::MemexportMergeEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_MERGE");
+    const bool on = !(v && v[0] == '0');
+    REXLOG_INFO("[memexport-merge] {} (REX_METAL_MEMEXPORT_MERGE={})",
+                on ? "on: a readback copies back the words its export "
+                     "changed, even when the CPU wrote elsewhere in the range"
+                   : "off (count only)",
+                v ? v : "unset");
+    return on;
+  }();
+  return enabled;
+}
+
+bool MetalSharedMemory::MemexportGuardEnabled() {
+  static const bool enabled = [] {
+    const char* v = MetalDebugEnv("MEMEXPORT_GUARD");
+    const bool on = !(v && v[0] == '0');
+    REXLOG_INFO(
+        "[memexport-guard] {} (MEMEXPORT_GUARD={})",
+        on ? "on: pages the CPU wrote around a memexport draw stay invalid "
+             "and are not read back"
+           : "off",
+        v ? v : "unset");
+    return on;
+  }();
+  return enabled;
+}
+
+void MetalSharedMemory::MemexportRangeWritten(uint32_t start, uint32_t length) {
+  if (!length || start >= kBufferSize) {
+    return;
+  }
+  length = std::min(length, kBufferSize - start);
+  const uint32_t page = uint32_t(1) << page_size_log2();
+  const uint32_t end = start + length;
+  ++guard_draw_ranges_;
+  // The range was requested (uploaded) for this draw, so an invalid page here
+  // was written by the CPU since then.
+  uint32_t invalid_pages = 0;
+  for (uint32_t p = start & ~(page - 1); p < end; p += page) {
+    if (!IsRangeValid(p, page)) {
+      ++invalid_pages;
+    }
+  }
+  if (!invalid_pages) {
+    RangeWrittenByGpu(start, length);
+    return;
+  }
+  ++guard_draw_ranges_hit_;
+  guard_draw_pages_invalid_ += invalid_pages;
+  if (guard_draw_ranges_hit_ <= 16) {
+    REXLOG_WARN(
+        "[memexport-guard] draw #{}: range {:08X}+{} has {} of {} pages "
+        "invalidated by a CPU write since its upload",
+        guard_draw_ranges_hit_, start, length, invalid_pages,
+        ((end - 1) >> page_size_log2()) - (start >> page_size_log2()) + 1);
+  }
+  if (!MemexportGuardEnabled()) {
+    RangeWrittenByGpu(start, length);
+    return;
+  }
+  uint32_t run = UINT32_MAX;
+  for (uint32_t p = start & ~(page - 1);; p += page) {
+    const bool valid = p < end && IsRangeValid(p, page);
+    if (valid) {
+      if (run == UINT32_MAX) {
+        run = std::max(p, start);
+      }
+    } else if (run != UINT32_MAX) {
+      RangeWrittenByGpu(run, std::min(p, end) - run);
+      run = UINT32_MAX;
+    }
+    if (p >= end) {
+      break;
+    }
+  }
+}
+
 namespace {
 constexpr uint32_t kReadbackMaxRangeBytes = 8u << 20;
 constexpr size_t kReadbackMaxPending = 4096;
+constexpr uint32_t kReadbackSnapshotMaxBytes = 2u << 20;
 }  // namespace
 
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
@@ -236,11 +331,692 @@ void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
   }
   pending_readbacks_.push_back({start, end, submission,
                                 XXH3_64bits(guest + start, end - start),
-                                frame_log::CurrentFrame()});
+                                frame_log::CurrentFrame(), {}});
+  if (end - start <= kReadbackSnapshotMaxBytes) {
+    pending_readbacks_.back().before.assign(guest + start, guest + end);
+  }
+  pending_readbacks_.back().export_us = PreserveNowUs();
+  pending_readbacks_.back().seq = ++readback_seq_;
+}
+
+void MetalSharedMemory::NoteMemexportShadow(MemexportShadow&& shadow,
+                                            uint64_t submission,
+                                            uint32_t own_ranges) {
+  if (shadow.end <= shadow.start || shadow.end > kBufferSize) {
+    ++shadow_dropped_;
+    return;
+  }
+  shadow.submission = submission;
+  shadow.seq_last = readback_seq_;
+  shadow.seq_first = readback_seq_ >= own_ranges
+                         ? readback_seq_ - own_ranges + 1
+                         : 1;
+  for (const PendingReadback& r : pending_readbacks_) {
+    if (r.seq >= shadow.seq_first) {
+      continue;
+    }
+    if (r.start < shadow.src_end && shadow.src_start < r.end) {
+      shadow.src_pending = true;
+      break;
+    }
+  }
+  if (shadow.src_end > shadow.src_start && shadow.src_end <= kBufferSize) {
+    shadow.src_invalid =
+        !IsRangeValid(shadow.src_start, shadow.src_end - shadow.src_start);
+  }
+  if (memexport_shadows_.size() >= 4096) {
+    memexport_shadows_.pop_front();
+    ++shadow_dropped_;
+  }
+  shadow_dup_copies_ += !shadow.losers.empty();
+  shadow_dup_rewritten_words_ += shadow.rewritten_words;
+  shadow_dup_contested_words_ += shadow.losers.size();
+  memexport_shadows_.push_back(std::move(shadow));
+}
+
+void MetalSharedMemory::NoteMemexportSourceState(MemexportShadow& shadow) {
+  if (shadow.src_end <= shadow.src_start || shadow.src_end > kBufferSize ||
+      page_last_gpu_write_submission_.empty()) {
+    return;
+  }
+  const uint64_t completed = command_processor_.GetCompletedSubmission();
+  const uint32_t psl = page_size_log2();
+  for (uint32_t page = shadow.src_start >> psl;
+       page <= (shadow.src_end - 1) >> psl; ++page) {
+    ++shadow.src_pages;
+    shadow.src_pages_invalid += !IsRangeValid(page << psl, 1u << psl);
+    std::lock_guard<std::mutex> lock(standalone_gpu_access_mutex_);
+    shadow.src_pages_gpu_write +=
+        page_last_gpu_write_submission_[page] > completed;
+    shadow.src_pages_staged +=
+        page_last_staged_copy_submission_[page] > completed;
+    shadow.src_pages_precommit +=
+        page_last_precommit_copy_submission_[page] > completed;
+    shadow.src_pages_standalone +=
+        page_standalone_gpu_access_counts_[page] != 0;
+  }
+  for (const PendingReadback& r : pending_readbacks_) {
+    shadow.src_readbacks_pending +=
+        r.start < shadow.src_end && shadow.src_start < r.end;
+  }
+}
+
+void MetalSharedMemory::NoteMemexportDestinationState(
+    MemexportShadow& shadow) {
+  if (shadow.end <= shadow.start || shadow.end > kBufferSize || !buffer_ ||
+      page_last_gpu_write_submission_.empty()) {
+    return;
+  }
+  const uint8_t* gpu = static_cast<const uint8_t*>(buffer_->contents());
+  if (gpu && shadow.end - shadow.start <= (4u << 20)) {
+    shadow.dst_buf_before.assign(gpu + shadow.start, gpu + shadow.end);
+  }
+  const uint64_t completed = command_processor_.GetCompletedSubmission();
+  const uint32_t psl = page_size_log2();
+  for (uint32_t page = shadow.start >> psl; page <= (shadow.end - 1) >> psl;
+       ++page) {
+    ++shadow.dst_pages;
+    const bool invalid = !IsRangeValid(page << psl, 1u << psl);
+    shadow.dst_page_invalid.push_back(invalid);
+    shadow.dst_pages_invalid += invalid;
+    std::lock_guard<std::mutex> lock(standalone_gpu_access_mutex_);
+    shadow.dst_pages_gpu_write +=
+        page_last_gpu_write_submission_[page] > completed;
+    shadow.dst_pages_staged +=
+        page_last_staged_copy_submission_[page] > completed;
+    shadow.dst_pages_precommit +=
+        page_last_precommit_copy_submission_[page] > completed;
+  }
+  for (const PendingReadback& r : pending_readbacks_) {
+    shadow.dst_readbacks_pending += r.start < shadow.end && shadow.start < r.end;
+  }
+}
+
+uint32_t MetalSharedMemory::CheckMemexportSourceDivergence(
+    uint32_t start, uint32_t length, uint32_t destination) {
+  if (!length || !buffer_ || uint64_t(start) + length > kBufferSize ||
+      page_last_gpu_write_submission_.empty()) {
+    return 0;
+  }
+  const uint8_t* guest =
+      static_cast<const uint8_t*>(memory().TranslatePhysical(0));
+  const uint8_t* gpu = static_cast<const uint8_t*>(buffer_->contents());
+  if (!guest || !gpu) {
+    return 0;
+  }
+  ++src_div_checks_;
+  const uint64_t completed = command_processor_.GetCompletedSubmission();
+  const uint32_t psl = page_size_log2();
+  const uint32_t end = start + length;
+  uint32_t total = 0;
+  for (uint32_t page = start >> psl; page <= (end - 1) >> psl; ++page) {
+    const uint32_t p0 = std::max(start, page << psl) & ~3u;
+    const uint32_t p1 = std::min(end, (page + 1) << psl) & ~3u;
+    if (p1 <= p0 || !IsRangeValid(p0, p1 - p0)) {
+      continue;
+    }
+    {
+      std::lock_guard<std::mutex> lock(standalone_gpu_access_mutex_);
+      if (page_last_gpu_write_submission_[page] > completed ||
+          page_last_staged_copy_submission_[page] > completed ||
+          page_last_precommit_copy_submission_[page] > completed ||
+          page_standalone_gpu_access_counts_[page]) {
+        continue;
+      }
+    }
+    bool pending = false;
+    for (const PendingReadback& r : pending_readbacks_) {
+      if (r.start < p1 && p0 < r.end) {
+        pending = true;
+        break;
+      }
+    }
+    if (pending) {
+      continue;
+    }
+    src_div_settled_bytes_ += p1 - p0;
+    if (!std::memcmp(gpu + p0, guest + p0, p1 - p0)) {
+      continue;
+    }
+    // A guest write in progress makes the page invalid before it lands.
+    if (!IsRangeValid(p0, p1 - p0)) {
+      continue;
+    }
+    uint32_t words = 0, guest_zero = 0, buffer_zero = 0, first = 0;
+    for (uint32_t a = p0; a < p1; a += 4) {
+      uint32_t g, c;
+      std::memcpy(&g, gpu + a, 4);
+      std::memcpy(&c, guest + a, 4);
+      if (g != c) {
+        if (!words) {
+          first = a;
+        }
+        ++words;
+        guest_zero += c == 0;
+        buffer_zero += g == 0;
+      }
+    }
+    if (!words) {
+      continue;
+    }
+    total += words;
+    ++src_div_pages_;
+    src_div_words_ += words;
+    src_div_words_guest_zero_ += guest_zero;
+    src_div_words_buffer_zero_ += buffer_zero;
+    if (src_div_logged_ < 200) {
+      ++src_div_logged_;
+      uint32_t g, c;
+      std::memcpy(&g, gpu + first, 4);
+      std::memcpy(&c, guest + first, 4);
+      REXLOG_WARN(
+          "[shmem-diverge] #{}: page {:08X}-{:08X} (source {:08X}+{} of a "
+          "copy to {:08X}, completed submission {}) is valid and settled but "
+          "{} of {} words differ, first at {:08X}: buffer {:08X} guest "
+          "{:08X}; differing words that are zero in guest {}, in the buffer "
+          "{}",
+          src_div_logged_, p0, p1, start, length, destination, completed,
+          words, (p1 - p0) / 4, first, g, c, guest_zero, buffer_zero);
+    }
+  }
+  return total;
+}
+
+void MetalSharedMemory::CheckCompletedMemexportShadows(
+    uint64_t completed_submission) {
+  if (memexport_shadows_.empty() ||
+      memexport_shadows_.front().submission > completed_submission ||
+      !buffer_) {
+    return;
+  }
+  std::atomic_thread_fence(std::memory_order_acquire);
+  const uint8_t* guest =
+      static_cast<const uint8_t*>(memory().TranslatePhysical(0));
+  const uint8_t* gpu = static_cast<const uint8_t*>(buffer_->contents());
+  if (!guest || !gpu) {
+    return;
+  }
+  while (!memexport_shadows_.empty() &&
+         memexport_shadows_.front().submission <= completed_submission) {
+    const MemexportShadow& s = memexport_shadows_.front();
+    bool later_export = false;
+    bool hole = false;
+    for (const PendingReadback& r : pending_readbacks_) {
+      if (r.seq >= s.seq_first && r.seq <= s.seq_last) {
+        hole |= r.hole;
+        continue;
+      }
+      if (r.seq > s.seq_last && r.start < s.end && s.start < r.end) {
+        later_export = true;
+      }
+    }
+    const uint32_t len = s.end - s.start;
+    uint64_t ok = 0, later = 0, cpu_later = 0, missing = 0, wrong = 0;
+    uint32_t first_bad = UINT32_MAX;
+    bool first_bad_missing = false;
+    for (uint32_t i = 0; i + 4 <= len; i += 4) {
+      if (!s.written[i]) {
+        continue;
+      }
+      uint32_t g, e, b, c;
+      std::memcpy(&g, gpu + s.start + i, 4);
+      std::memcpy(&e, s.expected.data() + i, 4);
+      if (g == e) {
+        ++ok;
+        continue;
+      }
+      std::memcpy(&b, s.before.data() + i, 4);
+      std::memcpy(&c, guest + s.start + i, 4);
+      if (later_export) {
+        ++later;
+      } else if (g == b) {
+        ++missing;
+        if (first_bad == UINT32_MAX) {
+          first_bad = i;
+          first_bad_missing = true;
+        }
+      } else if (g == c) {
+        ++cpu_later;
+      } else {
+        ++wrong;
+        if (first_bad == UINT32_MAX) {
+          first_bad = i;
+        }
+      }
+    }
+    ++shadow_draws_;
+    shadow_words_ok_ += ok;
+    shadow_words_later_export_ += later;
+    shadow_words_cpu_later_ += cpu_later;
+    shadow_words_missing_ += missing;
+    shadow_words_wrong_ += wrong;
+    if (s.src_pending) {
+      ++shadow_draws_src_pending_;
+    }
+    if (s.src_invalid) {
+      ++shadow_draws_src_invalid_;
+    }
+    if (hole) {
+      ++shadow_draws_hole_;
+    }
+    if (s.src_pending || s.src_invalid) {
+      shadow_words_wrong_src_ += wrong + missing;
+    }
+    if (missing || wrong) {
+      ++shadow_draws_bad_;
+      if (!s.src_pending) {
+        ++shadow_draws_bad_nopend_;
+      }
+      if (s.src_div_words) {
+        ++shadow_draws_bad_div_;
+      }
+      if (!s.src_pending && !s.src_div_words) {
+        ++shadow_draws_bad_unexplained_;
+        shadow_words_bad_unexplained_ += missing + wrong;
+      }
+      if (shadow_logged_ < 200 && !s.src_pending) {
+        ++shadow_logged_;
+        uint32_t g = 0, e = 0, b = 0, c = 0;
+        std::memcpy(&g, gpu + s.start + first_bad, 4);
+        std::memcpy(&e, s.expected.data() + first_bad, 4);
+        std::memcpy(&b, s.before.data() + first_bad, 4);
+        std::memcpy(&c, guest + s.start + first_bad, 4);
+        REXLOG_WARN(
+            "[memexport-shadow] #{}: copy to {:08X}+{} from {:08X}+{} "
+            "(submission {}, completed {}): words ok {}, missing {}, wrong "
+            "{}, later CPU write {}; source pending {}, source not valid {}, "
+            "upload went over it {}; first bad word at {:08X} ({}): buffer "
+            "{:08X} expected {:08X} before the copy {:08X} guest now {:08X}; "
+            "settled source words where buffer and guest differed {}",
+            shadow_logged_, s.start, len, s.src_start,
+            s.src_end - s.src_start, s.submission, completed_submission, ok,
+            missing, wrong, cpu_later, s.src_pending, s.src_invalid, hole,
+            s.start + first_bad, first_bad_missing ? "missing" : "wrong", g,
+            e, b, c, s.src_div_words);
+      }
+      // What the source did between the model and the completed copy.
+      uint64_t src_guest_changed = 0, src_buffer_differs = 0;
+      uint64_t as_buffer = 0, as_guest = 0, as_neither = 0;
+      const bool have_src =
+          !s.src_snap.empty() && s.src_end <= kBufferSize &&
+          s.src_snap.size() == size_t(s.src_end - s.src_start);
+      if (have_src) {
+        for (size_t i = 0; i + 4 <= s.src_snap.size(); i += 4) {
+          src_guest_changed += std::memcmp(guest + s.src_start + i,
+                                           s.src_snap.data() + i, 4) != 0;
+          src_buffer_differs += std::memcmp(gpu + s.src_start + i,
+                                            s.src_snap.data() + i, 4) != 0;
+        }
+      }
+      if (s.rerun) {
+        std::vector<uint8_t> from_buffer = s.before;
+        std::vector<uint8_t> from_guest = s.before;
+        s.rerun(gpu, from_buffer);
+        s.rerun(guest, from_guest);
+        for (uint32_t i = 0; i + 4 <= len; i += 4) {
+          if (!s.written[i] ||
+              !std::memcmp(gpu + s.start + i, s.expected.data() + i, 4)) {
+            continue;
+          }
+          if (!std::memcmp(gpu + s.start + i, from_buffer.data() + i, 4)) {
+            ++as_buffer;
+          } else if (!std::memcmp(gpu + s.start + i, from_guest.data() + i,
+                                  4)) {
+            ++as_guest;
+          } else {
+            ++as_neither;
+          }
+        }
+      }
+      // Bad words that hold a value an earlier vertex of the same draw
+      // wrote there (the CPU model lets the last vertex win).
+      uint64_t bad_words = 0, as_loser = 0;
+      for (uint32_t i = 0; i + 4 <= len; i += 4) {
+        if (!s.written[i] ||
+            !std::memcmp(gpu + s.start + i, s.expected.data() + i, 4)) {
+          continue;
+        }
+        ++bad_words;
+        uint32_t g;
+        std::memcpy(&g, gpu + s.start + i, 4);
+        auto it = std::lower_bound(
+            s.losers.begin(), s.losers.end(),
+            std::pair<uint32_t, uint32_t>(i, 0));
+        for (; it != s.losers.end() && it->first == i; ++it) {
+          if (it->second == g) {
+            ++as_loser;
+            break;
+          }
+        }
+      }
+      shadow_bad_words_all_ += bad_words;
+      shadow_dup_bad_words_ += as_loser;
+      shadow_dup_bad_copies_ += as_loser != 0;
+      if (!s.src_pending) {
+        shadow_bad_words_not_pending_ += bad_words;
+        shadow_dup_bad_words_not_pending_ += as_loser;
+      }
+      if (shadow_dup_logged_ < 120 && (as_loser || !s.src_pending)) {
+        ++shadow_dup_logged_;
+        REXLOG_WARN(
+            "[memexport-shadow-dup] copy to {:08X}+{} (submission {}, "
+            "source pending {}): bad words {}, of them equal to a value "
+            "an earlier vertex of the same draw wrote there {}; words "
+            "the draw writes more than once {}, with different values "
+            "{}",
+            s.start, len, s.submission, s.src_pending, bad_words, as_loser,
+            s.rewritten_words, s.losers.size());
+      }
+      if (!s.src_pending &&
+          (as_neither || (!src_guest_changed && !src_buffer_differs))) {
+        // Destination side of a bad copy the source does not explain.
+        const uint32_t psl = page_size_log2();
+        const uint32_t page_mask = (1u << psl) - 1;
+        const bool have_dst = s.dst_buf_before.size() == size_t(len);
+        uint64_t d_bad = 0, as_buf_before = 0, on_invalid = 0;
+        uint32_t runs = 0, runs_page_start = 0, runs_page_end = 0;
+        std::string run_list;
+        uint32_t first_run = UINT32_MAX;
+        bool in_run = false;
+        uint32_t run_start = 0, run_last = 0;
+        auto close_run = [&]() {
+          ++runs;
+          const uint32_t run_end = run_last + 4;
+          runs_page_start += ((s.start + run_start) & page_mask) == 0;
+          runs_page_end += ((s.start + run_end) & page_mask) == 0;
+          if (runs <= 6) {
+            run_list += fmt::format(" {:X}+{}", run_start, run_end - run_start);
+          }
+          in_run = false;
+        };
+        for (uint32_t i = 0; i + 4 <= len; i += 4) {
+          if (!s.written[i]) {
+            continue;
+          }
+          if (!std::memcmp(gpu + s.start + i, s.expected.data() + i, 4)) {
+            if (in_run) {
+              close_run();
+            }
+            continue;
+          }
+          ++d_bad;
+          as_buf_before += have_dst && !std::memcmp(gpu + s.start + i,
+                                                    s.dst_buf_before.data() + i,
+                                                    4);
+          const uint32_t pi =
+              ((s.start + i) >> psl) - (s.start >> psl);
+          on_invalid += pi < s.dst_page_invalid.size() && s.dst_page_invalid[pi];
+          if (!in_run) {
+            in_run = true;
+            run_start = i;
+            if (first_run == UINT32_MAX) {
+              first_run = i;
+            }
+          }
+          run_last = i;
+        }
+        if (in_run) {
+          close_run();
+        }
+        // Where else do the first run's 16 bytes exist?
+        auto find16 = [&](const uint8_t* hay, size_t hay_len) -> int64_t {
+          if (first_run == UINT32_MAX || first_run + 16 > len ||
+              hay_len < 16) {
+            return -1;
+          }
+          const uint8_t* needle = gpu + s.start + first_run;
+          for (size_t o = 0; o + 16 <= hay_len; o += 4) {
+            if (!std::memcmp(hay + o, needle, 16)) {
+              return int64_t(o);
+            }
+          }
+          return -1;
+        };
+        const int64_t in_expected = find16(s.expected.data(), s.expected.size());
+        const int64_t in_source = find16(s.src_snap.data(), s.src_snap.size());
+        const int64_t in_before = find16(s.before.data(), s.before.size());
+        const int64_t in_buf_before =
+            find16(s.dst_buf_before.data(), s.dst_buf_before.size());
+        uint32_t now_staged = 0, now_precommit = 0, now_gpu_write = 0,
+                 now_invalid = 0;
+        for (uint32_t page = s.start >> psl; page <= (s.end - 1) >> psl;
+             ++page) {
+          now_staged += page_last_staged_copy_submission_[page] >= s.submission;
+          now_precommit +=
+              page_last_precommit_copy_submission_[page] >= s.submission;
+          now_gpu_write += page_last_gpu_write_submission_[page] > s.submission;
+          now_invalid += !IsRangeValid(page << psl, 1u << psl);
+        }
+        uint32_t w[4][4] = {};
+        if (first_run != UINT32_MAX && first_run + 16 <= len) {
+          std::memcpy(w[0], gpu + s.start + first_run, 16);
+          std::memcpy(w[1], s.expected.data() + first_run, 16);
+          std::memcpy(w[2], s.before.data() + first_run, 16);
+          if (have_dst) {
+            std::memcpy(w[3], s.dst_buf_before.data() + first_run, 16);
+          }
+        }
+        ++shadow_dst_copies_;
+        shadow_dst_bad_words_ += d_bad;
+        shadow_dst_as_buf_before_ += as_buf_before;
+        shadow_dst_on_invalid_page_ += on_invalid;
+        shadow_dst_runs_ += runs;
+        shadow_dst_runs_page_start_ += runs_page_start;
+        shadow_dst_found_expected_ += in_expected >= 0;
+        shadow_dst_found_source_ += in_expected < 0 && in_source >= 0;
+        shadow_dst_found_nowhere_ += in_expected < 0 && in_source < 0 &&
+                                     in_before < 0 && in_buf_before < 0;
+        if (shadow_dst_logged_ < 160) {
+          ++shadow_dst_logged_;
+          REXLOG_WARN(
+              "[memexport-shadow-dst] copy to {:08X}+{} from {:08X}+{} "
+              "(submission {}): bad words {} in {} runs ({} start on a page "
+              "boundary, {} end on one), first runs (offset+bytes){}; bad "
+              "words equal to the buffer before the draw {} (snapshot {}); "
+              "bad words on pages not valid at the draw {}; destination "
+              "pages at the draw {}: not valid {}, GPU write outstanding {}, "
+              "staged upload outstanding {}, precommit upload outstanding "
+              "{}, readbacks pending over it {}; pages now: staged upload "
+              "since the draw {}, precommit upload since the draw {}, later "
+              "GPU write {}, not valid {}; first run's 16 bytes at offset "
+              "{:X} found in the expected image at {:X}, the source at {:X}, "
+              "guest before at {:X}, buffer before at {:X} (FFFFFFFF = not "
+              "found); buffer {:08X} {:08X} {:08X} {:08X} expected {:08X} "
+              "{:08X} {:08X} {:08X} guest before {:08X} {:08X} {:08X} {:08X} "
+              "buffer before {:08X} {:08X} {:08X} {:08X}",
+              s.start, len, s.src_start, s.src_end - s.src_start,
+              s.submission, d_bad, runs, runs_page_start, runs_page_end,
+              run_list, as_buf_before, have_dst, on_invalid, s.dst_pages,
+              s.dst_pages_invalid, s.dst_pages_gpu_write, s.dst_pages_staged,
+              s.dst_pages_precommit, s.dst_readbacks_pending, now_staged,
+              now_precommit, now_gpu_write, now_invalid, first_run,
+              uint32_t(in_expected), uint32_t(in_source), uint32_t(in_before),
+              uint32_t(in_buf_before), w[0][0], w[0][1], w[0][2], w[0][3],
+              w[1][0], w[1][1], w[1][2], w[1][3], w[2][0], w[2][1], w[2][2],
+              w[2][3], w[3][0], w[3][1], w[3][2], w[3][3]);
+        }
+        if ((shadow_dst_copies_ & 7) == 1) {
+          REXLOG_INFO(
+              "[memexport-shadow-dst] summary at submission {}: unexplained "
+              "bad copies {} (bad words {}); bad words equal to the buffer "
+              "before the draw {}; on pages not valid at the draw {}; runs "
+              "{}, starting on a page boundary {}; first run found in the "
+              "expected image {}, else in the source {}, nowhere {}",
+              completed_submission, shadow_dst_copies_, shadow_dst_bad_words_,
+              shadow_dst_as_buf_before_, shadow_dst_on_invalid_page_,
+              shadow_dst_runs_, shadow_dst_runs_page_start_,
+              shadow_dst_found_expected_, shadow_dst_found_source_,
+              shadow_dst_found_nowhere_);
+        }
+      }
+      if (!s.src_pending) {
+        if (!have_src) {
+          ++shadow_bad_src_unknown_;
+        } else if (src_guest_changed) {
+          ++shadow_bad_src_guest_changed_;
+        } else if (src_buffer_differs) {
+          ++shadow_bad_src_buffer_only_;
+        } else {
+          ++shadow_bad_src_same_;
+        }
+        shadow_bad_words_as_buffer_ += as_buffer;
+        shadow_bad_words_as_guest_ += as_guest;
+        shadow_bad_words_as_neither_ += as_neither;
+        if (s.src_pages_invalid || s.src_pages_gpu_write ||
+            s.src_pages_staged || s.src_pages_precommit ||
+            s.src_pages_standalone) {
+          ++shadow_bad_src_not_settled_;
+        }
+        if (shadow_src_logged_ < 200) {
+          ++shadow_src_logged_;
+          REXLOG_WARN(
+              "[memexport-shadow-src] copy to {:08X}+{} from {:08X}+{} "
+              "(submission {}): source words {}, changed in guest memory "
+              "since the draw {}, differing in the buffer from the draw-"
+              "time guest bytes {}; bad words equal to the copy of the "
+              "buffer's source now {}, of the guest's source now {}, "
+              "neither {}; source pages at the draw {}: not valid {}, GPU "
+              "write outstanding {}, staged upload outstanding {}, "
+              "precommit upload outstanding {}, standalone access {}; "
+              "readbacks pending over the source {}",
+              s.start, len, s.src_start, s.src_end - s.src_start,
+              s.submission, s.src_snap.size() / 4, src_guest_changed,
+              src_buffer_differs, as_buffer, as_guest, as_neither,
+              s.src_pages, s.src_pages_invalid, s.src_pages_gpu_write,
+              s.src_pages_staged, s.src_pages_precommit,
+              s.src_pages_standalone, s.src_readbacks_pending);
+        }
+      }
+    }
+    // Every copy: which written words did an earlier checked copy also write,
+    // and does the buffer hold the earlier copy's value where this one is bad.
+    {
+      std::vector<const MemexportShadow*> prev;
+      for (auto it = shadow_history_.rbegin(); it != shadow_history_.rend();
+           ++it) {
+        if (it->start < s.end && s.start < it->end) {
+          prev.push_back(&*it);  // newest first
+        }
+      }
+      uint64_t shared = 0, shared_diff = 0, bad = 0, as_earlier = 0,
+               earlier_other = 0, no_earlier = 0;
+      const MemexportShadow* first_prev = nullptr;
+      if (!later_export) {
+        for (uint32_t i = 0; i + 4 <= len; i += 4) {
+          if (!s.written[i]) {
+            continue;
+          }
+          const uint32_t a = s.start + i;
+          const MemexportShadow* h = nullptr;
+          for (const MemexportShadow* p : prev) {
+            if (a >= p->start && a + 4 <= p->end && p->written[a - p->start]) {
+              h = p;
+              break;
+            }
+          }
+          const bool is_bad =
+              std::memcmp(gpu + a, s.expected.data() + i, 4) != 0;
+          if (h) {
+            ++shared;
+            shared_diff += std::memcmp(h->expected.data() + (a - h->start),
+                                       s.expected.data() + i, 4) != 0;
+            if (!first_prev) {
+              first_prev = h;
+            }
+          }
+          if (is_bad) {
+            ++bad;
+            if (!h) {
+              ++no_earlier;
+            } else if (!std::memcmp(gpu + a,
+                                    h->expected.data() + (a - h->start), 4)) {
+              ++as_earlier;
+            } else {
+              ++earlier_other;
+            }
+          }
+        }
+      }
+      if (shared) {
+        ++shadow_prev_copies_;
+        shadow_prev_copies_same_sub_ +=
+            first_prev && first_prev->submission == s.submission;
+        shadow_prev_copies_bad_ += bad != 0;
+        shadow_prev_shared_words_ += shared;
+        shadow_prev_shared_diff_words_ += shared_diff;
+      }
+      shadow_prev_bad_words_ += bad;
+      shadow_prev_bad_as_earlier_ += as_earlier;
+      shadow_prev_bad_earlier_other_ += earlier_other;
+      shadow_prev_bad_no_earlier_ += no_earlier;
+      if (!s.src_pending) {
+        shadow_prev_np_bad_words_ += bad;
+        shadow_prev_np_bad_as_earlier_ += as_earlier;
+        shadow_prev_np_bad_earlier_other_ += earlier_other;
+        shadow_prev_np_bad_no_earlier_ += no_earlier;
+      }
+      if (bad && !s.src_pending && shadow_prev_logged_ < 160) {
+        ++shadow_prev_logged_;
+        REXLOG_WARN(
+            "[memexport-shadow-prev] copy to {:08X}+{} from {:08X} "
+            "(submission {}, draw {}): bad words {}, of them holding the "
+            "value an earlier copy wrote to the same word {}, an earlier "
+            "copy wrote the word but another value {}, no earlier copy "
+            "wrote the word {}; words this copy shares with an earlier copy "
+            "{} (the two write different values to {}); newest earlier copy "
+            "to {:08X}+{} from {:08X} (submission {}, draw {}); earlier "
+            "copies overlapping the span {}",
+            s.start, len, s.src_start, s.submission, s.seq_first, bad,
+            as_earlier, earlier_other, no_earlier, shared, shared_diff,
+            first_prev ? first_prev->start : 0,
+            first_prev ? first_prev->end - first_prev->start : 0,
+            first_prev ? first_prev->src_start : 0,
+            first_prev ? first_prev->submission : 0,
+            first_prev ? first_prev->seq_first : 0, prev.size());
+      }
+      if (bad && (shadow_prev_bad_words_ - bad) / 20000 !=
+                     shadow_prev_bad_words_ / 20000) {
+        REXLOG_INFO(
+            "[memexport-shadow-prev] summary at submission {}: copies "
+            "sharing a written word with an earlier copy {} (earlier copy in "
+            "the same submission {}, with a bad word {}); shared words {}, "
+            "written with different values {}; bad words in all copies {}: "
+            "holding the earlier copy's value {}, earlier copy wrote another "
+            "value {}, no earlier copy wrote the word {}; bad words in "
+            "copies whose source was not pending {}: holding the earlier "
+            "copy's value {}, earlier other {}, no earlier {}; history {}",
+            completed_submission, shadow_prev_copies_,
+            shadow_prev_copies_same_sub_, shadow_prev_copies_bad_,
+            shadow_prev_shared_words_, shadow_prev_shared_diff_words_,
+            shadow_prev_bad_words_, shadow_prev_bad_as_earlier_,
+            shadow_prev_bad_earlier_other_, shadow_prev_bad_no_earlier_,
+            shadow_prev_np_bad_words_, shadow_prev_np_bad_as_earlier_,
+            shadow_prev_np_bad_earlier_other_, shadow_prev_np_bad_no_earlier_,
+            shadow_history_.size());
+      }
+    }
+    {
+      MemexportShadow keep = std::move(memexport_shadows_.front());
+      memexport_shadows_.pop_front();
+      keep.rerun = nullptr;
+      keep.before = {};
+      keep.src_snap = {};
+      keep.dst_buf_before = {};
+      keep.losers = {};
+      shadow_history_bytes_ += keep.expected.size();
+      shadow_history_.push_back(std::move(keep));
+      while (shadow_history_.size() > 400 ||
+             shadow_history_bytes_ > (192ull << 20)) {
+        shadow_history_bytes_ -= shadow_history_.front().expected.size();
+        shadow_history_.pop_front();
+      }
+    }
+  }
 }
 
 void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
     uint64_t completed_submission) {
+  CheckCompletedMemexportShadows(completed_submission);
   if (pending_readbacks_.empty() ||
       pending_readbacks_.front().submission > completed_submission || !buffer_) {
     return;
@@ -280,12 +1056,55 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
     if (superseded) {
       continue;
     }
+    if (e.hole) {
+      ++hole_readbacks_;
+      if (e.before.size() == len &&
+          std::memcmp(gpu + e.start, e.before.data(), len) == 0) {
+        ++hole_readbacks_wiped_;
+      }
+    }
     const uint64_t guest_hash_now = XXH3_64bits(guest + e.start, len);
-    if (guest_hash_now != e.guest_hash) {
-      // The CPU wrote into the export range after the export: its data wins
-      // (that write also invalidated the page, so it gets re-uploaded).
-      cpu_skip_bytes += len;
-      continue;
+    const bool cpu_changed = guest_hash_now != e.guest_hash;
+    bool merge = false;
+    if (cpu_changed) {
+      // The CPU wrote into the export range after the export draw.
+      ++merge_ranges_;
+      uint32_t words_cpu = 0, words_gpu = 0, words_both = 0;
+      const bool snapshot = e.before.size() == len;
+      if (snapshot) {
+        const uint8_t* before = e.before.data();
+        for (uint32_t o = 0; o + 4 <= len; o += 4) {
+          const bool c = std::memcmp(guest + e.start + o, before + o, 4) != 0;
+          const bool g = std::memcmp(gpu + e.start + o, before + o, 4) != 0;
+          words_cpu += c && !g;
+          words_gpu += g && !c;
+          words_both += c && g;
+        }
+        merge_words_cpu_ += words_cpu;
+        merge_words_gpu_ += words_gpu;
+        merge_words_both_ += words_both;
+      }
+      merge = snapshot && MemexportMergeEnabled();
+      if (!merge) {
+        ++merge_ranges_lost_;
+      }
+      if (merge_logged_ < 32) {
+        ++merge_logged_;
+        REXLOG_WARN(
+            "[memexport-merge] #{}: range {:08X}+{} export_sub={} completed={}"
+            ": guest bytes changed since the export draw; words changed by "
+            "CPU only {}, by the export only {}, by both {} ({})",
+            merge_logged_, e.start, len, e.submission, completed_submission,
+            words_cpu, words_gpu, words_both,
+            merge ? "export words copied back"
+                  : "whole export dropped");
+      }
+      if (!merge) {
+        // Old behaviour: the CPU data wins for the whole range (that write
+        // also invalidated the page, so it gets re-uploaded).
+        cpu_skip_bytes += len;
+        continue;
+      }
     }
     // Hashes taken by later exports / fix A that still describe the guest
     // bytes must follow this (non-CPU) write, or it would look like a CPU
@@ -308,7 +1127,95 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
                              : XXH3_64bits(guest + p.start, p.end - p.start);
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
-    std::memcpy(guest + e.start, gpu + e.start, len);
+    {
+      // Diagnostic: where the readback changes guest memory, per 16 MiB region.
+      uint32_t changed_chunks = 0;
+      for (uint32_t p = e.start; p < e.end;) {
+        const uint32_t chunk_end = std::min(e.end, (p | 0xFFFu) + 1);
+        if (std::memcmp(guest + p, gpu + p, chunk_end - p)) ++changed_chunks;
+        p = chunk_end;
+      }
+      ReadbackRegionStats& rs = readback_regions_[e.start >> 24];
+      ++rs.ranges;
+      rs.bytes += len;
+      rs.changed_chunks += changed_chunks;
+      if ((e.start >> 24) != 0x06 && readback_region_logged_ < 48) {
+        ++readback_region_logged_;
+        REXLOG_WARN(
+            "[memexport-readback] region #{}: range {:08X}+{} export_sub={} "
+            "completed={} export_frame={} frame={}: {} of {} 4K chunks differ "
+            "from guest memory",
+            readback_region_logged_, e.start, len, e.submission,
+            completed_submission, e.export_frame, frame_log::CurrentFrame(),
+            changed_chunks, (len + 0xFFF) >> 12);
+      }
+    }
+    // Later exports' snapshots of these bytes must follow this write too.
+    std::vector<size_t> snap_later;
+    for (size_t j = i + 1; j < pending_readbacks_.size(); ++j) {
+      const PendingReadback& l = pending_readbacks_[j];
+      if (l.end <= e.start || l.start >= e.end || l.before.empty()) continue;
+      snap_later.push_back(j);
+    }
+    if (merge) {
+      const uint8_t* before = e.before.data();
+      for (uint32_t o = 0; o + 4 <= len; o += 4) {
+        const uint32_t p = e.start + o;
+        if (std::memcmp(gpu + p, before + o, 4) == 0 ||
+            std::memcmp(guest + p, before + o, 4) != 0) {
+          continue;
+        }
+        std::memcpy(guest + p, gpu + p, 4);
+        ++merge_words_applied_;
+        for (size_t j : snap_later) {
+          PendingReadback& l = pending_readbacks_[j];
+          if (p >= l.start && p + 4 <= l.end) {
+            std::memcpy(l.before.data() + (p - l.start), gpu + p, 4);
+          }
+        }
+      }
+    } else {
+      // A page that is invalid now was written by the CPU after the export
+      // (possibly with the same bytes the hash already saw, when a file read
+      // reports its pages only after writing them): the guest data wins.
+      const uint32_t page = uint32_t(1) << page_size_log2();
+      const bool guard = MemexportGuardEnabled();
+      uint32_t invalid_pages = 0, stale_pages = 0;
+      for (uint32_t p = e.start; p < e.end;) {
+        const uint32_t page_end = std::min(e.end, (p | (page - 1)) + 1);
+        const uint32_t n = page_end - p;
+        if (IsRangeValid(p & ~(page - 1), page)) {
+          std::memcpy(guest + p, gpu + p, n);
+        } else {
+          ++invalid_pages;
+          if (std::memcmp(guest + p, gpu + p, n)) {
+            ++stale_pages;
+          }
+          if (!guard) {
+            std::memcpy(guest + p, gpu + p, n);
+          }
+        }
+        p = page_end;
+      }
+      for (size_t j : snap_later) {
+        PendingReadback& l = pending_readbacks_[j];
+        const uint32_t os = std::max(l.start, e.start);
+        const uint32_t oe = std::min(l.end, e.end);
+        std::memcpy(l.before.data() + (os - l.start), guest + os, oe - os);
+      }
+      if (invalid_pages) {
+        ++guard_readback_ranges_hit_;
+        guard_readback_pages_invalid_ += invalid_pages;
+        guard_readback_pages_stale_ += stale_pages;
+        if (stale_pages && guard_readback_ranges_hit_ <= 16) {
+          REXLOG_WARN(
+              "[memexport-guard] readback #{}: range {:08X}+{} has {} pages "
+              "invalid, {} of them differ from guest memory ({})",
+              guard_readback_ranges_hit_, e.start, len, invalid_pages,
+              stale_pages, guard ? "left alone" : "overwritten");
+        }
+      }
+    }
     const uint64_t new_hash = XXH3_64bits(guest + e.start, len);
     for (size_t j : rebase_pending) {
       PendingReadback& l = pending_readbacks_[j];
@@ -336,6 +1243,92 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
   }
   pending_readbacks_.erase(pending_readbacks_.begin(),
                            pending_readbacks_.begin() + done);
+  if (completed_submission / 600 != guard_last_summary_) {
+    guard_last_summary_ = completed_submission / 600;
+    std::string regions;
+    for (const auto& [region, rs] : readback_regions_) {
+      regions += fmt::format(" {:02X}:{}r/{}b/{}c", region, rs.ranges, rs.bytes,
+                             rs.changed_chunks);
+    }
+    REXLOG_INFO("[memexport-readback] regions at submission {}:{}",
+                completed_submission, regions);
+    REXLOG_INFO(
+        "[memexport-guard] summary at submission {}: draw ranges {}, with "
+        "CPU-written pages {} ({} pages); readback ranges with invalid pages "
+        "{} ({} pages, {} differing from guest memory)",
+        completed_submission, guard_draw_ranges_, guard_draw_ranges_hit_,
+        guard_draw_pages_invalid_, guard_readback_ranges_hit_,
+        guard_readback_pages_invalid_, guard_readback_pages_stale_);
+    REXLOG_INFO(
+        "[memexport-merge] summary at submission {}: readbacks whose guest "
+        "bytes changed {} (dropped whole {}); words changed by CPU only {}, "
+        "by the export only {}, by both {}; export words copied back {}; "
+        "re-uploads over a changed export range {} (readback still pending "
+        "{}, export words lost {})",
+        completed_submission, merge_ranges_, merge_ranges_lost_,
+        merge_words_cpu_, merge_words_gpu_, merge_words_both_,
+        merge_words_applied_, preserve_dropped_, preserve_dropped_pending_,
+        preserve_dropped_gpu_words_);
+    REXLOG_INFO(
+        "[memexport-hole] summary at submission {}: uploads over a pending "
+        "export with no protection {} ({} bytes; guest unchanged since the "
+        "export {}, export older than the preserve lifetime {}); bytes kept "
+        "out of the upload {}; readbacks landing after one {} (buffer back "
+        "to pre-export bytes {})",
+        completed_submission, hole_events_, hole_bytes_,
+        hole_events_guest_same_, hole_events_expired_, hole_kept_bytes_,
+        hole_readbacks_, hole_readbacks_wiped_);
+    if (shadow_draws_ || shadow_dropped_) {
+      REXLOG_INFO(
+          "[memexport-shadow] summary at submission {}: copies checked {} "
+          "(with a missing or wrong word {}); words ok {}, missing {}, wrong "
+          "{} (missing or wrong with the source pending or not valid {}), "
+          "later CPU write {}, under a later export {}; copies whose source "
+          "was pending {}, not valid {}, with an upload over them {}; not "
+          "checked {}",
+          completed_submission, shadow_draws_, shadow_draws_bad_,
+          shadow_words_ok_, shadow_words_missing_, shadow_words_wrong_,
+          shadow_words_wrong_src_, shadow_words_cpu_later_,
+          shadow_words_later_export_, shadow_draws_src_pending_,
+          shadow_draws_src_invalid_, shadow_draws_hole_, shadow_dropped_);
+      REXLOG_INFO(
+          "[shmem-diverge] summary at submission {}: copy sources checked {} "
+          "({} settled bytes); valid, settled pages where the buffer differs "
+          "from guest memory {} ({} words; zero in guest {}, zero in the "
+          "buffer {}); bad copies: source not pending {}, source diverged "
+          "{}, neither {} ({} words)",
+          completed_submission, src_div_checks_, src_div_settled_bytes_,
+          src_div_pages_, src_div_words_, src_div_words_guest_zero_,
+          src_div_words_buffer_zero_, shadow_draws_bad_nopend_,
+          shadow_draws_bad_div_, shadow_draws_bad_unexplained_,
+          shadow_words_bad_unexplained_);
+      REXLOG_INFO(
+          "[memexport-shadow-dup] summary at submission {}: copies that "
+          "write a word twice with different values {} (words written "
+          "more than once {}, with different values {}); bad words in "
+          "all copies {}, of them equal to a value an earlier vertex of "
+          "the same draw wrote there {} (in {} copies); bad words in "
+          "copies whose source was not pending {}, of them such {}",
+          completed_submission, shadow_dup_copies_,
+          shadow_dup_rewritten_words_, shadow_dup_contested_words_,
+          shadow_bad_words_all_, shadow_dup_bad_words_,
+          shadow_dup_bad_copies_, shadow_bad_words_not_pending_,
+          shadow_dup_bad_words_not_pending_);
+      REXLOG_INFO(
+          "[memexport-shadow-src] summary at submission {}: bad copies "
+          "with the source not pending, by what the source did after the "
+          "draw: guest memory changed {}, only the buffer differs {}, "
+          "source unchanged {}, no snapshot {}; of them with a source "
+          "page not settled at the draw {}; bad words equal to the copy "
+          "of the buffer's source now {}, of the guest's source now {}, "
+          "neither {}",
+          completed_submission, shadow_bad_src_guest_changed_,
+          shadow_bad_src_buffer_only_, shadow_bad_src_same_,
+          shadow_bad_src_unknown_, shadow_bad_src_not_settled_,
+          shadow_bad_words_as_buffer_, shadow_bad_words_as_guest_,
+          shadow_bad_words_as_neither_);
+    }
+  }
   if (PreserveTraceEnabled()) {
     const uint64_t frame = frame_log::CurrentFrame();
     if (bytes) {
@@ -1135,12 +2128,13 @@ bool MetalSharedMemory::UploadRanges(
     ExpirePreservedExports(PreserveNowUs());
   }
   auto flush_merged_range = [&](uint32_t start, uint32_t end) -> bool {
-    if (!preserve || preserved_exports_.empty()) {
+    const bool use_preserve = preserve && !preserved_exports_.empty();
+    if (!use_preserve && pending_readbacks_.empty()) {
       return flush_merged_range_impl(start, end);
     }
     // Collect overlapping exports whose guest bytes are unchanged.
     std::vector<std::pair<uint32_t, uint32_t>> keep;
-    for (size_t k = 0; k < preserved_exports_.size();) {
+    for (size_t k = 0; use_preserve && k < preserved_exports_.size();) {
       const PreservedExport& e = preserved_exports_[k];
       if (e.end <= start || e.start >= end) {
         ++k;
@@ -1148,11 +2142,73 @@ bool MetalSharedMemory::UploadRanges(
       }
       if (XXH3_64bits(xbox_data + e.start, e.end - e.start) != e.guest_hash) {
         // The CPU wrote into the export range: its data wins, stop preserving.
+        ++preserve_dropped_;
+        bool pending = false;
+        for (const PendingReadback& r : pending_readbacks_) {
+          if (r.end <= e.start || r.start >= e.end) continue;
+          pending = true;
+        }
+        if (pending) ++preserve_dropped_pending_;
+        if (preserve_dropped_logged_ < 24) {
+          ++preserve_dropped_logged_;
+          REXLOG_WARN(
+              "[memexport-merge] re-upload #{}: pages {:08X}-{:08X} overlap "
+              "export range {:08X}+{} whose guest bytes changed; uploading "
+              "guest memory over it (readback pending: {})",
+              preserve_dropped_logged_, start, end, e.start, e.end - e.start,
+              pending ? "yes, export data is lost" : "no");
+        }
         preserved_exports_.erase(preserved_exports_.begin() + k);
         continue;
       }
       keep.emplace_back(std::max(e.start, start), std::min(e.end, end));
       ++k;
+    }
+    // [memexport-hole] an export whose readback has not landed is only in the
+    // buffer; guest RAM still holds the bytes from before the export. If no
+    // preserve entry covers it (expired, displaced by an overlapping export,
+    // list full, range too large), this upload puts the old bytes back.
+    if (!pending_readbacks_.empty()) {
+      const bool pending_keep = MemexportPendingKeepEnabled();
+      const uint64_t now_us = PreserveNowUs();
+      const size_t keep_preserved = keep.size();
+      for (PendingReadback& r : pending_readbacks_) {
+        if (r.end <= start || r.start >= end) continue;
+        const uint32_t a = std::max(r.start, start);
+        const uint32_t b = std::min(r.end, end);
+        uint32_t uncovered = b - a;
+        for (size_t k = 0; k < keep_preserved; ++k) {
+          const uint32_t ka = std::max(keep[k].first, a);
+          const uint32_t kb = std::min(keep[k].second, b);
+          if (kb > ka) uncovered -= std::min(uncovered, kb - ka);
+        }
+        if (!uncovered) continue;
+        const bool guest_same =
+            XXH3_64bits(xbox_data + r.start, r.end - r.start) == r.guest_hash;
+        const uint64_t age_us = now_us - r.export_us;
+        const bool expired = age_us > kPreservedExportLifetimeUs;
+        ++hole_events_;
+        hole_bytes_ += uncovered;
+        hole_events_guest_same_ += guest_same;
+        hole_events_expired_ += expired;
+        r.hole = true;
+        const bool kept = pending_keep && guest_same;
+        if (kept) {
+          keep.emplace_back(a, b);
+          hole_kept_bytes_ += uncovered;
+        }
+        if (hole_logged_ < 64) {
+          ++hole_logged_;
+          REXLOG_WARN(
+              "[memexport-hole] #{}: upload {:08X}-{:08X} covers pending "
+              "export {:08X}+{} (submission {}, {} ms old, {} bytes "
+              "unprotected, guest bytes {} since the export): {}",
+              hole_logged_, start, end, r.start, r.end - r.start, r.submission,
+              age_us / 1000, uncovered, guest_same ? "unchanged" : "changed",
+              kept ? "kept out of the upload"
+                   : "guest memory uploaded over it");
+        }
+      }
     }
     if (keep.empty()) {
       return flush_merged_range_impl(start, end);

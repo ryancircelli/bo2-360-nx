@@ -32,6 +32,7 @@
 #include "rex/graphics/command_processor.h"
 #include "rex/graphics/util/draw.h"
 #include "rex/graphics/pipeline/shader/dxbc_translator.h"
+#include "rex/graphics/pipeline/shader/interpreter.h"
 #include "rex/graphics/metal/dxbc_to_dxil_converter.h"
 #include "rex/graphics/metal/metal_deferred_render_encoder.h"
 #include "rex/graphics/metal/metal_geometry_shader.h"
@@ -1259,6 +1260,32 @@ class MetalCommandProcessor final : public CommandProcessor {
   // <lo>-<hi>): writes each resolve into the range to <dir> as 1x bytes
   // (downscaled at scale > 1). Guest RAM is not written.
   void DiagResolveDump(uint32_t written_address, uint32_t written_length);
+  // REX_METAL_FENCE_READBACK (default on; =0 disables). The guest's D3D fence
+  // is a scratch register write the GPU copies to memory; the game treats a
+  // completed fence as "every GPU write queued before it is in memory". Its
+  // streaming pool relies on that: block moves are memexport draws followed
+  // by a fence, and a block is reused only once that fence has completed.
+  // Here the moved bytes reach guest memory only when the draw's submission
+  // completes, so before a fence value is written with such readbacks
+  // outstanding, the work is submitted, waited for, and copied back.
+  void LandMemexportReadbacksBeforeGuestFence(uint32_t index, uint32_t value);
+  // REX_METAL_MEMEXPORT_CPU: does a BO2 streamed-texture copy draw on the CPU
+  // (guest memory to guest memory). Returns false when the draw is not one of
+  // the two copy shaders or the switch is off; the draw then exports on the GPU.
+  bool ExecuteMemexportCopyOnCpu(const Shader& vertex_shader,
+                                 uint32_t index_count,
+                                 const IndexBufferInfo* index_buffer_info);
+  std::unique_ptr<ShaderInterpreter> memexport_cpu_interpreter_;
+  uint64_t memexport_cpu_draws_ = 0;
+  uint64_t memexport_cpu_elements_ = 0;
+  uint64_t memexport_cpu_ns_ = 0;
+  uint64_t memexport_cpu_verified_ = 0;
+  uint64_t memexport_cpu_different_ = 0;
+  // [memexport-shadow] mode 4: the expected result of the copy draw being
+  // issued, handed to the shared memory when the draw is dispatched.
+  MetalSharedMemory::MemexportShadow memexport_shadow_;
+  bool memexport_shadow_ready_ = false;
+  uint64_t memexport_shadow_made_ = 0;
   bool WaitForMorphReadbackSubmission(uint32_t written_address,
                                       uint32_t written_length);
   void NoteMorphReadback(const uint8_t* data, uint32_t written_address,
@@ -1782,6 +1809,14 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool submission_has_draws_ = false;
 
   std::vector<PendingSharedMemoryWrite> pending_shared_memory_writes_;
+  uint64_t memexport_order_overlap_draws_ = 0;
+  uint64_t memexport_order_split_passes_ = 0;
+  uint64_t memexport_order_barrier_encoded_ = 0;
+  uint64_t memexport_order_barrier_skipped_ = 0;
+  uint64_t memexport_order_barrier_nothing_ = 0;
+  bool memexport_order_overlap_pending_ = false;
+  bool memexport_order_summary_logged_ = false;
+  void LogMemexportWriteOrderSummary();
   // [draw-prep-lite2] RetireFenceWaitedSharedMemoryWrites builds the retained list here and
   // swaps it in (no 64-entry stack array fill, no copy back).
   std::vector<PendingSharedMemoryWrite> pending_shared_memory_writes_scratch_;

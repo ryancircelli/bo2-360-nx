@@ -10,6 +10,8 @@
  */
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -17,10 +19,20 @@
 #include <rex/bit.h>
 #include <rex/dbg.h>
 #include <rex/graphics/shared_memory.h>
+#include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/memory.h>
 
 namespace rex::graphics {
+
+namespace {
+
+std::atomic<uint64_t> watch_ranges_watched{0};
+std::atomic<uint64_t> watch_ranges_unlinked{0};
+std::atomic<uint64_t> watch_double_unlinks{0};
+std::atomic<uint64_t> texture_destroys[3] = {};
+
+}  // namespace
 
 SharedMemory::SharedMemory(memory::Memory& memory) : memory_(memory) {
   page_size_log2_ = rex::log2_ceil(uint32_t(rex::memory::page_size()));
@@ -152,6 +164,35 @@ void SharedMemory::UnregisterGlobalWatch(GlobalWatchHandle handle) {
   delete watch;
 }
 
+bool SharedMemory::TexWatchUnlinkFixEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_TEX_WATCH_UNLINK_FIX");
+    const bool on = !(value && value[0] == '0');
+    REXLOG_INFO("[watch-unlink-fix] {} (REX_TEX_WATCH_UNLINK_FIX)", on ? "on" : "off");
+    return on;
+  }();
+  return enabled;
+}
+
+void SharedMemory::NoteTextureDestroyed(TextureDestroyPath path, uint64_t count) {
+  texture_destroys[static_cast<uint32_t>(path)].fetch_add(count, std::memory_order_relaxed);
+}
+
+void SharedMemory::LogWatchStats() const {
+  REXLOG_INFO(
+      "[watch-stats] ranges watched {} unlinked {} double unlinks {} textures destroyed {} "
+      "(memory trim {}, bindless pressure {}, destroy all {})",
+      watch_ranges_watched.load(std::memory_order_relaxed),
+      watch_ranges_unlinked.load(std::memory_order_relaxed),
+      watch_double_unlinks.load(std::memory_order_relaxed),
+      texture_destroys[0].load(std::memory_order_relaxed) +
+          texture_destroys[1].load(std::memory_order_relaxed) +
+          texture_destroys[2].load(std::memory_order_relaxed),
+      texture_destroys[0].load(std::memory_order_relaxed),
+      texture_destroys[1].load(std::memory_order_relaxed),
+      texture_destroys[2].load(std::memory_order_relaxed));
+}
+
 SharedMemory::WatchHandle SharedMemory::WatchMemoryRange(uint32_t start, uint32_t length,
                                                          WatchCallback callback,
                                                          void* callback_context,
@@ -185,6 +226,7 @@ SharedMemory::WatchHandle SharedMemory::WatchMemoryRange(uint32_t start, uint32_
   range->callback_argument = callback_argument;
   range->page_first = watch_page_first;
   range->page_last = watch_page_last;
+  range->linked = true;
 
   // Allocate and link the nodes.
   WatchNode* node_previous = nullptr;
@@ -215,12 +257,13 @@ SharedMemory::WatchHandle SharedMemory::WatchMemoryRange(uint32_t start, uint32_
     watch_buckets_[i] = node;
   }
 
+  watch_ranges_watched.fetch_add(1, std::memory_order_relaxed);
   return reinterpret_cast<WatchHandle>(range);
 }
 
 void SharedMemory::UnwatchMemoryRange(WatchHandle handle) {
   auto global_lock = global_critical_region_.Acquire();
-  UnlinkWatchRange(reinterpret_cast<WatchRange*>(handle));
+  UnlinkWatchRange(reinterpret_cast<WatchRange*>(handle), false);
 }
 
 void SharedMemory::FireWatches(uint32_t page_first, uint32_t page_last, bool invalidated_by_gpu) {
@@ -248,7 +291,7 @@ void SharedMemory::FireWatches(uint32_t page_first, uint32_t page_last, bool inv
       if (page_first <= range->page_last && page_last >= range->page_first) {
         range->callback(global_lock, range->callback_context, range->callback_data,
                         range->callback_argument, invalidated_by_gpu);
-        UnlinkWatchRange(range);
+        UnlinkWatchRange(range, true);
       }
     }
   }
@@ -315,7 +358,23 @@ void SharedMemory::MakeRangeValid(uint32_t start, uint32_t length, bool written_
   }
 }
 
-void SharedMemory::UnlinkWatchRange(WatchRange* range) {
+void SharedMemory::UnlinkWatchRange(WatchRange* range, bool from_fire_watches) {
+  if (!range->linked) {
+    const uint64_t count = watch_double_unlinks.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count <= 32 || (count & (count - 1)) == 0) {
+      REXLOG_WARN("[watch-double-unlink] #{} page_first {} page_last {} source {} fix {}",
+                  count, range->page_first, range->page_last,
+                  from_fire_watches ? "FireWatches" : "UnwatchMemoryRange",
+                  TexWatchUnlinkFixEnabled() ? "on" : "off");
+      LogWatchStats();
+    }
+    if (TexWatchUnlinkFixEnabled()) {
+      return;
+    }
+  } else {
+    range->linked = false;
+    watch_ranges_unlinked.fetch_add(1, std::memory_order_relaxed);
+  }
   uint32_t bucket = range->page_first << page_size_log2_ >> kWatchBucketSizeLog2;
   WatchNode* node = range->node_first;
   while (node != nullptr) {
