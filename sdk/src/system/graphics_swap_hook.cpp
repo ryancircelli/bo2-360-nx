@@ -147,8 +147,6 @@ std::atomic<bool>& IdleSpinSwitch() {
   }()};
   return requested;
 }
-bool IdleSpinRequested() { return IdleSpinSwitch().load(std::memory_order_relaxed); }
-void RequestIdleSpin(bool on) { IdleSpinSwitch().store(on, std::memory_order_relaxed); }
 std::atomic<bool>& IdleDeferSubmitSwitch() {
   static std::atomic<bool> requested{[] {
     const char* env = std::getenv("REX_METAL_IDLE_DEFER_SUBMIT");
@@ -157,8 +155,6 @@ std::atomic<bool>& IdleDeferSubmitSwitch() {
   }()};
   return requested;
 }
-bool IdleDeferSubmitRequested() { return IdleDeferSubmitSwitch().load(std::memory_order_relaxed); }
-void RequestIdleDeferSubmit(bool on) { IdleDeferSubmitSwitch().store(on, std::memory_order_relaxed); }
 std::atomic<bool>& CmdPadSwitch() {
   static std::atomic<bool> requested{[] {
     const char* env = std::getenv("REX_METAL_CMD_PAD");
@@ -176,6 +172,10 @@ std::atomic<bool>& Type0BatchConstsOnlySwitch() {
   return requested;
 }
 }
+bool IdleSpinRequested() { return IdleSpinSwitch().load(std::memory_order_relaxed); }
+void RequestIdleSpin(bool on) { IdleSpinSwitch().store(on, std::memory_order_relaxed); }
+bool IdleDeferSubmitRequested() { return IdleDeferSubmitSwitch().load(std::memory_order_relaxed); }
+void RequestIdleDeferSubmit(bool on) { IdleDeferSubmitSwitch().store(on, std::memory_order_relaxed); }
 bool Type0BatchConstsOnlyRequested() { return Type0BatchConstsOnlySwitch().load(std::memory_order_relaxed); }
 void RequestType0BatchConstsOnly(bool on) { Type0BatchConstsOnlySwitch().store(on, std::memory_order_relaxed); }
 bool CmdPadRequested() { return CmdPadSwitch().load(std::memory_order_relaxed); }
