@@ -28,6 +28,13 @@ class Fh1App : public rex::ReXApp {
     if (rex::cvar::GetFlagSource("gpu_plugin") == rex::cvar::Source::kDefault) {
       config.gpu_plugin = "metal";
     }
+    // The game presents every 2nd guest vblank, so the default 60 Hz vblank timer
+    // locks it to 30 fps. 120 Hz gives ~56 fps (simulation speed checked against
+    // wall-clock at 60 and 120 Hz, see /tmp/bo2/fh1-speed/REPORT.md). The cvar is read
+    // when the kernel video and window code run, after this hook.
+    if (rex::cvar::GetFlagSource("video_mode_refresh_rate") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("video_mode_refresh_rate", "120");
+    }
   }
 
   void OnConfigurePaths(rex::PathConfig& paths) override {
