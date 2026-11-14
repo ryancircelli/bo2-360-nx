@@ -642,7 +642,6 @@ X_STATUS XThread::Exit(int exit_code) {
   // into pthread_exit(). Otherwise ReleaseHandle() below may delete `this`
   // while this method is still running.
   auto self = retain_object(this);
-  if (is_guest_thread()) REXSYS_INFO("guest thread '{}' Exit({}) terminating_title={}", thread_name_, exit_code, kernel_state()->is_terminating_title());
 
   // Mark as terminated before running down APCs.
   auto kthread = guest_object<X_KTHREAD>();
@@ -796,7 +795,6 @@ void XThread::Execute() {
   func(*ctx, base);
 
   exit_code = static_cast<int>(ctx->r3.u32);
-  REXSYS_INFO("guest thread '{}' returned from entry, r3={:08X} lr={:08X} terminating_title={}", thread_name_, ctx->r3.u32, static_cast<uint32_t>(ctx->lr), kernel_state()->is_terminating_title());
 
   // If we got here it means the execute completed without an exit being called.
   // Treat the return code as an implicit exit code (if desired).

@@ -40,6 +40,9 @@ struct GameInfo {
   std::string executable;
   /// Folder beside the executable that holds the disc files.
   std::string data_root = "game";
+  /// Development fallback for the disc files ("~/Games/Xbox360/<name>/disc"):
+  /// used when no --game_data_root is given and the folder exists. Empty: none.
+  std::string local_data_root;
   /// Shader library file beside the executable (and its .spvidx index).
   std::string shader_pack;
   /// Pipeline list read at start-up (beside the executable or in the bundle).

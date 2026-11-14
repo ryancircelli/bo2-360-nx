@@ -18,7 +18,7 @@
 #include <rex/rex_app.h>
 
 #include "bo2zm_autoexec.h"
-#include "bo2zm_game_manifest.h"  // generated from games/bo2/game.toml
+#include "rex_game_manifest.h"  // rex::kGameManifest, from games/bo2/game.toml
 #include "bo2zm_benchmark.h"
 #include "bo2zm_controllers.h"
 #include "bo2zm_debug_options.h"
@@ -109,9 +109,7 @@ void ConfigureInstancePaths(rex::PathConfig& paths) {
 void rex::RegisterGame(rex::GameApi& api) {
   // Name, title id, executable, data folder, shader pack, pipeline list, link
   // port and setting defaults: games/bo2/game.toml.
-  if (std::string error; !rex::LoadGameManifest(kBo2zmGameManifest, api.info(), &error)) {
-    throw std::runtime_error("games/bo2/game.toml: " + error);
-  }
+  rex::UseGameManifest(api, rex::kGameManifest, "games/bo2/game.toml");
 
   // Without command-line paths (always the case on the Switch, where the NRO
   // is started from hbmenu or a forwarder), use folders next to the

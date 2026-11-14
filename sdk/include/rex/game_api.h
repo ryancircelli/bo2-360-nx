@@ -10,14 +10,17 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <stdexcept>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <rex/cvar.h>
 #include <rex/game_info.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
@@ -68,6 +71,14 @@ class GameApi {
 /// Defined once per binary by the title pack (games/<name>/).
 void RegisterGame(GameApi& api);
 
+/// Loads the title manifest compiled in by rexglue_game_manifest() (rex::kGameManifest)
+/// into api.info(); a manifest that does not parse stops start-up.
+inline void UseGameManifest(GameApi& api, std::string_view toml_text, std::string_view origin) {
+  if (std::string error; !LoadGameManifest(toml_text, api.info(), &error)) {
+    throw std::runtime_error(std::string(origin) + ": " + error);
+  }
+}
+
 /// The game-neutral app: runs whatever RegisterGame() registered.
 class GameApp : public ReXApp {
  public:
@@ -92,6 +103,17 @@ class GameApp : public ReXApp {
       : ReXApp(ctx, name, ppc_info), api_(std::move(api)) {}
 
   void OnConfigurePaths(PathConfig& paths) override {
+    // The manifest's local_data_root, when no --game_data_root was given.
+    if (paths.game_data_root.empty() && !Game().local_data_root.empty()) {
+      std::filesystem::path root = Game().local_data_root;
+      const std::string& text = Game().local_data_root;
+      if (text.starts_with("~/")) {
+        const char* home = std::getenv("HOME");
+        root = home ? std::filesystem::path(home) / text.substr(2) : std::filesystem::path();
+      }
+      std::error_code ec;
+      if (!root.empty() && std::filesystem::is_directory(root, ec)) paths.game_data_root = root;
+    }
     for (auto& fn : api_->configure_paths_) fn(*this, paths);
   }
   void OnConfigLoaded() override {
@@ -106,6 +128,8 @@ class GameApp : public ReXApp {
       REXLOG_WARN("{}: a renderer setting in the title manifest did not parse", Game().short_name);
     }
     ApplyGameDefaults(Game());
+    // ReXApp copied gpu_plugin into config before this hook; take a manifest default.
+    config.gpu_plugin = cvar::GetFlagByName("gpu_plugin");
     for (auto& fn : api_->pre_setup_) fn(*this, config);
   }
   void OnLoadXexImage(std::string& xex_image) override {

@@ -319,12 +319,8 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../games/bo2/src/ui/credits/bo2zm_cr
                "${CMAKE_CURRENT_BINARY_DIR}/generated_ui/bo2zm_credits_png.h" @ONLY)
 target_include_directories(bo2zm PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
 
-# The title manifest (games/bo2/game.toml), compiled in as text for rex::LoadGameManifest.
-set(BO2ZM_GAME_TOML_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../games/bo2/game.toml")
-file(READ "${BO2ZM_GAME_TOML_FILE}" BO2ZM_GAME_TOML)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BO2ZM_GAME_TOML_FILE}")
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../games/bo2/src/bo2zm_game_manifest.h.in"
-               "${CMAKE_CURRENT_BINARY_DIR}/generated_ui/bo2zm_game_manifest.h" @ONLY)
+# The title manifest (games/bo2/game.toml), compiled in as rex::kGameManifest.
+rexglue_game_manifest(bo2zm "${CMAKE_CURRENT_SOURCE_DIR}/../games/bo2/game.toml")
 # On Switch it also uses the SDK's thread priority/core helpers (src/core/threading_switch.h).
 if(REXGLUE_PLATFORM_SWITCH)
     target_include_directories(bo2zm PRIVATE "${REXSDK_DIR}/src")
