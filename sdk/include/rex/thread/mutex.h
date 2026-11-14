@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <mutex>
 
 namespace rex::thread {
@@ -56,6 +57,18 @@ namespace rex::thread {
 class global_critical_region {
  public:
   static std::recursive_mutex& mutex();
+
+  // Recompiled guest `mfmsr` / `mtmsrd r13` (interrupts off) / `mtmsrd rX`
+  // (restore). With the guest_msr_lock cvar true (default) these take the
+  // global lock exactly as before. With it false the guest sections skip the
+  // lock: on the 360 disabling interrupts never excluded other cores, and the
+  // sections recompiled games emit wrap lwarx/stwcx. reservation loops whose
+  // atomicity comes from the compare-and-swap (same reasoning as the codegen
+  // skip_msr option BO2 ships). Safe to flip at runtime: each thread finishes
+  // a section in the mode it entered it.
+  static uint64_t GuestCheck();
+  static void GuestEnter();
+  static void GuestLeave();
 
   // Acquires a lock on the global critical section.
   // Use this when keeping an instance is not possible. Otherwise, prefer
