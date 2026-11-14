@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <pthread.h>
@@ -5004,6 +5005,35 @@ bool MetalRenderTargetCache::PrepareResolvePlan(rex::memory::Memory& memory,
     return false;
   }
   plan_out.valid = true;
+
+  {
+    // Census of distinct resolve kinds (one INFO line per new kind).
+    static std::mutex census_mutex;
+    static std::set<uint64_t> census_seen;
+    const draw_util::ResolveInfo& ri = plan_out.resolve_info;
+    bool depth = ri.IsCopyingDepth();
+    uint32_t src_fmt = depth ? ri.depth_edram_info.format : ri.color_edram_info.format;
+    uint32_t dest_fmt = uint32_t(ri.copy_dest_info.copy_dest_format);
+    uint64_t key = uint64_t(depth) | (uint64_t(src_fmt) << 1) | (uint64_t(dest_fmt) << 8) |
+                   (uint64_t(uint32_t(ri.rb_copy_control.copy_command)) << 16) |
+                   (uint64_t(uint32_t(ri.rb_copy_control.copy_sample_select)) << 20) |
+                   (uint64_t(ri.color_edram_info.msaa_samples) << 24) |
+                   (uint64_t(ri.rb_copy_control.copy_src_select) << 28) |
+                   (uint64_t(ri.copy_dest_info.copy_dest_exp_bias & 0x3F) << 32);
+    std::lock_guard<std::mutex> lock(census_mutex);
+    if (census_seen.insert(key).second) {
+      REXLOG_INFO(
+          "resolve-census #{}: src={} fmt {} ({}) -> dest fmt {} cmd {} sel {} msaa {} rt {} "
+          "exp_bias {}",
+          census_seen.size(), depth ? "depth" : "color", src_fmt,
+          depth ? "-"
+                : xenos::GetColorRenderTargetFormatName(xenos::ColorRenderTargetFormat(src_fmt)),
+          dest_fmt, uint32_t(ri.rb_copy_control.copy_command),
+          uint32_t(ri.rb_copy_control.copy_sample_select),
+          uint32_t(ri.color_edram_info.msaa_samples), uint32_t(ri.rb_copy_control.copy_src_select),
+          int32_t(ri.copy_dest_info.copy_dest_exp_bias));
+    }
+  }
 
   const draw_util::ResolveInfo& resolve_info = plan_out.resolve_info;
   plan_out.noop =
