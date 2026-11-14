@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <rex/system/thread_probe.h>
 #include <rex/graphics/graphics_system.h>
 
 #include <algorithm>
@@ -312,8 +313,10 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
   //          interrupt_callback_, source, cpu);
 
   uint64_t args[] = {source, interrupt_callback_data_};
+  rex::thread_probe::Emit(rex::thread_probe::kIntrBegin, uint8_t(cpu), 0, source);
   function_dispatcher_->ExecuteInterrupt(thread->thread_state(), interrupt_callback_, args,
                                          rex::countof(args));
+  rex::thread_probe::Emit(rex::thread_probe::kIntrEnd);
 }
 
 void GraphicsSystem::MarkVblank() {
@@ -324,6 +327,7 @@ void GraphicsSystem::MarkVblank() {
   if (command_processor_) {
     command_processor_->increment_counter();
   }
+  rex::thread_probe::Emit(rex::thread_probe::kVblank);
 
   // TODO(benvanik): we shouldn't need to do the dispatch here, but there's
   //     something wrong and the CP will block waiting for code that

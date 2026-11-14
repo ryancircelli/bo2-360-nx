@@ -16,6 +16,7 @@
 #include <atomic>
 #include <string>
 
+#include <rex/system/thread_probe.h>
 #include <rex/cvar.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/register_file.h>
@@ -445,6 +446,10 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
                   mapped_u32 frontbuffer_ptr,  // ptr to frontbuffer address
                   mapped_u32 texture_format_ptr, mapped_u32 color_space_ptr, mapped_u32 width,
                   mapped_u32 height) {
+  if (rex::thread_probe::On()) {
+    rex::thread_probe::Emit(rex::thread_probe::kGuestSwap, 0, 0, 0,
+                            uint32_t(rex::runtime::current_ppc_context()->lr));
+  }
   // All of these parameters are REQUIRED.
   assert(buffer_ptr);
   assert(fetch_ptr);

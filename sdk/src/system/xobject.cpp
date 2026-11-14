@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <atomic>
 #include <vector>
 
@@ -27,6 +28,27 @@
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
+#include <rex/system/thread_probe.h>
+#include <rex/system/thread_state.h>
+
+namespace {
+// REX_THREAD_PROBE: one begin/end record pair around every guest wait.
+struct ProbeWait {
+  bool on;
+  ProbeWait(uint8_t sub, uint16_t b, uint32_t obj) : on(rex::thread_probe::On()) {
+    if (!on) return;
+    uint32_t lr = 0;
+    if (auto* ts = rex::runtime::ThreadState::Get()) lr = uint32_t(ts->context()->lr);
+    rex::thread_probe::SetWaiting(true);
+    rex::thread_probe::Emit(rex::thread_probe::kWaitBegin, sub, b, obj, lr);
+  }
+  ~ProbeWait() {
+    if (!on) return;
+    rex::thread_probe::SetWaiting(false);
+    rex::thread_probe::Emit(rex::thread_probe::kWaitEnd);
+  }
+};
+}  // namespace
 
 namespace rex::system {
 
@@ -239,6 +261,7 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+  ProbeWait probe(rex::thread_probe::kSingle, uint16_t(type()), handle());
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
   XThread::CheckTitleTermination();
   switch (result) {
@@ -269,6 +292,8 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
 
+  ProbeWait probe(rex::thread_probe::kSignalAndWait, uint16_t(wait_object->type()),
+                  wait_object->handle());
   auto result =
       rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
                                  alertable ? true : false, timeout_ms);
@@ -312,6 +337,10 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+  ProbeWait probe(wait_type ? rex::thread_probe::kMultiAny : rex::thread_probe::kMultiAll,
+                  uint16_t((std::min<uint32_t>(count, 255) << 8) |
+                           (count ? uint32_t(objects[0]->type()) & 0xFF : 0)),
+                  count ? objects[0]->handle() : 0);
   if (wait_type) {
     auto result =
         rex::thread::WaitAny(wait_handles, count, alertable ? true : false, timeout_ms);

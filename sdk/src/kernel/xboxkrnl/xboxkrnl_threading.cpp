@@ -18,6 +18,7 @@
 #include <memory>
 #include <vector>
 
+#include <rex/system/thread_probe.h>
 #include <rex/chrono/clock.h>
 #include <rex/dbg.h>
 #include <rex/kernel/xboxkrnl/private.h>
@@ -390,6 +391,13 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 }
 
 u32 NtYieldExecution_entry() {
+  if (rex::thread_probe::On()) {
+    rex::thread_probe::Emit(rex::thread_probe::kWaitBegin, rex::thread_probe::kYield, 0, 0,
+                            uint32_t(current_ppc_context()->lr));
+    rex::thread::MaybeYield();
+    rex::thread_probe::Emit(rex::thread_probe::kWaitEnd);
+    return X_STATUS_SUCCESS;
+  }
   rex::thread::MaybeYield();
   return X_STATUS_SUCCESS;
 }

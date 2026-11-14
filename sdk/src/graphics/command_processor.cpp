@@ -17,6 +17,7 @@
 
 #include <fmt/format.h>
 
+#include <rex/system/thread_probe.h>
 #include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/perf/counter.h>
@@ -240,6 +241,7 @@ void CommandProcessor::WorkerThreadMain() {
       // We've run out of commands to execute.
       // We spin here waiting for new ones, as the overhead of waiting on our
       // event is too high.
+      rex::thread_probe::Emit(rex::thread_probe::kRingIdle, 1);
       PrepareForWait();
 #if !REX_PLATFORM_SWITCH
       uint32_t loop_count = 0;
@@ -264,6 +266,7 @@ void CommandProcessor::WorkerThreadMain() {
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
       ReturnFromWait();
+      rex::thread_probe::Emit(rex::thread_probe::kRingIdle, 0);
       if (!worker_running_ || !pending_fns_.empty()) {
         continue;
       }
@@ -1076,6 +1079,7 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
   reader->AdvanceRead((count - 4) * sizeof(uint32_t));
 
   IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  rex::thread_probe::Emit(rex::thread_probe::kRingSwap, 0, 0, counter_ + 1);
 
   ++counter_;
   swap_count_.fetch_add(1, std::memory_order_relaxed);
@@ -1158,6 +1162,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
     if (!matched) {
       // Wait.
       if (wait >= 0x100) {
+        rex::thread_probe::Emit(rex::thread_probe::kRingIdle, 3, 0, poll_reg_addr);
         PrepareForWait();
         if (!REXCVAR_GET(vsync)) {
           // User wants it fast and dangerous.
@@ -1167,6 +1172,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
         }
         rex::thread::SyncMemory();
         ReturnFromWait();
+        rex::thread_probe::Emit(rex::thread_probe::kRingIdle, 2);
 
         if (!worker_running_) {
           // Short-circuited exit.
@@ -1370,6 +1376,8 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
   address &= ~0x3;
   data_value = GpuSwap(data_value, endianness);
   memory::store(memory_->TranslatePhysical(address), data_value);
+  rex::thread_probe::Emit(rex::thread_probe::kFence, uint8_t(initiator & 0x3F), 0, address,
+                          GpuSwap(data_value, endianness));
   // Guest threads polling this word (D3D fences) can wake now.
   NotifyGuestWrite();
   return true;

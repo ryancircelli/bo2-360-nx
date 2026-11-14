@@ -24,6 +24,7 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/ppc/context.h>
+#include <rex/system/thread_probe.h>
 #include <rex/platform/exceptions.h>
 #include <rex/runtime.h>
 #include <rex/stream.h>
@@ -251,6 +252,7 @@ int SwitchPriorityFor(bool guest_thread, std::string_view name);
 void XThread::set_name(const std::string_view name) {
   std::lock_guard<std::mutex> lock(thread_lock_);
   thread_name_ = fmt::format("{} ({:08X})", name, handle());
+  rex::thread_probe::NoteName(handle(), thread_name_.c_str());
 
   if (thread_) {
     // May be getting set before the thread is created.
@@ -590,6 +592,7 @@ X_STATUS XThread::Create() {
 
     // Set name immediately, if we have one.
     thread_->set_name(thread_name_);
+    rex::thread_probe::RegisterCurrent(handle(), thread_name_.c_str());
 
     PROFILE_THREAD_ENTER(thread_name_.c_str());
     PROFILE_THREAD_CREATED();
@@ -1229,6 +1232,18 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
   }
   timeout_ms = chrono::Clock::ScaleGuestDurationMillis(timeout_ms);
   CheckTitleTermination();
+  const bool probe = rex::thread_probe::On();
+  if (probe) {
+    rex::thread_probe::SetWaiting(true);
+    rex::thread_probe::Emit(rex::thread_probe::kWaitBegin, rex::thread_probe::kDelay, 0, timeout_ms,
+                            uint32_t(thread_state_->context()->lr));
+  }
+  struct ProbeEnd {
+    bool on;
+    ~ProbeEnd() {
+      if (on) { rex::thread_probe::SetWaiting(false); rex::thread_probe::Emit(rex::thread_probe::kWaitEnd); }
+    }
+  } probe_end{probe};
   if (alertable) {
     const bool reported = timeout_ms > 0 && DelayReported(thread_name_);
     const auto before = std::chrono::steady_clock::now();
