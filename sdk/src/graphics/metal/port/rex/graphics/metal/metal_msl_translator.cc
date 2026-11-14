@@ -2444,7 +2444,7 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
   }
   if (instr.opcode != FetchOpcode::kTextureFetch &&
       instr.opcode != FetchOpcode::kGetTextureWeights) {
-    Fail("unsupported fetch opcode");
+    Fail(fmt::format("unsupported fetch opcode {}", uint32_t(instr.opcode)));
     return;
   }
   // tfetch3D serves both 3D textures and stacked 2D textures (2D arrays): the
