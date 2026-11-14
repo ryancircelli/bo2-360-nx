@@ -15,6 +15,7 @@ include(generated/rexglue.cmake)
 
 add_executable(fh1 src/main.cpp hook_stubs.cpp)
 rexglue_setup_target(fh1 GPU_PLUGINS xenos metal)
+rexglue_game_manifest(fh1 "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
     target_include_directories(fh1 PRIVATE
