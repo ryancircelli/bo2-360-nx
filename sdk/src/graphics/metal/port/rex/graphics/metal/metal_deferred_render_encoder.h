@@ -70,6 +70,9 @@ class DeferredRenderEncoder {
   void Barrier();
   bool xpass() const { return xpass_; }
   void LogXpassStats();
+  // [mct] encode spin: microseconds the command thread's drain and the idle
+  // worker spin before sleeping (0 = the old short spin, worker sleeps).
+  void SetSpinUs(uint32_t us) { spin_us_.store(us, std::memory_order_relaxed); }
 
   // Drains and returns the real encoder. caller only splits the counters.
   enum class SyncCaller : uint8_t { kOther, kTileResolve, kTransfers, kCount };
@@ -232,6 +235,9 @@ class DeferredRenderEncoder {
   std::deque<std::unique_ptr<Chunk>> queue_;
   std::vector<std::unique_ptr<Chunk>> free_chunks_;
   uint64_t published_ = 0;
+  // [mct] published_ for the worker's lock-free idle spin.
+  std::atomic<uint64_t> published_seen_{0};
+  std::atomic<uint32_t> spin_us_{0};
   std::atomic<uint64_t> completed_{0};
   std::atomic<uint64_t> tile_dispatch_failures_{0};
   bool stop_ = false;

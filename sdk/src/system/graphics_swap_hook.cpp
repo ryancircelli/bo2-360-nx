@@ -122,5 +122,27 @@ std::atomic<bool>& DrawConstsDirtySwitch() {
 }
 bool DrawConstsDirtyRequested() { return DrawConstsDirtySwitch().load(std::memory_order_relaxed); }
 void RequestDrawConstsDirty(bool on) { DrawConstsDirtySwitch().store(on, std::memory_order_relaxed); }
+namespace {
+std::atomic<bool>& XpassLazyBarrierSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_XPASS_LAZY_BARRIER");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_xpass_lazy_barrier");
+  }()};
+  return requested;
+}
+std::atomic<bool>& EncodeSpinSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_ENCODE_SPIN");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_encode_spin");
+  }()};
+  return requested;
+}
+}
+bool XpassLazyBarrierRequested() { return XpassLazyBarrierSwitch().load(std::memory_order_relaxed); }
+void RequestXpassLazyBarrier(bool on) { XpassLazyBarrierSwitch().store(on, std::memory_order_relaxed); }
+bool EncodeSpinRequested() { return EncodeSpinSwitch().load(std::memory_order_relaxed); }
+void RequestEncodeSpin(bool on) { EncodeSpinSwitch().store(on, std::memory_order_relaxed); }
 }  // namespace rex::graphics::metal
 #endif

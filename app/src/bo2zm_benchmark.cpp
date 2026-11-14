@@ -43,7 +43,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "summary in the log ('[benchmark]'). Use with bo2zm_test_god")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(bo2zm_benchmark_ab_factors, "", "BO2",
-                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all,metal_reg_early_out,metal_bindless_cache,metal_draw_consts_dirty")
+                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all,metal_reg_early_out,metal_bindless_cache,metal_draw_consts_dirty,metal_xpass_lazy_barrier,metal_encode_spin")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_settle_s, 3, "BO2",
                      "Seconds excluded after each A/B arm change (also recorded in perf abarm events)")
@@ -198,6 +198,8 @@ const Factor kFactors[] = {
     {"metal_reg_early_out", &rex::graphics::metal::RegEarlyOutRequested, &rex::graphics::metal::RequestRegEarlyOut},
     {"metal_bindless_cache", &rex::graphics::metal::BindlessCacheRequested, &rex::graphics::metal::RequestBindlessCache},
     {"metal_draw_consts_dirty", &rex::graphics::metal::DrawConstsDirtyRequested, &rex::graphics::metal::RequestDrawConstsDirty},
+    {"metal_xpass_lazy_barrier", &rex::graphics::metal::XpassLazyBarrierRequested, &rex::graphics::metal::RequestXpassLazyBarrier},
+    {"metal_encode_spin", &rex::graphics::metal::EncodeSpinRequested, &rex::graphics::metal::RequestEncodeSpin},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };

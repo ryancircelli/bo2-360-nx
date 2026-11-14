@@ -1732,6 +1732,9 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool reg_early_out_active_ = false;
   uint64_t reg_early_out_hits_[2] = {0, 0};  // [0] fetch constants, [1] bool/loop constants
   bool bindless_cache_active_ = false;
+  // [mct] encode-thread hand-off switches (latched at a drained frame boundary).
+  bool xpass_lazy_barrier_active_ = false;
+  bool encode_spin_active_ = false;
   uint64_t bindless_cache_hits_ = 0;
   uint64_t bindless_cache_calls_ = 0;
   // Last fully-processed PopulateBindlessTables inputs (lever B).
