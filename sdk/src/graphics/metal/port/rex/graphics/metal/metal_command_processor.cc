@@ -9413,6 +9413,23 @@ MetalCommandProcessor::AcquireResourceSetScratch(RenderResourceSet& fallback) {
   return resource_set_scratch_;
 }
 
+bool MetalCommandProcessor::RecheckMemexportRangesForExecute(
+    const draw_util::MemExportRange* ranges, uint32_t count,
+    const SharedMemory::Range* draw_ranges, uint32_t draw_range_count) {
+  if (!shared_memory_ || !count || !MetalSharedMemory::MemexportExecArmEnabled()) return false;
+  shared_memory_->ClearArmedMemexportReadbacks();
+  bool invalid = false;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t start = ranges[i].base_address_dwords << 2;
+    if (MetalSharedMemory::MemexportReadbackEnabled()) shared_memory_->ArmMemexportReadback(start, ranges[i].size_bytes);
+    const SharedMemory::Range r{start, ranges[i].size_bytes};
+    invalid = invalid || AnySharedMemoryRangeInvalid(&r, 1);
+  }
+  if (!invalid && draw_range_count && MetalSharedMemory::MemexportExecSourceEnabled())
+    invalid = AnySharedMemoryRangeInvalid(draw_ranges, draw_range_count);
+  return invalid;
+}
+
 bool MetalCommandProcessor::SubmitPreparedDraw(
     std::unique_ptr<PreparedDraw> draw_ptr) {
   PreparedDrawQueueRejectReason reject_reason =
@@ -9446,7 +9463,12 @@ bool MetalCommandProcessor::SubmitPreparedDraw(
     return false;
   }
 
-  if (draw.has_invalid_shared_memory && shared_memory_ &&
+  const bool memexport_invalid_now = !draw.memexport_ranges.empty() &&
+      RecheckMemexportRangesForExecute(draw.memexport_ranges.data(),
+          uint32_t(draw.memexport_ranges.size()), draw.materialization_ranges.data(),
+          uint32_t(draw.materialization_ranges.size()));
+
+  if ((draw.has_invalid_shared_memory || memexport_invalid_now) && shared_memory_ &&
       !draw.materialization_ranges.empty()) {
     PrepareSharedMemoryUploadBeforeDrawPass(
         draw.materialization_ranges.data(),

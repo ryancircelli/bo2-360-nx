@@ -272,6 +272,12 @@ void SharedMemory::RangeWrittenByGpu(uint32_t start, uint32_t length) {
   MakeRangeValid(start, length, true);
 }
 
+void SharedMemory::FireWatchesForHostWrite(uint32_t start, uint32_t length) {
+  if (!length || start >= kBufferSize) return;
+  length = std::min(length, kBufferSize - start);
+  FireWatches(start >> page_size_log2_, (start + length - 1) >> page_size_log2_, false);
+}
+
 bool SharedMemory::AllocateSparseHostGpuMemoryRange(uint32_t offset_allocations,
                                                     uint32_t length_allocations) {
   assert_always(

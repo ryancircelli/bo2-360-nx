@@ -344,6 +344,11 @@ class MetalSharedMemory : public SharedMemory {
   static bool ShmemValidFirstEnabled();
   void NoteMemexportReadback(uint32_t start, uint32_t length,
                              uint64_t submission);
+  static bool MemexportExecArmEnabled();
+  static bool MemexportExecSourceEnabled();
+  static bool MemexportReadbackStaleInvalidateEnabled();
+  void ArmMemexportReadback(uint32_t start, uint32_t length);
+  void ClearArmedMemexportReadbacks() { armed_readbacks_.clear(); }
   void ApplyCompletedMemexportReadbacks(uint64_t completed_submission);
   // [upload-precommit] trace-only check (FABLE2_UPLOAD_VERIFY=1): once the
   // submission of a staged copy (in-pass or pre-commit) has completed, the
@@ -359,8 +364,10 @@ class MetalSharedMemory : public SharedMemory {
     uint64_t submission;
     uint64_t guest_hash;
     uint64_t export_frame;
+    std::vector<uint8_t> snapshot;
   };
   std::deque<PendingReadback> pending_readbacks_;
+  std::vector<PendingReadback> armed_readbacks_;
   struct PendingVerify {
     uint32_t start;
     uint32_t size;

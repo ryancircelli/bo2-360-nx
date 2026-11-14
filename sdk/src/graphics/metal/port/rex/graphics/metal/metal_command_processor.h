@@ -769,6 +769,10 @@ class MetalCommandProcessor final : public CommandProcessor {
       reg::RB_DEPTHCONTROL normalized_depth_control,
       uint32_t normalized_color_mask) const;
   bool SubmitPreparedDraw(std::unique_ptr<PreparedDraw> draw);
+  bool RecheckMemexportRangesForExecute(const draw_util::MemExportRange* ranges,
+                                       uint32_t count,
+                                       const SharedMemory::Range* draw_ranges,
+                                       uint32_t draw_range_count);
   // [prepared-draw-pool] FABLE2_PREPARED_DRAW_POOL (default on, =0 restores the per-draw
   // allocations): reuse PreparedDraw records (their vectors keep their capacity), recycle
   // flushed queue entries and queue storage, and build resource sets in reused storage.

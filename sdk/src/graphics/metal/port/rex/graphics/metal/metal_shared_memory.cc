@@ -205,7 +205,34 @@ bool MetalSharedMemory::MemexportReadbackEnabled() {
 namespace {
 constexpr uint32_t kReadbackMaxRangeBytes = 8u << 20;
 constexpr size_t kReadbackMaxPending = 4096;
+constexpr uint32_t kReadbackSnapshotMaxBytes = 1u << 20;
 }  // namespace
+
+bool MetalSharedMemory::MemexportExecArmEnabled() {
+  static const bool on = [] { const char* v = MetalDebugEnv("MEMEXPORT_EXEC_ARM"); return !(v && v[0] == '0'); }();
+  return on;
+}
+
+bool MetalSharedMemory::MemexportExecSourceEnabled() {
+  static const bool on = [] { const char* v = MetalDebugEnv("MEMEXPORT_EXEC_SOURCE"); return !(v && v[0] == '0'); }();
+  return on;
+}
+
+bool MetalSharedMemory::MemexportReadbackStaleInvalidateEnabled() {
+  static const bool on = [] { const char* v = MetalDebugEnv("MEMEXPORT_READBACK_STALE_INVALIDATE"); return !(v && v[0] == '0'); }();
+  return on;
+}
+
+void MetalSharedMemory::ArmMemexportReadback(uint32_t start, uint32_t length) {
+  if (!length || start >= kBufferSize) return;
+  const uint32_t end = uint32_t(std::min<uint64_t>(uint64_t(start) + length, kBufferSize));
+  if (end - start > kReadbackMaxRangeBytes) return;
+  const uint8_t* guest = static_cast<const uint8_t*>(memory().TranslatePhysical(0));
+  if (!guest) return;
+  PendingReadback e{start, end, 0, XXH3_64bits(guest + start, end - start), frame_log::CurrentFrame(), {}};
+  if (end - start <= kReadbackSnapshotMaxBytes) e.snapshot.assign(guest + start, guest + end);
+  armed_readbacks_.push_back(std::move(e));
+}
 
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
                                               uint64_t submission) {
@@ -234,9 +261,18 @@ void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
     // drop the oldest so bookkeeping stays bounded.
     pending_readbacks_.pop_front();
   }
-  pending_readbacks_.push_back({start, end, submission,
-                                XXH3_64bits(guest + start, end - start),
-                                frame_log::CurrentFrame()});
+  for (auto it = armed_readbacks_.begin(); it != armed_readbacks_.end(); ++it) {
+    if (it->start == start && it->end == end) {
+      PendingReadback e = std::move(*it);
+      armed_readbacks_.erase(it);
+      e.submission = submission;
+      pending_readbacks_.push_back(std::move(e));
+      return;
+    }
+  }
+  PendingReadback e{start, end, submission, XXH3_64bits(guest + start, end - start), frame_log::CurrentFrame(), {}};
+  if (end - start <= kReadbackSnapshotMaxBytes) e.snapshot.assign(guest + start, guest + end);
+  pending_readbacks_.push_back(std::move(e));
 }
 
 void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
@@ -245,6 +281,7 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       pending_readbacks_.front().submission > completed_submission || !buffer_) {
     return;
   }
+  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
   // Pairs with the release in the command buffer completion handler; shared
   // storage on Apple Silicon is coherent once the command buffer completed.
   std::atomic_thread_fence(std::memory_order_acquire);
@@ -263,6 +300,7 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
   uint64_t bytes = 0;
   uint64_t ranges = 0;
   uint64_t cpu_skip_bytes = 0;
+  std::vector<std::pair<uint32_t, uint32_t>> stale_runs;
   std::vector<size_t> rebase_pending;
   std::vector<size_t> rebase_preserved;
   for (size_t i = 0; i < done; ++i) {
@@ -281,7 +319,8 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       continue;
     }
     const uint64_t guest_hash_now = XXH3_64bits(guest + e.start, len);
-    if (guest_hash_now != e.guest_hash) {
+    const bool merge = guest_hash_now != e.guest_hash;
+    if (merge && e.snapshot.size() != len) {
       // The CPU wrote into the export range after the export: its data wins
       // (that write also invalidated the page, so it gets re-uploaded).
       cpu_skip_bytes += len;
@@ -308,13 +347,24 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
                              : XXH3_64bits(guest + p.start, p.end - p.start);
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
-    std::memcpy(guest + e.start, gpu + e.start, len);
+    if (merge) {
+      uint8_t* g = guest + e.start;
+      const uint8_t* x = gpu + e.start;
+      const uint8_t* snap = e.snapshot.data();
+      for (uint32_t k = 0; k < len; ++k) {
+        if (g[k] == snap[k] && g[k] != x[k]) g[k] = x[k];
+      }
+    } else {
+      std::memcpy(guest + e.start, gpu + e.start, len);
+    }
     const uint64_t new_hash = XXH3_64bits(guest + e.start, len);
+    if (new_hash != guest_hash_now) FireWatchesForHostWrite(e.start, len);
     for (size_t j : rebase_pending) {
       PendingReadback& l = pending_readbacks_[j];
       l.guest_hash = (l.start == e.start && l.end == e.end)
                          ? new_hash
                          : XXH3_64bits(guest + l.start, l.end - l.start);
+      if (!l.snapshot.empty()) l.snapshot.assign(guest + l.start, guest + l.end);
     }
     for (size_t j : rebase_preserved) {
       PreservedExport& p = preserved_exports_[j];
@@ -334,8 +384,30 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
           frame_log::CurrentFrame(), new_hash != guest_hash_now ? 1 : 0);
     }
   }
+  if (MemexportReadbackStaleInvalidateEnabled()) {
+    const uint32_t page = 1u << page_size_log2();
+    for (size_t i = 0; i < done; ++i) {
+      const PendingReadback& e = pending_readbacks_[i];
+      for (uint32_t p = e.start & ~(page - 1); p < e.end; p += page) {
+        bool later = false;
+        for (size_t j = done; j < pending_readbacks_.size(); ++j) {
+          const PendingReadback& l = pending_readbacks_[j];
+          if (l.start < p + page && l.end > p) { later = true; break; }
+        }
+        const uint32_t t = std::min(p + page, kBufferSize);
+        if (!later && std::memcmp(guest + p, gpu + p, t - p) != 0 &&
+            (stale_runs.empty() || stale_runs.back().first + stale_runs.back().second != p)) {
+          stale_runs.emplace_back(p, page);
+        } else if (!later && !stale_runs.empty() &&
+                   stale_runs.back().first + stale_runs.back().second == p) {
+          stale_runs.back().second += page;
+        }
+      }
+    }
+  }
   pending_readbacks_.erase(pending_readbacks_.begin(),
                            pending_readbacks_.begin() + done);
+  for (const auto& r : stale_runs) MemoryInvalidationCallback(r.first, r.second, true);
   if (PreserveTraceEnabled()) {
     const uint64_t frame = frame_log::CurrentFrame();
     if (bytes) {

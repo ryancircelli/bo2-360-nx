@@ -94,6 +94,7 @@ class SharedMemory {
   // the pages they touch, the CPU data is properly loaded to the unmodified
   // regions in those pages.
   void RangeWrittenByGpu(uint32_t start, uint32_t length);
+  void FireWatchesForHostWrite(uint32_t start, uint32_t length);
 
  protected:
   SharedMemory(memory::Memory& memory);
