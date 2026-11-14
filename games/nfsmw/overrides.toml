@@ -1,0 +1,20 @@
+# NFSMW (USA default.xex) - manual declarations for the codegen.
+# Hints from the SpeedBreaker study (/tmp/bo2/speedbreaker-study/src/config/nfsmw.toml,
+# same USA xex sha256); regenerated/verified against our analyser as we go.
+
+# --- setjmp / longjmp (root keys: must stay ABOVE [functions]) ---------------
+# SpeedBreaker: longjmp restores r14-r31 from the jmp_buf and calls RtlUnwind;
+# setjmp does the hook check then mflr/mfcr and saves into r3.
+setjmp_address = 0x826BF180
+longjmp_address = 0x826BCD30
+
+[functions]
+
+# --- Standalone thunks the analyzer never claimed -----------------------------
+# Round 1 (first codegen run): a virtual-call dispatcher reached only by tail
+# branches (`b`) from wrappers at 0x82866474 and 0x8286912C, so nothing marked
+# its start. clrlwi/cmplwi chains on r4/r5 then bctr through vtable slots
+# 0x2c/0x34/0x3c; returns a code in r3 (lis/ori 0x80070057) when no case
+# matches. Ends at the blr 0x8285CD54. Disassembly:
+# tools/inspect/ppc_dis.py work/default.image.bin 8285CC90
+"0x8285CC90" = { size = 0xC4 }
