@@ -279,3 +279,17 @@ target_compile_definitions(rexgpu-metal-msl-xlate PRIVATE REX_PLATFORM_MAC=1)
 target_compile_options(rexgpu-metal-msl-xlate PRIVATE
     -include ${_metal_dir}/compat.h -fno-strict-aliasing -ffp-model=strict -fno-char8_t)
 target_link_libraries(rexgpu-metal-msl-xlate PRIVATE rexruntime xxHash::xxhash)
+
+add_executable(rexgpu-metal-msl-test EXCLUDE_FROM_ALL
+    ${REXGPU_METAL_COMMON_SOURCES}
+    metal_flags.cpp
+    port/rex/graphics/metal/metal_msl_translator.cc
+    tools/msl_translator_test.cc
+)
+add_dependencies(rexgpu-metal-msl-test rexgpu-metal-helpers)
+target_include_directories(rexgpu-metal-msl-test BEFORE PRIVATE
+    ${_metal_dir}/port ${_metal_gen} ${_sdk_private}/include ${_sdk_private} ${_metal_dir} ${_metal_deps})
+target_compile_definitions(rexgpu-metal-msl-test PRIVATE REX_PLATFORM_MAC=1)
+target_compile_options(rexgpu-metal-msl-test PRIVATE
+    -include ${_metal_dir}/compat.h -fno-strict-aliasing -ffp-model=strict -fno-char8_t)
+target_link_libraries(rexgpu-metal-msl-test PRIVATE rexruntime xxHash::xxhash)

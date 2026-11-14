@@ -811,8 +811,31 @@ object_ref<UserModule> KernelState::LoadUserModule(const std::string_view raw_na
     }
 
     rex::platform::DynamicLibrary library_local;
-    if (!library_local.Load(std::filesystem::path(recomp->shared_lib_name),
-                            rex::platform::SymbolResolution::kImmediate)) {
+    // shared_lib_name is the bare CMake target name; dlopen needs the platform
+    // prefix/suffix (libfoo.dylib / libfoo.so), so try decorated first, bare last.
+    bool lib_loaded = false;
+    {
+      std::filesystem::path bare(recomp->shared_lib_name);
+#if defined(__APPLE__)
+      const char* kPrefix = "lib";
+      const char* kSuffix = ".dylib";
+#elif defined(_WIN32)
+      const char* kPrefix = "";
+      const char* kSuffix = ".dll";
+#else
+      const char* kPrefix = "lib";
+      const char* kSuffix = ".so";
+#endif
+      std::filesystem::path decorated =
+          bare.parent_path() / (std::string(kPrefix) + bare.filename().string() + kSuffix);
+      for (const auto& candidate : {decorated, bare}) {
+        if (library_local.Load(candidate, rex::platform::SymbolResolution::kImmediate)) {
+          lib_loaded = true;
+          break;
+        }
+      }
+    }
+    if (!lib_loaded) {
       REXSYS_ERROR("Failed to load shared library for module '{}'", recomp->pe_name);
     } else {
       auto register_func = reinterpret_cast<runtime::FunctionDispatcher::RegisterFn>(

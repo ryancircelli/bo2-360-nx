@@ -9,6 +9,9 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <execinfo.h>
+
+#include <atomic>
 #include <algorithm>
 #include <cstring>
 #include <utility>
@@ -567,6 +570,22 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
   uint32_t virtual_address = HostToGuestVirtual(host_address);
   BaseHeap* heap = LookupHeap(virtual_address);
   if (!heap || heap->heap_type() != memory::HeapType::kGuestPhysical) {
+    // A guest thread can fault in a tight loop (null-pointer polling); log the
+    // first 64 and then every 1,000,000th so the log is not rotated away.
+    static std::atomic<uint64_t> unhandled_av_count{0};
+    const uint64_t av_n = unhandled_av_count.fetch_add(1, std::memory_order_relaxed);
+    if (av_n >= 64 && (av_n % 1000000) != 0) {
+      return false;
+    }
+    if (av_n < 3) {
+      void* av_frames[24];
+      const int av_depth = backtrace(av_frames, 24);
+      char** av_syms = backtrace_symbols(av_frames, av_depth);
+      for (int i = 0; av_syms && i < av_depth; ++i) {
+        REXSYS_ERROR("  AV host frame {}: {}", i, av_syms[i]);
+      }
+      free(av_syms);
+    }
     REXSYS_ERROR(
         "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
         is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),

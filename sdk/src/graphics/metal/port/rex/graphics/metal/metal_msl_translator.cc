@@ -776,6 +776,17 @@ void MslShaderTranslator::ProcessJumpInstruction(
       break;
     case ParsedJumpInstruction::Type::kPredicated:
       taken = fmt::format("{}p0", instr.condition ? "" : "!");
+      if (is_pixel_shader() && instr.target_address > current_cf_index_) {
+        // Keep the whole quad on the same path so later derivatives are valid.
+        std::string quad_jump = NewTemp("qj");
+        // quad_shuffle_xor is not defined for bool; reduce as uint.
+        Line("uint {} = {} ? 1u : 0u;", quad_jump, taken);
+        Line("{} = {} & quad_shuffle_xor({}, 1);", quad_jump, quad_jump,
+             quad_jump);
+        Line("{} = {} & quad_shuffle_xor({}, 2);", quad_jump, quad_jump,
+             quad_jump);
+        taken = fmt::format("({} != 0u)", quad_jump);
+      }
       break;
   }
   if (instr.target_address <= current_cf_index_) {
@@ -2445,6 +2456,9 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
   bool use_computed_lod =
       instr.attributes.use_computed_lod &&
       (is_pixel_shader() || instr.attributes.use_register_gradients);
+  const bool cube_implicit_lod =
+      use_computed_lod && !instr.attributes.use_register_gradients &&
+      instr.dimension == xenos::FetchOpDimension::kCube;
 
   // Offsets (with the rounding epsilon), as in the DXBC translator.
   float offsets[3] = {};
@@ -2788,7 +2802,7 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
           Line("{} = {} * {};", lod, lod, F(1.0f / 32.0f));
         }
       }
-      if (use_computed_lod) {
+      if (use_computed_lod && !cube_implicit_lod) {
         have_grad = true;
         grad_count =
             (instr.dimension == xenos::FetchOpDimension::kCube || dim_3d) ? 3
@@ -2862,6 +2876,10 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
         if (have_grad) {
           return fmt::format("{}.sample({}, {}.xyz, gradientcube({}.xyz, {}.xyz))",
                              t, smp_v, coord, gh, gv);
+        }
+        if (cube_implicit_lod) {
+          return fmt::format("{}.sample({}, {}.xyz, bias({}))", t, smp_v, coord,
+                             lod_src);
         }
         return fmt::format("{}.sample({}, {}.xyz, level({}))", t, smp_v, coord,
                            lod_src);

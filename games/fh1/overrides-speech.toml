@@ -1,0 +1,6 @@
+# Derived from Pinyon Shift analysis config (BSD 3-Clause, Copyright 2026
+# Pinyon Shift contributors). Retain this notice with any source or binary
+# distribution of derived material.
+
+[functions]
+"0x890E2FA0" = { size = 24 }

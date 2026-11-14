@@ -1,0 +1,18 @@
+# FH1 manual declarations (our own analysis, evidence per entry).
+# setjmp/longjmp pair from Pinyon main-xex.toml (0x82A81E80 / 0x82A81950),
+# to be verified against our analyser like NFSMW did.
+setjmp_address = 0x82A81E80
+longjmp_address = 0x82A81950
+
+[functions]
+
+# XAPI fiber functions served by the SDK's host fibers (sdk/src/kernel/crt/threading.cpp).
+# Addresses from Pinyon Shift main-xex.toml [rexcrt] (BSD-3). Found from the only callers of
+# KeSetCurrentStackPointers: sub_830ED910 (reached via SwitchToFiber 0x830EBE90) is a context
+# switch that recompiled straight-line never restores the target fiber's registers (input6 probe).
+[rexcrt]
+ConvertThreadToFiber = 0x830EBC70
+ConvertFiberToThread = 0x830EBD00
+CreateFiber = 0x830EBD50
+DeleteFiber = 0x830EBE30
+SwitchToFiber = 0x830EBE90

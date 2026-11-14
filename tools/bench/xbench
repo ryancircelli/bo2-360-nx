@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Repeated paired offline GPU trace A/B benchmark with picture checks."""
+import argparse
+import hashlib
+import json
+import math
+import os
+import pathlib
+import statistics
+import subprocess
+import tempfile
+import time
+
+T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+       6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228}
+
+
+def interval(values):
+    if len(values) < 2:
+        return None
+    error = T95.get(len(values) - 1, 1.96) * statistics.stdev(values) / math.sqrt(len(values))
+    return statistics.mean(values) - error, statistics.mean(values) + error
+
+
+def ratio_summary(log_ratios):
+    center = statistics.mean(log_ratios)
+    ci = interval(log_ratios)
+    return {
+        "geometric_mean_on_off": math.exp(center),
+        "ci95_on_off": [math.exp(v) for v in ci] if ci else None,
+        "log_ratios": log_ratios,
+    }
+
+
+def steady_metrics(data):
+    passes = data["pass_list"][1:] or data["pass_list"]
+    frames = data["frames_per_pass"]
+    return {
+        "command_thread_ms_per_frame": statistics.median(p["cp_cpu_ms"] for p in passes) / frames,
+        "command_wall_ms_per_frame": statistics.median(p["cp_wall_ms"] for p in passes) / frames,
+        "pass_wall_ms_per_frame": statistics.median(p["pass_wall_ms"] for p in passes) / frames,
+        "encode_thread_ms_per_frame": statistics.median(p.get("encode_cpu_ms", 0) for p in passes) / frames,
+        "draws_per_frame": data["draws_per_pass"] / frames,
+        "frames": frames,
+        "passes": passes,
+    }
+
+
+def picture_hash(replay, trace, plugin, cvar, draws, base=()):
+    """Hash color-target deltas over three 128-draw windows (early, middle, last).
+
+    The final draw alone often has no render target (menus), and capturing every
+    draw costs ~26 s per state on a 15k-draw trace, so windows are a compromise.
+    """
+    window = 128
+    starts = sorted({max(0, draws // 4), max(0, draws * 3 // 5), max(0, draws - window)})
+    hashes = []
+    for start in starts:
+        with tempfile.TemporaryDirectory(prefix="xbench-hash-") as td:
+            subprocess.run([
+                str(replay), str(trace), "-o", td, "--plugin", str(plugin), "--backend", "any",
+                "--draws", f"{start}:{window}", "--no-depth", "--log-level", "error",
+                "--cvar", cvar, *[x for b in base for x in ("--cvar", b)],
+            ], check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            draws_file = pathlib.Path(td, "draws.jsonl")
+            if draws_file.exists():
+                for line in draws_file.read_text().splitlines():
+                    row = json.loads(line)
+                    for target in row.get("targets", []):
+                        hashes.append(f'{row["draw"]}:{target["key"]}:{target["hash"]}')
+    return hashlib.sha256("\n".join(hashes).encode()).hexdigest() if hashes else None
+
+
+def inproc_rows(args, item, trace, env):
+    """One process per trace: every cvar gets off,on,on,off blocks interleaved with the others."""
+    names, onvals = [], []
+    for setting in args.cvar:
+        name, value = setting.split("=", 1)
+        names.append(name)
+    out = []
+    timed = item.get("timing", True)
+    samples = {n: {"on": [], "off": []} for n in names}
+    draws = frames = None
+    if timed:
+        blocks = args.repeats * len(names)
+        with tempfile.TemporaryDirectory(prefix="xbench-") as td:
+            command = [str(args.replay), str(trace), "-o", td, "--plugin", str(args.plugin),
+                       "--backend", "any", "--bench", str(1 + 4 * blocks), "--log-level", "error"]
+            for base in args.base_cvar:
+                command += ["--cvar", base]
+            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, env=dict(env, REX_REPLAY_BENCH_AB=",".join(names)))
+            data = json.loads(pathlib.Path(td, "bench.json").read_text())
+        frames = data["frames_per_pass"]
+        draws = data["draws_per_pass"]
+        steady = data["pass_list"][1:]
+        for b in range(0, len(steady) - 3, 4):
+            block = steady[b:b + 4]
+            name = names[block[0]["ab_cvar"]]
+            for arm, key in ((0, "off"), (1, "on")):
+                sel = [p for p in block if p["ab_arm"] == arm]
+                mean = lambda f: statistics.mean(p[f] for p in sel) / frames
+                samples[name][key].append({
+                    "command_thread_ms_per_frame": mean("cp_cpu_ms"),
+                    "command_wall_ms_per_frame": mean("cp_wall_ms"),
+                    "pass_wall_ms_per_frame": mean("pass_wall_ms"),
+                    "encode_thread_ms_per_frame": mean("encode_cpu_ms"),
+                    "draws_per_frame": draws / frames, "frames": frames})
+    for name in names:
+        hashes = {}
+        if item.get("hash", False) and not args.no_hash:
+            n = None
+            with tempfile.TemporaryDirectory(prefix="xbench-n-") as td:
+                probe = subprocess.run([str(args.replay), str(trace), "-o", td, "--plugin", str(args.plugin),
+                                        "--backend", "any", "--bench", "1", "--log-level", "error"],
+                                       check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+                d = json.loads(pathlib.Path(td, "bench.json").read_text())
+                n = d["draws_per_pass"]
+            for state, val in (("off", "false"), ("on", "true")):
+                hashes[state] = picture_hash(args.replay, trace, args.plugin, f"{name}={val}", n, args.base_cvar)
+        row = {"game": item["game"], "trace": str(trace), "cvar": name, "metric": args.metric,
+               "frames": frames, "draws_per_frame": draws / frames if draws else None,
+               "picture_hash": hashes,
+               "picture_match": (hashes["on"] is not None and hashes["on"] == hashes["off"]) if hashes else None}
+        if timed:
+            lr = [math.log(b[args.metric] / a[args.metric])
+                  for a, b in zip(samples[name]["off"], samples[name]["on"])]
+            row.update(samples=samples[name], **ratio_summary(lr))
+            row["noise_cv_off"] = (statistics.stdev(x[args.metric] for x in samples[name]["off"]) /
+                                   statistics.mean(x[args.metric] for x in samples[name]["off"])
+                                   if len(samples[name]["off"]) > 1 else None)
+        out.append(row)
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--replay", required=True, type=pathlib.Path)
+    parser.add_argument("--plugin", required=True, type=pathlib.Path)
+    parser.add_argument("--manifest", required=True, type=pathlib.Path,
+                        help="JSON list of {game,trace}; relative traces resolve beside the manifest")
+    parser.add_argument("--cvar", action="append", required=True,
+                        help="name=on/off; compared with its inverse (repeatable)")
+    parser.add_argument("--base-cvar", action="append", default=[],
+                        help="name=value applied to every replay (both states), e.g. metal_encode_thread=true")
+    parser.add_argument("--inproc", action="store_true",
+                        help="one process per trace+cvar; flip the cvar between passes (REX_REPLAY_BENCH_AB, "
+                             "off,on,on,off blocks); --repeats = number of 4-pass blocks")
+    parser.add_argument("--repeats", type=int, default=5, help="paired A/B repetitions per trace")
+    parser.add_argument("--passes", type=int, default=5, help="passes inside each replay; pass 1 is warm-up")
+    parser.add_argument("--no-hash", action="store_true", help="skip final-draw color hash")
+    parser.add_argument("--metric", default="command_thread_ms_per_frame",
+                        choices=["command_thread_ms_per_frame", "command_wall_ms_per_frame",
+                                 "pass_wall_ms_per_frame", "encode_thread_ms_per_frame"])
+    parser.add_argument("--output", type=pathlib.Path, default=pathlib.Path("xbench-results.json"))
+    args = parser.parse_args()
+    if args.repeats < 2 or args.passes < 2:
+        parser.error("--repeats and --passes must be at least 2")
+    started = time.monotonic()
+    env = dict(os.environ, REX_AUDIO_MUTE="true")
+    rows = []
+    comparisons = []
+    items = json.loads(args.manifest.read_text())
+    for item in items:
+        trace = pathlib.Path(item["trace"])
+        if not trace.is_absolute():
+            trace = args.manifest.parent / trace
+        if args.inproc:
+            for row in inproc_rows(args, item, trace, env):
+                rows.append(row)
+                if "geometric_mean_on_off" in row:
+                    comparisons.append(row)
+                print(f'{item["game"]} {trace.stem} {row["cvar"]}: ' +
+                      (f'on/off={row["geometric_mean_on_off"]:.4f} CI95={row["ci95_on_off"]} ' if "geometric_mean_on_off" in row else "") +
+                      f'picture_match={row["picture_match"]}', flush=True)
+            continue
+        for setting in args.cvar:
+            name, on_value = setting.split("=", 1)
+            on = on_value.lower() in ("true", "on", "1")
+            off_value = "false" if on else "true"
+            on_value = "true" if on else "false"
+            states = {"on": f"{name}={on_value}", "off": f"{name}={off_value}"}
+            samples = {"on": [], "off": []}
+            for repetition in range(args.repeats):
+                order = ("off", "on") if repetition % 2 == 0 else ("on", "off")
+                for state in order:
+                    with tempfile.TemporaryDirectory(prefix="xbench-") as td:
+                        command = [str(args.replay), str(trace), "-o", td, "--plugin", str(args.plugin),
+                                   "--backend", "any", "--bench", str(args.passes), "--log-level", "error",
+                                   "--cvar", states[state]]
+                        for base in args.base_cvar:
+                            command += ["--cvar", base]
+                        subprocess.run(command, check=True, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, env=env)
+                        data = json.loads(pathlib.Path(td, "bench.json").read_text())
+                        samples[state].append(steady_metrics(data))
+            if len({sample["draws_per_frame"] for values in samples.values() for sample in values}) != 1:
+                raise RuntimeError(f"draw count changed for {trace} {name}")
+            hashes = {}
+            if not args.no_hash:
+                for state in ("off", "on"):
+                    hashes[state] = picture_hash(args.replay, trace, args.plugin, states[state],
+                                                 int(samples[state][0]["draws_per_frame"] * samples[state][0]["frames"]),
+                                                 args.base_cvar)
+            log_ratios = [math.log(b[args.metric] / a[args.metric])
+                          for a, b in zip(samples["off"], samples["on"])]
+            row = {"game": item["game"], "trace": str(trace), "cvar": name, "metric": args.metric,
+                   "samples": samples, "picture_hash": hashes,
+                   "picture_match": (hashes.get("on") is not None and hashes.get("on") == hashes.get("off")) if hashes else None,
+                   **ratio_summary(log_ratios)}
+            rows.append(row)
+            comparisons.append(row)
+            print(f'{item["game"]} {trace.stem} {name}: on/off={row["geometric_mean_on_off"]:.4f} '
+                  f'CI95={row["ci95_on_off"]} picture_match={row["picture_match"]}', flush=True)
+    games = {}
+    for row in comparisons:
+        games.setdefault(row["cvar"], {}).setdefault(row["game"], {})[row["trace"]] = row["geometric_mean_on_off"]
+    game_summary = {cvar: {game: ratio_summary([math.log(v) for v in values.values()])
+                           for game, values in by_game.items()}
+                    for cvar, by_game in games.items()}
+    cross_game = {cvar: (next(iter(by_game.values())) if len(by_game) == 1 else
+                         ratio_summary([math.log(v["geometric_mean_on_off"]) for v in by_game.values()]))
+                  for cvar, by_game in game_summary.items()}
+    result = {"rows": rows, "per_game": game_summary, "cross_game": cross_game,
+              "elapsed_seconds": time.monotonic() - started}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    for cvar, by_game in game_summary.items():
+        for game, summary in by_game.items():
+            print(f'{cvar} {game}: mean on/off={summary["geometric_mean_on_off"]:.4f}')
+        print(f'{cvar} cross-game geometric mean on/off={cross_game[cvar]["geometric_mean_on_off"]:.4f}')
+    print(f'elapsed={result["elapsed_seconds"]:.1f}s; output={args.output}')
+
+
+if __name__ == "__main__":
+    main()
