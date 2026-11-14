@@ -1,4 +1,4 @@
-"""Build and run the title manifest reader test (sdk/src/core/game_manifest.cpp, games/bo2/game.toml)."""
+"""Build and run the title manifest reader test (sdk/src/core/game_manifest.cpp, games/*/game.toml)."""
 from pathlib import Path
 import os
 import shutil
@@ -19,7 +19,9 @@ def main():
                         str(ROOT / "sdk/src/core/game_manifest.cpp"), "-o", str(executable)],
                        check=True, cwd=ROOT)
         subprocess.run([str(executable), str(ROOT / "games/bo2/game.toml"),
-                        str(ROOT / "sdk/src/graphics/metal/metal_flags.cpp")], check=True, cwd=ROOT, timeout=30)
+                        str(ROOT / "sdk/src/graphics/metal/metal_flags.cpp"),
+                        *(str(ROOT / f"games/{name}/game.toml") for name in ("nfsmw", "fh1", "bo1"))],
+                       check=True, cwd=ROOT, timeout=30)
 
 
 if __name__ == "__main__":
