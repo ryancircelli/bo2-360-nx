@@ -6,14 +6,23 @@
   runq submit [options] [--app APP] -- CMD ARGS...                                any command ({APP} {OUT} {PORT})
       options: --name N  --out DIR  --class C  --owner O  --timeout S  --env K=V (repeatable)
                --priority (= --class ship)  --wait (block until done, exit with the job's exit code)
+               --urgent (class-perf only: start a one-job perf batch as soon as the machine/builds drain)
                --solo (wait until no other game runs, then hold the machine alone; the default for class perf,
                --no-solo turns it off). Use --solo for FPS numbers and for proofs of timing-dependent bugs.
-               --quiet-machine stops builds, waits for load < 16 for at most 300 s, and records the load and avg/min FPS.
+               --quiet-machine stops builds, requires AC and the configured minimum adapter wattage, waits for load < 16
+               for at most 300 s, and records machine conditions and avg/min FPS.
       classes, first to run first: ship (0, ship-gate smokes), harness (1, harness/golden captures),
                proof (2, bug proof runs), sweep (3, scene sweeps; the default), perf (4, perf A/B), or a number.
       Within a class, jobs take turns by owner (--owner, else $RUNQ_OWNER, else the --name up to its first '-'):
       the owner with the fewest running jobs, then the one served longest ago; FIFO within an owner.
       prints:  "job <id> out <dir>"   (the result dir; <dir>/result.json and result.txt once done)
+      --where mac|any|laptop   mac (default) runs here. laptop = only the drawer laptop's pull worker runs it; any = the
+               laptop when it is idle and reachable, else this Mac. Only plain `-- CMD` jobs (no --app/scene/route/solo/
+               quiet-machine/perf): CPU-only work, no GPU, no game. The command runs with RUNQ_HOST=mac|laptop, and
+               {OUT} is the job's out dir on either host. --input PATH (repeatable, Mac path) is copied to {IN}/<name>
+               first; everything in {OUT} (except in/) is copied back to the Mac's job folder, then the result is recorded.
+               A laptop job killed by a signal, timed out, or whose worker vanished (no beat for 120 s) is requeued (3 tries;
+               then `any` falls back to the Mac, `laptop` is recorded lost).
   runq wait ID [ID...]      block until the jobs are done (no polling needed on the caller's side); exit = worst exit
   runq status               the queue in run order with estimated start times, running jobs, build throttle
   runq cancel ID            dequeue, or stop a running job (its own process group only)
@@ -38,21 +47,104 @@ and holds back build tokens while a game runs. Any runq/buildq command starts it
 result.json records the slot count, solo, and the games running during the job (conditions.games_start / games_mean /
 games_max, full_speed = no other game at any sample), so a 3-game run is never read as a full-speed one.
 """
-import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, time
+import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, tempfile, time
 
 SPOOL = os.path.expanduser(os.environ.get('RUNQ_SPOOL', '~/Games/Xbox360/bo2-build/runq'))
-D = {k: os.path.join(SPOOL, k) for k in ('queue', 'running', 'done', 'jobs', 'builds', 'bin')}
+D = {k: os.path.join(SPOOL, k) for k in ('queue', 'running', 'done', 'jobs', 'builds', 'bin', 'remote')}
 FIFO = os.path.join(SPOOL, 'pool.fifo')
 POOL_LOCK = os.path.join(SPOOL, 'pool.lock')
+BUILD_EXEC_LOCK = os.path.join(SPOOL, 'build-exec.lock')
 DAEMON_LOCK = os.path.join(SPOOL, 'daemon.lock')
 STATE = os.path.join(SPOOL, 'state.json')
 DLOG = os.path.join(SPOOL, 'daemon.log')
+HOLD_PERF_FILE = os.path.join(SPOOL, 'hold-perf')
+LAPTOP_HB = os.path.join(SPOOL, 'laptop.json')   # the laptop worker's last poll: {t, busy, load, worker}
+LAPTOP_FRESH_S = 45        # a poll newer than this counts as 'laptop reachable'
+LAPTOP_LEASE_S = 120       # a claimed job with no beat for this long goes back to the queue
+LAPTOP_MAX_ATTEMPTS = 3
+
+
+def wanted_power_mode(running_jobs):
+    """Owner rule 2026-11-12: measured (quiet-machine) runs execute in Low Power Mode (1), everything else -- builds,
+    picture checks, idle -- in High Power Mode (2). A running job with env RUNQ_POWERMODE=keep sets the mode itself."""
+    if any((j.get('env') or {}).get('RUNQ_POWERMODE') == 'keep' for j in running_jobs):
+        return None
+    return 1 if any(j.get('quiet_machine') for j in running_jobs) else 2
+
+
+def set_power_mode(mode):
+    """Needs the passwordless sudoers entry /etc/sudoers.d/bo2-lowpower; returns True when pmset accepted it."""
+    try:
+        return subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/pmset', '-a', 'powermode', str(mode)],
+                              capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 HERE = os.path.dirname(os.path.realpath(__file__))
 DEFAULTS = {'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'run_cap': 12, 'port_base': 60000, 'kill_grace_s': 15}
-COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift-frontend|metal|metallib|'
-                       r'dxc|rustc|cc|c\+\+)$')
+COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift|swiftc|swift-frontend|'
+                       r'metal|metallib|dxc|rustc|cc|c\+\+|ninja(?:-build)?|sccache|ccache)$')
+BUILD_TOOL = re.compile(r'^(dotnet|msbuild|xcodebuild|cmake|make|gmake|cargo|bazel|buck|scons|meson|gradle|ant)$', re.I)
+BUILD_COMMAND_HINT = re.compile(r'(^|[ /])(?:MSBuild(?:\.dll)?|build(?:\.(?:sh|py))?|cmake|ninja|cargo|bazel|xcodebuild)(?:$|[ /])', re.I)
+PERF_ACTIVITY_QUIET_S = 120
 QUIET_LOAD_LIMIT = 16
 QUIET_WAIT_CAP_S = 300
+QUIET_MIN_ADAPTER_W = 90
+BUILD_INTERLEAVE_WINDOW_S = 12 * 60
+BUILD_WAIT_BEFORE_WINDOW_S = 5 * 60
+PERF_BATCH_AGE_S = 30 * 60
+COMPILE_CPU_DELTA_THRESHOLD_S = 0.05
+COMPILER_INVALID_CPU_S = 2.0
+COMPILER_INVALID_WALL_S = 5.0
+_COMPILER_CPU_LAST = {}
+_PERF_ACTIVITY_CPU_LAST = {}
+PROCESS_SNAPSHOT = []
+
+
+def power_source():
+    """Return the current AC adapter and battery state for measured quiet-machine runs."""
+    try:
+        p = subprocess.run(['/usr/sbin/system_profiler', '-json', 'SPPowerDataType'],
+                           capture_output=True, text=True, timeout=12, check=True)
+        sections = json.loads(p.stdout).get('SPPowerDataType', [])
+        byname = {s.get('_name'): s for s in sections if isinstance(s, dict)}
+        charger = byname.get('sppower_ac_charger_information', {})
+        battery = byname.get('spbattery_information', {}).get('sppower_battery_charge_info', {})
+        power = byname.get('sppower_information', {}).get('AC Power', {})
+        watts = int(charger.get('sppower_ac_charger_watts', 0))
+        if watts <= 0:
+            # system_profiler sometimes omits the wattage on a connected adapter (seen 2026-11-12 22:21: a valid
+            # 94 W run was marked invalid as 0 W). pmset reads the same adapter directly.
+            try:
+                q = subprocess.run(['/usr/bin/pmset', '-g', 'ac'], capture_output=True, text=True, timeout=5)
+                m = re.search(r'Wattage\s*=\s*(\d+)\s*W', q.stdout)
+                if m:
+                    watts = int(m.group(1))
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return {
+            'connected': charger.get('sppower_battery_charger_connected') == 'TRUE',
+            'ac': power.get('Current Power Source') == 'TRUE',
+            'watts': watts,
+            'charge': int(battery.get('sppower_battery_state_of_charge', 0)),
+            'charging': charger.get('sppower_battery_is_charging') == 'TRUE',
+        }
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as e:
+        raise RuntimeError(f'cannot read power source: {e}') from e
+
+
+def adapter_hold_reason(job, power):
+    """Return why a quiet/perf job must wait for power, or None when its gate is met."""
+    if not (job.get('quiet_machine') or job_class(job) == 4):
+        return None
+    minimum = int((job.get('env') or {}).get('RUNQ_MIN_ADAPTER_W', QUIET_MIN_ADAPTER_W))
+    if not power or power.get('error'):
+        return 'held: power telemetry unavailable'
+    if not power.get('connected') or not power.get('ac'):
+        return 'held: no charger'
+    watts = int(power.get('watts', 0))
+    if watts < minimum:
+        return f'held: adapter {watts} W below {minimum} W'
+    return None
 
 
 def cfg():
@@ -103,12 +195,422 @@ def alive(pid):
         return True
 
 
-def compile_procs():
+def is_compiler_process(proc):
+    if COMPILERS.match(proc.get('exe', '')):
+        return True
+    if proc.get('exe') != 'xcrun':
+        return False
     try:
-        out = subprocess.run(['ps', '-axo', 'comm='], capture_output=True, text=True, timeout=10).stdout
+        argv = shlex.split(proc.get('command', ''))
+    except ValueError:
+        argv = proc.get('command', '').split()
+    return any(COMPILERS.match(os.path.basename(arg)) for arg in argv[1:])
+
+
+def compiler_processes():
+    """Return compiler/build process identities from full argv, not truncated ps comm names."""
+    global PROCESS_SNAPSHOT
+    try:
+        out = subprocess.run(['ps', '-axo', 'pid=,ppid=,stat=,etime=,time=,args='], capture_output=True, text=True,
+                             timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
+        return None
+    found, all_processes = [], []
+    for line in out.splitlines():
+        m = re.match(r'^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$', line)
+        if not m:
+            continue
+        pid, ppid = int(m.group(1)), int(m.group(2))
+        state = m.group(3)
+        elapsed_s, cpu_s = parse_ps_cpu_time(m.group(4)), parse_ps_cpu_time(m.group(5))
+        command = m.group(6).strip()
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            argv = command.split()
+        if not argv:
+            continue
+        exe = os.path.basename(argv[0])
+        proc = {'pid': pid, 'ppid': ppid, 'state': state, 'exe': exe, 'cpu_s': cpu_s, 'elapsed_s': elapsed_s,
+                'command': command[:1000]}
+        all_processes.append(proc)
+        if is_compiler_process(proc):
+            found.append(proc)
+    PROCESS_SNAPSHOT = all_processes
+    return found
+
+
+def parse_ps_cpu_time(value):
+    value = value.split('-', 1)[-1]
+    fields = value.split(':')
+    try:
+        seconds = float(fields[-1])
+        if len(fields) >= 2:
+            seconds += 60 * int(fields[-2])
+        if len(fields) >= 3:
+            seconds += 3600 * int(fields[-3])
+        return seconds
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def compile_procs():
+    found = compiler_processes()
+    if found is None:
         return -1
-    return sum(1 for line in out.splitlines() if COMPILERS.match(os.path.basename(line.strip())))
+    active, _ = cpu_active_processes(found, _COMPILER_CPU_LAST)
+    return len(active)
+
+
+_OUTSIDE_COMPILER_CPU_LAST = {}
+
+
+def outside_compile_procs():
+    """CPU-active compilers that no registered buildq build owns. During a speed batch only these delay the next
+    measured run: buildq-owned compilers are frozen (SIGSTOP) when the run starts, and waiting for them to go idle
+    never ends, because every running build keeps one job going at build cap 0."""
+    found = compiler_processes()
+    if found is None:
+        return -1
+    active, _ = cpu_active_processes(found, _OUTSIDE_COMPILER_CPU_LAST)
+    return len(outside_build_activity(active, buildq_owned_processes(PROCESS_SNAPSHOT)))
+
+
+def external_build_activity():
+    """Return build/compiler processes using CPU this sample, or None if process inspection failed."""
+    found = compiler_processes()
+    if found is None:
+        return None
+    buildq_pids = buildq_owned_processes(PROCESS_SNAPSHOT)
+    activity_candidates = [proc for proc in PROCESS_SNAPSHOT if is_build_activity_process(proc)]
+    candidates = outside_build_activity(activity_candidates, buildq_pids)
+    active, _ = cpu_active_processes(candidates, _PERF_ACTIVITY_CPU_LAST)
+    return active
+
+
+def registered_buildq_builds():
+    builds = []
+    for name in os.listdir(D['builds']):
+        if not name.endswith('.json'):
+            continue
+        build = rjson(os.path.join(D['builds'], name)) or {}
+        if any(pid and alive(pid) for pid in (build.get('pid'), build.get('child_pid'))):
+            builds.append(build)
+    return builds
+
+
+def path_inside(path, root):
+    if not path or not root:
+        return False
+    try:
+        return os.path.commonpath([os.path.realpath(path), os.path.realpath(root)]) == os.path.realpath(root)
+    except (OSError, ValueError):
+        return False
+
+
+def compiler_path_args(command):
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+    paths, i = [], 1
+    source = re.compile(r'\.(?:c|cc|cpp|cxx|m|mm|s|swift|rs|metal)$', re.I)
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ('-o', '--output') and i + 1 < len(argv):
+            i += 1
+            paths.append(argv[i])
+        elif arg.startswith('--output='):
+            paths.append(arg.split('=', 1)[1])
+        elif arg.startswith('-o') and len(arg) > 2:
+            paths.append(arg[2:])
+        elif not arg.startswith('-') and source.search(arg):
+            paths.append(arg)
+        i += 1
+    return paths
+
+
+def compiler_belongs_to_build(proc, build_cwd, cwd_by_pid):
+    cwd = cwd_by_pid.get(proc['pid'])
+    if path_inside(cwd, build_cwd):
+        return True
+    for arg in compiler_path_args(proc.get('command', '')):
+        path = arg if os.path.isabs(arg) else os.path.join(cwd or build_cwd or '', arg)
+        if path_inside(path, build_cwd):
+            return True
+    return False
+
+
+def buildq_owned_processes(processes):
+    """Return registered build trees plus compilers reattributed by cwd/source/output paths."""
+    builds = registered_buildq_builds()
+    roots = {int(pid) for build in builds for pid in (build.get('pid'), build.get('child_pid')) if pid}
+    found = descendant_pids(processes, roots)
+    candidates = [proc for proc in processes if proc['pid'] not in found and is_compiler_process(proc)]
+    cwds = process_cwds([proc['pid'] for proc in candidates])
+    for proc in candidates:
+        if any(compiler_belongs_to_build(proc, build.get('cwd'), cwds) for build in builds):
+            found.add(proc['pid'])
+    return found
+
+
+def leftover_build_compilers(build, processes, cwd_by_pid=None, other_builds=()):
+    roots = {int(pid) for pid in (build.get('pid'), build.get('child_pid')) if pid}
+    tree = descendant_pids(processes, roots)
+    candidates = [proc for proc in processes if is_compiler_process(proc)]
+    cwds = cwd_by_pid if cwd_by_pid is not None else process_cwds([proc['pid'] for proc in candidates])
+    return [proc for proc in candidates if proc['pid'] in tree or (
+        compiler_belongs_to_build(proc, build.get('cwd'), cwds) and
+        not any(compiler_belongs_to_build(proc, other.get('cwd'), cwds) for other in other_builds))]
+
+
+def kill_leftover_build_compilers(build, kill=os.kill):
+    found = compiler_processes()
+    if found is None:
+        return []
+    others = [other for other in registered_buildq_builds() if other.get('pid') != build.get('pid')]
+    leftovers = leftover_build_compilers(build, PROCESS_SNAPSHOT, other_builds=others)
+    killed = []
+    for proc in leftovers:
+        try:
+            kill(proc['pid'], signal.SIGKILL)
+            killed.append(proc['pid'])
+        except (ProcessLookupError, PermissionError):
+            pass
+    return killed
+
+
+def descendant_pids(processes, roots):
+    children = {}
+    for proc in processes:
+        children.setdefault(proc['ppid'], []).append(proc['pid'])
+    found, pending = set(), list(roots)
+    while pending:
+        pid = pending.pop()
+        if pid in found:
+            continue
+        found.add(pid)
+        pending.extend(children.get(pid, []))
+    return found
+
+
+def outside_build_activity(activity, tracked_buildq_pids):
+    return [proc for proc in activity if proc['pid'] not in tracked_buildq_pids]
+
+
+def is_build_activity_process(proc):
+    xcrun_compiler = proc['exe'] == 'xcrun' and re.search(r'\b(clang|swift|metal)\b', proc['command'])
+    return bool(COMPILERS.match(proc['exe']) or xcrun_compiler or BUILD_TOOL.match(proc['exe']) or
+                BUILD_COMMAND_HINT.search(proc['command']))
+
+
+def perf_activity_hold_reason(hold_file, last_activity, now):
+    if hold_file:
+        return 'held: hold-perf file'
+    if last_activity is not None and now - last_activity < PERF_ACTIVITY_QUIET_S:
+        return 'held: outside build'
+    return None
+
+
+def restorable_external_activity(timestamp, source):
+    """Ignore legacy cooldown timestamps whose source may have been a tracked buildq job."""
+    return timestamp if source == 'outside' else None
+
+
+def read_job_log(path, start_offset):
+    if start_offset is None:
+        return ''
+    try:
+        with open(path, 'rb') as log:
+            log.seek(max(0, int(start_offset)))
+            return log.read().decode(errors='replace')
+    except (OSError, ValueError, TypeError):
+        return ''
+
+
+def parse_quiet_machine_log(text):
+    gate = {}
+    power_failure = None
+    for line in text.splitlines():
+        if line.startswith('quiet-machine gate: '):
+            fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
+            if all(k in fields for k in ('waited_s', 'load1', 'limit', 'cap_s', 'capped')):
+                gate.update(waited_s=float(fields['waited_s']), load1=float(fields['load1']),
+                            load_limit=int(fields['limit']), wait_cap_s=int(fields['cap_s']),
+                            cap_reached=fields['capped'] == 'true')
+        elif line.startswith('power-machine gate: '):
+            fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
+            for key in ('connected', 'ac', 'charging'):
+                if key in fields:
+                    gate['power_' + key] = fields[key] == 'true'
+            for key in ('watts', 'charge'):
+                if key in fields:
+                    gate['power_' + key] = int(fields[key])
+            if fields.get('failed') == 'unavailable':
+                power_failure = 'power telemetry unavailable'
+        elif line.startswith('power-machine gate failed: '):
+            power_failure = line.split('power-machine gate failed: ', 1)[1].strip()
+    return gate, power_failure
+
+
+def cpu_active_processes(processes, previous):
+    active, live = [], set()
+    for proc in processes:
+        pid = proc['pid']
+        live.add(pid)
+        old = previous.get(pid, proc['cpu_s'])
+        delta = max(0.0, proc['cpu_s'] - old)
+        previous[pid] = proc['cpu_s']
+        if delta >= COMPILE_CPU_DELTA_THRESHOLD_S:
+            active.append({**proc, 'cpu_delta_s': round(delta, 3)})
+    for pid in set(previous) - live:
+        previous.pop(pid, None)
+    return active, previous
+
+
+def process_cwds(pids):
+    """Read cwd for new compiler PIDs in one lsof call to keep sampling overhead low."""
+    pids = sorted({int(pid) for pid in pids})
+    if not pids:
+        return {}
+    try:
+        out = subprocess.run(['/usr/sbin/lsof', '-a', '-p', ','.join(map(str, pids)), '-d', 'cwd', '-Fpn'],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    result, current = {}, None
+    for line in out.splitlines():
+        if line.startswith('p'):
+            try:
+                current = int(line[1:])
+            except ValueError:
+                current = None
+        elif line.startswith('n') and current is not None:
+            result[current] = line[1:]
+    return result
+
+
+def observe_compiler_activity(processes, previous, activity, now, cwd_by_pid):
+    """Aggregate compiler CPU and runnable observation time; return per-sample CPU-active processes."""
+    active, live = [], set()
+    for proc in processes:
+        pid = proc['pid']
+        live.add(pid)
+        old = previous.get(pid, proc['cpu_s'])
+        stopped = process_is_stopped(proc)
+        delta = 0.0 if stopped else max(0.0, proc['cpu_s'] - old)
+        previous[pid] = proc['cpu_s']
+        seen = activity.setdefault(pid, {
+            'pid': pid, 'ppid': proc['ppid'], 'exe': proc['exe'], 'command': proc['command'],
+            'cwd': cwd_by_pid.get(pid), 'first_seen': now, 'last_seen': now, 'cpu_delta_s': 0.0,
+            'observed_s': 0.0, 'ps_elapsed_s': proc.get('elapsed_s', 0.0), 'last_active_seen': None,
+        })
+        if stopped:
+            seen['last_active_seen'] = None
+        else:
+            if seen.get('last_active_seen') is not None:
+                seen['observed_s'] = round(seen.get('observed_s', 0.0) +
+                                           max(0.0, now - seen['last_active_seen']), 2)
+            seen['last_active_seen'] = now
+        seen.update(ppid=proc['ppid'], exe=proc['exe'], command=proc['command'],
+                    ps_elapsed_s=proc.get('elapsed_s', seen.get('ps_elapsed_s', 0.0)),
+                    state=proc.get('state'), stopped=stopped, last_seen=now)
+        if seen.get('cwd') is None and cwd_by_pid.get(pid):
+            seen['cwd'] = cwd_by_pid[pid]
+        seen['cpu_delta_s'] = round(seen.get('cpu_delta_s', 0.0) + delta, 3)
+        if delta >= COMPILE_CPU_DELTA_THRESHOLD_S:
+            active.append({**proc, 'cwd': seen.get('cwd'), 'cpu_delta_s': round(delta, 3)})
+    for pid in set(previous) - live:
+        previous.pop(pid, None)
+    return active
+
+
+PRE_FREEZE_GRACE_S = 15.0
+
+
+def meaningful_compiler_activity(activity):
+    """Compiler activity that invalidates a measured run. Entries flagged pre_freeze are buildq-owned compilers that
+    slipped past the launch-time SIGSTOP (spawned in the same second) and were frozen in the grace window: the CPU they
+    used before the freeze is not the run's fault (job 1113-190418-5121, clang 2.47 CPU-s)."""
+    return [p for p in activity.values()
+            if not p.get('pre_freeze') and (p.get('cpu_delta_s', 0.0) > COMPILER_INVALID_CPU_S or
+            p.get('observed_s', 0.0) > COMPILER_INVALID_WALL_S)]
+
+
+def freeze_late_buildq_compilers(j, owned, now_mono, start_mono, kill=os.kill):
+    """In the first PRE_FREEZE_GRACE_S of a quiet/perf run, SIGSTOP buildq-owned processes the launch freeze missed and
+    flag their activity entries pre_freeze. Returns the pids newly frozen."""
+    if now_mono - start_mono > PRE_FREEZE_GRACE_S:
+        return []
+    frozen = []
+    qp = j.setdefault('quiet_pids', [])
+    for pid in owned:
+        ent = j.get('compiler_activity', {}).get(pid)
+        if ent is None:
+            continue
+        ent['pre_freeze'] = True
+        if pid not in qp:
+            qp.append(pid)
+            try:
+                kill(pid, signal.SIGSTOP)
+                frozen.append(pid)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return frozen
+
+
+def process_is_stopped(proc):
+    return str(proc.get('state') or '')[:1] in ('T', 't')
+
+
+def confirmed_stopped_pids(pids, processes):
+    states = {proc['pid']: proc.get('state') for proc in processes}
+    return {int(pid) for pid in pids if process_is_stopped({'state': states.get(int(pid))})}
+
+
+def top_cpu_processes(totals, limit=10):
+    return sorted(totals.values(), key=lambda p: p['cpu_s'], reverse=True)[:limit]
+
+
+def quiet_fps_required(job):
+    return (bool(job.get('quiet_machine')) and not bool(job.get('no_fps')) and
+            job_uses_boot_test(job))
+
+
+def job_uses_boot_test(job):
+    cmd = job.get('cmd') or []
+    args = [cmd] if isinstance(cmd, str) else cmd
+    return any(os.path.basename(str(arg).strip()) == 'boot_test.sh' for arg in args)
+
+
+def quiet_missing_summary_invalid(job, status):
+    return status == 'done' and quiet_fps_required(job)
+
+
+def perf_guard_required(job):
+    return job_class(job) == CLASSES['perf'] or \
+        (job.get('quiet_machine') and (job.get('env') or {}).get('RUNQ_PERF_GUARD') == 'true')
+
+
+def perf_build_gate():
+    """Wait for external compiler/ninja work before perf; active work during a run is caught by samples."""
+    start = time.monotonic()
+    initial = compiler_processes()  # baseline so token-waiting ninja does not block perf
+    if initial is not None:
+        _COMPILER_CPU_LAST.update({p['pid']: p['cpu_s'] for p in initial})
+    time.sleep(0.12)
+    active = compile_procs()
+    while active != 0:
+        remaining = QUIET_WAIT_CAP_S - (time.monotonic() - start)
+        if remaining <= 0:
+            print(f'perf-build gate failed: compiler_ninja={active} wait_cap_s={QUIET_WAIT_CAP_S} '
+                  f'processes={json.dumps(compiler_processes() or [])}', flush=True)
+            return False
+        time.sleep(min(2, remaining))
+        active = compile_procs()
+    waited = round(time.monotonic() - start, 1)
+    print(f'perf-build gate: waited_s={waited} compiler_ninja={active}', flush=True)
+    return True
 
 
 def process_tree(pid):
@@ -133,6 +635,30 @@ def process_tree(pid):
     return result
 
 
+def process_ancestors(pid=None):
+    """Return a PID and its live ancestors; quiet-mode build suspension must never stop them."""
+    pid = os.getpid() if pid is None else int(pid)
+    try:
+        rows = subprocess.run(['ps', '-axo', 'pid=,ppid='], capture_output=True, text=True,
+                              timeout=10, check=True).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return {pid}
+    parents = {}
+    for row in rows:
+        try:
+            child, parent = map(int, row.split())
+            parents[child] = parent
+        except ValueError:
+            continue
+    protected, current = set(), pid
+    while current > 1 and current not in protected:
+        protected.add(current)
+        current = parents.get(current, 1)
+    if current == 1:
+        protected.add(1)
+    return protected
+
+
 def games_outside(own_pgids):
     """bo2zm processes that are not in one of runq's job process groups (someone booted the game by hand)."""
     try:
@@ -145,6 +671,39 @@ def games_outside(own_pgids):
         if len(parts) == 3 and os.path.basename(parts[2]) == 'bo2zm' and int(parts[1]) not in own_pgids:
             found.append(int(parts[0]))
     return found
+
+
+def defer_perf_for_builds(job, interleave_active):
+    return interleave_active and job_class(job) == CLASSES['perf']
+
+
+def defer_perf_for_activity(job, interleave_active, builds_busy, compiler_busy, in_perf_batch=False):
+    return defer_perf_for_builds(job, interleave_active) or (
+        job_class(job) == CLASSES['perf'] and ((builds_busy and not in_perf_batch) or compiler_busy))
+
+
+def can_finish_daemon_shutdown(running_jobs, active_buildq, compiler_count):
+    """A daemon exits only after its runq jobs and registered builds have drained."""
+    return running_jobs == 0 and active_buildq == 0 and compiler_count == 0
+
+
+def runq_solo_active():
+    st = rjson(STATE) or {}
+    return bool(st.get('quiet_starting') or any(j.get('solo') or j.get('quiet_machine')
+                                                 for j in (st.get('running') or {}).values()))
+
+
+def buildq_command_allowed(solo_quiet_active):
+    return not solo_quiet_active
+
+
+def should_open_build_window(waiting_builds, oldest_wait_s):
+    return waiting_builds > 0 and oldest_wait_s >= BUILD_WAIT_BEFORE_WINDOW_S
+
+
+def defer_solo_for_build_window(job, window_active):
+    return window_active and (is_solo(job) or bool(job.get('quiet_machine')) or
+                              job_class(job) == CLASSES['perf'])
 
 
 def paused(c):
@@ -160,20 +719,42 @@ def paused(c):
     return (t.tm_hour, t.tm_min) < (h, m)
 
 
-def active_builds():
-    n = 0
+def active_build_count(build_pids, stopped_pids=None):
+    stopped = set(stopped_pids or [])
+    return sum(1 for pid in build_pids if pid not in stopped)
+
+
+def active_builds(stopped_pids=None):
+    pids = []
     for f in os.listdir(D['builds']):
         if not f.endswith('.json'):
             continue
         b = rjson(os.path.join(D['builds'], f)) or {}
         if b.get('pid') and alive(b['pid']):
-            n += 1
+            pids.append(int(b['pid']))
         else:
             try:
                 os.unlink(os.path.join(D['builds'], f))
             except OSError:
                 pass
-    return n
+    return active_build_count(pids, stopped_pids)
+
+
+def oldest_build_wait_s(now=None):
+    now = time.time() if now is None else now
+    waits = []
+    for f in os.listdir(D['builds']):
+        if not f.endswith('.json'):
+            continue
+        b = rjson(os.path.join(D['builds'], f)) or {}
+        registered = b.get('registered') or b.get('started')
+        if b.get('pid') and alive(b['pid']) and registered:
+            try:
+                started = time.mktime(time.strptime(registered, '%Y-%m-%d %H:%M:%S'))
+                waits.append(max(0, now - started))
+            except ValueError:
+                continue
+    return max(waits, default=0)
 
 
 # ------------------------------------------------------------------ daemon
@@ -190,6 +771,31 @@ def daemon_running():
     return False
 
 
+def spawn_detached_daemon(executable):
+    """Double-fork so the daemon is orphaned before the submitting command returns."""
+    first = os.fork()
+    if first:
+        os.waitpid(first, 0)
+        return
+    try:
+        os.setsid()
+        second = os.fork()
+        if second:
+            os._exit(0)
+        null_fd = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(null_fd, 0)
+        log_fd = os.open(DLOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        os.dup2(log_fd, 1)
+        os.dup2(log_fd, 2)
+        os.execv(sys.executable, [sys.executable, '-I', executable, '_daemon'])
+    except BaseException as e:
+        try:
+            os.write(2, f'runq: detached daemon start failed: {e}\\n'.encode())
+        except OSError:
+            pass
+    os._exit(1)
+
+
 def ensure_daemon(fatal=True):
     if daemon_running():
         return True
@@ -197,9 +803,7 @@ def ensure_daemon(fatal=True):
         print('runq: starting the daemon from a niced shell; games would inherit the nice value. Run any runq '
               'command once without nice first.', file=sys.stderr)
     me = os.path.realpath(__file__)
-    with open(DLOG, 'a') as log:
-        subprocess.Popen([sys.executable, '-I', me, '_daemon'], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                         start_new_session=True, close_fds=True)
+    spawn_detached_daemon(me)
     for _ in range(100):
         st = rjson(STATE) or {}
         if st.get('pid') and alive(st['pid']) and daemon_running():
@@ -237,11 +841,26 @@ class Daemon:
     def __init__(self):
         self.c = cfg()
         self.held = 0           # build tokens the daemon holds back while games run
+        self.power_checked_at = 0.0
+        self.power_status = None
+        self.power_hold = None
+        self.perf_hold = None
+        self.last_external_build_activity = None
+        self.protected_pids = process_ancestors(os.getpid())
         self.jobs = {}          # id -> {proc, job, slot, start, samples, cancel}
         self.quiet_starting = False
         self.last_repair = 0.0
         self.outside = []
-        self.last_start = (rjson(STATE) or {}).get('last_start_by_owner') or {}
+        st = rjson(STATE) or {}
+        self.last_start = st.get('last_start_by_owner') or {}
+        self.last_external_build_activity = restorable_external_activity(
+            st.get('last_external_build_activity'), st.get('last_external_build_activity_source'))
+        self.last_external_build_activity_source = ('outside' if self.last_external_build_activity is not None else None)
+        self.build_interleave_until = float(self.c.get('build_interleave_until') or st.get('build_interleave_until') or 0)
+        if self.build_interleave_until > time.time() + BUILD_INTERLEAVE_WINDOW_S:
+            self.build_interleave_until = time.time() + BUILD_INTERLEAVE_WINDOW_S
+        self.perf_batch = set(st.get('perf_batch') or [])
+        self.stop_requested = False
 
     def log(self, msg):
         print(f'[{now_s()}] {msg}', flush=True)
@@ -288,8 +907,20 @@ class Daemon:
     def cap_now(self):
         """(cap, why): game_cap while a measured job runs, run_cap while only unmeasured games run (games started
         outside runq count as unmeasured), idle_cap with no game."""
-        quiet = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if j['job'].get('quiet_machine')]
-        if quiet or self.quiet_starting:
+        build_window = self.build_interleave_active()
+        quiet = [j['job'].get('name', j['job']['id']) for j in self.jobs.values()
+                 if j['job'].get('quiet_machine') or is_solo(j['job']) or
+                 job_class(j['job']) == CLASSES['perf']]
+        if build_window and not quiet and not self.quiet_starting:
+            measured = [j['job'].get('name', j['job']['id']) for j in self.jobs.values()
+                        if is_measured(j['job'])]
+            if measured:
+                return self.c['game_cap'], 'build window with measured game(s): ' + ', '.join(measured)
+            if self.jobs or self.outside:
+                return min(self.c.get('run_cap', 12), self.c['idle_cap']), \
+                    f'build window with {len(self.jobs) + len(self.outside)} unmeasured game(s)'
+            return self.c['idle_cap'], 'build window: no solo jobs; idle build cap'
+        if quiet or self.quiet_starting or self.perf_batch:
             return 0, 'quiet machine: ' + (', '.join(quiet) if quiet else 'preparing')
         measured = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if is_measured(j['job'])]
         if measured:
@@ -337,8 +968,9 @@ class Daemon:
         src = os.path.join(D['queue'], qfile)
         job = rjson(src)
         if not job:
-            os.unlink(src)
-            return
+            if os.path.exists(src):
+                os.unlink(src)
+            return   # (or the laptop worker claimed it between pick and launch)
         used = {j['slot'] for j in self.jobs.values()}
         slot = min(set(range(self.c['slots'])) - used)
         out = job['out']
@@ -356,15 +988,29 @@ class Daemon:
                 return
             app = dst
         port = str(self.c['port_base'] + 2000 * slot)
-        subst = {'{APP}': app, '{OUT}': out, '{PORT}': port, '{SLOT}': str(slot)}
-        cmd = [subst.get(a, a) for a in job['cmd']]
-        cmd = [re.sub(r'\{(APP|OUT|PORT|SLOT)\}', lambda m: subst['{' + m.group(1) + '}'], a) for a in cmd]
+        subst = {'{APP}': app, '{OUT}': out, '{PORT}': port, '{SLOT}': str(slot), '{IN}': os.path.join(out, 'in')}
+        if job.get('inputs'):   # same layout the laptop worker builds: {IN}/<basename> (symlinks here, nothing to copy)
+            os.makedirs(subst['{IN}'], exist_ok=True)
+            for ip in job['inputs']:
+                link = os.path.join(subst['{IN}'], os.path.basename(ip.rstrip('/')))
+                if not os.path.lexists(link):
+                    os.symlink(ip, link)
+        cmd = [subst.get(a, a) if a in subst else (a.replace('{OUT}', out).replace('{IN}', subst['{IN}']) if job.get('where') else a)
+               for a in job['cmd']]
+        cmd = [re.sub(r'\{(APP|OUT|PORT|SLOT|IN)\}', lambda m: subst['{' + m.group(1) + '}'], a) for a in cmd]
         quiet_pids = []
-        if job.get('quiet_machine'):
+        exec_lock_fd = None
+        if job.get('quiet_machine') or is_solo(job) or job_class(job) == CLASSES['perf']:
+            # Class-perf always means a measured quiet-machine run, even if an older
+            # queued manifest omitted --quiet-machine.
+            if job.get('quiet_machine') or job_class(job) == CLASSES['perf']:
+                job['quiet_machine'] = True
             self.quiet_starting = True
+            exec_lock_fd = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+            fcntl.flock(exec_lock_fd, fcntl.LOCK_EX)
             self.throttle()
             def stop_build_pid(pid):
-                if pid in quiet_pids or not alive(pid):
+                if pid in quiet_pids or pid in self.protected_pids or not alive(pid):
                     return
                 # Persist intent first: recovery may SIGCONT a process that was not stopped yet, harmlessly.
                 quiet_pids.append(pid)
@@ -375,27 +1021,38 @@ class Daemon:
                 except (ProcessLookupError, PermissionError):
                     pass
 
-            for f in os.listdir(D['builds']):
-                b = rjson(os.path.join(D['builds'], f)) or {}
-                pid = b.get('pid')
-                if pid and alive(pid):
-                    # Freeze the token owner first so it cannot start another compiler while its tree is inspected.
+            builds = registered_buildq_builds()
+            roots = {int(pid) for build in builds for pid in (build.get('pid'), build.get('child_pid')) if pid}
+            # Stop every token owner before inspecting children so none can spawn another compiler.
+            for pid in roots:
+                stop_build_pid(pid)
+            if compiler_processes() is not None:
+                for pid in buildq_owned_processes(PROCESS_SNAPSHOT):
                     stop_build_pid(pid)
+            else:
+                for pid in roots:
                     for child in process_tree(pid):
-                        if child == pid:
-                            continue
                         stop_build_pid(child)
             job['quiet_build_pids'] = quiet_pids
             wjson(src, job)  # recover the suspension even if the daemon exits before Popen/run.json
-            cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_quiet-wait', '--'] + cmd
+            if job.get('quiet_machine'):
+                cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_quiet-wait', '--'] + cmd
         env = dict(os.environ)
+        env['REX_AUDIO_MUTE'] = 'true'  # owner rule: test games never make sound
         env.update(job.get('env') or {})
-        env.update(RUNQ_JOB=job['id'], RUNQ_SLOT=str(slot), RUNQ_OUT=out, BO2_NET_PORT_OFFSET=port)
+        env.update(RUNQ_HOST='mac', RUNQ_JOB=job['id'], RUNQ_SLOT=str(slot), RUNQ_OUT=out, BO2_NET_PORT_OFFSET=port)
+        if job_class(job) == CLASSES['perf']:
+            env['RUNQ_PERF_GUARD'] = 'true'
+            if not job.get('quiet_machine'):
+                cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_perf-wait', '--'] + cmd
         start = time.time()
         la = loadavg()
         rec = {'id': job['id'], 'pid': None, 'slot': slot, 'started': now_s(), 'load_start': la,
                'cmd': cmd, 'games_start': len(self.jobs) + 1 + len(self.outside)}
-        log = open(os.path.join(out, 'runq.log'), 'ab')
+        qlog = os.path.join(out, 'runq.log')
+        log = open(qlog, 'ab')
+        job['runq_log_offset'] = os.fstat(log.fileno()).st_size
+        wjson(src, job)
         try:
             try:
                 os.unlink(os.path.join(out, EXIT_FILE))
@@ -403,36 +1060,89 @@ class Daemon:
                 pass
             proc = subprocess.Popen(WRAP + cmd, cwd=job.get('cwd') or out, env=env, stdin=subprocess.DEVNULL, stdout=log,
                                     stderr=subprocess.STDOUT, start_new_session=True)
-        except OSError as e:
+        except BaseException as e:
             log.close()
-            self.resume_builds(quiet_pids)
-            self.quiet_starting = False
-            self.finish_record(job, slot, 2, 'error', start, [], f'cannot start: {e}')
-            os.unlink(src)
-            return
+            try:
+                self.finish_record(job, slot, 2, 'error', start, [], f'cannot start: {e}')
+                os.unlink(src)
+            finally:
+                self.resume_builds(quiet_pids)
+                self.quiet_starting = False
+                if exec_lock_fd is not None:
+                    fcntl.flock(exec_lock_fd, fcntl.LOCK_UN)
+                    os.close(exec_lock_fd)
+            if isinstance(e, OSError):
+                return
+            raise
         log.close()
-        rec['pid'] = proc.pid
-        rec['quiet_pids'] = quiet_pids
-        os.replace(src, os.path.join(D['running'], job['id'] + '.json'))
-        wjson(os.path.join(D['running'], job['id'] + '.run.json'), rec)
-        with open(os.path.join(out, 'conditions.tsv'), 'w') as f:
-            f.write('t_s\tload1\tload5\tactive_builds\tcompile_procs\tbuild_cap\tgames\n')
-        self.last_start[job_owner(job)] = time.time()
-        self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
-                                'next_sample': 0.0, 'load_start': la, 'killing': 0.0,
-                                'games_start': len(self.jobs) + 1 + len(self.outside), 'quiet_pids': quiet_pids}
-        self.quiet_starting = False
-        self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
+        registered = False
+        try:
+            rec['pid'] = proc.pid
+            rec['quiet_pids'] = quiet_pids
+            os.replace(src, os.path.join(D['running'], job['id'] + '.json'))
+            wjson(os.path.join(D['running'], job['id'] + '.run.json'), rec)
+            with open(os.path.join(out, 'conditions.tsv'), 'w') as f:
+                f.write('t_s\tload1\tload5\tactive_builds\tcompile_procs\tbuild_cap\tgames\tcompile_details_json\n')
+            self.last_start[job_owner(job)] = time.time()
+            compiler_baseline = compiler_processes() or []
+            self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
+                                    'next_sample': 0.0, 'load_start': la, 'killing': 0.0,
+                                    'games_start': len(self.jobs) + 1 + len(self.outside), 'quiet_pids': quiet_pids,
+                                    'compiler_cpu_prev': {p['pid']: p['cpu_s'] for p in compiler_baseline},
+                                    'compiler_activity': {},
+                                    'process_cpu_prev': {p['pid']: p['cpu_s'] for p in PROCESS_SNAPSHOT},
+                                    'process_cpu_totals': {}}
+            registered = True
+            self.quiet_starting = False
+            self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
+            self.write_state()
+        finally:
+            if not registered:
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                self.resume_builds(quiet_pids)
+                self.quiet_starting = False
+            if exec_lock_fd is not None:
+                fcntl.flock(exec_lock_fd, fcntl.LOCK_UN)
+                os.close(exec_lock_fd)
 
     def sample(self, j, t):
         la = loadavg()
-        ab = active_builds()
-        cp = compile_procs()
+        compilers = compiler_processes()
+        stopped_pids = confirmed_stopped_pids(j.get('quiet_pids', []), PROCESS_SNAPSHOT) \
+            if compilers is not None else set()
+        ab = active_builds(stopped_pids)
+        activity = j.setdefault('compiler_activity', {})
+        new_pids = [] if compilers is None else [p['pid'] for p in compilers if p['pid'] not in activity]
+        cwds = process_cwds(new_pids)
+        hot = [] if compilers is None else observe_compiler_activity(
+            compilers, j.setdefault('compiler_cpu_prev', {}), activity, time.monotonic(), cwds)
+        if compilers is not None and (j['job'].get('quiet_machine') or job_class(j['job']) == CLASSES['perf']):
+            try:
+                freeze_late_buildq_compilers(j, buildq_owned_processes(PROCESS_SNAPSHOT), time.time(), j['start'])
+            except Exception as e:
+                self.log(f'late freeze failed: {e!r}')
+        cp = -1 if compilers is None else len(hot)
+        totals = j.setdefault('process_cpu_totals', {})
+        previous = j.setdefault('process_cpu_prev', {})
+        for proc in PROCESS_SNAPSHOT:
+            pid = proc['pid']
+            old = previous.get(pid, proc['cpu_s'])
+            delta = max(0.0, proc['cpu_s'] - old)
+            previous[pid] = proc['cpu_s']
+            if delta > 0:
+                item = totals.setdefault(pid, {'pid': pid, 'ppid': proc['ppid'], 'exe': proc['exe'],
+                                               'command': proc['command'], 'cpu_s': 0.0})
+                item.update(ppid=proc['ppid'], exe=proc['exe'], command=proc['command'])
+                item['cpu_s'] += delta
         cap = self.cap_now()[0]
         games = len(self.jobs) + len(self.outside)
-        j['samples'].append((la[0], ab, cp, games, cap))
+        j['samples'].append((la[0], ab, cp, games, cap, hot))
         with open(os.path.join(j['job']['out'], 'conditions.tsv'), 'a') as f:
-            f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\t{games}\n')
+            details = json.dumps(hot, separators=(',', ':')).replace('\t', ' ').replace('\n', ' ')
+            f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\t{games}\t{details}\n')
 
     def kill_job(self, j, why):
         pid = j['proc'].pid
@@ -450,7 +1160,8 @@ class Daemon:
             except ProcessLookupError:
                 pass
 
-    def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None, games_start=None):
+    def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None, games_start=None,
+                      process_cpu_totals=None, compiler_activity=None):
         out = job['out']
         res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code, 'measured': is_measured(job),
                'submitted': job.get('submitted'), 'started': time.strftime('%Y-%m-%d %H:%M:%S',
@@ -468,6 +1179,10 @@ class Daemon:
                                      compile_procs_max=max(s[2] for s in samples),
                                      build_cap=max(s[4] if len(s) > 4 else self.c['game_cap'] for s in samples),
                                      build_cap_min=min(s[4] if len(s) > 4 else self.c['game_cap'] for s in samples))
+            res['conditions']['compiler_processes_seen'] = sorted(
+                (compiler_activity or {}).values(), key=lambda p: p.get('cpu_delta_s', 0), reverse=True)
+            res['conditions']['meaningful_compiler_processes'] = meaningful_compiler_activity(
+                compiler_activity or {})
             gs = [s[3] for s in samples if len(s) > 3]
             if gs:
                 res['conditions'].update(games_mean=round(sum(gs) / len(gs), 2), games_max=max(gs))
@@ -476,22 +1191,18 @@ class Daemon:
         if job.get('quiet_machine'):
             res['quiet_machine'] = {'stopped_build_pids': job.get('quiet_build_pids', []),
                                     'load_limit': QUIET_LOAD_LIMIT, 'wait_cap_s': QUIET_WAIT_CAP_S,
-                                    'fps_valid_threshold': 30}
+                                    'fps_valid_threshold': 30,
+                                    'fps_required': quiet_fps_required(job),
+                                    'minimum_adapter_watts': int((job.get('env') or {}).get(
+                                        'RUNQ_MIN_ADAPTER_W', QUIET_MIN_ADAPTER_W))}
             qlog = os.path.join(out, 'runq.log')
-            try:
-                with open(qlog, errors='replace') as f:
-                    for line in f:
-                        if not line.startswith('quiet-machine gate: '):
-                            continue
-                        fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
-                        if all(k in fields for k in ('waited_s', 'load1', 'limit', 'cap_s', 'capped')):
-                            res['quiet_machine'].update(waited_s=float(fields['waited_s']),
-                                                        load1=float(fields['load1']),
-                                                        load_limit=int(fields['limit']),
-                                                        wait_cap_s=int(fields['cap_s']),
-                                                        cap_reached=fields['capped'] == 'true')
-            except OSError:
-                pass
+            res['quiet_machine']['runq_log_offset'] = job.get('runq_log_offset')
+            gate, power_failure = parse_quiet_machine_log(
+                read_job_log(qlog, job.get('runq_log_offset')))
+            res['quiet_machine'].update(gate)
+            if power_failure:
+                status, code, note = 'invalid', 2, 'power preflight: ' + power_failure
+                res.update(status=status, exit=code, note=note)
         if games_start is not None:
             res['conditions']['games_start'] = games_start
         g = max([x for x in (res['conditions'].get('games_max'), games_start) if x is not None], default=None)
@@ -504,17 +1215,30 @@ class Daemon:
             res['fps'] = {k: (round(s[k], 2) if isinstance(s.get(k), float) else s.get(k))
                           for k in ('fps_avg', 'fps_1pct_low', 'fps_01pct_low', 'ft_median', 'ft_p99', 'ft_worst',
                                     'frames') if k in s}
+            if job.get('no_fps'):
+                res['fps'].update(valid=None, required=False)
             if s.get('ft_worst'):
                 res['fps']['fps_min'] = round(1000.0 / s['ft_worst'], 2)
-            if job.get('quiet_machine'):
+            if quiet_fps_required(job):
                 res['fps']['valid'] = res['fps'].get('fps_avg') is not None and res['fps']['fps_avg'] >= 30
                 if not res['fps']['valid'] and status == 'done':
                     status, code, note = 'invalid', 2, 'quiet-machine average FPS below 30'
                     res.update(status=status, exit=code, note=note)
         elif job.get('quiet_machine'):
-            res['fps'] = {'fps_avg': None, 'fps_min': None, 'valid': False}
-            if status == 'done':
-                status, code, note = 'invalid', 2, 'quiet-machine FPS summary missing'
+            res['fps'] = {'fps_avg': None, 'fps_min': None,
+                          'valid': False if quiet_fps_required(job) else None}
+            if not quiet_fps_required(job):
+                res['fps']['required'] = False
+        if not sj and quiet_missing_summary_invalid(job, status):
+            status, code, note = 'invalid', 2, 'quiet-machine FPS summary missing'
+            res.update(status=status, exit=code, note=note)
+        if status == 'done' and perf_guard_required(job):
+            meaningful = res['conditions'].get('meaningful_compiler_processes', [])
+            if meaningful:
+                names = ', '.join(f"{p['exe']}[{p['pid']}] {p.get('cpu_delta_s', 0)} CPU-s "
+                                  f"cwd={p.get('cwd') or '?'} ppid={p.get('ppid')}" for p in meaningful[:8])
+                status, code, note = 'invalid', 2, f'perf run overlapped {len(meaningful)} meaningful compiler process(es)' + \
+                    (f': {names}' if names else '')
                 res.update(status=status, exit=code, note=note)
         caps = os.path.join(run, 'captures')
         if os.path.isdir(caps):
@@ -524,6 +1248,13 @@ class Daemon:
             res['scene'] = extra
         log = os.path.join(run, 'game.log')
         res['log'] = log if os.path.exists(log) else os.path.join(out, 'runq.log')
+        load_high = res['conditions'].get('load_max', 0) >= QUIET_LOAD_LIMIT
+        if perf_guard_required(job) and (status == 'invalid' or load_high):
+            top = top_cpu_processes(process_cpu_totals or {})
+            path = os.path.join(out, 'top-processes.json')
+            wjson(path, {'sampled_cpu_seconds': True, 'threshold_note': 'top cumulative CPU deltas sampled during run',
+                         'processes': top})
+            res['conditions']['top_processes_file'] = path
         wjson(os.path.join(out, 'result.json'), res)
         line = (f'{job["id"]} {job.get("name") or ""} {status} exit {code} wall {res["wall_s"]} s '
                 f'queued {res["queued_s"]} s load {res["conditions"]["load_start"][0]}'
@@ -543,7 +1274,7 @@ class Daemon:
         t = time.time()
         for jid, j in list(self.jobs.items()):
             if t >= j['next_sample']:
-                j['next_sample'] = t + 5
+                j['next_sample'] = t + 1
                 self.sample(j, t)
             code = j['proc'].poll()
             to = j['job'].get('timeout_s') or 1800
@@ -563,9 +1294,12 @@ class Daemon:
                 os.killpg(j['proc'].pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
-            self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
-                               j['load_start'], j.get('games_start'))
-            self.resume_builds(j.get('quiet_pids', []))
+            try:
+                self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
+                                   j['load_start'], j.get('games_start'), j.get('process_cpu_totals'),
+                                   j.get('compiler_activity'))
+            finally:
+                self.resume_builds(j.get('quiet_pids', []))
             if j['job'].get('clone_app', True) and j['job'].get('app'):
                 shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
             for suf in ('.json', '.run.json', '.cancel'):
@@ -574,6 +1308,31 @@ class Daemon:
                 except OSError:
                     pass
             del self.jobs[jid]
+            self.perf_batch.discard(jid)
+            if is_solo(j['job']) or j['job'].get('quiet_machine'):
+                builds_waiting = active_builds()
+                wait_s = oldest_build_wait_s()
+                if should_open_build_window(builds_waiting, wait_s):
+                    self.build_interleave_until = max(self.build_interleave_until,
+                                                      time.time() + BUILD_INTERLEAVE_WINDOW_S)
+                    self.log(f'build window opened after {jid}: {builds_waiting} buildq job(s), '
+                             'oldest waited ' + f'{int(wait_s)}s; up to {BUILD_INTERLEAVE_WINDOW_S}s')
+
+    def build_interleave_active(self):
+        if not self.build_interleave_until:
+            return False
+        builds_waiting = active_builds()
+        if not builds_waiting:
+            self.log('build interleave ended: no waiting buildq jobs')
+            self.build_interleave_until = 0.0
+            return False
+        remaining = self.build_interleave_until - time.time()
+        if remaining <= 0:
+            self.log(f'build interleave ended: {builds_waiting} buildq job(s) remain after '
+                     f'{BUILD_INTERLEAVE_WINDOW_S}s')
+            self.build_interleave_until = 0.0
+            return False
+        return True
 
     def write_state(self):
         wjson(STATE, {'pid': os.getpid(), 'updated': now_s(), 'nice': os.getpriority(os.PRIO_PROCESS, 0),
@@ -582,8 +1341,18 @@ class Daemon:
                       'build_cap_why': self.cap_now()[1],
                       'tokens_held_back': self.held, 'games_outside_runq': self.outside,
                       'paused_until': self.c.get('paused_until') if paused(self.c) else None,
+                      'build_interleave_until': self.build_interleave_until,
+                      'build_interleave_window_s': BUILD_INTERLEAVE_WINDOW_S,
+                      'power_hold': self.power_hold,
+                      'perf_hold': self.perf_hold,
+                      'last_external_build_activity': self.last_external_build_activity,
+                      'last_external_build_activity_source': self.last_external_build_activity_source,
+                      'power_status': self.power_status,
                       'running': {k: {'slot': v['slot'], 'pid': v['proc'].pid, 'name': v['job'].get('name'),
+                                      'solo': is_solo(v['job']),
+                                      'quiet_machine': bool(v['job'].get('quiet_machine')),
                                       'since_s': round(time.time() - v['start'])} for k, v in self.jobs.items()},
+                      'quiet_starting': self.quiet_starting,
                       'queued': self.queued(), 'last_start_by_owner': self.last_start})
 
     def resume_builds(self, pids):
@@ -600,7 +1369,7 @@ class Daemon:
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return  # another daemon has it
-        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'stop_requested', True))
         if os.getpriority(os.PRIO_PROCESS, 0) > 0:
             self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
         # jobs left in running/ by an earlier daemon: adopt the ones still alive (same pid, same process group; the
@@ -638,13 +1407,107 @@ class Daemon:
             while True:
                 self.c = cfg()
                 self.reap()
+                want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
+                if want_mode is not None and want_mode != getattr(self, 'power_mode', None):
+                    ok = set_power_mode(want_mode)
+                    self.log(f'power mode -> {"low" if want_mode == 1 else "high"}'
+                             f'{"" if ok else " FAILED (sudoers entry missing?)"}')
+                    self.power_mode = want_mode
                 q = self.queued()
+                qjobs = [(qf, rjson(os.path.join(D['queue'], qf)) or {}) for qf in q]
+                needs_power = any(j.get('quiet_machine') or job_class(j) == CLASSES['perf'] for _, j in qjobs)
+                if needs_power and time.time() - self.power_checked_at >= 15:
+                    try:
+                        self.power_status = power_source()
+                    except RuntimeError as e:
+                        self.power_status = {'error': str(e)}
+                    self.power_checked_at = time.time()
+                if needs_power:
+                    self.power_hold = next((reason for _, job in qjobs
+                                            if (reason := adapter_hold_reason(job, self.power_status))), None)
+                else:
+                    self.power_hold = None
+                activity = external_build_activity()
+                now = time.time()
+                if activity is None:
+                    self.last_external_build_activity = now
+                    self.last_external_build_activity_source = 'unknown'
+                elif activity:
+                    self.last_external_build_activity = now
+                    self.last_external_build_activity_source = 'outside'
+                self.perf_hold = (perf_activity_hold_reason(os.path.exists(HOLD_PERF_FILE),
+                                                           self.last_external_build_activity, now)
+                                  if any(j.get('quiet_machine') or job_class(j) == CLASSES['perf']
+                                         for _, j in qjobs) else None)
+                qids = {j.get('id') for _, j in qjobs}
+                power_eligible = {j.get('id') for _, j in qjobs
+                                  if not adapter_hold_reason(j, self.power_status)}
+                perf_eligible = {j.get('id') for _, j in qjobs if j.get('id') in power_eligible and
+                                 (not (j.get('quiet_machine') or job_class(j) == CLASSES['perf']) or
+                                  self.perf_hold is None)}
+                # Held speed work must not keep a batch open and block builds or non-speed jobs.
+                self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
+                self.perf_batch.intersection_update(qids | set(self.jobs))
+                self.perf_batch.update(bumped_perf_jobs(qjobs, perf_eligible))
+                if not self.perf_batch:
+                    waiting_perf = [(qf, j) for qf, j in qjobs
+                                    if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible]
+                    batch_n = max(1, int(self.c.get('perf_batch_size', 3)))
+                    batch_age = max(1, int(self.c.get('perf_batch_age_s', PERF_BATCH_AGE_S)))
+                    running_by_owner = {}
+                    for active in self.jobs.values():
+                        owner = job_owner(active['job'])
+                        running_by_owner[owner] = running_by_owner.get(owner, 0) + 1
+                    selected, batch_kind, oldest_age = (choose_perf_batch(
+                        waiting_perf, time.time(), batch_n, batch_age, running_by_owner, self.last_start)
+                        if not self.stop_requested else ([], False, 0))
+                    if selected:
+                        self.perf_batch = set(selected)
+                        if batch_kind == 'urgent':
+                            self.log(f'urgent perf batch opened: {next(iter(self.perf_batch))}')
+                        elif batch_kind == 'bump':
+                            self.log(f'bumped perf job opened next: {next(iter(self.perf_batch))}')
+                        else:
+                            self.log(f'perf batch opened: {len(self.perf_batch)} job(s), oldest waited '
+                                     f'{int(oldest_age)}s; builds and non-speed work held until batch drains')
+                if self.stop_requested and not self.jobs:
+                    # A TERM stops new launches; release the perf hold so token-waiting buildq jobs can finish.
+                    self.perf_batch.clear()
+                    self.build_interleave_until = 0.0
                 self.outside = (games_outside({j['proc'].pid for j in self.jobs.values()})
                                 if self.c.get('count_outside_games', True) else [])
                 free = self.c['slots'] - len(self.outside)
                 solo_running = any(is_solo(j['job']) for j in self.jobs.values())
-                while q and not paused(self.c) and not solo_running and len(self.jobs) < free:
-                    qf = self.pick(q)
+                while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
+                    interleave_active = self.build_interleave_active()
+                    compiler_busy = (outside_compile_procs() if self.perf_batch else compile_procs()) != 0
+                    builds_busy = active_builds() > 0
+                    jobs_per_owner = []
+                    for qf in q:
+                        job = rjson(os.path.join(D['queue'], qf)) or {}
+                        if adapter_hold_reason(job, self.power_status):
+                            continue
+                        if not mac_may_run(job):
+                            continue
+                        if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
+                            continue
+                        if not allowed_during_perf_batch(job, self.perf_batch, interleave_active):
+                            continue
+                        if not self.perf_batch and job_class(job) == CLASSES['perf']:
+                            continue
+                        if defer_perf_for_activity(job, interleave_active, builds_busy, compiler_busy,
+                                                   bool(self.perf_batch)):
+                            continue
+                        if defer_solo_for_build_window(job, interleave_active):
+                            continue
+                        jobs_per_owner.append((qf, job))
+                    non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
+                    non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
+                    candidates = [qf for qf, job in jobs_per_owner
+                                  if self.perf_batch or non_speed_running < non_speed_cap]
+                    if not candidates:
+                        break
+                    qf = self.pick(candidates)
                     if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
                         # a solo job holds the machine alone: start nothing else until the running games end
                         if self.jobs or self.outside:
@@ -652,8 +1515,18 @@ class Daemon:
                         solo_running = True
                     q.remove(qf)
                     self.launch(qf)
+                if time.time() - getattr(self, 'remote_checked', 0) >= 5:
+                    self.remote_checked = time.time()
+                    try:
+                        reap_remote()
+                    except Exception as e:   # never let laptop bookkeeping stop the Mac queue
+                        self.log(f'reap_remote failed: {e!r}')
                 self.throttle()
                 self.write_state()
+                if self.stop_requested and can_finish_daemon_shutdown(
+                        len(self.jobs), active_builds(), compile_procs()):
+                    self.log('graceful daemon stop: runq jobs and buildq/compiler activity drained')
+                    break
                 time.sleep(1)
         finally:
             for j in self.jobs.values():
@@ -691,6 +1564,39 @@ def sched_key(j, running_by_owner, last_start):
     o = job_owner(j)
     return (job_class(j), 0 if j.get('bump') else 1, -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
             last_start.get(o, 0.0), j.get('submitted_t', 0.0))
+
+
+def choose_perf_batch(waiting_perf, now, batch_n, batch_age, running_by_owner, last_start):
+    """Return IDs for an urgent one-job batch or a fair N/age-triggered perf block."""
+    bumped = sorted(((qf, j) for qf, j in waiting_perf if j.get('bump')),
+                    key=lambda fj: sched_key(fj[1], running_by_owner, last_start))
+    oldest_age = max((now - j.get('submitted_t', now) for _, j in waiting_perf), default=0)
+    if bumped:
+        return [bumped[0][1]['id']], 'bump', oldest_age
+    urgent = sorted(((qf, j) for qf, j in waiting_perf if j.get('urgent')),
+                    key=lambda fj: fj[1].get('submitted_t', 0))
+    if urgent:
+        return [urgent[0][1]['id']], 'urgent', oldest_age
+    if len(waiting_perf) < batch_n and oldest_age < batch_age:
+        return [], None, oldest_age
+    ordered = sorted(waiting_perf, key=lambda fj: sched_key(fj[1], running_by_owner, last_start))
+    return [j['id'] for _, j in ordered[:batch_n]], 'batch', oldest_age
+
+
+def bumped_perf_jobs(qjobs, power_eligible):
+    """Include a newly bumped queued speed job in an already-open batch, regardless of owner rotation."""
+    return {j.get('id') for _, j in qjobs
+            if j.get('id') in power_eligible and job_class(j) == CLASSES['perf'] and j.get('bump')}
+
+
+def allowed_during_perf_batch(job, selected, interleave_active):
+    """Preserve class order during a speed batch: higher classes may pass, lower classes wait."""
+    if not selected or interleave_active:
+        return True
+    klass = job_class(job)
+    if klass > CLASSES['perf']:
+        return False
+    return klass != CLASSES['perf'] or job.get('id') in selected
 
 
 def history_wall():
@@ -857,7 +1763,12 @@ def cmd_submit(argv):
     ap.add_argument('--quiet-machine', action='store_true',
                     help=f'stop active builds, wait for load < {QUIET_LOAD_LIMIT} for at most '
                          f'{QUIET_WAIT_CAP_S} s, record actual load and avg/min FPS')
+    ap.add_argument('--no-fps', action='store_true',
+                    help='with --quiet-machine, skip FPS summary validity for offline/non-game jobs')
+    ap.add_argument('--urgent', action='store_true', help='class-perf only: request an immediate one-job speed batch')
     ap.add_argument('--timeout', type=int)
+    ap.add_argument('--where', choices=('mac', 'any', 'laptop'), default='mac')
+    ap.add_argument('--input', action='append', default=[], help='Mac path copied to {IN}/<name> (with --where)')
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
     ap.add_argument('--golden', help='scene runs: golden dir override')
@@ -877,15 +1788,27 @@ def cmd_submit(argv):
             sys.exit(f'runq: no app at {a.app}')
     bt = os.path.join(HERE, 'boot_test.sh')
     klass = 0 if a.priority else parse_class(a.klass) if a.klass else 3
+    if a.no_fps and not a.quiet_machine:
+        sys.exit('runq submit: --no-fps requires --quiet-machine')
+    if a.where != 'mac' and (a.app or a.scene or a.route or a.quiet_machine or a.solo or a.urgent or not cmd
+                             or klass == CLASSES['perf']):
+        sys.exit('runq submit: --where any|laptop is for plain `-- CMD` jobs only (no --app/--scene/--route/--solo/'
+                 '--quiet-machine/--urgent/class perf): the laptop has no game and no GPU')
+    if a.urgent and klass != CLASSES['perf']:
+        sys.exit('runq submit: --urgent is only valid for class perf')
     solo = a.solo if a.solo is not None else klass == CLASSES['perf']
     if a.quiet_machine:
         solo = True
     job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
            'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'env': env}
+    if a.urgent:
+        job['urgent'] = True
     if a.measured is not None:
         job['measured'] = a.measured
     if a.quiet_machine:
         job.update(quiet_machine=True, measured=True)
+    if a.no_fps:
+        job['no_fps'] = True
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
         scene = rjson(sp)
@@ -924,6 +1847,13 @@ def cmd_submit(argv):
     else:
         sys.exit('runq submit: give --scene, --route or -- CMD')
     os.makedirs(job['out'], exist_ok=True)
+    if a.where != 'mac':
+        job['where'] = a.where
+    if a.input:
+        job['inputs'] = [os.path.abspath(os.path.expanduser(i)) for i in a.input]
+        for i in job['inputs']:
+            if not os.path.exists(i):
+                sys.exit(f'runq: no input {i}')
     owner = a.owner or os.environ.get('RUNQ_OWNER')
     if owner:
         job['owner'] = owner
@@ -933,6 +1863,142 @@ def cmd_submit(argv):
     print(f'job {jid} out {job["out"]}', flush=True)
     if a.wait:
         sys.exit(cmd_wait([jid]))
+
+
+# ------------------------------------------------------------------ the laptop pull worker's side (Mac end)
+def laptop_state():
+    hb = rjson(LAPTOP_HB) or {}
+    if not hb.get('t'):
+        return {'state': 'unreachable'}
+    age = round(time.time() - hb['t'])
+    state = 'unreachable' if age > LAPTOP_FRESH_S else ('busy' if hb.get('busy') else 'idle')
+    return dict(hb, state=state, age_s=age)
+
+
+def mac_may_run(job, hb=None):
+    """May the Mac daemon start this queued job? `laptop` never; `any` only while the laptop is busy or silent."""
+    w = job.get('where', 'mac')
+    if w == 'mac':
+        return True
+    if w == 'laptop':
+        return False
+    return (hb or laptop_state())['state'] != 'idle'
+
+
+def _write_hb(worker, busy, load):
+    wjson(LAPTOP_HB, {'t': time.time(), 'busy': busy, 'load': load, 'worker': worker, 'updated': now_s()})
+
+
+def remote_claim(worker, load=None):
+    """Called over ssh by the laptop worker when idle: atomically move the best eligible queued job to remote/ and
+    print its manifest (nothing when none). rename() is the claim: the Mac daemon launching the same file loses cleanly."""
+    mkdirs()
+    _write_hb(worker, False, load)
+    rbo = {}
+    jobs = []
+    for qf, j in load_queue():
+        if j.get('where') in ('any', 'laptop'):
+            jobs.append((qf, j))
+    if not jobs:
+        return None
+    jobs.sort(key=lambda fj: sched_key(fj[1], rbo, {}))
+    for qf, j in jobs:
+        dst = os.path.join(D['remote'], j['id'] + '.json')
+        try:
+            os.rename(os.path.join(D['queue'], qf), dst)
+        except OSError:
+            continue
+        j['_qname'] = qf
+        j['claim'] = {'worker': worker, 'started': now_s(), 'beat': time.time()}
+        wjson(dst, j)
+        return j
+    return None
+
+
+def remote_beat(worker, jid, load=None):
+    """-> 'ok' or 'cancel' (stop the job) or 'lost' (the Mac no longer holds this claim: kill it)."""
+    _write_hb(worker, True, load)
+    path = os.path.join(D['remote'], jid + '.json')
+    j = rjson(path)
+    if not j or j.get('claim', {}).get('worker') != worker:
+        return 'lost'
+    j['claim']['beat'] = time.time()
+    wjson(path, j)
+    return 'cancel' if os.path.exists(os.path.join(D['remote'], jid + '.cancel')) else 'ok'
+
+
+def _remote_drop(jid):
+    for suf in ('.json', '.cancel'):
+        try:
+            os.unlink(os.path.join(D['remote'], jid + suf))
+        except OSError:
+            pass
+
+
+def remote_requeue(j, why):
+    """A laptop job that died, timed out or lost its worker goes back to the queue (3 tries, then `any` runs on the Mac
+    and `laptop` is recorded lost)."""
+    jid = j['id']
+    j['attempts'] = j.get('attempts', 0) + 1
+    j.setdefault('history', []).append({'t': now_s(), 'why': why})
+    j.pop('claim', None)
+    if j['attempts'] >= LAPTOP_MAX_ATTEMPTS:
+        if j.get('where') == 'any':
+            j['where'] = 'mac'
+        else:
+            _remote_drop(jid)
+            _record_remote(j, 'lost', 2, 0, f'laptop gave up after {j["attempts"]} tries: {why}')
+            return 'lost'
+    qn = j.pop('_qname', None) or f'1-{time.time():.6f}-{jid}.json'
+    wjson(os.path.join(D['queue'], qn), j)
+    _remote_drop(jid)
+    return 'requeued'
+
+
+def _record_remote(j, status, code, wall, note=''):
+    out = j['out']
+    res = {'id': j['id'], 'name': j.get('name'), 'status': status, 'exit': code, 'host': 'laptop', 'out': out,
+           'submitted': j.get('submitted'), 'ended': now_s(), 'wall_s': wall, 'note': note, 'attempts': j.get('attempts', 0) + 1,
+           'conditions': {'load_start': [], 'full_speed': None}}
+    wjson(os.path.join(out, 'result.json'), res)
+    line = f'{j["id"]} {j.get("name") or ""} {status} exit {code} wall {wall} s on laptop' + (f' ({note})' if note else '')
+    with open(os.path.join(out, 'result.txt'), 'w') as f:
+        f.write(line + '\n')
+    wjson(os.path.join(D['done'], j['id'] + '.json'), res)
+    return res
+
+
+def remote_finish(worker, jid, code, wall, how):
+    """how: 'exit' (a real result, whatever the code), 'killed' (signal), 'timeout', 'cancelled'. Outputs are already
+    rsynced into the job's out dir on the Mac."""
+    path = os.path.join(D['remote'], jid + '.json')
+    j = rjson(path)
+    if not j or j.get('claim', {}).get('worker') != worker:
+        return 'lost'
+    if how in ('killed', 'timeout'):
+        return remote_requeue(j, f'{how} on the laptop (exit {code})')
+    _remote_drop(jid)
+    _record_remote(j, 'cancelled' if how == 'cancelled' else 'done', code, wall,
+                   'cancelled' if how == 'cancelled' else '')
+    return 'done'
+
+
+def reap_remote(now=None):
+    """Daemon: requeue claims with no beat for LAPTOP_LEASE_S; honour cancels whose worker is gone."""
+    now = now or time.time()
+    for f in os.listdir(D['remote']):
+        if not f.endswith('.json'):
+            continue
+        j = rjson(os.path.join(D['remote'], f))
+        if not j:
+            continue
+        beat = j.get('claim', {}).get('beat', 0)
+        if now - beat > LAPTOP_LEASE_S:
+            if os.path.exists(os.path.join(D['remote'], j['id'] + '.cancel')):
+                _remote_drop(j['id'])
+                _record_remote(j, 'cancelled', 2, 0, 'cancelled; the laptop worker vanished')
+            else:
+                remote_requeue(j, f'no beat from the laptop worker for {int(now - beat)} s')
 
 
 def find_done(jid):
@@ -958,7 +2024,7 @@ def cmd_wait(ids):
                 except OSError:
                     print(json.dumps(res), flush=True)
                 worst = max(worst, res.get('exit', 2) if res.get('status') == 'done' else max(res.get('exit', 2), 2))
-            elif not any(f.endswith(jid + '.json') for f in os.listdir(D['queue']) + os.listdir(D['running'])) \
+            elif not any(f.endswith(jid + '.json') for f in os.listdir(D['queue']) + os.listdir(D['running']) + os.listdir(D['remote'])) \
                     and not find_done(jid):   # (it may have moved to done/ while we listed)
                 print(f'{jid}: unknown job', flush=True)
                 pending.discard(jid)
@@ -980,6 +2046,10 @@ def cmd_status(_argv):
     print(f'build throttle: cap now {st.get("build_cap_now")} ({st.get("build_cap_why", "")}; idle {st.get("idle_cap")}, '
           f'unmeasured games {st.get("run_cap")}, measured {st.get("game_cap")}), tokens held back {st.get("tokens_held_back")}, active buildq builds '
           f'{active_builds()}, compiler processes {compile_procs()}')
+    if st.get('power_hold'):
+        print(st['power_hold'])
+    if st.get('perf_hold'):
+        print(st['perf_hold'])
     if st.get('games_outside_runq'):
         print(f'games running outside runq (they take slots): pids {st["games_outside_runq"]}')
     if st.get('paused_until'):
@@ -997,10 +2067,20 @@ def cmd_status(_argv):
         hh, mm = map(int, st['paused_until'].split(':'))
         lt = time.localtime(now)
         start = max(now, time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1)))
-    for qf, j, t, est in plan(load_queue(), running, max(1, slots), st.get('last_start_by_owner') or {}, now=start):
+    hb = laptop_state()
+    print('laptop: ' + (f'{hb["state"]} (poll {hb["age_s"]} s ago, load {hb.get("load")})' if hb.get('t') else 'never polled'))
+    for rf in sorted(os.listdir(D['remote'])):
+        if rf.endswith('.json'):
+            rj = rjson(os.path.join(D['remote'], rf)) or {}
+            print(f'running {rj.get("id")} ON LAPTOP {rj.get("name")} since {rj.get("claim", {}).get("started")} '
+                  f'attempt {rj.get("attempts", 0) + 1}')
+    for qf, j, t, est in plan([(f, j) for f, j in load_queue() if j.get('where') != 'laptop'], running, max(1, slots), st.get('last_start_by_owner') or {}, now=start):
         k = job_class(j)
         print(f'queued  {j.get("id")} {j.get("name")}  class {CLASS_NAMES.get(k, k)}{" bumped" if j.get("bump") else ""}'
               f'{" solo" if is_solo(j) else ""}  owner {job_owner(j)}  est start {time.strftime("%H:%M", time.localtime(t))} (~{int(est // 60)} min)')
+    for qf, j in load_queue():
+        if j.get('where') == 'laptop':
+            print(f'queued  {j.get("id")} {j.get("name")}  laptop-only  owner {job_owner(j)}')
     done = sorted(os.listdir(D['done']), key=lambda f: os.path.getmtime(os.path.join(D['done'], f)))[-5:]
     for f in done:
         r = rjson(os.path.join(D['done'], f)) or {}
@@ -1025,6 +2105,9 @@ def cmd_cancel(ids):
             if os.path.exists(os.path.join(D['running'], jid + '.json')):
                 open(os.path.join(D['running'], jid + '.cancel'), 'w').close()
                 print(f'{jid}: stop requested')
+            elif os.path.exists(os.path.join(D['remote'], jid + '.json')):
+                open(os.path.join(D['remote'], jid + '.cancel'), 'w').close()
+                print(f'{jid}: stop requested (on the laptop; takes effect at its next beat)')
             else:
                 print(f'{jid}: not queued or running')
 
@@ -1239,24 +2322,43 @@ def buildq(argv):
     c = cfg()
     tokens = max(1, min(tokens, c['game_cap']))
     rec = os.path.join(D['builds'], f'{os.getpid()}.json')
+    registered = now_s()
     wjson(rec, {'pid': os.getpid(), 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens, 'jobserver': jobserver,
-                'started': now_s()})
+                'registered': registered, 'started': registered})
     fifo = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)
     lk = os.open(POOL_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+    exec_lk = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+    exec_locked = False
     got = 0
     waited = time.time()
     try:
-        while got < tokens:
-            fcntl.flock(lk, fcntl.LOCK_SH)   # the daemon repairs the pool only when no build holds this
-            try:
-                b = os.read(fifo, tokens - got)
-                got += len(b)
-            except BlockingIOError:
-                pass
-            if got < tokens:
-                if got == 0:
+        while True:
+            while got < tokens:
+                fcntl.flock(lk, fcntl.LOCK_SH)   # token reads serialize with pool repair
+                try:
+                    b = os.read(fifo, tokens - got)
+                    got += len(b)
+                except BlockingIOError:
+                    pass
+                if got < tokens:
+                    if got:
+                        os.write(fifo, b'+' * got)
+                        got = 0
                     fcntl.flock(lk, fcntl.LOCK_UN)
+                    time.sleep(0.5)
+            # The execution lock closes the token-grant/quiet-start race. Keep it shared until
+            # the command and child PID are recorded; runq takes exclusive ownership for solo.
+            fcntl.flock(exec_lk, fcntl.LOCK_SH)
+            exec_locked = True
+            if not buildq_command_allowed(runq_solo_active()):
+                os.write(fifo, b'+' * got)
+                got = 0
+                fcntl.flock(exec_lk, fcntl.LOCK_UN)
+                exec_locked = False
+                fcntl.flock(lk, fcntl.LOCK_UN)
                 time.sleep(0.5)
+                continue
+            break
         w = time.time() - waited
         if w > 2:
             print(f'buildq: waited {w:.0f} s for build tokens (a game is running or the pool is busy)',
@@ -1268,13 +2370,20 @@ def buildq(argv):
         pre = None if ship else (lambda: os.nice(15))
         p = subprocess.Popen(cmd, env=env, preexec_fn=pre, start_new_session=True)
         wjson(rec, {'pid': os.getpid(), 'child_pid': p.pid, 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens,
-                    'jobserver': jobserver, 'started': now_s()})
+                    'jobserver': jobserver, 'registered': registered, 'started': now_s()})
+        fcntl.flock(exec_lk, fcntl.LOCK_UN)
+        exec_locked = False
         while True:
             try:
                 return p.wait()
             except KeyboardInterrupt:
                 p.send_signal(signal.SIGINT)
     finally:
+        build = rjson(rec) or {'pid': os.getpid(), 'cwd': os.getcwd()}
+        kill_leftover_build_compilers(build)
+        if exec_locked:
+            fcntl.flock(exec_lk, fcntl.LOCK_UN)
+        os.close(exec_lk)
         if got:
             os.write(fifo, b'+' * got)
         fcntl.flock(lk, fcntl.LOCK_UN)
@@ -1301,6 +2410,88 @@ def strip_jobs(cmd):
     return out
 
 
+
+def test_laptop():
+    """Self-test of the laptop path: eligibility, atomic claim, beats, requeue, fallback, finish, cancel."""
+    import tempfile
+    global D, LAPTOP_HB
+    old = (dict(D), LAPTOP_HB)
+    with tempfile.TemporaryDirectory() as tmp:
+        D = {k: os.path.join(tmp, k) for k in D}
+        LAPTOP_HB = os.path.join(tmp, 'laptop.json')
+        mkdirs()
+        def submit(jid, where, name='t'):
+            out = os.path.join(tmp, 'o-' + jid)
+            os.makedirs(out)
+            j = {'id': jid, 'name': name, 'where': where, 'out': out, 'cmd': ['true'], 'class': 3,
+                 'submitted_t': time.time()}
+            wjson(os.path.join(D['queue'], f'1-{time.time():.6f}-{jid}.json'), j)
+            return j
+        mac = {'where': 'mac'}
+        assert mac_may_run(mac) and not mac_may_run({'where': 'laptop'}) and mac_may_run({'where': 'any'}, {'state': 'unreachable'})
+        assert mac_may_run({'where': 'any'}, {'state': 'busy'}) and not mac_may_run({'where': 'any'}, {'state': 'idle'})
+        assert laptop_state()['state'] == 'unreachable'
+        submit('a', 'any'); submit('m', 'mac'); submit('l', 'laptop')
+        c1 = remote_claim('w1', '0.1')
+        assert c1['id'] in ('a', 'l') and laptop_state()['state'] == 'idle'
+        c2 = remote_claim('w2')
+        assert c2 and c2['id'] != c1['id']
+        assert remote_claim('w3') is None                       # 'm' (mac) is never handed out; each job claimed once
+        assert [j['id'] for _, j in load_queue()] == ['m']
+        assert remote_beat('w1', c1['id']) == 'ok' and laptop_state()['state'] == 'busy'
+        assert remote_beat('wX', c1['id']) == 'lost'
+        # a killed job goes back to the queue, attempts counted
+        assert remote_finish('w1', c1['id'], 137, 5, 'killed') == 'requeued'
+        assert c1['id'] in [j['id'] for _, j in load_queue()]
+        # a vanished worker: lease expiry requeues
+        c = remote_claim('w1')
+        assert c['id'] == c1['id']
+        j = rjson(os.path.join(D['remote'], c['id'] + '.json'))
+        reap_remote(now=j['claim']['beat'] + 10)
+        assert os.path.exists(os.path.join(D['remote'], c['id'] + '.json'))
+        reap_remote(now=j['claim']['beat'] + LAPTOP_LEASE_S + 1)
+        assert not os.path.exists(os.path.join(D['remote'], c['id'] + '.json'))
+        assert rjson(os.path.join(D['queue'], [f for f in os.listdir(D['queue']) if f.endswith(c['id'] + '.json')][0]))['attempts'] == 2
+        # third failure: `any` falls back to the Mac, `laptop` is recorded lost
+        for want in ('any', 'laptop'):
+            jid = c1['id'] if want == c1['where'] else c2['id']
+            for _ in range(LAPTOP_MAX_ATTEMPTS):
+                cj = remote_claim('w1')
+                while cj and cj['id'] != jid:
+                    remote_requeue(cj, 'skip'); cj = remote_claim('w1')
+                if cj:
+                    remote_finish('w1', jid, 124, 1, 'timeout')
+            if want == 'any':
+                q = [j for _, j in load_queue() if j['id'] == jid]
+                assert q and q[0]['where'] == 'mac' and mac_may_run(q[0]), q
+        # normal result, nonzero exit is a result not a requeue
+        submit('r', 'laptop')
+        for _ in range(5):
+            cj = remote_claim('w1')
+            if cj and cj['id'] == 'r':
+                break
+            if cj:
+                remote_requeue(cj, 'skip')
+        assert remote_finish('w1', 'r', 3, 1.5, 'exit') == 'done'
+        r = rjson(os.path.join(D['done'], 'r.json'))
+        assert r['exit'] == 3 and r['host'] == 'laptop' and 'on laptop' in open(os.path.join(r['out'], 'result.txt')).read()
+        # cancel
+        submit('x', 'laptop')
+        for _ in range(8):
+            cj = remote_claim('w1')
+            if cj and cj['id'] == 'x':
+                break
+            if cj:
+                remote_requeue(cj, 'skip')
+        open(os.path.join(D['remote'], 'x.cancel'), 'w').close()
+        assert remote_beat('w1', 'x') == 'cancel'
+        remote_finish('w1', 'x', 143, 1, 'cancelled')
+        assert rjson(os.path.join(D['done'], 'x.json'))['status'] == 'cancelled'
+    D, LAPTOP_HB = old
+    print('runq laptop path self-test passed: eligibility, atomic claim, beats, requeue on kill/timeout/lost worker, '
+          'Mac fallback after 3 tries, lost for laptop-only, result, cancel')
+
+
 def main():
     if os.path.basename(sys.argv[0]) == 'buildq':
         sys.exit(buildq(sys.argv[1:]))
@@ -1315,6 +2506,26 @@ def main():
             argv = argv[1:]
         if not argv:
             sys.exit('runq _quiet-wait: missing command')
+        try:
+            min_adapter_w = int(os.environ.get('RUNQ_MIN_ADAPTER_W', QUIET_MIN_ADAPTER_W))
+            if min_adapter_w < 1:
+                raise ValueError('minimum must be at least 1 W')
+        except ValueError as e:
+            print(f'power-machine gate failed: invalid RUNQ_MIN_ADAPTER_W: {e}', flush=True)
+            sys.exit(2)
+        try:
+            power = power_source()
+        except RuntimeError as e:
+            print(f'power-machine gate: failed=unavailable reason={shlex.quote(str(e))}', flush=True)
+            sys.exit(2)
+        print('power-machine gate: '
+              f'connected={str(power["connected"]).lower()} ac={str(power["ac"]).lower()} '
+              f'watts={power["watts"]} min_w={min_adapter_w} charge={power["charge"]} '
+              f'charging={str(power["charging"]).lower()}', flush=True)
+        if not power['connected'] or not power['ac'] or power['watts'] < min_adapter_w:
+            print(f'power-machine gate failed: measured perf requires AC and an adapter rated at least '
+                  f'{min_adapter_w} W; detected {power["watts"]} W', flush=True)
+            sys.exit(2)
         start = time.monotonic()
         capped = False
         while loadavg()[0] >= QUIET_LOAD_LIMIT:
@@ -1327,6 +2538,188 @@ def main():
         load = loadavg()[0]
         print(f'quiet-machine gate: waited_s={waited} load1={load:.2f} limit={QUIET_LOAD_LIMIT} '
               f'cap_s={QUIET_WAIT_CAP_S} capped={str(capped).lower()}', flush=True)
+        if os.environ.get('RUNQ_PERF_GUARD') == 'true' and not perf_build_gate():
+            sys.exit(2)
+        os.execvpe(argv[0], argv, os.environ)
+    elif sub == '_test-build-interleave':
+        fake = [{'id': 'perf-a', 'class': CLASSES['perf'], 'solo': True},
+                {'id': 'perf-b', 'class': CLASSES['perf'], 'solo': True},
+                {'id': 'proof', 'class': CLASSES['proof'], 'solo': True}]
+        held = [j['id'] for j in fake if not defer_perf_for_builds(j, True)]
+        released = [j['id'] for j in fake if not defer_perf_for_builds(j, False)]
+        assert held == ['proof'], held
+        assert released == ['perf-a', 'perf-b', 'proof'], released
+        assert adapter_hold_reason({'class': CLASSES['perf']},
+                                   {'connected': False, 'ac': False, 'watts': 0}) == 'held: no charger'
+        assert adapter_hold_reason({'class': CLASSES['perf']},
+                                   {'connected': True, 'ac': True, 'watts': 65}) == 'held: adapter 65 W below 90 W'
+        assert adapter_hold_reason({'quiet_machine': True, 'class': CLASSES['sweep']},
+                                   {'connected': True, 'ac': True, 'watts': 94}) is None
+        assert [j['id'] for j in fake if j['class'] == CLASSES['perf']] == ['perf-a', 'perf-b']
+        drained = [j['id'] for j in fake if not defer_perf_for_activity(j, False, True, False)]
+        compiling = [j['id'] for j in fake if not defer_perf_for_activity(j, False, False, True)]
+        clear = [j['id'] for j in fake if not defer_perf_for_activity(j, False, False, False)]
+        assert drained == ['proof'] and compiling == ['proof'], (drained, compiling)
+        assert clear == ['perf-a', 'perf-b', 'proof'], clear
+        waiting = [(str(i), {'id': f'p{i}', 'class': CLASSES['perf'], 'submitted_t': 990 + i})
+                   for i in range(3)]
+        assert choose_perf_batch(waiting, 1000, 3, 1800, {}, {})[0] == ['p0', 'p1', 'p2']
+        late = {'compiler_activity': {2718: {'pid': 2718, 'cpu_delta_s': 2.47, 'observed_s': 0.0},
+                                      2900: {'pid': 2900, 'cpu_delta_s': 2.47, 'observed_s': 0.0}}, 'quiet_pids': []}
+        sent = []
+        assert freeze_late_buildq_compilers(late, {2718}, 1003.0, 1000.0, kill=lambda p, s_: sent.append(p)) == [2718]
+        assert sent == [2718] and late['quiet_pids'] == [2718]
+        assert [p['pid'] for p in meaningful_compiler_activity(late['compiler_activity'])] == [2900]  # outside one still counts
+        assert freeze_late_buildq_compilers(late, {2900}, 1020.0, 1000.0, kill=lambda p, s_: sent.append(p)) == []
+        assert [p['pid'] for p in meaningful_compiler_activity(late['compiler_activity'])] == [2900]
+        assert choose_perf_batch(waiting[:2], 1000, 3, 1800, {}, {})[0] == []
+        assert choose_perf_batch(waiting[:1], 2800, 3, 1800, {}, {})[0] == ['p0']
+        urgent = [("u", {'id': 'u', 'class': CLASSES['perf'], 'urgent': True, 'submitted_t': 999}), *waiting]
+        assert choose_perf_batch(urgent, 1000, 3, 1800, {}, {})[:2] == (['u'], 'urgent')
+        bump_waiting = [('q-stutter', {'id': 'stutter', 'class': CLASSES['perf'], 'owner': 'stutter',
+                                       'bump': True, 'bump_t': 1000}),
+                        ('q-perfvar', {'id': 'perfvar', 'class': CLASSES['perf'], 'owner': 'perf-variance'})]
+        selected, kind, _ = choose_perf_batch(bump_waiting, 1000, 3, 1800,
+                                              {'perf-variance': 0, 'stutter': 0}, {})
+        assert (selected, kind) == (['stutter'], 'bump'), (selected, kind)
+        already_open = {'perfvar-B1'}
+        assert bumped_perf_jobs(bump_waiting, {'stutter', 'perfvar'}) == {'stutter'}
+        assert already_open | bumped_perf_jobs(bump_waiting, {'stutter', 'perfvar'}) == {'perfvar-B1', 'stutter'}
+        assert allowed_during_perf_batch({'id': 'stutter', 'class': CLASSES['ship']}, already_open, False)
+        assert not allowed_during_perf_batch({'id': 'long-ab', 'class': CLASSES['perf'] + 1},
+                                             already_open, False)
+        assert not allowed_during_perf_batch({'id': 'unselected', 'class': CLASSES['perf']},
+                                             already_open, False)
+        perf = {'id': 'p', 'class': CLASSES['perf']}
+        # buildq registers before receiving tokens; it has no compiler child while blocked at the FIFO.
+        assert defer_perf_for_activity(perf, False, True, False, False)
+        assert not defer_perf_for_activity(perf, False, True, False, True)
+        assert defer_perf_for_activity(perf, False, True, True, True)
+        assert should_open_build_window(11, 300)
+        assert not should_open_build_window(11, 299)
+        assert not should_open_build_window(0, 600)
+        assert defer_solo_for_build_window({'class': CLASSES['proof'], 'solo': True}, True)
+        assert not defer_solo_for_build_window({'class': CLASSES['proof'], 'solo': False}, True)
+        assert not buildq_command_allowed(True) and buildq_command_allowed(False)
+        assert quiet_fps_required({'quiet_machine': True, 'cmd': ['/runq/bin/boot_test.sh']})
+        assert not quiet_fps_required({'quiet_machine': True, 'no_fps': True,
+                                       'cmd': ['/runq/bin/boot_test.sh']})
+        custom_quiet = {'quiet_machine': True, 'cmd': ['/bin/bash', 'custom-bench.sh']}
+        assert not quiet_fps_required(custom_quiet)
+        assert not quiet_missing_summary_invalid(custom_quiet, 'done')
+        assert quiet_missing_summary_invalid({'quiet_machine': True, 'cmd': ['/runq/bin/boot_test.sh']}, 'done')
+        assert restorable_external_activity(1000, 'outside') == 1000
+        assert restorable_external_activity(1000, None) is None
+        buildq_tree = [{'pid': 100, 'ppid': 1}, {'pid': 101, 'ppid': 100},
+                       {'pid': 102, 'ppid': 101}, {'pid': 200, 'ppid': 1}]
+        assert descendant_pids(buildq_tree, {100}) == {100, 101, 102}
+        mixed_activity = [{'pid': 102, 'exe': 'clang'}, {'pid': 200, 'exe': 'swift'}]
+        assert outside_build_activity(mixed_activity, {100, 101, 102}) == [{'pid': 200, 'exe': 'swift'}]
+        orphan = {'pid': 53949, 'ppid': 1, 'exe': 'clang',
+                  'command': 'clang -c fh1_register.cpp -o out/fh1_register.o'}
+        assert compiler_belongs_to_build(orphan, '/work/fh1', {53949: '/work/fh1/out/mac'})
+        output_orphan = dict(orphan, command='clang -c /elsewhere/fh1.cpp -o /work/fh1/out/fh1.o')
+        source_orphan = dict(orphan, command='clang -c /work/fh1/src/fh1.cpp -o /elsewhere/fh1.o')
+        assert compiler_belongs_to_build(output_orphan, '/work/fh1', {53949: '/elsewhere'})
+        assert compiler_belongs_to_build(source_orphan, '/work/fh1', {53949: '/elsewhere'})
+        assert not compiler_belongs_to_build(orphan, '/work/fh1-other', {53949: '/elsewhere'})
+        with tempfile.TemporaryDirectory() as tmp:
+            old_build_dir, old_process_cwds = D['builds'], globals()['process_cwds']
+            try:
+                D['builds'] = tmp
+                wjson(os.path.join(tmp, '100.json'), {'pid': os.getpid(), 'cwd': '/work/fh1'})
+                globals()['process_cwds'] = lambda pids: {53949: '/work/fh1/out/mac'}
+                owned = buildq_owned_processes([orphan, {'pid': 200, 'ppid': 1, 'exe': 'swift',
+                                                        'command': 'swift /elsewhere/test.swift'}])
+                assert 53949 in owned and 200 not in owned, owned
+                assert outside_build_activity([orphan], owned) == []
+            finally:
+                D['builds'], globals()['process_cwds'] = old_build_dir, old_process_cwds
+        cleanup_build = {'pid': 100, 'child_pid': 101, 'cwd': '/work/fh1'}
+        direct = dict(orphan, pid=102, ppid=101)
+        cleanup_processes = [direct, orphan]
+        leftovers = leftover_build_compilers(cleanup_build, cleanup_processes,
+                                             {53949: '/work/fh1/out/mac', 102: '/work/fh1/out/mac'})
+        assert {proc['pid'] for proc in leftovers} == {102, 53949}, leftovers
+        ambiguous = leftover_build_compilers(cleanup_build, cleanup_processes,
+                                             {53949: '/work/fh1/out/mac', 102: '/work/fh1/out/mac'},
+                                             other_builds=[{'pid': 300, 'cwd': '/work/fh1'}])
+        assert [proc['pid'] for proc in ambiguous] == [102], ambiguous
+        old_compiler_processes = globals()['compiler_processes']
+        old_registered_builds = globals()['registered_buildq_builds']
+        old_snapshot = PROCESS_SNAPSHOT
+        try:
+            globals()['compiler_processes'] = lambda: cleanup_processes
+            globals()['registered_buildq_builds'] = lambda: [cleanup_build]
+            globals()['PROCESS_SNAPSHOT'] = cleanup_processes
+            killed = []
+            assert kill_leftover_build_compilers(
+                cleanup_build, kill=lambda pid, sig: killed.append((pid, sig))) == [102, 53949]
+            assert killed == [(102, signal.SIGKILL), (53949, signal.SIGKILL)], killed
+        finally:
+            globals()['compiler_processes'] = old_compiler_processes
+            globals()['registered_buildq_builds'] = old_registered_builds
+            globals()['PROCESS_SNAPSHOT'] = old_snapshot
+        with tempfile.TemporaryDirectory() as tmp:
+            qlog = os.path.join(tmp, 'runq.log')
+            stale = b'power-machine gate failed: measured perf requires AC; detected 0 W\n'
+            with open(qlog, 'wb') as f:
+                f.write(stale)
+                offset = f.tell()
+                f.write(b'power-machine gate: connected=true ac=true watts=94 charge=100 charging=false\n')
+            own_log = read_job_log(qlog, offset)
+            own_gate, own_failure = parse_quiet_machine_log(own_log)
+            assert own_failure is None and own_gate['power_watts'] == 94, (own_gate, own_failure)
+            with open(qlog, 'ab') as f:
+                f.write(b'power-machine gate failed: detected 0 W\n')
+            current_gate, current_failure = parse_quiet_machine_log(read_job_log(qlog, offset))
+            assert current_failure == 'detected 0 W', (current_gate, current_failure)
+        assert perf_activity_hold_reason(True, None, 1000) == 'held: hold-perf file'
+        assert perf_activity_hold_reason(False, 900, 1019) == 'held: outside build'
+        assert perf_activity_hold_reason(False, 900, 1020) is None
+        assert is_build_activity_process({'exe': 'dotnet', 'command': 'dotnet MSBuild.dll foo.csproj'})
+        assert is_build_activity_process({'exe': 'bash', 'command': 'bash /tmp/kartpad/build.sh'})
+        assert is_build_activity_process({'exe': 'xcrun', 'command': 'xcrun clang -c foo.c'})
+        assert not is_build_activity_process({'exe': 'python3', 'command': 'python3 app.py'})
+        cpu_prev = {11: 3.0, 12: 0.0}
+        cpu_now = [{'pid': 11, 'cpu_s': 3.0, 'exe': 'ninja'},
+                   {'pid': 12, 'cpu_s': 0.08, 'exe': 'clang'}]
+        cpu_hot, _ = cpu_active_processes(cpu_now, cpu_prev)
+        assert [p['pid'] for p in cpu_hot] == [12], cpu_hot
+        parsed_compilers = compiler_processes()
+        assert parsed_compilers is not None and all('state' in p for p in parsed_compilers)
+        frozen = {'pid': 53949, 'ppid': 53934, 'exe': 'clang', 'command': 'clang fh1_register.cpp',
+                  'cpu_s': 0.0, 'elapsed_s': 1500.0, 'state': 'T'}
+        frozen_activity, frozen_prev = {}, {}
+        observe_compiler_activity([frozen], frozen_prev, frozen_activity, 100.0, {})
+        observe_compiler_activity([frozen], frozen_prev, frozen_activity, 875.0, {})
+        assert frozen_activity[53949]['observed_s'] == 0.0
+        assert meaningful_compiler_activity(frozen_activity) == []
+        running = {**frozen, 'state': 'R'}
+        observe_compiler_activity([running], frozen_prev, frozen_activity, 876.0, {})
+        observe_compiler_activity([running], frozen_prev, frozen_activity, 882.0, {})
+        assert frozen_activity[53949]['observed_s'] == 6.0
+        assert len(meaningful_compiler_activity(frozen_activity)) == 1
+        stopped = confirmed_stopped_pids([28496, 53916],
+                                         [{'pid': 28496, 'state': 'T'}, {'pid': 53916, 'state': 'S'}])
+        assert stopped == {28496}, stopped
+        assert active_build_count([28496, 53916, 60000], stopped) == 2
+        top = top_cpu_processes({i: {'pid': i, 'cpu_s': float(i)} for i in range(12)})
+        assert len(top) == 10 and top[0]['pid'] == 11 and top[-1]['pid'] == 2, top
+        assert not can_finish_daemon_shutdown(0, 1, 0)
+        assert can_finish_daemon_shutdown(0, 0, 0)
+        print('runq scheduling dry-run passed: build drain, FIFO batch threshold, 30-minute age, urgent single, '
+              'solo speed jobs, five-minute build-window trigger, non-solo smoke allowance, registered buildq waiters, '
+              'CPU-delta compiler detection, sticky outside-build cooldown, hold-perf status, top-process sampling, '
+              'stopped-build exclusion, runnable compiler lifetime, no-FPS quiet jobs, graceful shutdown, and '
+              'non-speed capacity config')
+    elif sub == '_perf-wait':
+        if argv and argv[0] == '--':
+            argv = argv[1:]
+        if not argv:
+            sys.exit('runq _perf-wait: missing command')
+        if not perf_build_gate():
+            sys.exit(2)
         os.execvpe(argv[0], argv, os.environ)
     elif sub == '_scene':
         sys.exit(cmd_scene(argv))
@@ -1338,6 +2731,18 @@ def main():
         cmd_status(argv)
     elif sub == 'cancel':
         cmd_cancel(argv)
+    elif sub == '_remote-claim':   # worker [load]
+        mkdirs()
+        j = remote_claim(argv[0], argv[1] if len(argv) > 1 else None)
+        print(json.dumps(j) if j else '')
+    elif sub == '_remote-beat':    # worker id [load]
+        mkdirs()
+        print(remote_beat(argv[0], argv[1], argv[2] if len(argv) > 2 else None))
+    elif sub == '_remote-finish':  # worker id exit wall how
+        mkdirs()
+        print(remote_finish(argv[0], argv[1], int(argv[2]), float(argv[3]), argv[4]))
+    elif sub == '_test-laptop':
+        test_laptop()
     elif sub == 'priority':
         sys.exit(cmd_priority(argv))
     elif sub == 'bump':
