@@ -142,6 +142,24 @@ DEFINE_bool(
     "Metal");
 
 DEFINE_bool(
+    metal_xpass_lazy_barrier, false,
+    "Cross-pass encode thread: getting the command buffer no longer waits for "
+    "the encode thread at a pass boundary; only encoder creation, event "
+    "waits/signals and commit do. Runtime-switchable at a drained frame "
+    "boundary; env REX_METAL_XPASS_LAZY_BARRIER=0/1 overrides.",
+    "Metal");
+
+DEFINE_bool(
+    metal_encode_spin, false,
+    "Encode-thread hand-off spins up to metal_encode_spin_us before sleeping: "
+    "the command thread waiting for a drain and the idle encode worker. "
+    "Runtime-switchable at a drained frame boundary; env "
+    "REX_METAL_ENCODE_SPIN=0/1 overrides.",
+    "Metal");
+REXCVAR_DEFINE_UINT32(metal_encode_spin_us, 50, "Metal",
+                      "Spin length in microseconds for metal_encode_spin.");
+
+DEFINE_bool(
     metal_bindless_cache, false,
     "Reuse the previous draw's bindless tables when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
     "Metal");
@@ -1355,6 +1373,11 @@ MetalCommandProcessor::MetalCommandProcessor(
   reg_early_out_active_ = RegEarlyOutRequested();
   bindless_cache_active_ = BindlessCacheRequested();
   draw_consts_dirty_active_ = DrawConstsDirtyRequested();
+  xpass_lazy_barrier_active_ = XpassLazyBarrierRequested();
+  encode_spin_active_ = EncodeSpinRequested();
+  std::fprintf(stderr, "[warn] [mct] xpass_lazy_barrier %s encode_spin %s\n",
+               xpass_lazy_barrier_active_ ? "on" : "off",
+               encode_spin_active_ ? "on" : "off");
   BuildDrawConstsInputTable();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
   pending_shared_memory_writes_scratch_.reserve(
@@ -2943,6 +2966,19 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     ++draw_consts_input_epoch_;
     draw_consts_cache_.valid = false;
     REXLOG_INFO("Metal draw consts dirty: {} at drained frame boundary (hits so far: {}/{}, verify mismatches {})", draw_consts_dirty_active_ ? "on" : "off", draw_consts_hits_, draw_consts_calls_, draw_consts_verify_mismatches_);
+  }
+  if (xpass_lazy_barrier_active_ != XpassLazyBarrierRequested()) {
+    xpass_lazy_barrier_active_ = XpassLazyBarrierRequested();
+    REXLOG_INFO("Metal xpass lazy barrier: {} at drained frame boundary", xpass_lazy_barrier_active_ ? "on" : "off");
+  }
+  if (encode_spin_active_ != EncodeSpinRequested()) {
+    encode_spin_active_ = EncodeSpinRequested();
+    REXLOG_INFO("Metal encode spin: {} at drained frame boundary", encode_spin_active_ ? "on" : "off");
+  }
+  {
+    const uint32_t spin_us =
+        encode_spin_active_ ? REXCVAR_GET(metal_encode_spin_us) : 0;
+    render_encoder_recorder_.SetSpinUs(spin_us);
   }
   CloseFrameLifetime();
   // Proactive descriptor-pressure trimming: at frame boundaries the GPU has
@@ -11311,10 +11347,19 @@ static DeferredRenderEncoder* g_xpass_recorder = nullptr;
 
 MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   ProcessCompletedSubmissions();
-  render_encoder_recorder_.Barrier();
   if (current_command_buffer_) {
+    // [mct] lazy barrier: every front-end touch of the command buffer itself
+    // drains on its own (pass_trace encoder creation via the encode barrier,
+    // EncodePrecommitWait*, EncodeMainCommandBufferEnd before commit,
+    // FlushCommandBufferAndWait, GetCurrentCommandBuffer), and mid-pass
+    // callers already run alongside the worker. Getting the buffer only to
+    // check it exists no longer waits for the previous pass to replay.
+    if (!xpass_lazy_barrier_active_) {
+      render_encoder_recorder_.Barrier();
+    }
     return current_command_buffer_;
   }
+  render_encoder_recorder_.Barrier();
   if (!command_queue_) {
     REXLOG_ERROR("EnsureCommandBuffer: no command queue");
     return nullptr;

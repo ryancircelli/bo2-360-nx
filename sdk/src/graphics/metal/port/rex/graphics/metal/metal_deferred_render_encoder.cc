@@ -318,6 +318,7 @@ void DeferredRenderEncoder::PublishChunk() {
     std::lock_guard<std::mutex> lock(mutex_);
     queue_.push_back(std::move(current_));
     ++published_;
+    published_seen_.store(published_, std::memory_order_release);
     wake = worker_waiting_;
   }
   ++stats_.chunks;
@@ -337,13 +338,30 @@ uint64_t DeferredRenderEncoder::Drain() {
   auto start = std::chrono::steady_clock::now();
   // Most drains finish within a few microseconds of the last chunk; spin
   // briefly before sleeping.
-  for (int i = 0; i < 256; ++i) {
-    if (completed_.load(std::memory_order_acquire) == published_) {
-      break;
-    }
+  const uint32_t spin_us = spin_us_.load(std::memory_order_relaxed);
+  if (spin_us) {
+    // [mct] encode spin: a sleep here costs a wake-up on the critical thread.
+    const auto spin_end = start + std::chrono::microseconds(spin_us);
+    for (uint32_t i = 0;; ++i) {
+      if (completed_.load(std::memory_order_acquire) == published_) {
+        break;
+      }
+      if ((i & 63) == 63 && std::chrono::steady_clock::now() >= spin_end) {
+        break;
+      }
 #if defined(__aarch64__)
-    __asm__ __volatile__("yield");
+      __asm__ __volatile__("yield");
 #endif
+    }
+  } else {
+    for (int i = 0; i < 256; ++i) {
+      if (completed_.load(std::memory_order_acquire) == published_) {
+        break;
+      }
+#if defined(__aarch64__)
+      __asm__ __volatile__("yield");
+#endif
+    }
   }
   if (completed_.load(std::memory_order_acquire) != published_) {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -366,6 +384,24 @@ uint64_t DeferredRenderEncoder::Drain() {
 void DeferredRenderEncoder::WorkerMain() {
   for (;;) {
     std::unique_ptr<Chunk> chunk;
+    if (const uint32_t spin_us = spin_us_.load(std::memory_order_relaxed)) {
+      // [mct] encode spin: wait for the next chunk without sleeping, so the
+      // publish needs no wake-up and the replay starts at once.
+      const auto spin_end =
+          std::chrono::steady_clock::now() + std::chrono::microseconds(spin_us);
+      for (uint32_t i = 0;; ++i) {
+        if (published_seen_.load(std::memory_order_acquire) !=
+            completed_.load(std::memory_order_relaxed)) {
+          break;
+        }
+        if ((i & 63) == 63 && std::chrono::steady_clock::now() >= spin_end) {
+          break;
+        }
+#if defined(__aarch64__)
+        __asm__ __volatile__("yield");
+#endif
+      }
+    }
     {
       std::unique_lock<std::mutex> lock(mutex_);
       if (!stop_ && queue_.empty()) {

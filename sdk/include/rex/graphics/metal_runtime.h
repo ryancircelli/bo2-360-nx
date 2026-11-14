@@ -25,5 +25,13 @@ __attribute__((visibility("default"))) bool BindlessCacheRequested();
 __attribute__((visibility("default"))) void RequestBindlessCache(bool on);
 __attribute__((visibility("default"))) bool DrawConstsDirtyRequested();
 __attribute__((visibility("default"))) void RequestDrawConstsDirty(bool on);
+// [mct] Cross-pass encode thread: EnsureCommandBuffer stops draining the encode
+// thread at pass boundaries (encoder creation, events and commit still do).
+__attribute__((visibility("default"))) bool XpassLazyBarrierRequested();
+__attribute__((visibility("default"))) void RequestXpassLazyBarrier(bool on);
+// [mct] Encode-thread hand-off spins (metal_encode_spin_us) before sleeping,
+// on the command thread's drain and the worker's idle wait.
+__attribute__((visibility("default"))) bool EncodeSpinRequested();
+__attribute__((visibility("default"))) void RequestEncodeSpin(bool on);
 }  // namespace rex::graphics::metal
 #endif
