@@ -197,6 +197,12 @@ DEFINE_bool(metal_ssm_merge, false,
             "Merge stencil-only alias clear transfers into the next draw pass. "
             "Exact; can help bandwidth-bound Macs, slightly slower on others.",
             "Metal");
+DEFINE_int32(metal_resolve_readback_max_bytes, 0,
+             "Copy colour resolves of at most this many bytes back to guest "
+             "RAM after their command buffer completes, for titles whose CPU "
+             "reads resolve results (NFSMW auto-exposure). 0 = off.",
+             "Metal");
+
 DEFINE_bool(metal_occlusion_real, true,
             "Answer guest occlusion queries with real Metal visibility results; "
             "off reports a fixed 1000 samples passed.",

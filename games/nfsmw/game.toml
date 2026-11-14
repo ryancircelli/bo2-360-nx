@@ -9,3 +9,8 @@ local_data_root = "~/Games/Xbox360/nfsmw/disc"  # read-only extracted disc; --ga
 
 [defaults]
 gpu_plugin = "metal"                     # the native Metal renderer; --gpu_plugin or a config file still wins
+
+[renderer.settings]
+# Auto-exposure: the CPU reads the 64x64 luminance resolve (16 KB). Without the
+# copy back to guest RAM the exposure runs away and the scene blows out white.
+metal_resolve_readback_max_bytes = 16384
