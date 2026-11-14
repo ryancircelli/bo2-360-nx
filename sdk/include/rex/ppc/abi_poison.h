@@ -146,6 +146,18 @@ inline bool AbiPoisonVmxLowEnabled() {
   return enabled;
 }
 
+// REX_ABI_POISON_R2=0 skips the r2 comparison. The ABI reserves r2 but the
+// NFSMW compiler uses it as a 64-bit scratch register (sub_82801950 builds
+// 64-bit values in r2 via rldicr/clrldi), so r2 changes across calls there.
+// Previously hidden by the 500-line mismatch log cap behind the v14-v31 hits.
+inline bool AbiPoisonR2Enabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_ABI_POISON_R2");
+    return !(value && value[0] == '0');
+  }();
+  return enabled;
+}
+
 // host_local_lr (NEAR_NATIVE_RESEARCH.md NN-1.3): a function that keeps its LR
 // save slot in the `rex_saved_lr` local writes this value to the guest slot
 // instead of the return address, so a reader the generator's LR-slot scan
@@ -217,7 +229,7 @@ inline void AbiPoisonPostCall(::PPCContext& ctx, uint32_t site) {
     static constexpr int kGprNames[21] = {1,  2,  13, 14, 15, 16, 17, 18, 19, 20, 21,
                                           22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
     for (int i = 0; i < 21; ++i) {
-      if (before.gpr[i] != after.gpr[i]) {
+      if (before.gpr[i] != after.gpr[i] && (kGprNames[i] != 2 || AbiPoisonR2Enabled())) {
         AbiPoisonReport(site, "r", kGprNames[i], before.gpr[i], after.gpr[i]);
       }
     }
