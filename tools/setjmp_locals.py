@@ -1,6 +1,6 @@
 """Register locals across BO2's setjmp/longjmp (Com_Error recovery): check, and fix the generated code.
 
-The codegen turns `bl setjmp` (setjmp_address in app/overrides.toml, 0x82918CA0) into
+The codegen turns `bl setjmp` (setjmp_address in games/bo2/overrides.toml, 0x82918CA0) into
     env = ctx; temp.s64 = ppc_setjmp(ctx.r3.u32); if (temp.s64 != 0) ctx = env;
 so a longjmp restores ctx as it was at the setjmp. The game's setjmp also saves CR (mfcr), f14-f31, r13-r31 and
 v64-v127 in the buffer (disassembly at 0x82918CB8-0x82918E..), and its longjmp (0x82919E50) puts them back. With

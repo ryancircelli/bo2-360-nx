@@ -1,5 +1,5 @@
 // The start-up hooks (bo2zm_lifecycle.h) and the home screen's update check (bo2zm_updates.h) for the standard build,
-// which has no update server: the CHECK FOR UPDATES button is left out of the menus (app/CMakeLists.txt), and the
+// which has no update server: the CHECK FOR UPDATES button is left out of the menus (games/bo2/CMakeLists.txt), and the
 // update functions do nothing.
 //
 // The early hand-over to the campaign program runs from a constructor of the first priority a program may use (101),

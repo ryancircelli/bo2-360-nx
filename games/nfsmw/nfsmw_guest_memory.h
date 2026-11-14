@@ -1,5 +1,5 @@
 // How the NFSMW generated code reaches guest memory. Modeled on
-// app/src/bo2zm_guest_memory.h (BO2), appended after the generated PCH via a
+// core/bo2zm_guest_memory.h (BO2), appended after the generated PCH via a
 // forced include (games/nfsmw/CMakeLists.txt).
 //
 // Default: the codegen's own REX_LOAD_*/REX_STORE_* (volatile) stay, and

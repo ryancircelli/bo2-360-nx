@@ -1,7 +1,7 @@
 # Sums one thread's samples in the console profiler's log (logs/rex/rex_profile.log, with bo2zm_profile_stacks = 1)
 # by the outermost function of each sample's inline chain (addr2line -i), and with --lines by its file:line, so the
 # samples inside one big function with everything inlined (the native renderer's Draw) split by the line that called
-# the inlined code. Needs an ELF with line tables: a BO2_DEBUG_LINES=1 build of the same commit (app/build_switch.sh;
+# the inlined code. Needs an ELF with line tables: a BO2_DEBUG_LINES=1 build of the same commit (games/bo2/build_switch.sh;
 # its .text is the same as the normal build's). Kernel waits (svc) are left out of the busy total.
 # usage: python tools/profile_inline.py rex_profile.log bo2zm_<commit>_lines.elf [--thread NAME] [--top N] [--lines]
 #        [--only SUBSTRING]

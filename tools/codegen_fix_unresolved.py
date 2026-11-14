@@ -7,7 +7,7 @@ before it ends a function (blr, b, bctr, or zero padding). Anything else may
 be the middle of a function and is left for a human, and the loop stops.
 
 usage: python tools/codegen_fix_unresolved.py [--max-rounds N] [--project DIR --manifest FILE --image FILE]
-Run from the repository root. Appends to <project>/overrides.toml (default app/, bo2zm_manifest.toml and the
+Run from the repository root. Appends to <project>/overrides.toml (default games/bo2/, bo2zm_manifest.toml and the
 default_mp image).
 """
 import argparse
@@ -20,7 +20,7 @@ import sys
 import capstone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP = os.path.join(ROOT, "app")
+APP = os.path.join(ROOT, "games", "bo2")
 IMAGE = os.path.join(ROOT, "work", "dump_tu18", "default_mp.image.bin")
 # The host tools (tools/build_host.sh); a worktree without its own build can point REXGLUE_BIN at another checkout's.
 SDK_BIN = os.environ.get("REXGLUE_BIN") or os.path.join(ROOT, "sdk", "out", "win-amd64")
@@ -80,7 +80,7 @@ def main():
     global APP, OVERRIDES, LOG, data
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-rounds", type=int, default=15)
-    ap.add_argument("--project", default=APP, help="the codegen project folder (default app/)")
+    ap.add_argument("--project", default=APP, help="the codegen project folder (default games/bo2/)")
     ap.add_argument("--manifest", default="bo2zm_manifest.toml", help="the manifest, inside --project")
     ap.add_argument("--image", default=IMAGE, help="the decrypted image the manifest's XEX gives")
     a = ap.parse_args()

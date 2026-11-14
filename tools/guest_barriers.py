@@ -17,7 +17,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GEN = os.path.join(ROOT, "app", "generated", "default_mp")
+GEN = os.path.join(ROOT, "games", "bo2", "generated", "default_mp")
 BARRIER = "\tREX_GUEST_BARRIER();"
 LABEL = re.compile(r"^loc_[0-9A-F]+:\s*$")
 ORDERING = re.compile(r"^\s*// (sync|lwsync|eieio|isync|db16cyc)\b")

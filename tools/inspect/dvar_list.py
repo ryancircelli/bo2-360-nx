@@ -21,7 +21,7 @@ import struct
 import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-GEN = os.path.join(REPO, "app", "generated", "default_mp")
+GEN = os.path.join(REPO, "games", "bo2", "generated", "default_mp")
 IMAGE = os.path.join(REPO, "work", "dump_tu18", "default_mp.image.bin")
 BASE = 0x82000000
 KINDS = {0x82498550: ("bool", 5, 6), 0x824985D0: ("int", 7, 8), 0x82498668: ("float", 7, 8),

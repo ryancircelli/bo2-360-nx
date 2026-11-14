@@ -1,11 +1,11 @@
 -- bo2zm: the port's changes to the game's menus.
 --
 -- The game builds its menus in Lua (HavokScript) from scripts stored in its fastfiles. This file is the port's own:
--- CMake embeds it in the executable as text (app/CMakeLists.txt, bo2zm_ui_lua.h), and bo2zm_ui.cpp runs it inside the
+-- CMake embeds it in the executable as text (games/bo2/CMakeLists.txt, bo2zm_ui_lua.h), and bo2zm_ui.cpp runs it inside the
 -- menu system's Lua state as soon as that state exists. None of the game's files are modified. The file must not
 -- contain the at sign, which the CMake template uses as its delimiter.
 --
--- Keep the number of top-level locals small: app/CMakeLists.txt fails the build above 80 "local" lines at the left
+-- Keep the number of top-level locals small: games/bo2/CMakeLists.txt fails the build above 80 "local" lines at the left
 -- margin. The game's Lua compiler does not enforce a limit on a function's active local variables; past about 95 it
 -- silently overwrites the menu heap, and the game crashed right after this file's second install once the main chunk
 -- reached 97 (92 was fine). The check was probably compiled out of the shipped game, which contains none of Lua 5.1's
@@ -1462,7 +1462,7 @@ end
 ---------------------------------------------------------------------------------------------------------------------
 -- CHECK FOR UPDATES (home menu, under EXTRAS): a popup over the home menu, like Extras. The program does the work
 -- (bo2zm_updates.h): "bo2zm_update check" asks the update server (a PC on the local network) whether it has an
--- update for this console, and downloads nothing. Builds without an update server have no button: app/CMakeLists.txt
+-- update for this console, and downloads nothing. Builds without an update server have no button: games/bo2/CMakeLists.txt
 -- sets UpdatesButton to false in the text it builds in. The popup shows what the program reports: bo2zm_update_ui is the
 -- state (1 checking, 2 no update server set up, 3 none answered, 4 up to date, 5 update found, 6 restarting, 7 failed),
 -- bo2zm_update_text_ui a title and up to three lines separated by '|', bo2zm_update_install_ui 1 when DOWNLOAD AND

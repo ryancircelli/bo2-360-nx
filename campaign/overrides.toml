@@ -6,13 +6,13 @@
 # ============================================================================
 
 # --- setjmp / longjmp (root keys: must stay ABOVE any table) -----------------
-# The same two routines as default_mp's 0x82918CA0 / 0x82919E50 (app/overrides.toml):
+# The same two routines as default_mp's 0x82918CA0 / 0x82919E50 (games/bo2/overrides.toml):
 # their first 24 instructions match word for word apart from 16-bit immediates.
 setjmp_address = 0x826EC320
 longjmp_address = 0x826EC7B0
 
 # --- Codegen speed options (root keys: must stay ABOVE [functions]) -----------
-# The same as the Zombies program's (app/overrides.toml explains each): the
+# The same as the Zombies program's (games/bo2/overrides.toml explains each): the
 # game's mfmsr/mtmsrd interrupt guards become no-ops instead of one global
 # lock (on the Switch that lock held Zombies at 0-4 FPS), and the condition,
 # XER, CTR, non-volatile and scratch vector registers become C++ locals.
@@ -44,7 +44,7 @@ vector_scratch_as_local = true
 "0x826055A0" = { share_registers = true }
 
 # --- Native C library functions ([rexcrt]) -----------------------------------
-# As in the Zombies program (app/overrides.toml): the codegen drops each
+# As in the Zombies program (games/bo2/overrides.toml): the codegen drops each
 # function listed here and calls rexcrt_<key> instead, implemented in
 # games/bo2/src/bo2zm_crt.cpp. The campaign's copies of the same routines are
 # memcpy and memmove byte for byte, the others equal apart from call targets.

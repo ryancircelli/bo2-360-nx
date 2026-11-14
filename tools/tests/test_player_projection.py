@@ -15,7 +15,7 @@ FUNCTIONS = ("821AFC90", "82687AF8", "82687B80", "82687D98")
 
 
 def main():
-    generated = ROOT / "app/generated/default_mp"
+    generated = ROOT / "games/bo2/generated/default_mp"
     controls = {}
     for path in generated.glob("bo2zm_recomp.*.cpp"):
         text = path.read_text(encoding="utf-8")

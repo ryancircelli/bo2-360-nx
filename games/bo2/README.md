@@ -1,4 +1,4 @@
-# app
+# games/bo2
 
 The game: the code generator's configuration, the port's own code and the scripts that build and run it. The
 recompiled game is generated into `generated/` and never committed.
@@ -7,16 +7,16 @@ recompiled game is generated into `generated/` and never committed.
 
 | File | What it is |
 |---|---|
-| `build_switch.sh` | Builds `out/switch/bo2zm.nro` (GCC 16, `-O3`, LTO; PGO with `BO2_PGO=use`); see [building](../docs/building.md#step-7-build-the-switch-nro) |
+| `build_switch.sh` | Builds `out/switch/bo2zm.nro` (GCC 16, `-O3`, LTO; PGO with `BO2_PGO=use`); see [building](../../docs/building.md#step-7-build-the-switch-nro) |
 | `build_windows.sh` | Builds `out/win/bo2zm.exe` (clang; Direct3D 12 and Vulkan) |
-| `build_linux.sh` | Builds the Linux ARM64 package; see [building-linux-arm64](../docs/building-linux-arm64.md) |
+| `build_linux.sh` | Builds the Linux ARM64 package; see [building-linux-arm64](../../docs/building-linux-arm64.md) |
 | `run_windows.sh`, `play_windows.cmd` | Run the PC build, one copy at a time; a double-click shortcut to play |
 | `CMakeLists.txt` | The build: generated code, SDK, port sources, the menu script (at most 80 top-level locals), PGO and test builds |
 | `bo2zm_manifest.toml` | The code generator's project |
 | `overrides.toml` | What the generator is told by hand, each entry with its evidence (root keys above `[functions]`) |
 | `gaps.toml` | Code no function covers, from `tools/codegen_gaps.py` |
 | `locals.txt` | Hot leaf functions `tools/localize.py` copies with local registers |
-| `switch/bo2zm.toml` | The settings file next to the NRO ([features](../docs/features.md#bo2zmtoml)) |
+| `switch/bo2zm.toml` | The settings file next to the NRO ([features](../../docs/features.md#bo2zmtoml)) |
 
 Generate code only through `tools/codegen.sh`; the builds check for its fix-up passes.
 

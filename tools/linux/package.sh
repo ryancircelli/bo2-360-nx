@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lays out the Linux ARM64 runtime package from a finished build (app/build_linux.sh runs it):
+# Lays out the Linux ARM64 runtime package from a finished build (games/bo2/build_linux.sh runs it):
 #
 #   tools/linux/package.sh <build folder>
 #

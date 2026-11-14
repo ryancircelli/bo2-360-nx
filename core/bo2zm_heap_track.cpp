@@ -5,7 +5,7 @@
 // not a known cause.
 //
 // What: the linker routes malloc, free, calloc, realloc, memalign, aligned_alloc and posix_memalign to the wrappers
-// below (-Wl,--wrap=..., app/CMakeLists.txt, only with BO2ZM_HEAP_TRACK: BO2_HEAP_TRACK=1 bash app/build_switch.sh).
+// below (-Wl,--wrap=..., games/bo2/CMakeLists.txt, only with BO2ZM_HEAP_TRACK: BO2_HEAP_TRACK=1 bash games/bo2/build_switch.sh).
 // One allocation in 16, chosen by a hash of its address (so free finds the same ones), is noted with its caller: the
 // return address and three more from the frame records (this file is built with frame pointers; the walk stops at a
 // record that does not look like one). Once a minute the frame hook logs the callers whose live bytes grew most, and

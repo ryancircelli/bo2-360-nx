@@ -1,6 +1,6 @@
 """Cross-references from the generated code's disassembly comments.
 
-The recompiled C++ (app/generated/default_mp/*.cpp) keeps every PowerPC instruction as a comment inside
+The recompiled C++ (games/bo2/generated/default_mp/*.cpp) keeps every PowerPC instruction as a comment inside
 DEFINE_REX_FUNC(sub_XXXXXXXX). This finds which functions build a given address (lis + addi/ori/lwz/stw...), or
 call a given function (bl), without a disassembler database. Read-only; the generated code is game-derived.
 
@@ -14,7 +14,7 @@ import os
 import re
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-GEN = os.path.join(REPO, "app", "generated", "default_mp")
+GEN = os.path.join(REPO, "games", "bo2", "generated", "default_mp")
 FUNC = re.compile(r"^DEFINE_REX_FUNC\((sub_[0-9A-F]+)\)")
 INSN = re.compile(r"^\s*// (\w+\.?) ?(.*)$")
 REG = r"r(\d+)"

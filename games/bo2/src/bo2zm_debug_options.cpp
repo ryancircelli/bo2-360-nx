@@ -24,7 +24,7 @@
 //
 // The quiet log. Someone who is just playing should get a log that stays small but can still report a crash. A toml
 // or command line that sets log_level keeps that log, the Switch profiler's report (logs/rex/rex_profile.log) and
-// every log file whatever DEBUG is; every test toml sets it and app/run_windows.sh passes it, so test runs (the
+// every log file whatever DEBUG is; every test toml sets it and games/bo2/run_windows.sh passes it, so test runs (the
 // benchmark, log uploads, per-thread CPU) are unaffected. Without it, as in a player's default toml, DEBUG off writes
 // only warnings and errors and no profiler report (the profiler's thread registry, counters and the overlays' FPS keep
 // running); DEBUG on brings the info log and the report back at once, with LOG DETAIL as usual. The level is decided

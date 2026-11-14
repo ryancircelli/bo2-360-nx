@@ -5,7 +5,7 @@ generated/
 **/generated/
 # tools/build_mac.sh links these to the data folder, so they are symlinks, not directories
 /work
-/app/generated
+/games/bo2/generated
 *.xex
 *.xexp
 *.pe
@@ -44,7 +44,7 @@ build/
 
 # Logs (local paths, per-run data)
 *.log
-app/logs/
+games/bo2/logs/
 
 # Ghidra / REA local state
 *.gpr

@@ -9,7 +9,7 @@ native build on the ARM machine uses the same script.
 
 ## Before you start
 
-- **Generated C++** in `app/generated/`, from `tools/codegen.sh` (it runs on Windows; the output is the same for every
+- **Generated C++** in `games/bo2/generated/`, from `tools/codegen.sh` (it runs on Windows; the output is the same for every
   platform).
 - **The SDK's third-party sources**: `python3 tools/fetch_thirdparty.py`.
 - Your game files and shader library are not needed to build; they go next to the program afterwards.
@@ -21,7 +21,7 @@ Clang 19 or newer is required (with clang 18, libstdc++'s `<expected>` is empty 
 ```bash
 sudo apt install clang-20 lld-20 llvm-20 cmake ninja-build pkg-config python3 libwayland-bin mmdebstrap
 sudo bash tools/linux/make_sysroot.sh     # out/linux-sysroot, ~460 MB of unpacked Ubuntu 24.04 ARM64 packages
-bash app/build_linux.sh                   # app/out/linux-arm64/package/bo2zm-linux-arm64/ and a .tar.gz
+bash games/bo2/build_linux.sh                   # games/bo2/out/linux-arm64/package/bo2zm-linux-arm64/ and a .tar.gz
 ```
 
 A first build took 11 minutes in WSL2 on a 16-thread PC (12 jobs in 15 GB; lower `JOBS=` on smaller machines). In
@@ -29,7 +29,7 @@ WSL2, keep the sysroot and build folder on the Linux file system:
 
 ```bash
 sudo bash tools/linux/make_sysroot.sh ~/bo2zm/sysroot
-BO2_LINUX_SYSROOT=~/bo2zm/sysroot BO2_LINUX_OUT=~/bo2zm/build bash app/build_linux.sh
+BO2_LINUX_SYSROOT=~/bo2zm/sysroot BO2_LINUX_OUT=~/bo2zm/build bash games/bo2/build_linux.sh
 ```
 
 **Docker** (`tools/linux/Dockerfile`, the same environment with the sysroot built in; not yet run), from the top of
@@ -47,7 +47,7 @@ sudo apt install clang lld llvm cmake ninja-build pkg-config python3 libwayland-
   libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
   libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev \
   libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev
-bash app/build_linux.sh
+bash games/bo2/build_linux.sh
 ```
 
 On Ubuntu use `clang-20 lld-20`. The binary then needs the build machine's glibc or newer; set `BO2_LINUX_SYSROOT`
@@ -58,7 +58,7 @@ for the same binary as a cross build.
 | Variable | Default | What it does |
 |---|---|---|
 | `BO2_LINUX_SYSROOT` | `out/linux-sysroot` | The sysroot; native builds use one only when it is set |
-| `BO2_LINUX_OUT` | `app/out/linux-arm64` | The build folder |
+| `BO2_LINUX_OUT` | `games/bo2/out/linux-arm64` | The build folder |
 | `BO2_LINUX_MARCH` | `armv8-a` | `-march`; `armv8.2-a` suits Cortex-A76/A78, Neoverse N1 and newer |
 | `BO2_GUEST_MEMORY_PLAIN` | `1` | Plain guest memory accesses, as on the Switch; `0` is the volatile form |
 | `BO2_LTO` | `0` | `1` turns on ThinLTO |

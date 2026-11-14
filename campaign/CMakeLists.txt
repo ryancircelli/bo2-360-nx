@@ -91,7 +91,7 @@ if(BO2CP_NATIVE)
     set_property(SOURCE ${BO2ZM_SRC}/bo2zm_switch.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS "BO2ZM_BUILD_ID=\"bo2cp-${BO2CP_BUILD_TIME}\"")
     # The limiter's rewrite repeats the game's single-precision operations one by one: GCC must not fuse a product into
-    # a later add there (app/CMakeLists.txt does the same).
+    # a later add there (games/bo2/CMakeLists.txt does the same).
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         set_property(SOURCE ${BO2ZM_SRC}/bo2zm_native_limiter.cpp APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
     endif()
@@ -114,7 +114,7 @@ endif()
 
 rexglue_setup_target(bo2cp GPU_PLUGINS xenos)
 
-# Switch, as for bo2zm (app/CMakeLists.txt): contended host mutexes and the C heap's lock spin briefly before sleeping
+# Switch, as for bo2zm (games/bo2/CMakeLists.txt): contended host mutexes and the C heap's lock spin briefly before sleeping
 # (games/bo2/src/bo2zm_switch_mutex.cpp), and the default display's id for VSYNC's refresh signal (bo2zm_switch.cpp).
 if(REXGLUE_PLATFORM_SWITCH AND BO2CP_NATIVE)
     target_sources(bo2cp PRIVATE ${BO2ZM_SRC}/bo2zm_switch_mutex.cpp)
@@ -146,7 +146,7 @@ endif()
 
 # rex_app.cpp (compiled into this target) includes imgui.h, but rexruntime links
 # imgui privately, so the include path does not reach us when the SDK is a
-# subdirectory (app/CMakeLists.txt does the same).
+# subdirectory (games/bo2/CMakeLists.txt does the same).
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
     target_include_directories(bo2cp PRIVATE
         $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
@@ -176,7 +176,7 @@ if(BO2CP_NATIVE)
     if(TARGET Vulkan::Headers)
         target_link_libraries(bo2cp PRIVATE Vulkan::Headers)
     endif()
-    # The .webm videos' VP8 decoder (bo2zm_webm.cpp) is the SDK's FFmpeg, as in app/CMakeLists.txt.
+    # The .webm videos' VP8 decoder (bo2zm_webm.cpp) is the SDK's FFmpeg, as in games/bo2/CMakeLists.txt.
     target_link_libraries(bo2cp PRIVATE $<LINK_ONLY:libavcodec> $<LINK_ONLY:libavutil>)
     set_source_files_properties(${BO2ZM_SRC}/bo2zm_webm.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${REXSDK_DIR}/thirdparty/FFmpeg")

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Configures and builds bo2cp.nro (the campaign bring-up) for the Switch with devkitA64, libnx and Mesa's NVK, as
-# app/build_switch.sh does for bo2zm, with link-time optimization (BO2_LTO=0 turns it off). Output:
+# games/bo2/build_switch.sh does for bo2zm, with link-time optimization (BO2_LTO=0 turns it off). Output:
 # campaign/out/switch/bo2cp.nro. JOBS limits the parallel jobs (default 8: the generated code is big).
 set -euo pipefail
 CP="$(cd "$(dirname "$0")" && pwd)"

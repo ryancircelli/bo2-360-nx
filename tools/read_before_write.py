@@ -3,10 +3,10 @@
 The callers of each finding are listed too.
 
 With cr_as_local / xer_as_local / ctr_as_local / non_volatile_as_local / vector_scratch_as_local
-(app/overrides.toml), r14-r31, f14-f31, v0, v14-v127, cr0-cr7, ctr and xer are C++ locals of each generated function, zero at entry. A function that
+(games/bo2/overrides.toml), r14-r31, f14-f31, v0, v14-v127, cr0-cr7, ctr and xer are C++ locals of each generated function, zero at entry. A function that
 reads one of them before writing it gets 0 instead of the value PowerPC code would see. That matters for pieces of
 split functions: the analyzer cut a function in two, and the first piece jumps into the second (b, a conditional
-branch, a jump table or bctr) with registers already set. Such a piece needs share_registers in app/overrides.toml:
+branch, a jump table or bctr) with registers already set. Such a piece needs share_registers in games/bo2/overrides.toml:
 it then keeps every register in ctx, and whoever jumps into it passes its locals through ctx
 (the SDK's emit_call_sharing_registers). Run this after every codegen.
 
@@ -21,7 +21,7 @@ always comes first): those are the known false alarms, and need a human look.
 usage: python tools/read_before_write.py [--gen DIR] [--saves] [--strict]
   --saves   also list the functions whose only early reads are stack saves (normally noise)
   --strict  exit 1 if a function outside KNOWN (below) shows up: it needs a human look, and share_registers in
-            app/overrides.toml if it is a piece of a split function
+            games/bo2/overrides.toml if it is a piece of a split function
 Output: one line per function: name, registers, how it is reached (b / cond / jt / bl / indirect), first read.
 """
 import argparse
@@ -32,7 +32,7 @@ import sys
 from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GEN = os.path.join(ROOT, "app", "generated", "default_mp")
+GEN = os.path.join(ROOT, "games", "bo2", "generated", "default_mp")
 
 FN = re.compile(r"^DEFINE_REX_FUNC\((sub_[0-9A-F]{8})\)")
 # The localized registers, as bare names (ctx.r31 is not a local).

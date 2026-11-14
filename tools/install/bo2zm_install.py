@@ -63,8 +63,8 @@ BOTS_PACK = "bo2zm_bots.gscpack"
 MAX_SHADERS = 65536
 
 # What the source copy leaves out: a checkout's git-ignored folders and its top-level dot folders (a kit has none).
-SKIP_DIRS = {"out", "work", "refs", "data", os.path.join("app", "out"), os.path.join("app", "generated"),
-             os.path.join("app", "logs"), os.path.join("sdk", "out"), os.path.join("campaign", "out"),
+SKIP_DIRS = {"out", "work", "refs", "data", os.path.join("games", "bo2", "out"), os.path.join("games", "bo2", "generated"),
+             os.path.join("games", "bo2", "logs"), os.path.join("sdk", "out"), os.path.join("campaign", "out"),
              os.path.join("campaign", "generated")}
 SKIP_FILES = {"bo2_data.txt"}
 # Variables of a developer's shell that would send the builds elsewhere or change them.
@@ -497,7 +497,7 @@ class Installer:
         self.bash = self.find_bash()
         if not self.bash:
             problems.append("bash was not found: install Git for Windows (git-scm.com)")
-        if not os.path.isfile(os.path.join(self.source, "app", "CMakeLists.txt")):
+        if not os.path.isfile(os.path.join(self.source, "games", "bo2", "CMakeLists.txt")):
             problems.append(f"the source tree was not found at {self.source}")
         host = os.path.join(self.runtime, "host")
         for name in ("rexglue.exe", "xexdump.exe", "rexruntime.dll", "bo2zm_hlsl.exe", "bo2zm_pack.exe", "dxc.exe",
@@ -808,14 +808,14 @@ class Installer:
         extra = dict(self.build_env(), BO2_LTO="1" if self.lto() else "0")
         if self.args.pgo:
             extra.update(BO2_PGO="use", BO2_PGO_DIR=os.path.abspath(self.args.pgo).replace("\\", "/"))
-        run.run([self.bash, "app/build_switch.sh"], cwd=self.src, env=self.env(**extra))
+        run.run([self.bash, "games/bo2/build_switch.sh"], cwd=self.src, env=self.env(**extra))
 
     def step_build_switch_campaign(self, run):
         run.run([self.bash, "campaign/build_switch.sh"], cwd=self.src,
                 env=self.env(BO2_LTO="1" if self.lto() else "0"))
 
     def step_build_windows(self, run):
-        run.run([self.bash, "app/build_windows.sh"], cwd=self.src, env=self.env(**self.build_env()))
+        run.run([self.bash, "games/bo2/build_windows.sh"], cwd=self.src, env=self.env(**self.build_env()))
 
     def step_build_windows_campaign(self, run):
         run.run([self.bash, "campaign/build_windows.sh"], cwd=self.src, env=self.env())
@@ -852,9 +852,9 @@ class Installer:
         os.makedirs(dst, exist_ok=True)
         boot_zombies = "true" if "zm" in self.modes else "false"
         if self.main_program():
-            link_or_copy(os.path.join(self.src, "app", "out", "switch", "bo2zm.nro"), os.path.join(dst, "bo2zm.nro"))
+            link_or_copy(os.path.join(self.src, "games", "bo2", "out", "switch", "bo2zm.nro"), os.path.join(dst, "bo2zm.nro"))
             self.write(os.path.join(dst, "bo2zm.toml"),
-                       self.toml_text(os.path.join(self.src, "app", "switch", "bo2zm.toml"), boot_zombies))
+                       self.toml_text(os.path.join(self.src, "games", "bo2", "switch", "bo2zm.toml"), boot_zombies))
             self.lay_out_shaders(run, "bo2zm", dst)
         if self.campaign():
             link_or_copy(os.path.join(self.src, "campaign", "out", "switch", "bo2cp.nro"),
@@ -895,7 +895,7 @@ class Installer:
         root = os.path.join(self.out, "windows")
         dst = os.path.join(root, "bo2zm")
         os.makedirs(dst, exist_ok=True)
-        main_out = os.path.join(self.src, "app", "out", "win")
+        main_out = os.path.join(self.src, "games", "bo2", "out", "win")
         cp_out = os.path.join(self.src, "campaign", "out", "win")
         if self.main_program():
             link_or_copy(os.path.join(main_out, "bo2zm.exe"), os.path.join(dst, "bo2zm.exe"))

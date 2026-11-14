@@ -11,7 +11,7 @@ How bo2-360-nx works, what was optimized and what it gained, and where to go to 
 | [script-mods.md](script-mods.md) | The GSC Loader: mod folders, `mod.ini`, startup scripts, limits |
 
 Elsewhere: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) lists every upstream project and its license;
-`app/README.md`, `sdk/README.md`, `tools/README.md` and `patches/README.md` describe their folders.
+`games/bo2/README.md`, `sdk/README.md`, `tools/README.md` and `patches/README.md` describe their folders.
 
 ## Contents
 
@@ -46,15 +46,15 @@ the SDK's exact Xenos emulation (Direct3D 12, `--bo2zm_renderer=xenos`) remains 
 
 The SDK's loader (from Xenia) decrypts the XEX2 image, decompresses it and applies the update's delta patch: a 47 MB
 image at 0x82000000 that imports 162 functions from `xam` and 215 from `xboxkrnl`. ReXGlue's code generator
-(`sdk/src/codegen`, driven by `app/bo2zm_manifest.toml`) then:
+(`sdk/src/codegen`, driven by `games/bo2/bo2zm_manifest.toml`) then:
 
 1. **Analyzes** the image from the entry point, exports, call targets, jump tables and exception tables until nothing
    new appears: 30,096 functions, no errors.
 2. **Emits** one C++ function per PowerPC function, about 5 million lines in 140 files. Guest memory is one base
    pointer with byte swaps; VMX128 maps to SIMDe (NEON on ARM, SSE on x86).
 
-`app/overrides.toml` holds what the analysis cannot find (boundaries, tail-branch thunks, `setjmp` addresses, register
-options), each entry with its evidence; `app/gaps.toml` lists code no function covers.
+`games/bo2/overrides.toml` holds what the analysis cannot find (boundaries, tail-branch thunks, `setjmp` addresses, register
+options), each entry with its evidence; `games/bo2/gaps.toml` lists code no function covers.
 
 **Registers as locals.** The non-volatile general, floating-point and vector registers, the condition registers, CTR,
 XER and the scratch vector registers are C++ locals, so the compiler keeps them in host registers. Only argument and
@@ -67,7 +67,7 @@ volatile registers stay in the context structure.
 | `read_before_write.py --strict` | Finds functions that read a register before writing it; they must share registers |
 | `setjmp_locals.py --fix` | `longjmp` error recovery must restore the register locals |
 | `direct_calls.py` | Direct calls to unhooked functions, so the compiler can inline them |
-| `localize.py` | Local-register copies of the hot leaf functions in `app/locals.txt` |
+| `localize.py` | Local-register copies of the hot leaf functions in `games/bo2/locals.txt` |
 | `guest_barriers.py` | Compiler barriers that keep plain guest memory accesses correct |
 
 GCC 16 (devkitA64) compiles the generated code, the SDK and the port at `-O3` with LTO and PGO into one NRO. Switch

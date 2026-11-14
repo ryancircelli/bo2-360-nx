@@ -109,7 +109,7 @@ def main():
     arguments = parser.parse_args()
     source = arguments.source.resolve()
     compiler = os.environ.get("CXX") or shutil.which("clang++") or "C:/Program Files/LLVM/bin/clang++.exe"
-    generated = ROOT/"app/generated/default_mp"
+    generated = ROOT/"games/bo2/generated/default_mp"
     with tempfile.TemporaryDirectory(prefix="bo2-mod-hud-") as temp:
         directory = Path(temp)
         (directory/"include").mkdir(parents=True)

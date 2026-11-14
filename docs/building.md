@@ -63,7 +63,7 @@ $BO2_DATA/
 ```
 
 The repository also uses three git-ignored folders of its own: `work/` (the loaded and decrypted executable),
-`app/generated/` (the recompiled game) and `app/out/` (build outputs).
+`games/bo2/generated/` (the recompiled game) and `games/bo2/out/` (build outputs).
 
 ## Step 1: prepare your game files
 
@@ -123,21 +123,21 @@ The shader extractor looks for the image under that name. For TU18 its SHA-256 i
 tools/codegen.sh
 ```
 
-This runs the code generator on `app/bo2zm_manifest.toml` and then the fix-up passes the build depends on, in order:
+This runs the code generator on `games/bo2/bo2zm_manifest.toml` and then the fix-up passes the build depends on, in order:
 
-1. `rexglue codegen`: about 30,100 functions into `app/generated/default_mp/` (about 145 MB of C++, log in
-   `app/codegen.log`).
+1. `rexglue codegen`: about 30,100 functions into `games/bo2/generated/default_mp/` (about 145 MB of C++, log in
+   `games/bo2/codegen.log`).
 2. `tools/read_before_write.py --strict`: stops if a function reads a register before writing it and is not a
    known case.
 3. `tools/setjmp_locals.py --fix`: register locals restored after the game's `longjmp`.
 4. `tools/direct_calls.py`: direct calls between the game functions that have no hook.
-5. `tools/localize.py`: local-register copies of the hot leaf functions listed in `app/locals.txt`.
+5. `tools/localize.py`: local-register copies of the hot leaf functions listed in `games/bo2/locals.txt`.
 6. `tools/guest_barriers.py`: compiler barriers for plain guest memory.
 7. `tools/codegen_stats.py`: a summary of the generated code.
 
 Always use `codegen.sh`. A bare `rexglue codegen` silently drops the fix-ups, and the builds check for them and stop.
 If the generator reports a branch to a target outside any function, `tools/codegen_fix_unresolved.py` declares the
-missing functions in `app/overrides.toml`.
+missing functions in `games/bo2/overrides.toml`.
 
 ## Step 5: build the shader library
 
@@ -203,10 +203,10 @@ static zstd library the SDK's Switch link expects to the same folder.
 ## Step 7: build the Switch NRO
 
 ```bash
-app/build_switch.sh
+games/bo2/build_switch.sh
 ```
 
-The result is `app/out/switch/bo2zm.nro`. The build checks the generated code's fix-ups first and stops if any is
+The result is `games/bo2/out/switch/bo2zm.nro`. The build checks the generated code's fix-ups first and stops if any is
 missing. Options, as environment variables:
 
 | Variable | Default | Effect |
@@ -218,7 +218,7 @@ missing. Options, as environment variables:
 | `BO2_DEBUG_LINES` | `0` | `1`: line tables for the renderer and the audio code, for profiling by source line. The code is byte for byte the normal build's. |
 | `BO2_HEAP_TRACK`, `BO2_MEMCPY_CALLERS` | `0` | test builds that log heap growth by caller, or the renderer's copy calls by call site |
 | `BO2ZM_NRO_ICON` | `$BO2_DATA/art/icon_switch.jpg` | a 256x256 JPEG for hbmenu. Without one the NRO gets libnx's default icon. |
-| `BO2_BUILD_TAG` | empty | a separate build folder (`app/out/switch-<tag>`), for building several checkouts side by side |
+| `BO2_BUILD_TAG` | empty | a separate build folder (`games/bo2/out/switch-<tag>`), for building several checkouts side by side |
 | `MESA_SDK` | the Mesa build of step 6 | where the Vulkan driver SDK is |
 | `BO2_SPECS_DIR` | `specs/` in the data folder | a folder without spaces for a copy of the toolchain's specs file (below) |
 | `BO2ZM_BUILD_ID` | `switch-<date>-<time>` | the build's name in its logs. A fixed one makes two builds comparable byte for byte. |
@@ -232,11 +232,11 @@ folder without spaces (created if missing).
 A profile is worth about 9 % on a console, and it has to match the code: a profile trained before the generated code
 or the compiler flags changed stops applying without a word. The cycle:
 
-1. `BO2_PGO=generate app/build_switch.sh` builds an instrumented NRO in `app/out/switch-pgo/`.
+1. `BO2_PGO=generate games/bo2/build_switch.sh` builds an instrumented NRO in `games/bo2/out/switch-pgo/`.
 2. Run it on a console with the benchmark (see [testing](technical.md#testing-and-measuring)). When the route ends, the game
    writes its counters to `sdmc:/switch/bo2zm/pgo/`.
 3. Copy that folder to `$BO2_DATA/pgo` (or anywhere, with `BO2_PGO_DIR`).
-4. `BO2_PGO=use app/build_switch.sh` builds with it. The build runs `tools/pgo_check.py` first and warns if the
+4. `BO2_PGO=use games/bo2/build_switch.sh` builds with it. The build runs `tools/pgo_check.py` first and warns if the
    profile no longer fits.
 
 Train and build in the same checkout: the profile of a function that is private to its file is keyed by the source
@@ -253,7 +253,7 @@ This assembles `$BO2_DATA/sd/switch/bo2zm/`:
 ```
 switch/bo2zm/
   bo2zm.nro                 the game
-  bo2zm.toml                settings (app/switch/bo2zm.toml)
+  bo2zm.toml                settings (games/bo2/switch/bo2zm.toml)
   bo2zm_shaders.spvpack     the shader library from step 5
   bo2zm_shaders.spvidx      its index (bo2zm_pack --index), if made
   game/                     disc files and the TU18 patches
@@ -279,13 +279,13 @@ menu icon and pick Extras > EXPERIMENTAL > CPU CORES: 4.
 ## The Windows build
 
 ```bash
-app/build_windows.sh                             # app/out/win/bo2zm.exe (clang, Direct3D 12 and Vulkan back ends)
-app/run_windows.sh 0 --bo2zm_renderer=native     # the native renderer; needs the shader library next to the exe
-app/run_windows.sh 0 --bo2zm_renderer=xenos      # exact Xenos emulation, the reference image
+games/bo2/build_windows.sh                             # games/bo2/out/win/bo2zm.exe (clang, Direct3D 12 and Vulkan back ends)
+games/bo2/run_windows.sh 0 --bo2zm_renderer=native     # the native renderer; needs the shader library next to the exe
+games/bo2/run_windows.sh 0 --bo2zm_renderer=xenos      # exact Xenos emulation, the reference image
 ```
 
-`run_windows.sh` runs the game against `$BO2_DATA/game` and `$BO2_DATA/update`, logs to `app/logs/` and allows one
-copy at a time. Copy or hard-link `bo2zm_shaders.spvpack` next to the exe. `app/play_windows.cmd` plays in a normal
+`run_windows.sh` runs the game against `$BO2_DATA/game` and `$BO2_DATA/update`, logs to `games/bo2/logs/` and allows one
+copy at a time. Copy or hard-link `bo2zm_shaders.spvpack` next to the exe. `games/bo2/play_windows.cmd` plays in a normal
 window. Saves and DLC live in `Documents\bo2zm\`.
 
 ## Linux ARM64

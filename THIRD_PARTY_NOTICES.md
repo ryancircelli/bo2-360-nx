@@ -1,7 +1,7 @@
 # Third-party notices
 
 bo2-zm-nx (Black Ops II Zombies for the Nintendo Switch) is licensed under the GNU General Public License v3.0
-(`LICENSE`). That license covers everything this project wrote: `app/`, its changes in `sdk/`, `tools/`, the Mesa patch
+(`LICENSE`). That license covers everything this project wrote: `games/bo2/`, its changes in `sdk/`, `tools/`, the Mesa patch
 and the documentation. The port is built on the work of the projects and libraries below. Their code keeps its own
 copyright and license notices, exactly as they are, and every one of those licenses is compatible with GPL-3.0.
 
@@ -14,7 +14,7 @@ copyright and license notices, exactly as they are, and every one of those licen
 | [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) by hedge-dev and contributors | `tools/xenosrecomp/translator/`: Xenos microcode to HLSL translator | MIT (`tools/xenosrecomp/translator/LICENSE.md`) |
 | [mesa-switch](https://github.com/danfromtico/mesa-switch) by danfromtico (commit `1a8c1a66d6f`), on top of [Mesa](https://mesa3d.org) | The Vulkan driver (NVK) and shader compiler (NAK) for Horizon, linked into the NRO. The official base is fetched by `tools/build_mesa.sh`; this project's changes are `patches/mesa-bo2zm.patch` | MIT (Mesa's licenses per file) |
 
-Parts of `app/` and `tools/` are derived from GPL-3.0 code, so GPL-3.0 would apply to them in any case; each such file
+Parts of `games/bo2/` and `tools/` are derived from GPL-3.0 code, so GPL-3.0 would apply to them in any case; each such file
 says so in its header. The upstream code in this repository keeps its own license: the ReXGlue SDK with its Xenia
 portions and the Switch layer in `sdk/` under BSD-3-Clause (`sdk/LICENSE`), the translator under MIT
 (`tools/xenosrecomp/translator/LICENSE.md`), and Mesa with the changes to it under its per-file licenses (MIT).

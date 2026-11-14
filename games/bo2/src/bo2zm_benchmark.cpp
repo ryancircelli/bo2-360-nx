@@ -145,7 +145,7 @@ REXCVAR_DEFINE_INT32(bo2zm_benchmark_net_idle_us_b, -1, "BO2",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 #if defined(BO2ZM_PGO_GENERATE)
-// The training build of app/build_switch.sh (BO2_PGO=generate): libgcov's counters, reset when the route starts and
+// The training build of games/bo2/build_switch.sh (BO2_PGO=generate): libgcov's counters, reset when the route starts and
 // written to sdmc:/switch/bo2zm/pgo when it ends, so the profile is the route's gameplay.
 extern "C" void __gcov_reset(void);
 extern "C" void __gcov_dump(void);

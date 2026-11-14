@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the campaign bring-up (campaign/out/win/bo2cp.exe) against the game files in the data folder, with the
-# emulated GPU. The same rules as app/run_windows.sh: one game at a time on this PC (the pc-run.lock in the data
+# emulated GPU. The same rules as games/bo2/run_windows.sh: one game at a time on this PC (the pc-run.lock in the data
 # folder, shared with bo2zm), a small window (960x540) on the second monitor without focus (BO2_FOREGROUND=1: a
 # normal window on the main monitor), 5 % volume (BO2_VOLUME sets it).
 # usage: campaign/run_windows.sh [seconds] [extra --cvar=value ...]   (seconds > 0 stops the game after that long)

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Runs the PC build against the game files in the data folder (tools/data_dir.sh: $BO2_DATA, bo2_data.txt or data/; layout in docs/building.md).
-# usage: [LOG_LEVEL=debug] [BO2_VOLUME=percent] [BO2_FOREGROUND=1] app/run_windows.sh [seconds] [extra --cvar=value ...]
+# usage: [LOG_LEVEL=debug] [BO2_VOLUME=percent] [BO2_FOREGROUND=1] games/bo2/run_windows.sh [seconds] [extra --cvar=value ...]
 # LOG_LEVEL=none leaves --log_level out, so the log follows DEBUG as with a player's toml (the quiet log,
 # games/bo2/src/bo2zm_debug_options.cpp); BO2_NUMBERED_LOGS=1 leaves --log_file out: the SDK's numbered logs, as on the
-# Switch, in app/out/win*/logs. Both are for testing those two features; leave them unset otherwise.
+# Switch, in games/bo2/out/win*/logs. Both are for testing those two features; leave them unset otherwise.
 # Test runs stay out of the way of whoever is using the PC: the window opens on the second monitor when there is one
 # (--monitor=2) without taking the focus. Sound: 0 % while the file gaming.flag exists in the data folder (create it
 # while playing something else on this PC), else 5 % of the game's volume (bo2zm_volume). BO2_VOLUME sets the volume;
-# BO2_FOREGROUND=1 (app/play_windows.cmd) opens a normal window on the main monitor that takes the focus.
+# BO2_FOREGROUND=1 (games/bo2/play_windows.cmd) opens a normal window on the main monitor that takes the focus.
 # Do not repeat a cvar this script already passes: the parser rejects the
 # duplicate and then ignores every argument ("--game_data_root was not provided").
 # With seconds > 0 the game is stopped after that long (for unattended tests).
@@ -18,9 +18,9 @@
 # also waits until no bo2zm.exe is left from anything else. A run ends when no process of its own exe remains
 # (the game relaunches itself as a new process on a mode switch).
 set -uo pipefail
-APP="$(cd "$(dirname "$0")" && pwd)"
+APP="$(cd "$(dirname "$0")" && pwd -P)"
 SECS="${1:-0}"; shift || true
-DATA="$(bash "$APP/../tools/data_dir.sh")"
+DATA="$(bash "$APP/../../tools/data_dir.sh")"
 EXE="$APP/out/win${BO2_BUILD_TAG:+-$BO2_BUILD_TAG}/bo2zm.exe"
 EXE_W="$(cygpath -w "$EXE")"
 COMPANION_W="$(cygpath -w "$(dirname "$EXE")/bo2cp.exe")"
@@ -59,7 +59,7 @@ while any_game; do  # a game started by other means (a debugger, RenderDoc) also
   sleep 5
 done
 
-DESKTOP="$(powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$APP/../tools/pc_desktop_state.ps1")" 2>/dev/null | tr -d '\r')"
+DESKTOP="$(powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$APP/../../tools/pc_desktop_state.ps1")" 2>/dev/null | tr -d '\r')"
 VOLUME="${BO2_VOLUME:-}"
 if [ -z "$VOLUME" ]; then
   if [ -f "$DATA/gaming.flag" ]; then VOLUME=0; else VOLUME=5; fi
@@ -76,7 +76,7 @@ fi
 
 # Test runs play as the console does: the native renderer (the PC's default is the emulated GPU, xenos) and god mode
 # (the player otherwise dies while a test stands in Town). Passing --bo2zm_renderer=... or --bo2zm_test_god=...
-# (app/play_windows.cmd passes both) decides instead; never both (see the top).
+# (games/bo2/play_windows.cmd passes both) decides instead; never both (see the top).
 DEFAULTS=()
 case " $* " in
   *" --bo2zm_renderer="*) ;;

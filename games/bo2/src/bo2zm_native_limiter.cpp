@@ -32,7 +32,7 @@
 // fused multiply-add rounded to a float, as the generated code does, and the vector scales with flush to zero on, as
 // there. The DC blocker, the copy, the sign clearing and the per-sample loop go in one pass (each sample's DC output is
 // all the later steps need of it): the DC blocker's chain of dependent operations then overlaps the envelope's. This
-// file is built with -ffp-contract=off (app/CMakeLists.txt): GCC must not fuse a product into a later add here.
+// file is built with -ffp-contract=off (games/bo2/CMakeLists.txt): GCC must not fuse a product into a later add here.
 //
 // The setup's log10 and pow(10, x) run once a call: those are the game's own (sub_82594280, sub_82594228), called in
 // its frame. The gains' pow (at least every 32nd sample above the threshold, every sample while the envelope rises)
