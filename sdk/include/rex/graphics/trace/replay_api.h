@@ -38,6 +38,10 @@ enum RexGpuTraceReplayFlags : uint32_t {
   // bench_iterations times and writes bench.json with the command processor
   // thread CPU time of each pass (packet execution only).
   kRexGpuTraceReplayBench = 1u << 5,
+  // Also read back depth after depth-only (EdramMode::kDepthOnly) draws.
+  // Off by default: on Metal the readback resolve covers the scissor area,
+  // which can overlap other targets' eDRAM and change later draws' results.
+  kRexGpuTraceReplayDepthOnlyDraws = 1u << 6,
 };
 
 struct RexGpuTraceReplayOptions {

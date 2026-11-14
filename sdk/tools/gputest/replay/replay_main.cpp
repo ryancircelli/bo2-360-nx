@@ -33,7 +33,7 @@ namespace {
 void Usage() {
   std::fprintf(stderr,
                "usage: rexgpu-replay <trace.xtr> -o <out_dir> [--plugin path|name]\n"
-               "       [--backend vulkan|any] [--label name] [--no-color] [--no-depth]\n"
+               "       [--backend vulkan|any] [--label name] [--no-color] [--no-depth] [--depth-only]\n"
                "       [--full] [--frames N] [--scratch 0xADDR] [--draws FIRST:COUNT]\n"
                "       [--texcheck] [--race] [--race-frames N] [--bench [PASSES]]\n"
                "       [--log-level trace|debug|info|warn|error] [--cvar name=value]...\n");
@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
       flags &= ~kRexGpuTraceReplayReadbackColor;
     } else if (a == "--no-depth") {
       flags &= ~kRexGpuTraceReplayReadbackDepth;
+    } else if (a == "--depth-only") {
+      flags |= kRexGpuTraceReplayDepthOnlyDraws;
     } else if (a == "--full") {
       flags |= kRexGpuTraceReplayFullImages;
     } else if (a == "--texcheck") {

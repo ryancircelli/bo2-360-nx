@@ -1294,10 +1294,12 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
                                             index - options_.first_draw < options_.draw_count);
   bool first_target = true;
   // Depth-only passes (EdramMode::kDepthOnly, z prepasses and shadow maps)
-  // write depth too, so they get a depth readback; colour only in kColorDepth.
+  // write depth too; with kRexGpuTraceReplayDepthOnlyDraws they get a depth
+  // readback. Colour is read back only in kColorDepth.
   bool color_depth = modecontrol.edram_mode == xenos::EdramMode::kColorDepth;
-  if (in_window && draw.succeeded &&
-      (color_depth || modecontrol.edram_mode == xenos::EdramMode::kDepthOnly)) {
+  bool depth_only = modecontrol.edram_mode == xenos::EdramMode::kDepthOnly &&
+                    (options_.flags & kRexGpuTraceReplayDepthOnlyDraws);
+  if (in_window && draw.succeeded && (color_depth || depth_only)) {
     auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
     auto scissor_br = regs.Get<reg::PA_SC_WINDOW_SCISSOR_BR>();
     uint32_t pitch = surface_info.surface_pitch;
