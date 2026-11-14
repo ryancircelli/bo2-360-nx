@@ -1736,6 +1736,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool xpass_lazy_barrier_active_ = false;
   bool encode_spin_active_ = false;
   bool type0_consts_only_active_ = false;
+  uint32_t cmd_pad_ns_ = 0;
   uint64_t bindless_cache_hits_ = 0;
   uint64_t bindless_cache_calls_ = 0;
   // Last fully-processed PopulateBindlessTables inputs (lever B).

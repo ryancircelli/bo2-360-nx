@@ -165,6 +165,15 @@ DEFINE_bool(
     "overrides.",
     "Metal");
 
+DEFINE_bool(
+    metal_cmd_pad, false,
+    "Diagnostic only: busy-wait metal_cmd_pad_ns on the command thread at the "
+    "start of every draw, to emulate a slower command thread. Env "
+    "REX_METAL_CMD_PAD=0/1 overrides.",
+    "Metal");
+REXCVAR_DEFINE_UINT32(metal_cmd_pad_ns, 210, "Metal",
+                      "Per-draw busy-wait in nanoseconds for metal_cmd_pad.");
+
 REXCVAR_DEFINE_UINT32(metal_encode_spin_us, 50, "Metal",
                       "Spin length in microseconds for metal_encode_spin.");
 
@@ -1385,6 +1394,7 @@ MetalCommandProcessor::MetalCommandProcessor(
   xpass_lazy_barrier_active_ = XpassLazyBarrierRequested();
   encode_spin_active_ = EncodeSpinRequested();
   type0_consts_only_active_ = Type0BatchConstsOnlyRequested();
+  cmd_pad_ns_ = CmdPadRequested() ? REXCVAR_GET(metal_cmd_pad_ns) : 0;
   std::fprintf(stderr, "[warn] [mct] xpass_lazy_barrier %s encode_spin %s\n",
                xpass_lazy_barrier_active_ ? "on" : "off",
                encode_spin_active_ ? "on" : "off");
@@ -2985,6 +2995,13 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     type0_consts_only_active_ = Type0BatchConstsOnlyRequested();
     REXLOG_INFO("Metal type0 batch consts only: {} at drained frame boundary", type0_consts_only_active_ ? "on" : "off");
   }
+  {
+    const uint32_t pad_ns = CmdPadRequested() ? REXCVAR_GET(metal_cmd_pad_ns) : 0;
+    if (pad_ns != cmd_pad_ns_) {
+      cmd_pad_ns_ = pad_ns;
+      REXLOG_INFO("Metal cmd pad: {} ns per draw at drained frame boundary", cmd_pad_ns_);
+    }
+  }
   if (encode_spin_active_ != EncodeSpinRequested()) {
     encode_spin_active_ = EncodeSpinRequested();
     REXLOG_INFO("Metal encode spin: {} at drained frame boundary", encode_spin_active_ ? "on" : "off");
@@ -4231,6 +4248,13 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                       uint32_t index_count,
                                       IndexBufferInfo* index_buffer_info,
                                       bool major_mode_explicit) {
+  if (cmd_pad_ns_) {
+    // [mct] diagnostic slowdown, see metal_cmd_pad.
+    const auto pad_end = std::chrono::steady_clock::now() +
+                         std::chrono::nanoseconds(cmd_pad_ns_);
+    while (std::chrono::steady_clock::now() < pad_end) {
+    }
+  }
   rex::graphics::GetPerfStats().draws.fetch_add(1, std::memory_order_relaxed);
   if (hle_census::Enabled()) {
     census_draw_site_ = hle_census::CurrentSite();
