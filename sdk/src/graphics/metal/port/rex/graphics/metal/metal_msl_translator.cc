@@ -395,6 +395,15 @@ void MslShaderTranslator::StartTranslation() {
     } else {
       Line("float4 r{} = float4(0.0f);", i);
     }
+    if (i == 0 && current_shader().ucode_data_hash() ==
+                      UINT64_C(0x77D7B2CB34D794B3)) {
+      Line("float xe_probe_x = floor(r0.x * 65536.0f);");
+      Line("float xe_probe_y = floor(r0.y * 65536.0f);");
+      Line("xe_probe_fetch = float4(floor(xe_probe_x / 256.0f) / 255.0f, "
+           "(xe_probe_x - floor(xe_probe_x / 256.0f) * 256.0f) / 255.0f, "
+           "floor(xe_probe_y / 256.0f) / 255.0f, "
+           "(xe_probe_y - floor(xe_probe_y / 256.0f) * 256.0f) / 255.0f);");
+    }
   }
   if (param_gen_interpolator != UINT32_MAX) {
     const uint32_t rt_scale_x =
@@ -2863,6 +2872,14 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
                            lod_src);
       }
       std::string t = fmt::format("xe_tl.t2d[xe_desc[{}]].t", desc_index);
+      if (current_shader().ucode_data_hash() ==
+              UINT64_C(0x77D7B2CB34D794B3) &&
+          tf == 2 && desc_index == tex_u) {
+        Line("float4 xe_probe_read = {}.read(uint2(112u, 176u), 0u);", t);
+        Line("uint4 xe_probe_q = uint4(round(clamp(xe_probe_read, 0.0f, 1.0f) * float4(1023.0f, 1023.0f, 1023.0f, 3.0f))); ");
+        Line("uint xe_probe_word = xe_probe_q.x | (xe_probe_q.y << 10u) | (xe_probe_q.z << 20u) | (xe_probe_q.w << 30u);");
+        Line("xe_probe_fetch = float4(float(xe_probe_word & 255u), float((xe_probe_word >> 8u) & 255u), float((xe_probe_word >> 16u) & 255u), float(xe_probe_word >> 24u)) / 255.0f;");
+      }
       if (have_grad) {
         return fmt::format(
             "{}.sample({}, {}, 0u, gradient2d({}.xy, {}.xy))", t, smp_name,
@@ -3899,6 +3916,12 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
   if (any_out) {
     s += "  XeOut xe_out;\n";
   }
+  const bool probe_fetch =
+      !is_vertex_shader() &&
+      shader.ucode_data_hash() == UINT64_C(0x77D7B2CB34D794B3);
+  if (probe_fetch) {
+    s += "  float4 xe_probe_fetch = float4(0.0f);\n";
+  }
   // front_face is referenced as xe_in.front_face in the body.
   std::string body = body_;
   for (size_t pos = 0;
@@ -3907,6 +3930,13 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
   }
   s += body;
   if (any_out) {
+    if (!is_vertex_shader() &&
+        shader.ucode_data_hash() == UINT64_C(0xA4A965C189287B99)) {
+      s += "  xe_out.c0 = float4(0.125f, 0.875f, 0.375f, 1.0f);\n";
+    }
+    if (probe_fetch) {
+      s += "  xe_out.c0 = xe_probe_fetch;\n";
+    }
     s += "  return xe_out;\n";
   }
   s += "}\n";
