@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Second tier: scripted in-run A/B flip of runtime-switchable factors in a live, muted, minimized game.
+
+  xbench --inrun submit --app APP --factors a,b [--route R] [--name N] [--ab-s 30]
+  xbench --inrun analyze PERF_TSV [--abflip /path/abflip.py]
+
+Wraps the stutter-lead abflip method (branch codex/stutter-abflip): the game flips the named factors
+every REX_BO2ZM_BENCHMARK_AB_S seconds in a 2x2 order inside one run; abflip.py reports per-factor on/off
+frame stats. Launch goes through runq (boot_test.sh), which starts the game minimized and muted, so this
+never takes over the desktop. Only factors registered in the app build can be flipped (currently
+waits_fence_wake, metal_encode_thread, metal_type0_register_batching; two-stage is NOT registered).
+"""
+import argparse, os, subprocess, sys
+
+RUNQ = os.path.expanduser("~/Games/Xbox360/bo2-build/runq/bin/runq")
+ABFLIP = "/tmp/bo2/stutter-lead/tools/abflip.py"
+ROUTE = os.path.expanduser("~/dev/bo2-360-nx-abflip/tools/mac/routes/splitscreen4-long.route")
+APP = "/tmp/bo2/stutter-lead/abflip/BO2 Zombies.app"
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="mode", required=True)
+    s = sub.add_parser("submit")
+    s.add_argument("--app", default=APP)
+    s.add_argument("--route", default=ROUTE)
+    s.add_argument("--factors", required=True, help="one or two comma-separated registered factor names")
+    s.add_argument("--ab-s", default="30")
+    s.add_argument("--name", default="xbench-inrun")
+    s.add_argument("--out")
+    a = sub.add_parser("analyze")
+    a.add_argument("perf_tsv")
+    a.add_argument("--abflip", default=ABFLIP)
+    args = p.parse_args()
+    if args.mode == "analyze":
+        sys.exit(subprocess.call([sys.executable, "-I", args.abflip, args.perf_tsv]))
+    cmd = [RUNQ, "submit", "--name", args.name, "--class", "perf", "--solo", "--quiet-machine",
+           "--timeout", "1800", "--env", "REX_AUDIO_MUTE=true", "--env", "RUNQ_MIN_ADAPTER_W=90",
+           "--env", f"REX_BO2ZM_BENCHMARK_AB_S={args.ab_s}",
+           "--env", f"REX_BO2ZM_BENCHMARK_AB_FACTORS={args.factors}",
+           "--app", args.app, "--route", args.route]
+    if args.out:
+        cmd += ["--out", args.out]
+    sys.exit(subprocess.call(cmd))
+
+
+main()
