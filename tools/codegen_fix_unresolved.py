@@ -67,7 +67,7 @@ def summary(ea, limit=6):
 def run_codegen(manifest):
     env = dict(os.environ, PATH=SDK_BIN + os.pathsep + os.environ["PATH"])
     with open(LOG, "w", encoding="utf-8", errors="replace") as log:
-        rc = subprocess.call([os.path.join(SDK_BIN, "rexglue.exe"), "--log-level", "debug",
+        rc = subprocess.call([os.path.join(SDK_BIN, "rexglue"), "--log-level", "debug",
                               "codegen", manifest], cwd=APP, stdout=log,
                              stderr=subprocess.STDOUT, env=env)
     text = open(LOG, encoding="utf-8", errors="replace").read()
