@@ -1271,6 +1271,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   // <lo>-<hi>): writes each resolve into the range to <dir> as 1x bytes
   // (downscaled at scale > 1). Guest RAM is not written.
   void DiagResolveDump(uint32_t written_address, uint32_t written_length);
+  void LandMemexportReadbacksBeforeGuestFence(uint32_t index, uint32_t value);
   bool WaitForMorphReadbackSubmission(uint32_t written_address,
                                       uint32_t written_length);
   void NoteMorphReadback(const uint8_t* data, uint32_t written_address,

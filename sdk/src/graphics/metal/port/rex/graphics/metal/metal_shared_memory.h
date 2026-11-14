@@ -344,6 +344,10 @@ class MetalSharedMemory : public SharedMemory {
   static bool ShmemValidFirstEnabled();
   void NoteMemexportReadback(uint32_t start, uint32_t length,
                              uint64_t submission);
+  // True while memexport data is still waiting to be copied back to guest RAM.
+  bool HasPendingMemexportReadbacks() const {
+    return !pending_readbacks_.empty();
+  }
   void ApplyCompletedMemexportReadbacks(uint64_t completed_submission);
   // [upload-precommit] trace-only check (FABLE2_UPLOAD_VERIFY=1): once the
   // submission of a staged copy (in-pass or pre-commit) has completed, the

@@ -11027,11 +11027,61 @@ void MetalCommandProcessor::DirtyFetchConstantDwords(
   }
 }
 
+void MetalCommandProcessor::LandMemexportReadbacksBeforeGuestFence(
+    uint32_t index, uint32_t value) {
+  if (!shared_memory_ || !MetalSharedMemory::MemexportReadbackEnabled() ||
+      !shared_memory_->HasPendingMemexportReadbacks()) {
+    return;
+  }
+  static const bool enabled = [] {
+    const char* v = std::getenv("REX_METAL_FENCE_READBACK");
+    const bool on = !(v && v[0] == '0');
+    REXLOG_INFO(
+        "[fence-readback] {}: a guest fence written while memexport data is "
+        "still on the GPU {}",
+        on ? "on" : "off (REX_METAL_FENCE_READBACK=0)",
+        on ? "waits for it and copies it back first" : "does not wait");
+    return on;
+  }();
+  static uint64_t fences = 0, left_pending = 0, wait_us = 0;
+  ++fences;
+  if (enabled) {
+    const auto start = std::chrono::steady_clock::now();
+    if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kManual)) {
+      REXLOG_ERROR("[fence-readback] failed to flush the prepared draw queue");
+    }
+    EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
+    FlushCommandBufferAndWait(/*timeout_ns=*/5000000000ULL,
+                              "guest fence readback");
+    WaitForPendingCompletionHandlers();
+    ProcessCompletedSubmissions();
+    wait_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count());
+    if (shared_memory_->HasPendingMemexportReadbacks()) {
+      ++left_pending;
+    }
+  }
+  if (fences <= 8 || (fences & (fences - 1)) == 0) {
+    REXLOG_INFO(
+        "[fence-readback] fence #{} (reg {} value {:08X}) with memexport "
+        "data outstanding at submission {}: {}; total wait {} ms, still "
+        "outstanding after the wait {}",
+        fences, index - XE_GPU_REG_SCRATCH_REG0, value, submission_current_,
+        enabled ? "waited" : "not waited", wait_us / 1000, left_pending);
+  }
+}
+
 void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   uint32_t old_value = 0;
   bool valid_register = index < RegisterFile::kRegisterCount;
   if (valid_register) {
     old_value = register_file_->values[index];
+  }
+  if (index >= XE_GPU_REG_SCRATCH_REG0 && index <= XE_GPU_REG_SCRATCH_REG7 &&
+      ((1u << (index - XE_GPU_REG_SCRATCH_REG0)) &
+       register_file_->values[XE_GPU_REG_SCRATCH_UMSK])) [[unlikely]] {
+    LandMemexportReadbacksBeforeGuestFence(index, value);
   }
   // [reg-fast] Only the scratch, coherency and gamma ramp registers have side
   // effects in the generic handler; everything else is a plain store (plus a
