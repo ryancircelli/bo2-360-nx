@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 
+#include <rex/thread.h>
 #include <rex/cvar.h>
 #include <rex/graphics/metal_runtime.h>
 #include <rex/logging.h>
@@ -198,6 +199,7 @@ const Factor kFactors[] = {
     {"metal_reg_early_out", &rex::graphics::metal::RegEarlyOutRequested, &rex::graphics::metal::RequestRegEarlyOut},
     {"metal_bindless_cache", &rex::graphics::metal::BindlessCacheRequested, &rex::graphics::metal::RequestBindlessCache},
     {"metal_draw_consts_dirty", &rex::graphics::metal::DrawConstsDirtyRequested, &rex::graphics::metal::RequestDrawConstsDirty},
+    {"mac_precise_sleep", &rex::thread::PreciseSleepEnabled, &rex::thread::SetPreciseSleep},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };

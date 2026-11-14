@@ -12,6 +12,7 @@
 #include <rex/cvar.h>
 
 #if defined(__APPLE__)
+#include <sys/event.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
@@ -93,6 +94,10 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #else
 #define REX_HAS_SIGEV_THREAD_ID 0
 #endif
+
+REXCVAR_DEFINE_BOOL(mac_precise_sleep, false, "Kernel",
+                    "macOS: guest timed sleeps wait on a NOTE_CRITICAL kqueue timer, which macOS does not "
+                    "coalesce (a 1 ms nanosleep otherwise wakes 1 to 9 ms late)");
 
 REXCVAR_DEFINE_STRING(audio_thread_policy, "realtime", "Audio",
                       "How the threads that produce sound (Audio Worker, XMA Decoder, and the guest threads named in "
@@ -295,7 +300,72 @@ void SyncMemory() {
   __sync_synchronize();
 }
 
+namespace {
+// -1: not yet read from the cvar.
+std::atomic<int> precise_sleep_{-1};
+}  // namespace
+
+bool PreciseSleepEnabled() {
+#if defined(__APPLE__)
+  int v = precise_sleep_.load(std::memory_order_relaxed);
+  if (v < 0) {
+    int expected = -1;
+    precise_sleep_.compare_exchange_strong(expected, REXCVAR_GET(mac_precise_sleep) ? 1 : 0);
+    v = precise_sleep_.load(std::memory_order_relaxed);
+  }
+  return v == 1;
+#else
+  return false;
+#endif
+}
+
+void SetPreciseSleep(bool on) {
+#if defined(__APPLE__)
+  precise_sleep_.store(on ? 1 : 0, std::memory_order_relaxed);
+  REXLOG_INFO("[precise-sleep] {}", on ? "on" : "off");
+#else
+  (void)on;
+#endif
+}
+
+#if defined(__APPLE__)
+namespace {
+// One kqueue per thread, closed at thread exit.
+struct ThreadKqueue {
+  int fd = -1;
+  ~ThreadKqueue() {
+    if (fd >= 0) close(fd);
+  }
+};
+thread_local ThreadKqueue thread_kqueue_;
+
+// Waits until steady deadline on a one-shot NOTE_CRITICAL timer; false if a kqueue is unavailable.
+bool CriticalSleepUntil(std::chrono::steady_clock::time_point deadline) {
+  if (thread_kqueue_.fd < 0) {
+    thread_kqueue_.fd = kqueue();
+    if (thread_kqueue_.fd < 0) return false;
+  }
+  for (;;) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) return true;
+    const int64_t left_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count();
+    struct kevent64_s ev;
+    EV_SET64(&ev, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS | NOTE_CRITICAL, left_ns, 0, 0, 0);
+    struct kevent64_s out;
+    const int n = kevent64(thread_kqueue_.fd, &ev, 1, &out, 1, 0, nullptr);
+    if (n < 0 && errno != EINTR) return false;
+  }
+}
+}  // namespace
+#endif
+
 void Sleep(std::chrono::microseconds duration) {
+#if defined(__APPLE__)
+  if (duration.count() > 0 && PreciseSleepEnabled() &&
+      CriticalSleepUntil(std::chrono::steady_clock::now() + duration)) {
+    return;
+  }
+#endif
   timespec rqtp = DurationToTimeSpec(duration);
   timespec rmtp = {};
   auto p_rqtp = &rqtp;
