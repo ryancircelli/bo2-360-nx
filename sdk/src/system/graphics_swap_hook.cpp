@@ -139,6 +139,26 @@ std::atomic<bool>& EncodeSpinSwitch() {
   }()};
   return requested;
 }
+std::atomic<bool>& IdleSpinSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_IDLE_SPIN");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_idle_spin");
+  }()};
+  return requested;
+}
+bool IdleSpinRequested() { return IdleSpinSwitch().load(std::memory_order_relaxed); }
+void RequestIdleSpin(bool on) { IdleSpinSwitch().store(on, std::memory_order_relaxed); }
+std::atomic<bool>& IdleDeferSubmitSwitch() {
+  static std::atomic<bool> requested{[] {
+    const char* env = std::getenv("REX_METAL_IDLE_DEFER_SUBMIT");
+    if (env && env[0]) return env[0] == '1';
+    return rex::cvar::Query<bool>("metal_idle_defer_submit");
+  }()};
+  return requested;
+}
+bool IdleDeferSubmitRequested() { return IdleDeferSubmitSwitch().load(std::memory_order_relaxed); }
+void RequestIdleDeferSubmit(bool on) { IdleDeferSubmitSwitch().store(on, std::memory_order_relaxed); }
 std::atomic<bool>& CmdPadSwitch() {
   static std::atomic<bool> requested{[] {
     const char* env = std::getenv("REX_METAL_CMD_PAD");

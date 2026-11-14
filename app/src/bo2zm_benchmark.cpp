@@ -44,7 +44,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "summary in the log ('[benchmark]'). Use with bo2zm_test_god")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(bo2zm_benchmark_ab_factors, "", "BO2",
-                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all,metal_reg_early_out,metal_bindless_cache,metal_draw_consts_dirty,metal_xpass_lazy_barrier,metal_encode_spin,metal_type0_batch_consts_only,metal_cmd_pad")
+                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all,metal_reg_early_out,metal_bindless_cache,metal_draw_consts_dirty,metal_xpass_lazy_barrier,metal_encode_spin,metal_type0_batch_consts_only,metal_cmd_pad,metal_idle_spin,metal_idle_defer_submit")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_settle_s, 3, "BO2",
                      "Seconds excluded after each A/B arm change (also recorded in perf abarm events)")
@@ -204,6 +204,8 @@ const Factor kFactors[] = {
     {"metal_encode_spin", &rex::graphics::metal::EncodeSpinRequested, &rex::graphics::metal::RequestEncodeSpin},
     {"metal_type0_batch_consts_only", &rex::graphics::metal::Type0BatchConstsOnlyRequested, &rex::graphics::metal::RequestType0BatchConstsOnly},
     {"metal_cmd_pad", &rex::graphics::metal::CmdPadRequested, &rex::graphics::metal::RequestCmdPad},
+    {"metal_idle_spin", &rex::graphics::metal::IdleSpinRequested, &rex::graphics::metal::RequestIdleSpin},
+    {"metal_idle_defer_submit", &rex::graphics::metal::IdleDeferSubmitRequested, &rex::graphics::metal::RequestIdleDeferSubmit},
 #endif
 };
 struct SelectedFactor { const Factor* factor; bool usual; };
