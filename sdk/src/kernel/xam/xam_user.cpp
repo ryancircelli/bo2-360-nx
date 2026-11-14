@@ -75,6 +75,8 @@ u32 XamUserGetSigninState_entry(u32 user_index) {
       signin_state = user_profile->signin_state();
     }
   }
+  static int n = 0;
+  if (n++ < 12) REXKRNL_INFO("[save] XamUserGetSigninState user {} -> {}", uint32_t(user_index), signin_state);
   return signin_state;
 }
 

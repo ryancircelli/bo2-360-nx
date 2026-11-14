@@ -82,6 +82,7 @@ u32 XamContentResolve_entry(u32 user_index, mapped_void content_data_ptr, mapped
 u32 XamContentCreateEnumerator_entry(u32 user_index, u32 device_id, u32 content_type,
                                      u32 content_flags, u32 items_per_enumerate,
                                      mapped_u32 buffer_size_ptr, mapped_u32 handle_out) {
+  REXKRNL_INFO("[save] XamContentCreateEnumerator user {} device {:08X} type {:08X}", uint32_t(user_index), uint32_t(device_id), uint32_t(content_type));
   assert_not_null(handle_out);
 
   auto device_info = device_id == 0 ? nullptr : GetDummyDeviceInfo(device_id);

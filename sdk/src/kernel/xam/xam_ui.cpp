@@ -515,7 +515,7 @@ u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_te
 u32 XamShowDeviceSelectorUI_entry(u32 user_index, u32 content_type, u32 content_flags,
                                   u64 total_requested, mapped_u32 device_id_ptr,
                                   mapped_void overlapped) {
-  REXKRNL_DEBUG("XamShowDeviceSelectorUI({:08X}, {:08X}, {:08X}, {:016X}, {:08X}, {:08X})",
+  REXKRNL_INFO("[save] XamShowDeviceSelectorUI({:08X}, {:08X}, {:08X}, {:016X}, {:08X}, {:08X})",
                 uint32_t(user_index), uint32_t(content_type), uint32_t(content_flags),
                 uint64_t(total_requested), device_id_ptr.guest_address(),
                 overlapped.guest_address());
