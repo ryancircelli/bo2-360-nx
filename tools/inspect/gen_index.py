@@ -1,4 +1,4 @@
-"""Index the generated C++ (app/generated/default_mp) by function.
+"""Index the generated C++ (games/bo2/generated/default_mp) by function.
 
 The recompiler keeps each PowerPC instruction as a comment ("// bl 0x82161700"),
 so the call graph and the constants each function builds can be read back
@@ -20,7 +20,7 @@ import re
 import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-GEN = os.path.join(ROOT, "app", "generated", "default_mp")
+GEN = os.path.join(ROOT, "games", "bo2", "generated", "default_mp")
 INDEX = os.path.join(ROOT, "work", "gen_index.json")
 
 RE_FN = re.compile(r"^DEFINE_REX_FUNC\(sub_([0-9A-F]{8})\)")

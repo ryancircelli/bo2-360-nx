@@ -37,11 +37,11 @@ from the game is ever written inside the repository.
 | `read_before_write.py` | Registers read before written; `--strict` stops on unknown cases | `python tools/read_before_write.py [--strict]` |
 | `setjmp_locals.py` | `setjmp` sites restore register locals | `--fix` or `--verify` |
 | `direct_calls.py` | Direct calls to unhooked functions; `--check` catches hooked ones | `[--check \| --undo]` |
-| `localize.py` | Local-register copies of the functions in `app/locals.txt` | `python tools/localize.py` |
+| `localize.py` | Local-register copies of the functions in `games/bo2/locals.txt` | `python tools/localize.py` |
 | `guest_barriers.py` | Compiler barriers for plain guest memory | `[--check \| --undo]` |
 | `codegen_stats.py` | Counts what makes generated code slow | `python tools/codegen_stats.py` |
 | `codegen_fix_unresolved.py` | Declares tail-branch targets that are in no function | `[--max-rounds N]` |
-| `codegen_gaps.py` | Classifies code no function covers into `app/gaps.toml` | `[--min 8]` |
+| `codegen_gaps.py` | Classifies code no function covers into `games/bo2/gaps.toml` | `[--min 8]` |
 | `volatile_locals.py` | Experimental: volatile registers as locals (+0.07 %, not used) | `[--check]` |
 | `gen_d3d_trace_list.py` | Lists the Direct3D functions the trace wrappers cover | `python tools/gen_d3d_trace_list.py` |
 
@@ -49,7 +49,7 @@ from the game is ever written inside the repository.
 
 | Tool | What it does | Run |
 |---|---|---|
-| `pgo_check.py` | How many trained functions still read a PGO profile's counts | `--build app/out/switch --pgo <profile> [--native]` |
+| `pgo_check.py` | How many trained functions still read a PGO profile's counts | `--build games/bo2/out/switch --pgo <profile> [--native]` |
 | `profile_sym.py` | Names the console profiler's addresses | `rex_profile.log <elf> out.txt` |
 | `profile_inline.py` | One thread's samples by inlined function or source line | `rex_profile.log <lines elf> [--thread NAME] [--lines]` |
 | `memcpy_callers_sym.py` | A copy-callers build's calls by call site | `<game log> <lines elf>` |
@@ -58,7 +58,7 @@ from the game is ever written inside the repository.
 | `spot_flicker.py` | What blinks in a burst of test screenshots | `<captures folder> [--burst NAME]` |
 | `pipelines_list.py` | Reads, merges and subtracts pipeline prewarm lists | `info \| extract \| merge \| minus` |
 | `check_menus_lua.py` | Checks `menus.lua` with the Lua 5.1 compiler | `python -I tools/check_menus_lua.py` |
-| `pc_desktop_state.ps1` | Counts screens, for `app/run_windows.sh` | used by the script |
+| `pc_desktop_state.ps1` | Counts screens, for `games/bo2/run_windows.sh` | used by the script |
 | `runtime_stress/` | The kernel objects' waits under stress on Linux | `tools/runtime_stress/build.sh` (in WSL) |
 
 ## Inspecting the game

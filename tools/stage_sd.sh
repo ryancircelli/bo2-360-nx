@@ -18,8 +18,8 @@ OUT="${1:-$DATA/sd}"
 DST="$OUT/switch/bo2zm"
 
 mkdir -p "$DST"
-cp "$ROOT/app/out/switch/bo2zm.nro" "$DST/"
-cp "$ROOT/app/switch/bo2zm.toml" "$DST/"
+cp "$ROOT/games/bo2/out/switch/bo2zm.nro" "$DST/"
+cp "$ROOT/games/bo2/switch/bo2zm.toml" "$DST/"
 # The native renderer's shader library (game-derived, built locally by tools/xenosrecomp).
 [ -f "$DATA/shaders/bo2zm_shaders.spvpack" ] && cp "$DATA/shaders/bo2zm_shaders.spvpack" "$DST/bo2zm_shaders.spvpack"
 # Its index, when it is at least as new as the pack; without it the first start makes one.

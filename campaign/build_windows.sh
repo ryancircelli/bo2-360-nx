@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Configures and builds bo2cp.exe (the campaign bring-up) for Windows with LLVM's clang and Ninja, as
-# app/build_windows.sh does for bo2zm. Output: campaign/out/win/bo2cp.exe. The generated code comes from
+# games/bo2/build_windows.sh does for bo2zm. Output: campaign/out/win/bo2cp.exe. The generated code comes from
 # rexglue codegen bo2cp_manifest.toml (see campaign/README.md).
 set -euo pipefail
 CP="$(cd "$(dirname "$0")" && pwd)"

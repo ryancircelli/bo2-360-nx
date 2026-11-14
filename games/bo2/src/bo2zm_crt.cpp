@@ -1,8 +1,8 @@
-// BO2's memory copy and fill routines, as native code ([rexcrt] in app/overrides.toml).
+// BO2's memory copy and fill routines, as native code ([rexcrt] in games/bo2/overrides.toml).
 //
 // The codegen drops the recompiled bodies of the functions listed under [rexcrt] and calls rexcrt_<key> instead,
 // from every direct call and from the dispatch table (so function pointers land here too). The addresses, and the
-// evidence that each one is a plain memcpy/memmove/memset, are in app/overrides.toml:
+// evidence that each one is a plain memcpy/memmove/memset, are in games/bo2/overrides.toml:
 //   bo2zm_memcpy   0x82916330  CRT memcpy (forward)            bo2zm_memmove 0x82916270  CRT memmove
 //   bo2zm_memset   0x82916AE0  CRT memset                      bo2zm_xmemcpy 0x827D33F0  VMX memcpy (dcbzl)
 //   bo2zm_xmemset  0x827D2EC0  VMX memset (dcbzl)              bo2zm_bigcopy 0x827D3290, bo2zm_bigcopy2 0x827D3340

@@ -1,5 +1,5 @@
 # Symbolizes the console profiler's log: replaces each "image+0xNNN" (the SDK profiler's own format) in
-# logs/rex/rex_profile.log with the function (and file) from the ELF of the same build (app/out/switch/bo2zm, the
+# logs/rex/rex_profile.log with the function (and file) from the ELF of the same build (games/bo2/out/switch/bo2zm, the
 # unstripped executable the build leaves beside the NRO; an ELF of a different build gives wrong names).
 # usage: python tools/profile_sym.py rex_profile.log bo2zm_<commit>.elf out.txt
 import re, subprocess, sys

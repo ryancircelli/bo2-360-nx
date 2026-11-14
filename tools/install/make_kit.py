@@ -154,7 +154,7 @@ def main():
     if inside(out, ROOT) and not inside(out, data):  # the data folder is git-ignored, even inside the checkout
         sys.exit("the kit must be written outside the repository or in its data folder")
     source = os.path.abspath(args.source)
-    if not os.path.isfile(os.path.join(source, "app", "CMakeLists.txt")):
+    if not os.path.isfile(os.path.join(source, "games", "bo2", "CMakeLists.txt")):
         sys.exit(f"{source} is not a source tree (export main first)")
     if args.bots_pack and not os.path.isfile(args.bots_pack):
         sys.exit(f"{args.bots_pack} was not found")

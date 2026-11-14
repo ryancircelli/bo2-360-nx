@@ -8,7 +8,7 @@
 #
 #   tools/linux/smoke_qemu.sh <package folder> <data folder> [seconds] [extra game arguments...]
 #
-#   <package folder>  e.g. app/out/linux-arm64/package/bo2zm-linux-arm64
+#   <package folder>  e.g. games/bo2/out/linux-arm64/package/bo2zm-linux-arm64
 #   <data folder>     holds game/, update/ and bo2zm_shaders.spvpack/.spvidx (read only; linked, never copied)
 #   seconds           time limit (default 600)
 #

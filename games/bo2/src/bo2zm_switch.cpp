@@ -185,7 +185,7 @@ int CoresInUse() {
 }
 
 #if defined(__SWITCH__)
-// The "Default" display as libnx's default window opened it (viOpenDisplay is wrapped: app/CMakeLists.txt). A second
+// The "Default" display as libnx's default window opened it (viOpenDisplay is wrapped: games/bo2/CMakeLists.txt). A second
 // open of the same display fails with vi 0x1272 (with VSYNC on, that used to keep the refresh pacing from ever
 // running), but the vsync event only needs the display's id.
 static std::atomic<uint64_t> g_default_display_id{~uint64_t(0)};

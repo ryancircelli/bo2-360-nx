@@ -1,5 +1,5 @@
 # NFS: Most Wanted (Xbox 360, USA, title 454107D9)
-# First recompile attempt; modeled on app/bo2zm_manifest.toml.
+# First recompile attempt; modeled on games/bo2/bo2zm_manifest.toml.
 # default.xex sha256 aebdf3c14d1e4e4ed2c130d94bc1a0e97bd6d5bf39bdfdef33c3909c9cc4ba4c (matches SpeedBreaker's USA hash).
 
 [project]

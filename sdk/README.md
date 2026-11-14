@@ -52,6 +52,6 @@ codec list, and a cache of the FFT and MDCT tables.
 
 ## How it is built
 
-Not on its own: `app/build_switch.sh` and `app/build_windows.sh` point `REXSDK_DIR` here and CMake builds the SDK with
+Not on its own: `games/bo2/build_switch.sh` and `games/bo2/build_windows.sh` point `REXSDK_DIR` here and CMake builds the SDK with
 the app. `tools/build_host.sh` builds the host tools (`rexglue.exe`, `xexdump`). See
 [`../docs/building.md`](../docs/building.md).

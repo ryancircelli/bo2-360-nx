@@ -2,10 +2,10 @@
 """Makes the volatile PowerPC registers C++ locals of every generated function, written back to ctx only where
 something else can see them.
 
-  python tools/volatile_locals.py [--gen app/generated/default_mp] [--list FILE] [--no-trim] [--scalars-only] [--check]
+  python tools/volatile_locals.py [--gen games/bo2/generated/default_mp] [--list FILE] [--no-trim] [--scalars-only] [--check]
 
 The code generator keeps r0-r13, f0-f13 and the vector registers v0-v13, v32-v63 in the PPCContext struct (ctx);
-the non-volatile ones are already locals (non_volatile_as_local in app/overrides.toml). GCC cannot keep a ctx field
+the non-volatile ones are already locals (non_volatile_as_local in games/bo2/overrides.toml). GCC cannot keep a ctx field
 in a host register across a guest load or store: guest memory is reached through may_alias pointers
 (core/bo2zm_guest_memory.h) or volatile ones, which may point anywhere, ctx included (ctx is __restrict, but it is
 handed to every callee; a __restrict base as well changed nothing: 0.4 % fewer instructions in one file). So every
@@ -42,7 +42,7 @@ Status: a measured experiment, not a step of tools/codegen.sh. The scalar form (
 stores of bo2zm_recomp.10.cpp by 8.7 % and its hot loop from ~28 to ~20 instructions a pass, and .text by 3.3 %, yet
 three alternating pairs of runs on an OLED showed no change in frame rate or in any thread's CPU per frame.
 
-Functions left as they are: those in app/locals.txt (tools/localize.py makes checked copies of them from the original
+Functions left as they are: those in games/bo2/locals.txt (tools/localize.py makes checked copies of them from the original
 form), those that reach ctx registers they do not own (the SEH funclets and pieces of split functions that share their
 owner's registers: a non-volatile, CR, CTR or XER register in ctx with no local of the same name), and, with --list,
 every function not on the list. The summaries are made from the original form, so the tool runs on freshly generated
@@ -380,9 +380,9 @@ def rewrite(text, b, summ, eligible=ALL):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gen", default=os.path.join(ROOT, "app", "generated", "default_mp"))
+    ap.add_argument("--gen", default=os.path.join(ROOT, "games", "bo2", "generated", "default_mp"))
     ap.add_argument("--list", help="only the functions named in this file (one sub_X per line, # comments)")
-    ap.add_argument("--skip", default=os.path.join(ROOT, "app", "locals.txt"),
+    ap.add_argument("--skip", default=os.path.join(ROOT, "games", "bo2", "locals.txt"),
                     help="functions to leave as they are (tools/localize.py copies them from the original form)")
     ap.add_argument("--no-trim", action="store_true", help="write back and reload at every call as at an unknown one")
     ap.add_argument("--scalars-only", action="store_true", help="leave the vector registers in ctx")

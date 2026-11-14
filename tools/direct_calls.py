@@ -1,13 +1,13 @@
 """Direct calls between game functions that have no hook.
 
-DEFINE_REX_FUNC (app/generated/default_mp/bo2zm_pch.h) makes every recompiled function sub_X a *weak* alias of
+DEFINE_REX_FUNC (games/bo2/generated/default_mp/bo2zm_pch.h) makes every recompiled function sub_X a *weak* alias of
 __imp__sub_X, so a hook (REX_HOOK_RAW(sub_X) in games/bo2/src) can replace it at link time. The codegen always calls sub_X,
 and a compiler never inlines a call through a weak alias (a hook might replace it), in the same file or with LTO. This
 tool rewrites `sub_X(ctx, base);` into `__imp__sub_X(ctx, base);` in bo2zm_recomp.*.cpp when sub_X has no hook: the
 same function, but now one the compiler may inline. bo2zm_init.cpp and bo2zm_register.cpp are not touched, so indirect
 calls (function pointers, vtables, the dispatch table) still go through sub_X and still reach every hook.
 
-A function counts as hooked if its address (82xxxxxx) appears in the code of games/bo2/src, core, app/CMakeLists.txt or the SDK
+A function counts as hooked if its address (82xxxxxx) appears in the code of games/bo2/src, core, games/bo2/CMakeLists.txt or the SDK
 (sdk/src, include): hooks are sometimes built from pieces (REX_HOOK_RAW(sub_##a) in bo2zm_d3d_trace.cpp,
 with the addresses in bo2zm_d3d_trace_list.inc), so looking for REX_HOOK_RAW(sub_...) is not enough. Comments (after
 //) and lines marked "call only" (functions the port calls through the dispatch table, games/bo2/src/bo2zm_guest.h) do not
@@ -27,9 +27,9 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GEN = os.path.join(ROOT, "app", "generated", "default_mp")
+GEN = os.path.join(ROOT, "games", "bo2", "generated", "default_mp")
 SOURCES = [os.path.join(ROOT, "games", "bo2", "src"), os.path.join(ROOT, "core"),
-           os.path.join(ROOT, "app", "CMakeLists.txt"),
+           os.path.join(ROOT, "games", "bo2", "CMakeLists.txt"),
            os.path.join(ROOT, "sdk", "src"), os.path.join(ROOT, "sdk", "include")]
 # The campaign build (bo2cp, campaign/generated) also has hooks of its own in campaign/src, among them the games/bo2/src hooks
 # renamed to its addresses (campaign/src/native/bo2cp_game_remap.h); they count only for its generated code.

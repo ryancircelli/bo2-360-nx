@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the AArch64 Linux sysroot that app/build_linux.sh compiles and links against.
+# Builds the AArch64 Linux sysroot that games/bo2/build_linux.sh compiles and links against.
 #
 #   tools/linux/make_sysroot.sh [<output folder>]     (default: out/linux-sysroot, under the checkout)
 #

@@ -14,7 +14,7 @@ FUNCTIONS = ("82425B50", "82424750", "8241A178", "8241A5F0", "8241A0C8", "829160
 
 def main():
     bodies = {}
-    for path in (ROOT/"app/generated/default_mp").glob("bo2zm_recomp.*.cpp"):
+    for path in (ROOT/"games/bo2/generated/default_mp").glob("bo2zm_recomp.*.cpp"):
         source = path.read_text(encoding="utf-8")
         for function in FUNCTIONS:
             match = re.search(r"DEFINE_REX_FUNC\(sub_"+function+r"\) \{.*?(?=\nDEFINE_REX_FUNC|\Z)",source,re.S)

@@ -4,8 +4,8 @@
 // samples' lr is stale (the context Horizon hands back keeps the lr of the last system call), so the profile cannot
 // name the callers.
 //
-// What: the linker routes the four functions to the wrappers below (-Wl,--wrap=..., app/CMakeLists.txt, only with
-// BO2ZM_MEMCPY_CALLERS: BO2_MEMCPY_CALLERS=1 bash app/build_switch.sh). On the marked thread (the thread pointer of
+// What: the linker routes the four functions to the wrappers below (-Wl,--wrap=..., games/bo2/CMakeLists.txt, only with
+// BO2ZM_MEMCPY_CALLERS: BO2_MEMCPY_CALLERS=1 bash games/bo2/build_switch.sh). On the marked thread (the thread pointer of
 // MarkThread's caller, read from tpidrro_el0, so no thread-local variable is touched before libnx sets them up), one
 // call in 16 is noted by its return address with its bytes. Every 10 s Report logs the call sites with the most bytes
 // and the most calls, times 16, as image offsets for tools/profile_sym.py. Calls GCC expands inline are not seen.

@@ -13,7 +13,7 @@
 #   package  a folder ready to play ($BO2_BUILD/run, with a bo2zm.command launcher)
 #
 # Everything made from the game (extracted files, generated code, shaders, the build) goes to $BO2_BUILD,
-# ~/Games/Xbox360/bo2-build by default, never into this repository: work/ and app/generated are links to it.
+# ~/Games/Xbox360/bo2-build by default, never into this repository: work/ and games/bo2/generated are links to it.
 #
 # Inputs (override with the variables):
 #   BO2_ISO   the disc image (default: ~/Games/Xbox360/roms/Call of Duty - Black Ops II (World).iso)
@@ -68,7 +68,7 @@ export VULKAN_SDK
 
 mkdir -p "$BO2_BUILD/work" "$BO2_BUILD/generated" "$DATA"
 # Links from the checkout to the data folder (both ignored by git). A real folder in their place is left alone.
-for pair in "work:$BO2_BUILD/work" "app/generated:$BO2_BUILD/generated"; do
+for pair in "work:$BO2_BUILD/work" "games/bo2/generated:$BO2_BUILD/generated"; do
   link="$ROOT/${pair%%:*}"
   target="${pair#*:}"
   if [ -L "$link" ] || [ ! -e "$link" ]; then
@@ -149,7 +149,7 @@ fi
 
 if want app; then
   echo "== app"
-  [ -f "$ROOT/app/generated/default_mp/sources.cmake" ] || { echo "no generated code: run the codegen step" >&2; exit 1; }
+  [ -f "$ROOT/games/bo2/generated/default_mp/sources.cmake" ] || { echo "no generated code: run the codegen step" >&2; exit 1; }
   FLAGS="-march=armv8-a"
   RELEASE="-O3 -DNDEBUG"
   cmake -S "$ROOT/app" -B "$OUT" -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -161,7 +161,7 @@ if want app; then
     "-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out" \
     -DREXGLUE_BUILD_HOST_TOOLS=OFF -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_METAL=ON -DBO2ZM_GUEST_MEMORY_PLAIN=ON \
     "-DBO2ZM_BUILD_ID=mac-arm64-$(date +%Y%m%d-%H%M%S)" "-DREXSDK_DIR=$ROOT/sdk" > /dev/null
-  G="$ROOT/app/generated/default_mp"
+  G="$ROOT/games/bo2/generated/default_mp"
   "$PY" "$ROOT/tools/direct_calls.py" --check --gen "$G"
   "$PY" "$ROOT/tools/setjmp_locals.py" --verify --gen "$G"
   "$PY" "$ROOT/tools/guest_barriers.py" --check --gen "$G"

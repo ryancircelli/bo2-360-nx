@@ -2,17 +2,17 @@
 # Configures and builds bo2zm.nro for the Switch with devkitA64, libnx and Mesa's NVK Vulkan driver.
 # Needs the generated C++ (tools/codegen.sh), devkitPro and the Mesa SDK that tools/build_mesa.sh builds; where each
 # tool is installed comes from tools/toolchain.sh (BO2_DEVKITPRO, MESA_SDK, BO2_NINJA, ...). The toolchain file is in
-# tools/switch/cmake. The output is app/out/switch/bo2zm.nro.
+# tools/switch/cmake. The output is games/bo2/out/switch/bo2zm.nro.
 # Options, all from the environment: BO2_LTO, BO2_PGO and BO2_PGO_DIR, BO2_DEVLINK, BO2_GUEST_MEMORY_PLAIN, BO2_BUILD_TAG,
 # BO2_HEAP_TRACK, BO2_MEMCPY_CALLERS, BO2_DEBUG_LINES, JOBS and BO2ZM_BUILD_ID (the build's name in its logs; the date
 # and time by default), each explained where it is read below.
 set -euo pipefail
-APP="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$APP/.."
+APP="$(cd "$(dirname "$0")" && pwd -P)"
+ROOT="$APP/../.."
 BO2_DATA="$(bash "$ROOT/tools/data_dir.sh")"
 SDK="${BO2_SDK_DIR:-$ROOT/sdk}"
 # Several checkouts at once (git worktrees prepared by tools/bootstrap_worktree.sh): BO2_BUILD_TAG gives this checkout
-# its own build folder, its own copy of the SDK's libraries and its own specs file. Without it: app/out/switch.
+# its own build folder, its own copy of the SDK's libraries and its own specs file. Without it: games/bo2/out/switch.
 OUT="$APP/out/switch${BO2_BUILD_TAG:+-$BO2_BUILD_TAG}"
 SDK_OUT_ARG=()
 if [ -n "${BO2_BUILD_TAG:-}" ]; then
@@ -24,7 +24,7 @@ fi
 # GPU 768 / memory 1600 MHz, CPU-bound) it took the average from 37.7 to 41.4 FPS and the median frame from 26.2 to
 # 24.0 ms, halved the frames over 33.3 ms (5.4 to 2.6 %), and the job workers used about 13 % less CPU per frame. The
 # Release flags are passed either way, so switching it in one build folder never keeps the other's from CMake's cache.
-# Profile-guided optimization (GCC) of the generated code (app/CMakeLists.txt, BO2ZM_PGO). BO2_PGO=generate: a
+# Profile-guided optimization (GCC) of the generated code (games/bo2/CMakeLists.txt, BO2ZM_PGO). BO2_PGO=generate: a
 # training build (BO2_BUILD_TAG=pgo by default, its own folder) whose counters are written to sdmc:/switch/bo2zm/pgo
 # when the benchmark route ends (bo2zm_benchmark.cpp; reset when it starts). Copy that folder to $BO2_DATA/pgo, then
 # BO2_PGO=use builds with the profile.
@@ -33,16 +33,16 @@ if [ "${BO2_PGO:-}" = "generate" ] && [ -z "${BO2_BUILD_TAG:-}" ]; then
   OUT="$APP/out/switch-pgo"
   SDK_OUT_ARG=("-DREXGLUE_OUTPUT_DIR=$OUT/sdk-out")
 fi
-# BO2_HEAP_TRACK=1: a test build that logs the C heap's live bytes by caller every minute (app/CMakeLists.txt).
+# BO2_HEAP_TRACK=1: a test build that logs the C heap's live bytes by caller every minute (games/bo2/CMakeLists.txt).
 HEAP_ARGS=("-DBO2ZM_HEAP_TRACK=OFF")
 if [ "${BO2_HEAP_TRACK:-}" = "1" ]; then
   HEAP_ARGS=("-DBO2ZM_HEAP_TRACK=ON")
 fi
-# BO2_MEMCPY_CALLERS=1: a test build that logs the ring thread's memcpy calls by call site every 10 s (app/CMakeLists.txt).
+# BO2_MEMCPY_CALLERS=1: a test build that logs the ring thread's memcpy calls by call site every 10 s (games/bo2/CMakeLists.txt).
 HEAP_ARGS+=("-DBO2ZM_MEMCPY_CALLERS=$([ "${BO2_MEMCPY_CALLERS:-}" = "1" ] && echo ON || echo OFF)")
-# BO2_DEBUG_LINES=1: a profile build with line tables for the native renderer (app/CMakeLists.txt, BO2ZM_DEBUG_LINES).
+# BO2_DEBUG_LINES=1: a profile build with line tables for the native renderer (games/bo2/CMakeLists.txt, BO2ZM_DEBUG_LINES).
 DEBUG_ARGS=("-DBO2ZM_DEBUG_LINES=$([ "${BO2_DEBUG_LINES:-}" = "1" ] && echo ON || echo OFF)")
-# BO2_DEVLINK=0: a build without the development consoles' PC link (app/CMakeLists.txt, BO2ZM_DEVLINK).
+# BO2_DEVLINK=0: a build without the development consoles' PC link (games/bo2/CMakeLists.txt, BO2ZM_DEVLINK).
 DEVLINK_ARGS=("-DBO2ZM_DEVLINK=$([ "${BO2_DEVLINK:-1}" = "0" ] && echo OFF || echo ON)")
 PGO_ARGS=()
 case "${BO2_PGO:-}" in
@@ -88,16 +88,16 @@ cp "$OUT/switch.specs" "$(cygpath -u "$SPECS")"
 # The generated code must come from tools/codegen.sh, which adds the fix-ups the build depends on: fail early if a
 # hooked function is called directly (__imp__sub_X, so its hook would be skipped) or a setjmp site lacks the
 # register-locals fix.
-"${PYTHON:-python}" "$APP/../tools/direct_calls.py" --check --gen "$APP/generated/default_mp"
-"${PYTHON:-python}" "$APP/../tools/setjmp_locals.py" --verify --gen "$APP/generated/default_mp"
+"${PYTHON:-python}" "$APP/../../tools/direct_calls.py" --check --gen "$APP/generated/default_mp"
+"${PYTHON:-python}" "$APP/../../tools/setjmp_locals.py" --verify --gen "$APP/generated/default_mp"
 # Plain guest memory is only safe with the barriers in place (core/bo2zm_guest_memory.h).
 if [ "${BO2_GUEST_MEMORY_PLAIN:-1}" = "1" ]; then
-  "${PYTHON:-python}" "$APP/../tools/guest_barriers.py" --check --gen "$APP/generated/default_mp"
+  "${PYTHON:-python}" "$APP/../../tools/guest_barriers.py" --check --gen "$APP/generated/default_mp"
 fi
 # A profile trained before the generated code or its flags changed stops applying without a word, so say so before
 # building with it. Not fatal: an old profile only loses the gain.
 if [ "${BO2_PGO:-}" = "use" ]; then
-  "${PYTHON:-python}" "$APP/../tools/pgo_check.py" --build "$(cygpath -m "$OUT")" \
+  "${PYTHON:-python}" "$APP/../../tools/pgo_check.py" --build "$(cygpath -m "$OUT")" \
     --pgo "$(cygpath -m "${BO2_PGO_DIR:-${BO2_DATA}/pgo}")" ||
     echo "WARNING: building with a stale PGO profile" >&2
 fi

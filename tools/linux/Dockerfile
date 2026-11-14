@@ -4,8 +4,8 @@
 #   docker build -t bo2zm-linux-arm64 -f tools/linux/Dockerfile tools/linux
 #   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" bo2zm-linux-arm64
 #
-# The second command runs app/build_linux.sh on the checkout mounted at /src (with app/generated and sdk/thirdparty
-# already in place); the package ends up in app/out/linux-arm64/package. docs/building-linux-arm64.md has the rest.
+# The second command runs games/bo2/build_linux.sh on the checkout mounted at /src (with games/bo2/generated and sdk/thirdparty
+# already in place); the package ends up in games/bo2/out/linux-arm64/package. docs/building-linux-arm64.md has the rest.
 FROM ubuntu:24.04
 
 RUN apt-get update \
@@ -20,4 +20,4 @@ ENV BO2_LINUX_SYSROOT=/opt/bo2zm/sysroot \
     CLANG_SUFFIX=-20 \
     HOME=/tmp
 WORKDIR /src
-CMD ["bash", "app/build_linux.sh"]
+CMD ["bash", "games/bo2/build_linux.sh"]

@@ -3,12 +3,12 @@
 # machine builds natively; an x86_64 machine (WSL2, Docker, a desktop) cross-compiles with clang and the sysroot from
 # tools/linux/make_sysroot.sh. docs/building-linux-arm64.md is the guide.
 #
-#   bash app/build_linux.sh
+#   bash games/bo2/build_linux.sh
 #
 # Environment:
 #   BO2_LINUX_SYSROOT  cross builds: the sysroot (default out/linux-sysroot; made on first use). Also usable on an
 #                      ARM64 host, to build against exactly the same libraries as a cross build.
-#   BO2_LINUX_OUT      build folder (default app/out/linux-arm64, or app/out/linux-arm64-$BO2_BUILD_TAG)
+#   BO2_LINUX_OUT      build folder (default games/bo2/out/linux-arm64, or games/bo2/out/linux-arm64-$BO2_BUILD_TAG)
 #   BO2_LINUX_MARCH    -march for everything (default armv8-a: any 64-bit ARM CPU, Cortex-A53/A72 included)
 #   BO2_GUEST_MEMORY_PLAIN  1 (default, as on the Switch) or 0: how the generated code reaches guest memory
 #   BO2_LTO=1          ThinLTO across the generated code and the runtime (slower link, more memory)
@@ -17,23 +17,23 @@
 #   JOBS               parallel compile jobs (default: the CPU count, at most 12; the generated code needs ~1.5 GB
 #                      of memory per job)
 #
-# The generated C++ (app/generated) and the SDK's third-party sources (sdk/thirdparty) must already be in place:
+# The generated C++ (games/bo2/generated) and the SDK's third-party sources (sdk/thirdparty) must already be in place:
 # the generated code comes from tools/codegen.sh, run on the player's own copy of the game; the third-party sources
 # from tools/fetch_thirdparty.py.
 set -euo pipefail
-APP="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$APP/.." && pwd)"
+APP="$(cd "$(dirname "$0")" && pwd -P)"
+ROOT="$(cd "$APP/../.." && pwd)"
 SDK="${BO2_SDK_DIR:-$ROOT/sdk}"
 OUT="${BO2_LINUX_OUT:-$APP/out/linux-arm64${BO2_BUILD_TAG:+-$BO2_BUILD_TAG}}"
 MARCH="${BO2_LINUX_MARCH:-armv8-a}"
 HOST_ARCH="$(uname -m)"
 
 if [ "$(uname -s)" != Linux ]; then
-  echo "app/build_linux.sh runs on Linux (on Windows: inside WSL2, see docs/building-linux-arm64.md)" >&2
+  echo "games/bo2/build_linux.sh runs on Linux (on Windows: inside WSL2, see docs/building-linux-arm64.md)" >&2
   exit 1
 fi
 if [ ! -f "$APP/generated/default_mp/sources.cmake" ]; then
-  echo "no generated code in app/generated/default_mp: run tools/codegen.sh on your copy of the game first" >&2
+  echo "no generated code in games/bo2/generated/default_mp: run tools/codegen.sh on your copy of the game first" >&2
   exit 1
 fi
 # Clang 19 or newer: with clang 18, libstdc++'s <expected> stays empty (it tests __cpp_concepts >= 202002L, which

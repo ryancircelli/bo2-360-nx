@@ -16,7 +16,7 @@ words into segments. For each segment:
   - otherwise                           -> standalone function at segment start
 
 usage: python tools/codegen_gaps.py [--min 8]   (run from the repository root)
-Writes app/gaps.toml and the report work/codegen_gaps.txt (git-ignored, beside the image it reads). For another
+Writes games/bo2/gaps.toml and the report work/codegen_gaps.txt (git-ignored, beside the image it reads). For another
 project (the campaign's default.xex):
   --gen DIR --prefix NAME --image FILE --text START:END --image-size BYTES --toml FILE --report FILE
 """
@@ -31,9 +31,9 @@ from collections import defaultdict
 import capstone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GEN = os.path.join(ROOT, "app", "generated", "default_mp")
+GEN = os.path.join(ROOT, "games", "bo2", "generated", "default_mp")
 IMAGE = os.path.join(ROOT, "work", "dump_tu18", "default_mp.image.bin")
-OUT_TOML = os.path.join(ROOT, "app", "gaps.toml")
+OUT_TOML = os.path.join(ROOT, "games", "bo2", "gaps.toml")
 OUT_REPORT = os.path.join(ROOT, "work", "codegen_gaps.txt")
 BASE = 0x82000000
 TEXT = (0x82160000, 0x82160000 + 0x7DEB24)  # TU18 .text
@@ -168,7 +168,7 @@ def main():
     ap.add_argument("--image-size", type=lambda v: int(v, 0), help="the image's size in bytes")
     ap.add_argument("--toml", default=OUT_TOML)
     ap.add_argument("--report", default=OUT_REPORT)
-    ap.add_argument("--overrides", default=os.path.join(ROOT, "app", "overrides.toml"),
+    ap.add_argument("--overrides", default=os.path.join(ROOT, "games", "bo2", "overrides.toml"),
                     help="the project's overrides.toml: its [rexcrt] functions are dropped by the codegen on purpose")
     a = ap.parse_args()
     GEN, IMAGE, OUT_TOML, OUT_REPORT, PREFIX = a.gen, a.image, a.toml, a.report, a.prefix

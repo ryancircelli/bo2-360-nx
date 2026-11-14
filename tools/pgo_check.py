@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Does a PGO profile still apply to the code? (Switch, BO2_PGO=use)
 
-  python tools/pgo_check.py [--build app/out/switch[-<tag>]] [--pgo DIR] [--file bo2zm_recomp.N.cpp] [--min 0.5]
+  python tools/pgo_check.py [--build games/bo2/out/switch[-<tag>]] [--pgo DIR] [--file bo2zm_recomp.N.cpp] [--min 0.5]
   python tools/pgo_check.py --native [--build ...] [--pgo DIR] [--min 0.5]
 
 GCC finds a function's counts in the profile by a hash of its name, but drops them, silently, when the function's
 control flow no longer has the checksum it had in the training build: the warning (-Wcoverage-mismatch) points at
-DEFINE_REX_FUNC, which comes from the precompiled header, a system header, and app/CMakeLists.txt also passes
+DEFINE_REX_FUNC, which comes from the precompiled header, a system header, and games/bo2/CMakeLists.txt also passes
 -Wno-coverage-mismatch. So a profile trained before the generated code or its flags changed (plain guest memory, a
 code generator fix) can stop applying to the hot functions without a word (once, a profile two days old gave counts
 to 7 of the 35 trained functions of bo2zm_recomp.10.cpp and none to its hottest one; retrained, the build was 9 %
@@ -16,10 +16,10 @@ This compiles one generated file the way the build does (flags from <build>/buil
 profile and -fdump-ipa-profile, in a scratch folder below the build folder laid out like it (the profile's file names
 come from the object's path), and counts the functions that read non-zero counts against the functions the profile
 has non-zero counts for. By default the file is the one with the most trained functions. Exit 1 if the share is
-below --min (default 0.5): retrain (BO2_PGO=generate, notes in app/build_switch.sh).
+below --min (default 0.5): retrain (BO2_PGO=generate, notes in games/bo2/build_switch.sh).
 
 --native does the same for each of the app's own instrumented files the profile has (the renderer, culling, audio...;
-the list in app/CMakeLists.txt), which change far more often than the generated code: it prints each file's share and
+the list in games/bo2/CMakeLists.txt), which change far more often than the generated code: it prints each file's share and
 the share over all of them. A file that is no longer in the build, or has no counts, is skipped. A profile trained on
 the very code it is checked against reads about 98 % there (908 of 922 functions in one check).
 
@@ -122,9 +122,9 @@ def check_generated(a):
 def check_native(a):
     total_read = total_trained = 0
     for gcda in sorted(glob.glob(os.path.join(a.pgo, APP_PREFIX + "*.gcda"))):
-        rel = os.path.basename(gcda)[len(APP_PREFIX):-len(".gcda")].replace("#", "/")  # __/games/bo2/src/native/...cpp (CMake spells ../ as __/)
+        rel = os.path.basename(gcda)[len(APP_PREFIX):-len(".gcda")].replace("#", "/")  # src/native/...cpp, or __/__/core/...cpp (CMake spells ../ as __/)
         n_trained = trained(gcda)
-        if n_trained == 0 or not os.path.isfile(os.path.join(ROOT, "app", rel.replace("__/", "../"))):
+        if n_trained == 0 or not os.path.isfile(os.path.join(ROOT, "games", "bo2", rel.replace("__/", "../"))):
             continue
         n = reading(a.build, a.pgo, f"CMakeFiles/bo2zm.dir/{rel}.obj")
         if n is None:
@@ -164,7 +164,7 @@ def data_dir():
 def main():
     ap = argparse.ArgumentParser()
     tag = os.environ.get("BO2_BUILD_TAG")
-    ap.add_argument("--build", default=os.path.join(ROOT, "app", "out", "switch" + (f"-{tag}" if tag else "")))
+    ap.add_argument("--build", default=os.path.join(ROOT, "games", "bo2", "out", "switch" + (f"-{tag}" if tag else "")))
     ap.add_argument("--pgo", default=os.path.join(data_dir(), "pgo"))
     ap.add_argument("--file", help="bo2zm_recomp.N.cpp (default: the one with the most trained functions)")
     ap.add_argument("--native", action="store_true", help="check the app's own instrumented files instead")

@@ -2,7 +2,7 @@
 its CPU and the functions with the most samples: "self" (the leaf: where the CPU was) and "total" (anywhere in the
 stack). Addresses in bo2zm.exe are symbolized with llvm-symbolizer; other modules show as module+offset.
 
-usage: python -I tools/pc_profile_report.py <pc_profile_<pid>.txt> [--exe app/out/win/bo2zm.exe] [--top 25]
+usage: python -I tools/pc_profile_report.py <pc_profile_<pid>.txt> [--exe games/bo2/out/win/bo2zm.exe] [--top 25]
        [--thread <name substring>] [--callers <function substring>]
 
 --callers lists, for the functions matching the substring, which functions called them (the frame above), with
@@ -60,7 +60,7 @@ def symbolize(addresses, exe):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('profile')
-    ap.add_argument('--exe', default=os.path.join(REPO, 'app', 'out', 'win', 'bo2zm.exe'))
+    ap.add_argument('--exe', default=os.path.join(REPO, 'games', 'bo2', 'out', 'win', 'bo2zm.exe'))
     ap.add_argument('--top', type=int, default=25)
     ap.add_argument('--thread', default=None)
     ap.add_argument('--callers', default=None)

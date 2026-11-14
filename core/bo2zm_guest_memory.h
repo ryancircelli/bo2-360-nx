@@ -1,5 +1,5 @@
 // How the generated code reaches guest memory in this port. Appended to the generated code's precompiled header
-// (app/CMakeLists.txt), after bo2zm_pch.h.
+// (games/bo2/CMakeLists.txt), after bo2zm_pch.h.
 //
 // The code generator makes every guest load and store volatile (sdk/resources/templates/codegen/pch_h.inja,
 // REX_LOAD_* / REX_STORE_*). That keeps them in program order and stops GCC from removing any of them: the game's
@@ -7,7 +7,7 @@
 // each reload stays a load, a byte swap and often a conversion. Compiled without volatile, a typical generated file
 // came out 8 % smaller, with 156 of its 207 functions shorter, some by three quarters.
 //
-// With BO2ZM_GUEST_MEMORY_PLAIN (CMake option of the same name: off in CMake, on in app/build_switch.sh) the guest
+// With BO2ZM_GUEST_MEMORY_PLAIN (CMake option of the same name: off in CMake, on in games/bo2/build_switch.sh) the guest
 // loads and stores are ordinary memory accesses, through may_alias types (the generated code is built with strict
 // aliasing, and the guest reads the same bytes as different widths). What volatile also gave, and the guest relies on,
 // is kept by REX_GUEST_BARRIER(), a compiler barrier on guest memory that tools/guest_barriers.py puts after every

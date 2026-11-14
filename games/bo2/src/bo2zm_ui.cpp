@@ -39,7 +39,7 @@
 #include <rex/system/xmemory.h>
 
 #include "bo2zm_game.h"
-#include "bo2zm_ui_lua.h"  // generated from games/bo2/src/ui/menus.lua (app/CMakeLists.txt)
+#include "bo2zm_ui_lua.h"  // generated from games/bo2/src/ui/menus.lua (games/bo2/CMakeLists.txt)
 
 REXCVAR_DEFINE_BOOL(bo2zm_ui_changes, true, "BO2",
                     "Applies mode-specific home menus, Extras and graphics settings. Online and System Link "

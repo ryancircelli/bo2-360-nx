@@ -17,8 +17,8 @@ OUT="$DATA/sd-update/switch/bo2zm"
 MANIFEST="$DATA/sd/.delivered.sha256"
 
 declare -A SOURCES=(
-  [bo2zm.nro]="$ROOT/app/out/switch/bo2zm.nro"
-  [bo2zm.toml]="$ROOT/app/switch/bo2zm.toml"
+  [bo2zm.nro]="$ROOT/games/bo2/out/switch/bo2zm.nro"
+  [bo2zm.toml]="$ROOT/games/bo2/switch/bo2zm.toml"
   # The native renderer's shader library: game-derived, built locally (tools/xenosrecomp), never in the repo.
   [bo2zm_shaders.spvpack]="$DATA/shaders/bo2zm_shaders.spvpack"
 )

@@ -1,11 +1,11 @@
 # BO2 Zombies / multiplayer title manifest (rex/game_info.h, LoadGameManifest).
-# Compiled into the executable (app/CMakeLists.txt); edit and rebuild to change.
+# Compiled into the executable (games/bo2/CMakeLists.txt); edit and rebuild to change.
 
 [game]
 name = "bo2zm"                       # config file stem, Switch folder sdmc:/switch/bo2zm
 title_ids = ["415608C3"]             # Call of Duty: Black Ops II
 # The SDK loads game:\default.xex (the campaign executable). Zombies and multiplayer
-# live in default_mp.xex, which app/ recompiles; the wrong one fails with
+# live in default_mp.xex, which games/bo2/ recompiles; the wrong one fails with
 # "No function registered at 825C69B8" (default.xex's TU18 entry point).
 executable = "game:\\default_mp.xex"
 data_root = "game"                   # disc files + default_mp.xexp (TU18) beside the executable

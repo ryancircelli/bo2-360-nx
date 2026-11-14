@@ -1,7 +1,7 @@
 # CMake toolchain file: AArch64 Linux (glibc) from an x86_64 Linux host, with LLVM clang and lld and the sysroot that
-# tools/linux/make_sysroot.sh builds. app/build_linux.sh passes it; an ARM64 Linux machine builds natively without it.
+# tools/linux/make_sysroot.sh builds. games/bo2/build_linux.sh passes it; an ARM64 Linux machine builds natively without it.
 #
-# The sysroot comes from BO2ZM_LINUX_SYSROOT (environment or cache). Clang 19 or newer (app/build_linux.sh says why);
+# The sysroot comes from BO2ZM_LINUX_SYSROOT (environment or cache). Clang 19 or newer (games/bo2/build_linux.sh says why);
 # CLANG_SUFFIX picks a versioned install (e.g. -20 for clang-20).
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
