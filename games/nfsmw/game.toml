@@ -1,0 +1,11 @@
+# Need for Speed: Most Wanted (Xbox 360, USA) title manifest (rex/game_info.h, LoadGameManifest).
+# Compiled into the executable by rexglue_game_manifest() (games/nfsmw/CMakeLists.txt); edit and rebuild to change.
+
+[game]
+name = "nfsmw"                          # config file stem
+title_ids = ["454107D9"]
+executable = "game:\\default.xex"     # the disc's default.xex, recompiled from games/nfsmw/nfsmw_manifest.toml
+local_data_root = "~/Games/Xbox360/nfsmw/disc"  # read-only extracted disc; --game_data_root wins
+
+[defaults]
+gpu_plugin = "metal"                     # the native Metal renderer; --gpu_plugin or a config file still wins
