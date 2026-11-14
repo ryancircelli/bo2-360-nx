@@ -33,5 +33,8 @@ __attribute__((visibility("default"))) void RequestXpassLazyBarrier(bool on);
 // on the command thread's drain and the worker's idle wait.
 __attribute__((visibility("default"))) bool EncodeSpinRequested();
 __attribute__((visibility("default"))) void RequestEncodeSpin(bool on);
+// [mct] Type-0 batching split: batch only whole shader-constant ranges.
+__attribute__((visibility("default"))) bool Type0BatchConstsOnlyRequested();
+__attribute__((visibility("default"))) void RequestType0BatchConstsOnly(bool on);
 }  // namespace rex::graphics::metal
 #endif

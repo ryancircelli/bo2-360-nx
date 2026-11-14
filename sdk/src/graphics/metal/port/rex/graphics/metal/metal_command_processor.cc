@@ -156,6 +156,15 @@ DEFINE_bool(
     "Runtime-switchable at a drained frame boundary; env "
     "REX_METAL_ENCODE_SPIN=0/1 overrides.",
     "Metal");
+DEFINE_bool(
+    metal_type0_batch_consts_only, false,
+    "Type-0 register batching only batches ranges that lie entirely inside "
+    "the shader constant files (float, fetch, bool/loop); every other range "
+    "goes through WriteRegister one register at a time. Runtime-switchable "
+    "at a drained frame boundary; env REX_METAL_TYPE0_BATCH_CONSTS_ONLY=0/1 "
+    "overrides.",
+    "Metal");
+
 REXCVAR_DEFINE_UINT32(metal_encode_spin_us, 50, "Metal",
                       "Spin length in microseconds for metal_encode_spin.");
 
@@ -1375,6 +1384,7 @@ MetalCommandProcessor::MetalCommandProcessor(
   draw_consts_dirty_active_ = DrawConstsDirtyRequested();
   xpass_lazy_barrier_active_ = XpassLazyBarrierRequested();
   encode_spin_active_ = EncodeSpinRequested();
+  type0_consts_only_active_ = Type0BatchConstsOnlyRequested();
   std::fprintf(stderr, "[warn] [mct] xpass_lazy_barrier %s encode_spin %s\n",
                xpass_lazy_barrier_active_ ? "on" : "off",
                encode_spin_active_ ? "on" : "off");
@@ -2970,6 +2980,10 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   if (xpass_lazy_barrier_active_ != XpassLazyBarrierRequested()) {
     xpass_lazy_barrier_active_ = XpassLazyBarrierRequested();
     REXLOG_INFO("Metal xpass lazy barrier: {} at drained frame boundary", xpass_lazy_barrier_active_ ? "on" : "off");
+  }
+  if (type0_consts_only_active_ != Type0BatchConstsOnlyRequested()) {
+    type0_consts_only_active_ = Type0BatchConstsOnlyRequested();
+    REXLOG_INFO("Metal type0 batch consts only: {} at drained frame boundary", type0_consts_only_active_ ? "on" : "off");
   }
   if (encode_spin_active_ != EncodeSpinRequested()) {
     encode_spin_active_ = EncodeSpinRequested();
@@ -11022,6 +11036,10 @@ bool MetalCommandProcessor::CanFastWriteRegisterRange(
                             XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031,
                             XE_GPU_REG_SHADER_CONSTANT_LOOP_31 + 1)) {
     return true;
+  }
+  // [mct] split test: other ranges keep per-register WriteRegister handling.
+  if (type0_consts_only_active_) {
+    return false;
   }
 
   const bool overlaps_special =
