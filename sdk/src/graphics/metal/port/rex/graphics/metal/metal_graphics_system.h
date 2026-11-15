@@ -39,6 +39,8 @@ class MetalGraphicsSystem : public GraphicsSystem {
 
   // Joins the metal_frame_dump thread (metal_frame_dump.h) before the presenter is destroyed.
   void Shutdown() override;
+  // Ends and joins the metal_frame_dump thread so it writes what it captured before std::_Exit.
+  void PrepareForHardExit() override;
 
  protected:
   std::unique_ptr<CommandProcessor> CreateCommandProcessor() override;

@@ -84,6 +84,13 @@ bool WriteNpy(const std::filesystem::path& path, const std::vector<float>& data,
 // Joined by StopFrameDump before the presenter goes away (a detached thread outlived it and threw on its
 // destroyed mutex when its wait timed out after the game had quit).
 std::thread dump_thread;
+// Every exit path joins (Shutdown) or ends it (PrepareForHardExit, then std::_Exit). Should a stray exit()
+// still run static destructors, destroying the joinable thread would std::terminate (SIGABRT): let it go.
+struct DumpThreadExitGuard {
+  ~DumpThreadExitGuard() {
+    if (dump_thread.joinable()) dump_thread.detach();
+  }
+} dump_thread_exit_guard;  // after dump_thread, so destroyed before it
 
 void DumpThread(ui::metal::MetalPresenter* presenter, std::vector<uint64_t> frames,
                 std::filesystem::path dir, uint32_t title_id, uint32_t timeout_s) {

@@ -66,6 +66,10 @@ void MetalGraphicsSystem::Shutdown() {
   GraphicsSystem::Shutdown();
 }
 
+void MetalGraphicsSystem::PrepareForHardExit() {
+  StopFrameDump(presenter());
+}
+
 bool MetalGraphicsSystem::IsAvailable() {
   return rex::ui::metal::MetalProvider::IsMetalAPIAvailable();
 }
@@ -335,6 +339,7 @@ void MetalGraphicsSystem::RunShaderPrep() {
   REXLOG_INFO("[shader-prep] done in {:.2f}s (ok {}): {}", seconds(), !timed_out, counts);
   write_status("done", last, true, !timed_out);
   // The same exit as a window close (SDK ReXApp::OnClosing): the marker line tells tools it was clean.
+  PrepareForHardExit();
   REXLOG_INFO("Title terminated; hard-exiting process.");
   rex::FlushLogging();
   std::_Exit(timed_out ? 3 : 0);

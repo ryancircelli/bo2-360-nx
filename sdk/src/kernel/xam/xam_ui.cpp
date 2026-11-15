@@ -10,6 +10,7 @@
  */
 
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <limits>
 #include <thread>
@@ -548,9 +549,10 @@ void XamShowDirtyDiscErrorUI_entry(u32 user_index) {
     REXKRNL_ERROR("Missing files or bad mounts cause this error");
     REXKRNL_ERROR("===========================================");
   }
-  // This is death, and should never return.
-  // TODO(benvanik): cleaner exit.
-  exit(1);
+  // This is death, and should never return. Hard exit like a window close (ReXApp::OnClosing): exit(1)
+  // ran static destructors under live guest, GPU and frame-dump threads.
+  rex::FlushLogging();
+  std::_Exit(1);
 }
 
 u32 XamShowPartyUI_entry(u32 r3, u32 r4) {

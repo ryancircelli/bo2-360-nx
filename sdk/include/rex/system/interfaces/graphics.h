@@ -92,6 +92,11 @@ class IGraphicsSystem {
   }
 
   virtual void Shutdown() = 0;
+
+  // The process is about to hard-exit (ReXApp::OnClosing, std::_Exit): Shutdown will not run. Finish
+  // host-side work that must outlive the title and still needs this system alive, e.g. writing the
+  // frames a frame dump already captured. Called on the UI thread after the title is terminated.
+  virtual void PrepareForHardExit() {}
 };
 
 }  // namespace rex::system
