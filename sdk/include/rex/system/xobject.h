@@ -244,6 +244,13 @@ class XObject {
   // if we allocated it!
   uint32_t guest_object_ptr_ = 0;
   bool allocated_guest_object_ = false;
+  // Guest body an object made by GetNativeObject stands for (it does not own the memory, so it is not
+  // guest_object_ptr_). Set before the handle is stashed in that body.
+  uint32_t wrapped_native_ptr_ = 0;
+
+  // The guest body whose stash may name this object.
+  uint32_t native_body() const { return guest_object_ptr_ ? guest_object_ptr_ : wrapped_native_ptr_; }
+  static object_ref<XObject> FindCreatedBody(KernelState* kernel_state, uint32_t body);
 };
 
 template <typename T>
