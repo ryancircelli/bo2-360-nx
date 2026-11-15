@@ -32,6 +32,9 @@ class ByteStream;
 
 namespace rex::system {
 
+// Wait watchdog: optional extra state appended to each snapshot (set by the audio system).
+extern std::string (*g_diag_extra_dump)();
+
 constexpr memory::fourcc_t kXObjSignature = memory::make_fourcc('R', 'E', 'X', '\0');
 
 class KernelState;
@@ -159,6 +162,18 @@ class XObject {
   std::vector<X_HANDLE>& handles() { return handles_; }
 
   const std::string& name() const { return name_; }
+
+  // Wait watchdog diagnostics (cvar wait_watchdog_s, off by default): who last signalled this
+  // object. Updated by DiagNoteSignal() from the signalling paths; read by the watchdog thread.
+  struct DiagSignal {
+    std::atomic<uint64_t> count{0};
+    std::atomic<int64_t> last_ms{0};
+    std::atomic<uint32_t> thread_id{0};
+    std::atomic<uint32_t> lr{0};
+    std::atomic<uint32_t> stack[6]{};  // guest return addresses above lr
+  };
+  void DiagNoteSignal();
+  const DiagSignal& diag_signal() const { return diag_signal_; }
   uint32_t guest_object() const { return guest_object_ptr_; }
 
   // Has this object been created for use by the host?
@@ -244,6 +259,7 @@ class XObject {
   // if we allocated it!
   uint32_t guest_object_ptr_ = 0;
   bool allocated_guest_object_ = false;
+  DiagSignal diag_signal_;
 };
 
 template <typename T>

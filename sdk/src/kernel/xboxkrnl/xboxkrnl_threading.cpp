@@ -16,9 +16,11 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/kernel/xboxkrnl/threading.h>
@@ -780,12 +782,18 @@ void KeInitializeTimerEx_entry(ppc_ptr_t<X_KTIMER> timer_ptr, u32 timer_type, u3
   timer_ptr->period = 0;
 }
 
+REXCVAR_DEFINE_INT32(timer_debug_set_delay_ms, 0, "Kernel",
+                     "Debug: sleep this long in NtSetTimerEx before reading the due time (widens guest races, PAS-18)");
+
 u32 NtSetTimerEx_entry(u32 timer_handle, mapped_u64 due_time_ptr,
                        mapped_void routine_ptr /*PTIMERAPCROUTINE*/, u32 unk_one,
                        mapped_void routine_arg, u32 resume, u32 period_ms, u32 unk_zero) {
   assert_true(unk_one == 1);
   assert_true(unk_zero == 0);
 
+  if (int32_t delay_ms = REXCVAR_GET(timer_debug_set_delay_ms); delay_ms > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+  }
   uint64_t due_time = *due_time_ptr;
 
   X_STATUS result = X_STATUS_SUCCESS;

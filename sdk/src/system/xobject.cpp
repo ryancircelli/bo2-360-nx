@@ -9,10 +9,17 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
+#include <rex/logging.h>
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>  // For TranslateAnsiStringAddress
@@ -27,8 +34,285 @@
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
+#include <cstdio>
+
+REXCVAR_DEFINE_STRING(wait_watchdog_regpeek, "", "Kernel",
+                      "Diagnostics: 'lr:off:len[,...]' (hex): for each waiter whose guest lr matches, dump "
+                      "len bytes at its r31+off in every snapshot");
+REXCVAR_DEFINE_STRING(wait_watchdog_peek, "", "Kernel",
+                      "Diagnostics: guest memory to hex-dump in each wait watchdog snapshot, comma separated "
+                      "'addr:len' or '[ptr]+off:len' (one dereference), hex addresses");
+REXCVAR_DEFINE_INT32(wait_watchdog_s, 0, "Kernel",
+                     "Diagnostics: log guest threads blocked in a kernel wait for longer than this "
+                     "many seconds, with each object and who last signalled it (0 = off)");
 
 namespace rex::system {
+
+std::string (*g_diag_extra_dump)() = nullptr;
+
+
+namespace {
+// Wait watchdog (PAS-18). Off by default; when wait_watchdog_s > 0 every guest kernel wait is
+// recorded with the objects it waits on, every signal records who sent it, and a host thread logs
+// a snapshot of all waiting guest threads once any of them has waited longer than the limit.
+int64_t DiagNowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+uint32_t DiagGuestLr() {
+  if (!XThread::IsInThread()) return 0;
+  auto* ts = XThread::GetCurrentThread()->thread_state();
+  return ts && ts->context() ? static_cast<uint32_t>(ts->context()->lr) : 0;
+}
+
+// Guest memory read for diagnostics: 0 if the page is not accessible.
+bool DiagRead32(uint32_t addr, uint32_t* out) {
+  auto* mem = kernel_state()->memory();
+  auto* heap = mem->LookupHeap(addr);
+  if (!heap || (addr & 3) ||
+      heap->QueryRangeAccess(addr, addr + 3) == rex::memory::PageAccess::kNoAccess) {
+    return false;
+  }
+  *out = memory::load_and_swap<uint32_t>(mem->TranslateVirtual(addr));
+  return true;
+}
+
+// Walk the guest back chain (r1 -> caller sp; saved lr at caller_sp - 8, the 360 ABI) of the
+// current guest thread. Only reads inside the thread's own stack allocation.
+size_t DiagGuestStack(uint32_t* out, size_t max) {
+  if (!XThread::IsInThread()) return 0;
+  auto* t = XThread::GetCurrentThread();
+  auto* ts = t->thread_state();
+  if (!ts || !ts->context()) return 0;
+  uint32_t lo = t->diag_stack_low(), hi = t->diag_stack_high();
+  uint32_t sp = ts->context()->r1.u32;
+  size_t n = 0;
+  while (n < max && sp >= lo && sp + 4 <= hi) {
+    uint32_t back = 0, lr = 0;
+    // The thread's own stack allocation is committed: plain loads, no heap lock (this also runs on
+    // every signal while the watchdog is on).
+    auto* mem = kernel_state()->memory();
+    back = memory::load_and_swap<uint32_t>(mem->TranslateVirtual(sp));
+    if (back <= sp || back < lo + 8 || back >= hi) break;  // hi is the first guard page
+    lr = memory::load_and_swap<uint32_t>(mem->TranslateVirtual(back - 8));
+    out[n++] = lr;
+    sp = back;
+  }
+  return n;
+}
+
+std::string DiagStackString(const uint32_t* s, size_t n) {
+  std::string r;
+  for (size_t i = 0; i < n; ++i) r += fmt::format("{}{:08X}", i ? "<" : "", s[i]);
+  return r;
+}
+
+std::string DiagDump(uint32_t addr, uint32_t len) {
+  std::string out;
+  for (uint32_t i = 0; i < std::min<uint32_t>(len, 0x400); i += 4) {
+    uint32_t v = 0;
+    if (i % 32 == 0) out += fmt::format("\n    +{:03X}", i);
+    out += DiagRead32(addr + i, &v) ? fmt::format(" {:08X}", v) : std::string(" ????????");
+  }
+  return out;
+}
+
+std::string DiagRegPeek(uint32_t lr, uint32_t r31) {
+  std::string spec = REXCVAR_GET(wait_watchdog_regpeek), out;
+  size_t pos = 0;
+  while (pos < spec.size()) {
+    size_t end = spec.find(',', pos);
+    if (end == std::string::npos) end = spec.size();
+    std::string item = spec.substr(pos, end - pos);
+    pos = end + 1;
+    uint32_t want = 0, off = 0, len = 0;
+    if (std::sscanf(item.c_str(), "%x:%x:%x", &want, &off, &len) != 3 || want != lr) continue;
+    out += fmt::format("\n  r31={:08X}+{:X}:", r31, off) + DiagDump(r31 + off, len);
+  }
+  return out;
+}
+
+std::string DiagPeek() {
+  std::string spec = REXCVAR_GET(wait_watchdog_peek);
+  std::string out;
+  size_t pos = 0;
+  while (pos < spec.size()) {
+    size_t end = spec.find(',', pos);
+    if (end == std::string::npos) end = spec.size();
+    std::string item = spec.substr(pos, end - pos);
+    pos = end + 1;
+    size_t colon = item.find(':');
+    if (colon == std::string::npos) continue;
+    uint32_t len = std::strtoul(item.c_str() + colon + 1, nullptr, 16);
+    std::string a = item.substr(0, colon);
+    uint32_t addr = 0;
+    if (!a.empty() && a[0] == '[') {
+      size_t close = a.find(']');
+      if (close == std::string::npos) continue;
+      uint32_t ptr = std::strtoul(a.c_str() + 1, nullptr, 16), v = 0;
+      int32_t off = 0;
+      if (close + 1 < a.size()) off = int32_t(std::strtol(a.c_str() + close + 1, nullptr, 16));
+      if (!DiagRead32(ptr, &v)) { out += fmt::format("\n  {} -> unreadable", item); continue; }
+      addr = v + off;
+    } else {
+      addr = std::strtoul(a.c_str(), nullptr, 16);
+    }
+    out += fmt::format("\n  {} @{:08X}:", item, addr);
+    for (uint32_t i = 0; i < std::min<uint32_t>(len, 0x400); i += 4) {
+      uint32_t v = 0;
+      if (i % 32 == 0) out += fmt::format("\n    +{:03X}", i);
+      out += DiagRead32(addr + i, &v) ? fmt::format(" {:08X}", v) : std::string(" ????????");
+    }
+  }
+  return out;
+}
+
+const char* DiagTypeName(XObject::Type t) {
+  static const char* kNames[] = {"Undefined", "Enumerator", "Event",  "File",
+                                 "IOCompletion", "Module", "Mutant", "NotifyListener",
+                                 "Semaphore", "Session", "Socket", "SymbolicLink",
+                                 "Thread", "Timer"};
+  auto i = static_cast<uint32_t>(t);
+  return i < std::size(kNames) ? kNames[i] : "?";
+}
+
+struct DiagWait {
+  std::vector<object_ref<XObject>> objects;
+  int64_t start_ms = 0;
+  uint32_t lr = 0;
+  uint32_t stack[12] = {};
+  size_t stack_n = 0;
+  uint32_t thread_id = 0;
+  std::string thread_name;
+  bool alertable = false;
+  bool wait_all = false;
+  int64_t timeout_ticks = 0;
+  bool has_timeout = false;
+  bool reported = false;
+  uint32_t r31 = 0;
+};
+
+std::mutex g_diag_mutex;
+std::unordered_map<XThread*, DiagWait> g_diag_waits;
+std::once_flag g_diag_once;
+
+void DiagWatchdogMain() {
+  int64_t last_snapshot_ms = 0;
+  for (;;) {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    int32_t limit_s = REXCVAR_GET(wait_watchdog_s);
+    if (limit_s <= 0) continue;
+    std::lock_guard<std::mutex> lock(g_diag_mutex);
+    int64_t now = DiagNowMs();
+    bool any_new = false;
+    for (auto& [t, w] : g_diag_waits) {
+      if (!w.reported && now - w.start_ms >= int64_t(limit_s) * 1000) any_new = true;
+    }
+    bool any_over = false;
+    for (auto& [t, w] : g_diag_waits) {
+      if (now - w.start_ms >= int64_t(limit_s) * 1000) any_over = true;
+    }
+    // New stuck waits: at most every 30 s. Still stuck: a repeat snapshot every 120 s.
+    if (!(any_new && now - last_snapshot_ms >= 30000) && !(any_over && now - last_snapshot_ms >= 120000)) {
+      continue;
+    }
+    last_snapshot_ms = now;
+    REXSYS_WARN("[waitdog] snapshot: {} guest threads in kernel waits{}{}", g_diag_waits.size(),
+                DiagPeek(), g_diag_extra_dump ? g_diag_extra_dump() : std::string());
+    for (auto& [t, w] : g_diag_waits) {
+      bool over = now - w.start_ms >= int64_t(limit_s) * 1000;
+      if (over) w.reported = true;
+      std::string objs;
+      for (auto& o : w.objects) {
+        auto& sig = o->diag_signal();
+        uint64_t n = sig.count.load(std::memory_order_relaxed);
+        int64_t last = sig.last_ms.load(std::memory_order_relaxed);
+        std::string extra;
+        if (o->type() == XObject::Type::Thread) {
+          extra = fmt::format(" thread='{}'", static_cast<XThread*>(o.get())->thread_name());
+        }
+        objs += fmt::format(
+            " [{} handle={:08X} guest={:08X} name='{}'{} signals={} last={} by tid={:X} lr={:08X}<{}]",
+            DiagTypeName(o->type()), o->handles().empty() ? 0u : o->handle(), o->guest_object(),
+            o->name(), extra, n, n ? fmt::format("{}ms ago", now - last) : std::string("never"),
+            sig.thread_id.load(std::memory_order_relaxed), sig.lr.load(std::memory_order_relaxed),
+            [&] {
+              uint32_t s[6];
+              for (int i = 0; i < 6; ++i) s[i] = sig.stack[i].load(std::memory_order_relaxed);
+              size_t k = 0;
+              while (k < 6 && s[k]) ++k;
+              return DiagStackString(s, k);
+            }());
+      }
+      REXSYS_WARN("[waitdog] {}{} tid={:X} waiting {}ms at lr={:08X} r31={:08X} stack={} {}{} timeout={}:{}{}{}",
+                  over ? "STUCK " : "", w.thread_name, w.thread_id, now - w.start_ms, w.lr, w.r31,
+                  DiagStackString(w.stack, w.stack_n), w.wait_all ? "all" : "any",
+                  w.alertable ? " alertable" : "", w.has_timeout ? "ticks" : "infinite",
+                  w.timeout_ticks, objs, DiagRegPeek(w.lr, w.r31));
+    }
+  }
+}
+
+class DiagWaitScope {
+ public:
+  DiagWaitScope(XObject* const* objects, uint32_t count, bool wait_all, uint32_t alertable,
+                uint64_t* opt_timeout) {
+    if (REXCVAR_GET(wait_watchdog_s) <= 0 || !XThread::IsInThread()) return;
+    thread_ = XThread::GetCurrentThread();
+    std::call_once(g_diag_once, [] { std::thread(DiagWatchdogMain).detach(); });
+    DiagWait w;
+    for (uint32_t i = 0; i < count; ++i) w.objects.push_back(retain_object(objects[i]));
+    w.start_ms = DiagNowMs();
+    w.lr = DiagGuestLr();
+    {
+      auto* ts = thread_->thread_state();
+      w.r31 = ts && ts->context() ? ts->context()->r31.u32 : 0;
+    }
+    w.stack_n = DiagGuestStack(w.stack, std::size(w.stack));
+    w.thread_id = thread_->thread_id();
+    w.thread_name = thread_->thread_name();
+    w.alertable = alertable != 0;
+    w.wait_all = wait_all;
+    w.has_timeout = opt_timeout != nullptr;
+    w.timeout_ticks = opt_timeout ? int64_t(*opt_timeout) : 0;
+    std::lock_guard<std::mutex> lock(g_diag_mutex);
+    g_diag_waits[thread_] = std::move(w);
+  }
+  ~DiagWaitScope() {
+    if (!thread_) return;
+    DiagWait old;
+    {
+      std::lock_guard<std::mutex> lock(g_diag_mutex);
+      auto it = g_diag_waits.find(thread_);
+      if (it == g_diag_waits.end()) return;
+      old = std::move(it->second);
+      g_diag_waits.erase(it);
+    }
+    if (old.reported) {
+      REXSYS_WARN("[waitdog] {} woke after {}ms (lr={:08X})", old.thread_name,
+                  DiagNowMs() - old.start_ms, old.lr);
+    }
+    // old.objects released here, on the waiting guest thread.
+  }
+
+ private:
+  XThread* thread_ = nullptr;
+};
+}  // namespace
+
+void XObject::DiagNoteSignal() {
+  if (REXCVAR_GET(wait_watchdog_s) <= 0) return;
+  diag_signal_.count.fetch_add(1, std::memory_order_relaxed);
+  diag_signal_.last_ms.store(DiagNowMs(), std::memory_order_relaxed);
+  diag_signal_.thread_id.store(XThread::IsInThread() ? XThread::GetCurrentThread()->thread_id() : 0,
+                               std::memory_order_relaxed);
+  diag_signal_.lr.store(DiagGuestLr(), std::memory_order_relaxed);
+  uint32_t s[6] = {};
+  DiagGuestStack(s, 6);
+  for (int i = 0; i < 6; ++i) diag_signal_.stack[i].store(s[i], std::memory_order_relaxed);
+}
 
 namespace {
 
@@ -238,6 +522,8 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
 
+  XObject* diag_self = this;
+  DiagWaitScope diag_scope(&diag_self, 1, false, alertable, opt_timeout);
   XThread::CheckTitleTermination();
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
   XThread::CheckTitleTermination();
@@ -269,6 +555,8 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
 
+  signal_object->DiagNoteSignal();
+  DiagWaitScope diag_scope(&wait_object, 1, false, alertable, opt_timeout);
   auto result =
       rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
                                  alertable ? true : false, timeout_ms);
@@ -311,6 +599,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
 
+  DiagWaitScope diag_scope(objects, count, wait_type == 0, alertable, opt_timeout);
   XThread::CheckTitleTermination();
   if (wait_type) {
     auto result =

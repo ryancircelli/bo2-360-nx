@@ -38,6 +38,7 @@ void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
 }
 
 X_STATUS XMutant::ReleaseMutant(uint32_t priority_increment, bool abandon, bool wait) {
+  DiagNoteSignal();
   // Call should succeed if we own the mutant, so go ahead and do this.
   if (owning_thread_ == XThread::GetCurrentThread()) {
     owning_thread_ = nullptr;

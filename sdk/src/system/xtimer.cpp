@@ -9,11 +9,19 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
+
 #include <rex/chrono/chrono.h>
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xtimer.h>
+
+REXCVAR_DEFINE_BOOL(timer_clamp_absolute_due, true, "Kernel",
+                    "Clamp absolute timer due times to within 10 years of now, so a time long past fires at once "
+                    "instead of overflowing the steady_clock conversion (false: old behaviour, for A/B)");
+REXCVAR_DECLARE(int32_t, wait_watchdog_s);
 
 namespace rex::system {
 
@@ -54,7 +62,31 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
     auto after = rex::chrono::hundrednanoseconds(-due_time);
     due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::now() + after);
   } else {
-    due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::from_file_time(due_time));
+    // An absolute guest FILETIME. Same arithmetic as clock_cast<WinSystemClock> (host now + guest time left, scaled),
+    // but the time left is clamped to +-10 years first.
+    //
+    // Why: NFSMW re-arms its tick timer with an absolute due time of 0 (the year 1601) when the thread that stops
+    // the timer writes 0 into the due-time slot between the tick thread's check of it and its re-arm. On the
+    // console a past absolute time fires at once; here the time left, about -1.3e17 x 100 ns, became about
+    // -1.3e19 ns in the later conversion to steady_clock (PosixTimer), which overflows int64 nanoseconds and wraps
+    // to about 160 years ahead. The timer never fired, the tick thread waited forever, and the game stopped while
+    // loading a race (PAS-18). Within +-10 years the result is unchanged; a past time still fires at once.
+    constexpr auto kLimit = rex::chrono::hundrednanoseconds(10ll * 365 * 24 * 3600 * 10000000ll);
+    auto left = rex::chrono::hundrednanoseconds(XSystemClock::from_file_time(due_time) - XSystemClock::now());
+    const bool clamp = REXCVAR_GET(timer_clamp_absolute_due);
+    if (left < -kLimit || left > kLimit) {
+      REXSYS_WARN("XTimer: absolute due time {:016X} is {} s from guest now; {}", due_time,
+                  left.count() / 10000000, clamp ? "clamped to +-10 years" : "NOT clamped (timer_clamp_absolute_due=false)");
+    }
+    if (!clamp) {
+      due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::from_file_time(due_time));
+    } else {
+      left = std::clamp(left, -kLimit, kLimit);
+      if (!REXCVAR_GET(clock_no_scaling)) {
+        left = std::chrono::floor<WinSystemClock::duration>(left * chrono::Clock::guest_time_scalar());
+      }
+      due_tp = WinSystemClock::now() + left;
+    }
   }
 
   // Stash routine for callback.
@@ -66,6 +98,7 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
   std::function<void()> callback = nullptr;
   if (callback_routine_) {
     callback = [this]() {
+      DiagNoteSignal();
       // Queue APC to call back routine with (arg, low, high).
       // It'll be executed on the thread that requested the timer.
       uint64_t time = rex::chrono::Clock::QueryGuestSystemTime();
@@ -75,6 +108,10 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
                    callback_routine_, callback_routine_arg_, time_low, time_high);
       callback_thread_->EnqueueApc(callback_routine_, callback_routine_arg_, time_low, time_high);
     };
+  }
+
+  if (!callback && REXCVAR_GET(wait_watchdog_s) > 0) {
+    callback = [this]() { DiagNoteSignal(); };  // diagnostics only
   }
 
   bool result;

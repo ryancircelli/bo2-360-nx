@@ -114,7 +114,11 @@ void av_log_callback(void* avcl, int level, const char* fmt, va_list va) {
   }
 }
 
+namespace { XmaDecoder* g_diag_decoder = nullptr; }
+
 X_STATUS XmaDecoder::Setup(system::KernelState* kernel_state) {
+  g_diag_decoder = this;
+  system::g_diag_extra_dump = [] { return g_diag_decoder ? g_diag_decoder->DiagDump() : std::string(); };
   // Setup ffmpeg logging callback
   av_log_set_callback(av_log_callback);
   // Diagnostic (audio_ffmpeg_simd): before opening any codec, make FFmpeg's function tables (FFT,
@@ -406,6 +410,20 @@ int XmaDecoder::GetContextId(uint32_t guest_ptr) {
   }
   assert_zero(guest_ptr & 0x3F);
   return (guest_ptr - context_data_first_ptr_) >> 6;
+}
+
+std::string XmaDecoder::DiagDump() {
+  std::string out = fmt::format("\n  xma: paused={}", paused_.load());
+  for (uint32_t i = 0; i < kContextCount; ++i) {
+    auto& c = contexts_[i];
+    if (!c.is_allocated()) continue;
+    out += fmt::format("\n  xma[{}] guest={:08X} enabled={}:", i, c.guest_ptr(), c.is_enabled());
+    auto* p = memory_->TranslateVirtual<const uint8_t*>(c.guest_ptr());
+    for (int k = 0; k < 64; k += 4) {
+      out += fmt::format(" {:08X}", rex::memory::load_and_swap<uint32_t>(p + k));
+    }
+  }
+  return out;
 }
 
 uint32_t XmaDecoder::AllocateContext() {

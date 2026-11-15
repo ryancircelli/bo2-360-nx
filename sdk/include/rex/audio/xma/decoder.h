@@ -43,6 +43,7 @@ class XmaDecoder {
   uint32_t context_array_ptr() const { return register_file_[XmaRegister::ContextArrayAddress]; }
 
   uint32_t AllocateContext();
+  std::string DiagDump();  // wait watchdog: allocated contexts + raw context data
   void ReleaseContext(uint32_t guest_ptr);
   bool BlockOnContext(uint32_t guest_ptr, bool poll);
 
