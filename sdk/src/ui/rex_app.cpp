@@ -159,8 +159,16 @@ bool ReXApp::SetupEnvironment() {
     metadata_dir = metadata_root_cvar;
   }
 
+  // Settings file: cvar override (an app bundle keeps it in the user's support folder,
+  // since the bundle beside the executable is signed), or <name>.toml beside the executable.
+  std::filesystem::path config_path = exe_dir / (std::string(GetName()) + ".toml");
+  std::string config_file_cvar = REXCVAR_GET(config_file);
+  if (!config_file_cvar.empty()) {
+    config_path = config_file_cvar;
+  }
+
   PathConfig path_config{game_dir,  user_dir,     update_dir,
-                         cache_dir, metadata_dir, exe_dir / (std::string(GetName()) + ".toml")};
+                         cache_dir, metadata_dir, config_path};
   OnConfigurePaths(path_config);
   game_data_root_ = path_config.game_data_root;
   user_data_root_ = path_config.user_data_root;
