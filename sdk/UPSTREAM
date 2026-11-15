@@ -1,0 +1,19 @@
+# Upstream sync record for this vendored copy of rexglue-sdk (github.com/rexglue/rexglue-sdk)
+
+base: c94f5ebd (2026-08-21; after v0.10.0 f5337cdc). Everything since is hand-ported, listed below.
+last reviewed: v0.11.0 (tag a3e1d826, main ebac1cf0), 2026-11-14. Each of the 358 commits since
+v0.10.0 was classified; anything not listed here was judged not needed, not applicable, or too
+entangled with upstream's restructuring to port by hand.
+
+ported from v0.10.0..v0.11.0:
+  ab61f2e6  codegen: vcmpbfp NaN bounds bits, CR6 bit 0 clear
+  02a002f8  codegen: srad/sraw CA when every bit shifts out
+  c9f19382  codegen: fctid/fctidz saturate at exactly 2^63
+  e5b48481  codegen: mtmsrd mask EE|RI (0x8002)
+  80c6aba8  codegen: fctiw/fctiwz NaN gives INT_MIN (that part only; with 57b701b5)
+  6069ba19  ppc: ARM64 flush mask FZ only
+  48eafbbc  ppc: 64-bit export arguments read whole
+  ee20900e  xam: content results compared against X_ERROR_SUCCESS (cherry-pick)
+already equivalent in this copy: e007b1d6, e8f302da, 6319e236, 77bbb7d3
+
+Next review starts at v0.11.0.
