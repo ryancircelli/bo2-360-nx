@@ -23,6 +23,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/thread_state.h>
 #include <rex/types.h>
+#include <rex/kcall_recorder.h>
 
 //=============================================================================
 // Hook Macros
@@ -69,16 +70,49 @@
   }
 
 // Export: hook + register in global registry for kernel ordinal lookup.
-#define REX_EXPORT(name, function) \
-  REX_HOOK(name, function)         \
+// Kernel exports carry a kernel-call recorder site (see rex/kcall_recorder.h). With the recorder
+// off it costs one load and a not-taken branch per call. Plain REX_HOOKs (game and CRT function
+// hooks) are not recorded.
+#define REX_KCALL_SITE_FN(subroutine, function)                                             \
+  static constinit rex::kcall::Site _kcall_site{                                           \
+      #subroutine,                                                                         \
+      static_cast<uint8_t>(rex::ppc::arg_count_t<function>::value < 8                      \
+                               ? rex::ppc::arg_count_t<function>::value                    \
+                               : 8),                                                       \
+      !std::is_void_v<decltype(std::apply(function, rex::ppc::function_args(function)))>}; \
+  rex::kcall::Scope _kcall_scope(_kcall_site, ctx, base)
+
+#define REX_KCALL_SITE_RAW(subroutine, nargs, returns)                        \
+  static constinit rex::kcall::Site _kcall_site{#subroutine, nargs, returns}; \
+  rex::kcall::Scope _kcall_scope(_kcall_site, ctx, base)
+
+#ifdef REXGLUE_ENABLE_PROFILING
+#define REX_EXPORT_ZONE(name) ZoneNamedN(___tracy_hook_zone, #name, TracyIsStarted)
+#else
+#define REX_EXPORT_ZONE(name) (void)0
+#endif
+
+#define REX_EXPORT(name, function)                     \
+  extern "C" REX_FUNC(name) {                          \
+    REX_EXPORT_ZONE(name);                             \
+    REX_KCALL_SITE_FN(name, function);                 \
+    rex::ppc::HostToGuestFunction<function>(ctx, base); \
+  }                                                    \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
-#define REX_EXPORT_STUB(name) \
-  REX_STUB(name)              \
+#define REX_EXPORT_STUB(name)                \
+  extern "C" REX_FUNC(name) {                \
+    REX_KCALL_SITE_RAW(name, 4, false);      \
+    REXKRNL_WARN("{} STUB", #name);          \
+  }                                          \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
-#define REX_EXPORT_STUB_RETURN(name, retval) \
-  REX_STUB_RETURN(name, retval)              \
+#define REX_EXPORT_STUB_RETURN(name, retval)                                             \
+  extern "C" REX_FUNC(name) {                                                            \
+    REX_KCALL_SITE_RAW(name, 4, true);                                                   \
+    REXKRNL_WARN("{} STUB - returning {:#x}", #name, static_cast<uint32_t>(retval));     \
+    ctx.r3.u64 = (retval);                                                               \
+  }                                                                                      \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 namespace rex {

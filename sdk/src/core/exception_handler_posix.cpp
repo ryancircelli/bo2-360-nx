@@ -15,6 +15,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 
+#include <rex/kcall_recorder.h>
 #include <rex/exception_handler.h>
 
 #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
@@ -417,6 +418,8 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+  // No handler took it: this fault is fatal. Write the kernel-call record before it goes.
+  rex::kcall::DumpFromSignal(signal_number);
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {

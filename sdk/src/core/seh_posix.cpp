@@ -6,6 +6,7 @@
  * @license     BSD 3-Clause License
  */
 
+#include <rex/kcall_recorder.h>
 #include <rex/platform.h>
 #include <rex/platform/seh.h>
 
@@ -35,6 +36,7 @@ static void signal_handler(int sig, siginfo_t* info, void* /*ucontext*/) {
   // Only handle if we're in SEH-protected code
   if (!tls_seh_active) {
     // Not in SEH region - restore default handler and re-raise
+    rex::kcall::DumpFromSignal(sig);
     signal(sig, SIG_DFL);
     raise(sig);
     return;
