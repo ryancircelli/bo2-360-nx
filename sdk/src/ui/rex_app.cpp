@@ -540,7 +540,13 @@ void ReXApp::LaunchModule() {
       OnGuestThreadExit(main_thread.get());
       REXLOG_INFO("Execution complete");
       if (!shutting_down_.load(std::memory_order_acquire)) {
-        app_context().CallInUIThread([this]() { app_context().QuitFromUIThread(); });
+        // The title ended by itself (it quit, or handed over to another executable): leave the way a
+        // window close does. A full teardown here faulted forever in the input driver and then let the
+        // frame-dump thread abort on the destroyed presenter (BO1, 2026-11-14).
+        app_context().CallInUIThread([this]() {
+          ui::UIEvent event(window_.get());
+          OnClosing(event);
+        });
       }
     });
   });
@@ -676,6 +682,13 @@ void ReXApp::OnDestroy() {
   }
   if (module_thread_.joinable()) {
     module_thread_.join();
+  }
+  // Retire the input drivers while the window they listen to still exists. A title that quits by
+  // itself (XamLoaderLaunchTitle / TerminateTitle) never sends OnClosing, so the mouse-and-keyboard
+  // driver would otherwise detach from the freed window inside runtime_.reset() and fault forever.
+  // Runtime::Shutdown calls this again later; the second call finds no drivers.
+  if (window_ && runtime_ && runtime_->input_system()) {
+    static_cast<rex::input::InputSystem*>(runtime_->input_system())->Shutdown();
   }
   if (window_) {
     window_->RemoveInputListener(this);

@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
 #include <vector>
 
@@ -115,6 +116,9 @@ class MetalPresenter : public Presenter {
   };
   int CaptureGuestOutputAtFrames(const std::vector<uint64_t>& target_frames, uint32_t timeout_ms,
                                  std::vector<FrameCapture>& captures_out, uint64_t* current_frame_out);
+  // Ends a pending CaptureGuestOutputAtFrames early (the caller gets what was captured so far), refuses new
+  // ones and returns once no caller is inside it any more. Called before the presenter goes away.
+  void CloseFrameCaptures();
 
   bool CopyTextureToGuestOutput(MTL::Texture* source_texture, id dest_texture,
                                 uint32_t source_width, uint32_t source_height,
@@ -182,6 +186,9 @@ class MetalPresenter : public Presenter {
   std::shared_ptr<FrameCaptureRequest> frame_capture_;  // guarded by frame_capture_mutex_
   std::mutex frame_capture_mutex_;
   std::atomic<bool> frame_capture_pending_{false};
+  bool frame_capture_closed_ = false;           // guarded by frame_capture_mutex_
+  int frame_capture_callers_ = 0;               // guarded by frame_capture_mutex_
+  std::condition_variable frame_capture_idle_;  // frame_capture_callers_ reached 0
   std::atomic<uint64_t> last_refreshed_frame_{0};
   std::shared_ptr<ScreenCaptureRequest> screen_capture_;  // guarded by screen_capture_mutex_
   std::mutex screen_capture_mutex_;

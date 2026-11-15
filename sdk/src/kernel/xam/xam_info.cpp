@@ -284,11 +284,15 @@ void XamLoaderLaunchTitle_entry(mapped_string raw_name_ptr, u32 flags) {
     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");
   }
 
+  // A title that hands over to another executable (a multiplayer xex, the dashboard) ends this run here.
+  REXKRNL_INFO("XamLoaderLaunchTitle(\"{}\", flags {:08X}): the title asked to leave; ending the run",
+               loader_data.launch_path, uint32_t(flags));
   // This function does not return.
   REX_KERNEL_STATE()->TerminateTitle();
 }
 
 void XamLoaderTerminateTitle_entry() {
+  REXKRNL_INFO("XamLoaderTerminateTitle: the title asked to quit; ending the run");
   // This function does not return.
   REX_KERNEL_STATE()->TerminateTitle();
 }

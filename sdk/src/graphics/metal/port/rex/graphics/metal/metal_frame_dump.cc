@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <thread>
 #include <vector>
 
 #include <rex/cvar.h>
@@ -79,6 +80,10 @@ bool WriteNpy(const std::filesystem::path& path, const std::vector<float>& data,
             std::streamsize(data.size() * sizeof(float)));
   return bool(out);
 }
+
+// Joined by StopFrameDump before the presenter goes away (a detached thread outlived it and threw on its
+// destroyed mutex when its wait timed out after the game had quit).
+std::thread dump_thread;
 
 void DumpThread(ui::metal::MetalPresenter* presenter, std::vector<uint64_t> frames,
                 std::filesystem::path dir, uint32_t title_id, uint32_t timeout_s) {
@@ -157,10 +162,24 @@ void StartFrameDump(ui::Presenter* presenter, uint32_t title_id) {
   }
   REXLOG_INFO("metal_frame_dump: {} frames from {} to {}", frames.size(), frames.front(),
               frames.back());
-  std::thread(DumpThread, static_cast<ui::metal::MetalPresenter*>(presenter),
-              std::move(frames), std::filesystem::path(REXCVAR_GET(metal_frame_dump_dir)),
-              title_id, uint32_t(std::max(1, REXCVAR_GET(metal_frame_dump_timeout_s))))
-      .detach();
+  if (dump_thread.joinable()) {
+    REXLOG_ERROR("metal_frame_dump: a dump is already running; not starting another");
+    return;
+  }
+  dump_thread = std::thread(DumpThread, static_cast<ui::metal::MetalPresenter*>(presenter),
+                            std::move(frames), std::filesystem::path(REXCVAR_GET(metal_frame_dump_dir)),
+                            title_id, uint32_t(std::max(1, REXCVAR_GET(metal_frame_dump_timeout_s))));
+}
+
+void StopFrameDump(ui::Presenter* presenter) {
+  if (!dump_thread.joinable()) {
+    return;
+  }
+  if (presenter) {
+    // Wakes the dump thread now with what it has, so it writes those frames and exits.
+    static_cast<ui::metal::MetalPresenter*>(presenter)->CloseFrameCaptures();
+  }
+  dump_thread.join();
 }
 
 }  // namespace rex::graphics::metal

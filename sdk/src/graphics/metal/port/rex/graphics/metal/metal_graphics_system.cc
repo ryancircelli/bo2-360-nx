@@ -61,6 +61,11 @@ MetalGraphicsSystem::MetalGraphicsSystem() {}
 
 MetalGraphicsSystem::~MetalGraphicsSystem() {}
 
+void MetalGraphicsSystem::Shutdown() {
+  StopFrameDump(presenter());
+  GraphicsSystem::Shutdown();
+}
+
 bool MetalGraphicsSystem::IsAvailable() {
   return rex::ui::metal::MetalProvider::IsMetalAPIAvailable();
 }

@@ -156,6 +156,7 @@ bool MetalPresenter::Initialize() {
 }
 
 void MetalPresenter::Shutdown() {
+  CloseFrameCaptures();
   frame_interp::StopPresentThread();
   uint64_t last_submission = guest_output_submission_counter_.load(std::memory_order_acquire);
   if (shared_event_ && last_submission) {
@@ -496,6 +497,7 @@ struct MetalPresenter::FrameCaptureRequest {
   size_t next = 0;                // GPU thread: the next target to read back
   int outstanding = 0;            // readbacks encoded, not completed yet
   bool failed = false;
+  bool cancelled = false;  // CloseFrameCaptures: stop waiting, keep what was captured
   std::vector<FrameCapture> results;
   bool Done() const { return next == targets.size() && outstanding == 0; }
 };
@@ -512,14 +514,24 @@ int MetalPresenter::CaptureGuestOutputAtFrames(const std::vector<uint64_t>& targ
     std::lock_guard<std::mutex> lock(frame_capture_mutex_);
     const uint64_t seen = last_refreshed_frame_.load(std::memory_order_acquire);
     if (current_frame_out) *current_frame_out = seen;
-    // One request at a time; never a later frame than asked for.
-    if (frame_capture_ || (seen && seen >= request->targets.front())) return -1;
+    // One request at a time; never a later frame than asked for; none once the presenter is closing.
+    if (frame_capture_closed_ || frame_capture_ || (seen && seen >= request->targets.front())) return -1;
     frame_capture_ = request;
     frame_capture_pending_.store(true, std::memory_order_release);
+    ++frame_capture_callers_;
   }
+  // Last touch of *this on the way out: CloseFrameCaptures waits for it before the presenter goes away.
+  struct CallerExit {
+    MetalPresenter* self;
+    ~CallerExit() {
+      std::lock_guard<std::mutex> lock(self->frame_capture_mutex_);
+      if (--self->frame_capture_callers_ == 0) self->frame_capture_idle_.notify_all();
+    }
+  } caller_exit{this};
   std::unique_lock<std::mutex> wait_lock(request->mutex);
   const bool finished = request->cv.wait_for(wait_lock, std::chrono::milliseconds(timeout_ms),
-                                             [&] { return request->Done(); });
+                                             [&] { return request->Done() || request->cancelled; }) &&
+                        request->Done();
   {
     std::lock_guard<std::mutex> lock(frame_capture_mutex_);
     if (frame_capture_ == request) {
@@ -539,6 +551,23 @@ int MetalPresenter::CaptureGuestOutputAtFrames(const std::vector<uint64_t>& targ
   wait_lock.unlock();
   if (!finished) return 0;
   return captures_out.size() == request->targets.size() ? 1 : -1;
+}
+
+void MetalPresenter::CloseFrameCaptures() {
+  std::shared_ptr<FrameCaptureRequest> request;
+  {
+    std::lock_guard<std::mutex> lock(frame_capture_mutex_);
+    frame_capture_closed_ = true;
+    request = frame_capture_;
+  }
+  // The waiter takes request->mutex before frame_capture_mutex_, so never hold both here.
+  if (request) {
+    std::lock_guard<std::mutex> request_lock(request->mutex);
+    request->cancelled = true;
+    request->cv.notify_all();
+  }
+  std::unique_lock<std::mutex> lock(frame_capture_mutex_);
+  frame_capture_idle_.wait(lock, [&] { return frame_capture_callers_ == 0; });
 }
 
 struct MetalPresenter::ScreenCaptureRequest {
