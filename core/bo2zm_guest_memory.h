@@ -52,6 +52,23 @@ typedef u64 __attribute__((may_alias)) bo2zm_guest_u64;
 #define REX_STORE_U32(x, y) (*(bo2zm_guest_u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)) = __builtin_bswap32(y))
 #define REX_STORE_U64(x, y) (*(bo2zm_guest_u64*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)) = __builtin_bswap64(y))
 
+#undef REX_STACK_LOAD_U8
+#undef REX_STACK_LOAD_U16
+#undef REX_STACK_LOAD_U32
+#undef REX_STACK_LOAD_U64
+#undef REX_STACK_STORE_U8
+#undef REX_STACK_STORE_U16
+#undef REX_STACK_STORE_U32
+#undef REX_STACK_STORE_U64
+#define REX_STACK_LOAD_U8(x) (*(bo2zm_guest_u8*)REX_STACK_ADDR(x))
+#define REX_STACK_LOAD_U16(x) __builtin_bswap16(*(bo2zm_guest_u16*)REX_STACK_ADDR(x))
+#define REX_STACK_LOAD_U32(x) __builtin_bswap32(*(bo2zm_guest_u32*)REX_STACK_ADDR(x))
+#define REX_STACK_LOAD_U64(x) __builtin_bswap64(*(bo2zm_guest_u64*)REX_STACK_ADDR(x))
+#define REX_STACK_STORE_U8(x, y) (*(bo2zm_guest_u8*)REX_STACK_ADDR(x) = (y))
+#define REX_STACK_STORE_U16(x, y) (*(bo2zm_guest_u16*)REX_STACK_ADDR(x) = __builtin_bswap16(y))
+#define REX_STACK_STORE_U32(x, y) (*(bo2zm_guest_u32*)REX_STACK_ADDR(x) = __builtin_bswap32(y))
+#define REX_STACK_STORE_U64(x, y) (*(bo2zm_guest_u64*)REX_STACK_ADDR(x) = __builtin_bswap64(y))
+
 #else
 
 #define REX_GUEST_BARRIER() ((void)0)

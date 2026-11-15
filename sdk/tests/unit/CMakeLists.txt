@@ -3,6 +3,7 @@
 add_executable(codegen_branch_tests
     codegen/conditional_branch_test.cpp
     codegen/jump_table_bounds_test.cpp
+    codegen/stack_access_test.cpp
 )
 
 target_include_directories(codegen_branch_tests PRIVATE
@@ -180,3 +181,8 @@ target_include_directories(xma_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(xma_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(xma_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME xma_tests COMMAND xma_tests)
+
+add_executable(guest_stack_range_tests runtime_stack_range_test.cpp)
+target_include_directories(guest_stack_range_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(guest_stack_range_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME guest_stack_range_tests COMMAND guest_stack_range_tests)

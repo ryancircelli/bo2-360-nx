@@ -265,6 +265,23 @@ bool BuilderContext::mmio_check_x_form() {
   return locals.is_mmio_base(insn.operands[1]) || locals.is_mmio_base(insn.operands[2]);
 }
 
+bool BuilderContext::stack_d_form() {
+  return insn.operands[2] == 1 && !mmio_check_d_form();
+}
+
+bool BuilderContext::stack_x_form() {
+  return insn.operands[1] == 1 && !mmio_check_x_form();
+}
+
+std::string BuilderContext::stack_macro(std::string_view plain) {
+  for (std::string_view kind : {"REX_LOAD_", "REX_STORE_"}) {
+    if (plain.starts_with(kind)) {
+      return "REX_STACK_" + std::string(plain.substr(4));
+    }
+  }
+  return std::string(plain);
+}
+
 const CallTarget* BuilderContext::findCallTarget(uint32_t site) const {
   // Search in calls (bl instructions)
   for (const auto& edge : fn.calls()) {
@@ -696,6 +713,12 @@ void BuilderContext::emit_load_d_form(const char* load_macro, const char* dest_t
     }
   }
 
+  std::string stack_name;
+  if (check_mmio && stack_d_form()) {
+    stack_name = stack_macro(load_macro);
+    macro = stack_name.c_str();
+  }
+
   print("\t{}.{} = {}(", r(insn.operands[0]), dest_type, macro);
   if (insn.operands[2] != 0)
     print("{}.u32 + ", r(insn.operands[2]));
@@ -714,6 +737,12 @@ void BuilderContext::emit_load_x_form(const char* load_macro, const char* dest_t
       snprintf(mm_macro, sizeof(mm_macro), "REX_MM_LOAD_%s", load_macro + 9);
       macro = mm_macro;
     }
+  }
+
+  std::string stack_name;
+  if (check_mmio && stack_x_form()) {
+    stack_name = stack_macro(load_macro);
+    macro = stack_name.c_str();
   }
 
   print("\t{}.{} = {}(", r(insn.operands[0]), dest_type, macro);
@@ -736,6 +765,12 @@ void BuilderContext::emit_store_d_form(const char* store_macro, const char* src_
     }
   }
 
+  std::string stack_name;
+  if (check_mmio && stack_d_form()) {
+    stack_name = stack_macro(store_macro);
+    macro = stack_name.c_str();
+  }
+
   print("\t{}(", macro);
   if (insn.operands[2] != 0)
     print("{}.u32 + ", r(insn.operands[2]));
@@ -754,6 +789,12 @@ void BuilderContext::emit_store_x_form(const char* store_macro, const char* src_
       snprintf(mm_macro, sizeof(mm_macro), "REX_MM_STORE_%s", store_macro + 10);
       macro = mm_macro;
     }
+  }
+
+  std::string stack_name;
+  if (check_mmio && stack_x_form()) {
+    stack_name = stack_macro(store_macro);
+    macro = stack_name.c_str();
   }
 
   print("\t{}(", macro);
