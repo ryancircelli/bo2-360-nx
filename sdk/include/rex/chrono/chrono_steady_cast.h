@@ -65,7 +65,18 @@ struct clock_time_conversion<std::chrono::steady_clock, ::rex::chrono::WinSystem
     auto nt_now = WinSystemClock_::now();
     std::atomic_thread_fence(std::memory_order_acq_rel);
 
-    auto delta = t - nt_now;
+    // Early absolute due times (e.g. FILETIME 0, 1) give a delta of ~-400 years,
+    // and steady_now + delta overflows the steady_clock rep (signed wrap), so
+    // POSIX timers built from it never fire. Clamp to +/-100 years: still far
+    // in the past/future for any wait, and safely inside the representable range.
+    constexpr auto kMaxDelta = std::chrono::duration_cast<WinSystemClock_::duration>(
+        std::chrono::hours(24 * 365 * 100));
+    auto delta = std::chrono::duration_cast<WinSystemClock_::duration>(t - nt_now);
+    if (delta > kMaxDelta) {
+      delta = kMaxDelta;
+    } else if (delta < -kMaxDelta) {
+      delta = -kMaxDelta;
+    }
     return steady_now + delta;
   }
 };
