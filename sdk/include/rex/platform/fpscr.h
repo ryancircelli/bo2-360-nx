@@ -59,8 +59,8 @@ struct FPSCRPlatform {
   // RMode
   static constexpr size_t RoundShift = 22;
   static constexpr size_t RoundMaskVal = 3 << RoundShift;
-  // FZ and FZ16
-  static constexpr size_t FlushMask = (1 << 19) | (1 << 24);
+  // FZ only: FZ16 would also flush half-precision denormals, which the guest keeps
+  static constexpr size_t FlushMask = 1 << 24;
   // Indexed by the PowerPC FPSCR[RN] value (0 Nearest, 1 Zero, 2 +Infinity, 3 -Infinity);
   // FPCR RMode is 0 RN (nearest), 1 RP (+Infinity), 2 RM (-Infinity), 3 RZ (zero).
   static constexpr size_t GuestToHost[] = {0 << RoundShift, 3 << RoundShift, 1 << RoundShift,
