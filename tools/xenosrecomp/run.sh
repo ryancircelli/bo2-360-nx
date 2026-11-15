@@ -50,7 +50,8 @@ compile_one() {
   printf '%s\tok\t\n' "$base"
 }
 export -f compile_one; export OUT DXC VAL
-ls "$OUT"/hlsl/*.hlsl | xargs -P "$JOBS" -I{} bash -c 'compile_one "$@"' _ {} > "$OUT/compile.tsv"
+# find, not a glob: with the DLC packs installed there are 16,000+ shaders, past the argument list limit for ls.
+find "$OUT/hlsl" -maxdepth 1 -name '*.hlsl' -print0 | sort -z | xargs -0 -P "$JOBS" -I{} bash -c 'compile_one "$@"' _ {} > "$OUT/compile.tsv"
 
 echo "translate: $(grep -c $'\tok\t' "$OUT/hlsl/translate.tsv") ok, $(grep -c $'\tfailed\t' "$OUT/hlsl/translate.tsv") failed, $(grep -c $'\tskipped\t' "$OUT/hlsl/translate.tsv") skipped"
 echo "compile:   $(grep -c $'\tok\t' "$OUT/compile.tsv") ok, $(grep -c $'\tdxc\t' "$OUT/compile.tsv") dxc errors, $(grep -c $'\tspirv-val\t' "$OUT/compile.tsv") invalid SPIR-V"
