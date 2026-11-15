@@ -59,14 +59,14 @@ def license_mask(path):
     return mask
 
 
-def header_bytes(file_name, display_name):
+def header_bytes(file_name, display_name, title_id=TITLE_ID, content_type=MARKETPLACE):
     data = bytearray(0x148)
-    struct.pack_into(">II", data, 0, 1, MARKETPLACE)  # device_id HDD, content_type
+    struct.pack_into(">II", data, 0, 1, content_type)  # device_id HDD, content_type
     name16 = display_name.encode("utf-16-be")[: 2 * 127]
     data[8:8 + len(name16)] = name16
     fn = file_name.encode("ascii")[:42]
     data[0x108:0x108 + len(fn)] = fn
-    struct.pack_into(">QI", data, 0x138, 0, TITLE_ID)  # xuid 0 (shared), title id
+    struct.pack_into(">QI", data, 0x138, 0, title_id)  # xuid 0 (shared), title id
     return bytes(data)
 
 

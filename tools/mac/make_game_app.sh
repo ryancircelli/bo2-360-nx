@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds one game of games/ and packs it into its app, in one command:
 #
-#   tools/mac/make_game_app.sh <game> [--install] [--no-build] [--build-dir DIR] [--out APP]
+#   tools/mac/make_game_app.sh <game> [--install] [--no-build] [--no-pack] [--build-dir DIR] [--out APP]
 #
 # <game> is a folder of games/ with an app.toml (nfsmw, fh1, bo1). Its game facts (title id, executable, renderer
 # defaults) stay in games/<game>/game.toml; games/<game>/app.toml names the app, its saves folder and its game data
@@ -9,6 +9,7 @@
 #   --build-dir  the CMake build folder (default: $REX_BUILD_ROOT/apps-<game>, REX_BUILD_ROOT defaulting to
 #                ~/Games/Xbox360/bo2-build/out). Configured on first use, then built incrementally.
 #   --no-build   pack what the build folder already has
+#   --no-pack    build only (tools/mac/build_app.py packs the app itself, with the game data)
 #   --out        the app to write (default: $REX_APP_DIR/<name>.app, REX_APP_DIR defaulting to the build folder)
 #   --install    write it to ~/Games/Launchers/<name>.app instead (replaced atomically if it exists)
 # Builds go through buildq when it is there ($BUILDQ, default ~/Games/Xbox360/bo2-build/runq/bin/buildq), else
@@ -17,13 +18,14 @@
 # Black Ops II keeps its own route: tools/build_mac.sh, then tools/mac/pack_app.py with its defaults.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-GAME="${1:?usage: tools/mac/make_game_app.sh <game> [--install] [--no-build] [--build-dir DIR] [--out APP]}"
+GAME="${1:?usage: tools/mac/make_game_app.sh <game> [--install] [--no-build] [--no-pack] [--build-dir DIR] [--out APP]}"
 shift
-BUILD=1 INSTALL=0 OUT_APP="" BDIR=""
+BUILD=1 PACK=1 INSTALL=0 OUT_APP="" BDIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --install) INSTALL=1 ;;
     --no-build) BUILD=0 ;;
+    --no-pack) PACK=0 ;;
     --build-dir) BDIR="$2"; shift ;;
     --out) OUT_APP="$2"; shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
@@ -67,6 +69,7 @@ PYEOF
   ${RUNB[@]+"${RUNB[@]}"} cmake --build "$BDIR"
 fi
 
+[ "$PACK" = 1 ] || exit 0
 if [ "$INSTALL" = 1 ]; then
   OUT_APP="$HOME/Games/Launchers/$NAME.app"
   mkdir -p "$HOME/Games/Launchers"
