@@ -22,4 +22,8 @@ namespace rex::graphics::metal {
 // Call once the presenter exists. title_id goes into summary.json.
 void StartFrameDump(ui::Presenter* presenter, uint32_t title_id);
 
+// Ends the dump early with the frames captured so far and joins its thread. Call while the presenter
+// still exists (graphics system shutdown); a game that quits before the last frame keeps what it reached.
+void StopFrameDump(ui::Presenter* presenter);
+
 }  // namespace rex::graphics::metal

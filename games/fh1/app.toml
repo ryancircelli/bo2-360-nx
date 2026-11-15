@@ -1,0 +1,14 @@
+# The macOS app of this game: read by tools/mac/pack_app.py --game fh1 (tools/mac/make_game_app.sh fh1).
+# Game facts the executable needs (title id, executable, renderer defaults) are in game.toml; this file only says how
+# the app around it is named, where it keeps saves and logs, and where it looks for the game data.
+name = "Forza Horizon"                         # the app's name and its launcher (CFBundleExecutable)
+executable = "fh1"                    # the game binary in the build folder
+bundle_id = "io.github.ryancircelli.fh1-360"
+version = "0.1.0"
+support_folder = "fh1-360"             # ~/Library/Application Support/<this> (saves, settings) and ~/Library/Logs/<this>
+env_prefix = "FH1"                 # FH1_DATA, FH1_SUPPORT_DIR, FH1_LOG_DIR, ...
+data_path = "~/Games/Xbox360/fh1/disc"       # the extracted disc (default.xex at its top); never copied into the app
+settings = "app_settings.toml"               # first settings file; the app keeps the live copy in the support folder
+shaders = false                              # no Vulkan shader library: draws with Metal
+microphone = "Forza Horizon uses the microphone only if the game asks for it."
+cmake_args = ["-DREXGLUE_BUILD_HOST_TOOLS=ON"]   # the build needs the host rexglue tool (OFF fails to configure)

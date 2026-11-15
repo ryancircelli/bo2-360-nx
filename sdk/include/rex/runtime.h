@@ -40,6 +40,7 @@ REXCVAR_DECLARE(std::string, user_data_root);
 REXCVAR_DECLARE(std::string, update_data_root);
 REXCVAR_DECLARE(std::string, cache_root);
 REXCVAR_DECLARE(std::string, metadata_root);
+REXCVAR_DECLARE(std::string, config_file);
 
 namespace rex {
 

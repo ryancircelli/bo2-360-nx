@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Packs the macOS build of bo2-zm-nx into a double-clickable "Black Ops II.app".
+"""Packs the macOS build of a game into a double-clickable app: "Black Ops II.app" by default, any other game of
+games/ with --game <game> (its games/<game>/app.toml names the app, its saves folder and its game data folder).
 
 Borrowed from switch2mac's dm/mac/pack_app.py (MIT, Copyright (c) 2026 seedds): the APFS clone copy, the .icns
 from a picture with sips and iconutil, the atomic swap of the finished app, the codesign retry on detritus. The
 rest is written for this project. No game data is ever written inside the repository.
 
   python3 -I tools/mac/pack_app.py --build <build folder> --shaders <shader folder> --data <data folder> [options]
+  python3 -I tools/mac/pack_app.py --game nfsmw --build <build folder> [options]   (tools/mac/make_game_app.sh)
 
   --build    the folder tools/build_mac.sh leaves ($BO2_BUILD/out/mac-arm64): bo2zm, its librex*.dylib files and
              the vulkan/ runtime (loader, MoltenVK, icd file). With --binary a bare executable instead.
@@ -33,12 +35,12 @@ Every Mach-O gets @loader_path and @executable_path/../Frameworks as its only rp
 removed), then everything is ad-hoc signed (--sign - ; no hardened runtime, so the game's dlopen of the GPU plugin
 needs no entitlement), inner files first.
 """
-import argparse, ctypes, os, plistlib, re, shutil, subprocess, sys, tempfile
+import argparse, ctypes, os, plistlib, re, shutil, subprocess, sys, tempfile, tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-EXE_NAME = 'Black Ops II'
-GAME = 'bo2zm'
+EXE_NAME = 'Black Ops II'   # the launcher; --game sets both from games/<game>/app.toml
+GAME = 'bo2zm'              # the game executable
 ICON_SIZES = (16, 32, 128, 256, 512)
 SYSTEM_PREFIXES = ('/usr/lib/', '/System/', '/Library/Apple/')
 LOADER_RPATH = '@loader_path'
@@ -253,7 +255,7 @@ def info_plist(a, has_icon):
         'LSSupportsGameMode': True, 'GCSupportsGameMode': True,   # Game Mode (macOS 14+) prioritizes the CPU and GPU
         'NSSupportsAutomaticGraphicsSwitching': True,
         # GameController needs no permission prompt; HID pads outside it and voice chat do ask once
-        'NSMicrophoneUsageDescription': 'Black Ops II uses the microphone for in-game voice chat.',
+        'NSMicrophoneUsageDescription': a.microphone,
         'GCSupportedGameControllers': [{'ProfileName': 'ExtendedGamepad'}, {'ProfileName': 'MicroGamepad'}],
         'BO2PackedBy': 'tools/mac/pack_app.py',
     }
@@ -261,6 +263,14 @@ def info_plist(a, has_icon):
         p['CFBundleIconFile'] = 'AppIcon'
     if a.data_mode == 'external' and a.data_path:
         p['BO2DataPath'] = str(Path(a.data_path).expanduser())
+    if a.game_manifest:   # read by the launcher (tools/mac/app/launcher.c); absent = Black Ops II
+        m = a.game_manifest
+        p.update({'RexGameExecutable': GAME, 'RexGameTitle': a.name, 'RexSupportFolder': m['support_folder'],
+                  'RexEnvPrefix': m['env_prefix']})
+        if a.toml:
+            p['RexSettingsFile'] = f'{GAME}.toml'
+        if 'BO2DataPath' in p:
+            p['RexDataPath'] = p.pop('BO2DataPath')
     return p
 
 
@@ -283,21 +293,21 @@ def pack(a):
     shaders = Path(a.shaders).resolve() if a.shaders else None
     shader_files = []
     if shaders:
-        for f in ('bo2zm_shaders.spvpack', 'bo2zm_shaders.spvidx', 'bo2zm_pso.psolist', 'shader_seed'):
+        for f in (f'{GAME}_shaders.spvpack', f'{GAME}_shaders.spvidx', f'{GAME}_pso.psolist', 'shader_seed'):
             if (shaders / f).exists():
                 shader_files.append(shaders / f)
             elif f.endswith('spvpack'):
                 raise SystemExit(f'no {f} in {shaders}')
-    elif not a.allow_missing_shaders:
+    elif not a.allow_missing_shaders and not (a.game_manifest and not a.game_manifest.get('shaders', True)):
         raise SystemExit('--shaders is required (or --allow-missing-shaders for a test pack)')
     data = Path(a.data).resolve() if a.data else None
     if a.data_mode == 'clone' and not data:
         raise SystemExit('--data-mode clone needs --data')
-    if data and not (data / 'game').is_dir():
-        raise SystemExit(f'{data} has no game/ folder')
+    if data and not (data / 'game').is_dir() and not (data / 'default.xex').is_file():
+        raise SystemExit(f'{data} has neither a game/ folder nor default.xex')
     icon = Path(a.icon)
     toml = Path(a.toml) if a.toml else None
-    if toml is None and (ROOT / 'tools/mac/bo2zm.toml').is_file():
+    if toml is None and not a.game_manifest and (ROOT / 'tools/mac/bo2zm.toml').is_file():
         toml = ROOT / 'tools/mac/bo2zm.toml'   # the build's own settings file, when this branch has it
 
     tmp = out.with_name(out.name + '.partial')
@@ -339,21 +349,25 @@ def pack(a):
         link_into_macos(mac, rt, f.name)
 
     if toml:
-        shutil.copyfile(toml, rt / 'bo2zm.toml')
-        link_into_macos(mac, rt, 'bo2zm.toml')
+        shutil.copyfile(toml, rt / f'{GAME}.toml')
+        if not a.game_manifest:   # BO2 reads it beside the game; the others from the support folder (the launcher seeds it)
+            link_into_macos(mac, rt, f'{GAME}.toml')
 
     if a.data_mode == 'clone':
         step('game data (APFS clones)' if can_clone(data / 'game', res) else 'game data (plain copies: not the same APFS volume)')
         clone = can_clone(data / 'game', res)
         if not clone:
             free = shutil.disk_usage(res).free
-            need = sum(tree_bytes(data / d) for d in ('game', 'update', 'content') if (data / d).exists())
+            need = sum(tree_bytes(data / d) for d in ('game', 'update', 'content') if (data / d).exists()) or tree_bytes(data)
             if need + (1 << 30) > free:
                 raise SystemExit(f'the data needs {need / 2**30:.1f} GB on the volume of {out.parent}, {free / 2**30:.1f} GB are free; use --data-mode external')
-        (res / 'data').mkdir()
-        for d in ('game', 'update', 'content'):
-            if (data / d).exists():
-                copy_tree(data / d, res / 'data' / d, clone)
+        if (data / 'game').is_dir():
+            (res / 'data').mkdir()
+            for d in ('game', 'update', 'content'):
+                if (data / d).exists():
+                    copy_tree(data / d, res / 'data' / d, clone)
+        else:   # the extracted disc itself
+            copy_tree(data, res / 'data', clone)
 
     has_icon = False
     if icon.is_file():
@@ -385,8 +399,26 @@ def pack(a):
     print(f'app: {out}', flush=True)
 
 
+def game_manifest(game):
+    path = ROOT / 'games' / game / 'app.toml'
+    if not path.is_file():
+        raise SystemExit(f'no app manifest {path}')
+    m = tomllib.loads(path.read_text())
+    for k in ('name', 'executable', 'bundle_id', 'support_folder', 'env_prefix'):
+        if not m.get(k):
+            raise SystemExit(f'{path}: {k} is missing')
+    m['dir'] = path.parent
+    return m
+
+
 def parse(argv):
-    ap = argparse.ArgumentParser(description='Pack the macOS build of bo2-zm-nx into a double-clickable app')
+    global EXE_NAME, GAME
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument('--game')
+    game = pre.parse_known_args(argv)[0].game
+    m = game_manifest(game) if game else None
+    ap = argparse.ArgumentParser(description='Pack the macOS build of a game into a double-clickable app')
+    ap.add_argument('--game', help='a game of games/ with an app.toml (default: Black Ops II, whose facts are the defaults below)')
     ap.add_argument('--out', default='Black Ops II.app', help='the app to write (default: ./"Black Ops II.app")')
     ap.add_argument('--build', help='tools/build_mac.sh output folder (bo2zm, librex*.dylib, vulkan/)')
     ap.add_argument('--binary', help='a bare game executable instead of --build (libraries beside it are used)')
@@ -404,7 +436,16 @@ def parse(argv):
     ap.add_argument('--bundle-id', default='io.github.ryancircelli.bo2-360-nx')
     ap.add_argument('--min-os', default='15.0')
     ap.add_argument('--sign', default='-', help='codesign identity (default: - = ad-hoc)')
+    ap.add_argument('--microphone', default='Black Ops II uses the microphone for in-game voice chat.')
+    if m:
+        ap.set_defaults(out=f"{m['name']}.app", name=m['name'], bundle_id=m['bundle_id'], version=m.get('version', '0.1.0'),
+                        data_path=m.get('data_path'), microphone=m.get('microphone', f"{m['name']} uses the microphone."),
+                        toml=str(m['dir'] / m['settings']) if m.get('settings') else None,
+                        icon=str(m['dir'] / m['icon']) if m.get('icon') else '')
     a = ap.parse_args(argv)
+    a.game_manifest = m
+    if m:
+        EXE_NAME, GAME = a.name, m['executable']
     if not a.build and not a.binary:
         ap.error('--build or --binary is required')
     if a.data_mode is None:

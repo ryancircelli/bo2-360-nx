@@ -1,0 +1,13 @@
+# The macOS app of this game: read by tools/mac/pack_app.py --game bo1 (tools/mac/make_game_app.sh bo1).
+# Game facts the executable needs (title id, executable, renderer defaults) are in game.toml; this file only says how
+# the app around it is named, where it keeps saves and logs, and where it looks for the game data.
+name = "Black Ops"                         # the app's name and its launcher (CFBundleExecutable)
+executable = "bo1"                    # the game binary in the build folder
+bundle_id = "io.github.ryancircelli.bo1-360"
+version = "0.1.0"
+support_folder = "bo1-360"             # ~/Library/Application Support/<this> (saves, settings) and ~/Library/Logs/<this>
+env_prefix = "BO1"                 # BO1_DATA, BO1_SUPPORT_DIR, BO1_LOG_DIR, ...
+data_path = "~/Games/Xbox360/bo1/disc"       # the extracted disc (default.xex at its top); never copied into the app
+settings = "app_settings.toml"               # first settings file; the app keeps the live copy in the support folder
+shaders = false                              # no Vulkan shader library: draws with Metal
+microphone = "Black Ops uses the microphone for in-game voice chat."

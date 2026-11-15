@@ -1,12 +1,22 @@
-// Launcher of "Black Ops II.app" (CFBundleExecutable): works out where the game data, saves and logs are, then runs
-// Contents/MacOS/bo2zm as a child and returns its exit code. Packed by tools/mac/pack_app.py.
+// Launcher of every game app (CFBundleExecutable): works out where the game data, saves and logs are, then runs the
+// game executable in Contents/MacOS as a child and returns its exit code. Packed by tools/mac/pack_app.py, which writes
+// the per-game facts into Info.plist (games/<game>/app.toml); without them it behaves as "Black Ops II.app":
+//   RexGameExecutable  the game binary in Contents/MacOS            (default bo2zm)
+//   RexGameTitle       title of error dialogs                       (default Black Ops II)
+//   RexSupportFolder   folder under ~/Library/Application Support and ~/Library/Logs (default bo2-360-nx)
+//   RexEnvPrefix       prefix of the environment overrides below    (default BO2: BO2_DATA, BO2_SUPPORT_DIR, ...)
+//   RexDataPath        game data folder (BO2DataPath is the older name of the same key)
+//   RexSettingsFile    settings file name kept in the support folder and passed as --config_file; it starts as a copy
+//                      of Contents/Resources/runtime/<name> (absent: the settings file beside the game, as BO2 has)
+// Below, BO2_ stands for <RexEnvPrefix>_ and bo2-360-nx for <RexSupportFolder>.
 //
 // The child is not exec'ed: macOS privacy checks (TCC) attribute a child's file access to the app that started it,
 // while a launcher that hands its process over gets EPERM on a removable volume (the data on an external SSD) with
 // no prompt. The same approach is used by switch2mac's dm/mac/launcher.c (MIT, Copyright (c) 2026 seedds), which
 // this file borrows the idea and the signal forwarding from; the code is written for this project.
 //
-// Game data folder (game/, update/, optional content/ with the DLC, linked into the support folder), first match wins:
+// Game data folder, first match wins. Either game/, update/ and optional content/ with the DLC (linked into the support
+// folder), or the extracted disc itself with default.xex at its top:
 //   1. $BO2_DATA
 //   2. the first line of ~/Library/Application Support/bo2-360-nx/data_path.txt
 //   3. Info.plist key BO2DataPath (pack_app.py --data-mode external --data-path)
@@ -39,11 +49,16 @@
 
 extern char **environ;
 static pid_t g_child;
+static char g_title[256] = "Black Ops II", g_exe[256] = "bo2zm", g_folder[256] = "bo2-360-nx", g_prefix[64] = "BO2";
+static const char *env_of(const char *suffix) {   // <prefix>_<suffix>, empty counts as unset
+    char name[128]; snprintf(name, sizeof name, "%s_%s", g_prefix, suffix);
+    const char *v = getenv(name); return v && *v ? v : NULL;
+}
 static void forward(int sig) { if (g_child > 0) kill(g_child, sig); }
 
 static void alert(const char *title, const char *msg) {
-    fprintf(stderr, "bo2: %s\n", msg);
-    if (getenv("BO2_NO_DIALOG")) return;
+    fprintf(stderr, "%s: %s\n", g_exe, msg);
+    if (env_of("NO_DIALOG")) return;
     const char *script = "on run argv\ndisplay alert (item 1 of argv) message (item 2 of argv) as critical\nend run";
     char *argv[] = {"osascript", "-e", (char *)script, (char *)title, (char *)msg, NULL};
     pid_t pid; int st;
@@ -51,6 +66,16 @@ static void alert(const char *title, const char *msg) {
 }
 
 static int is_dir(const char *p) { struct stat s; return !stat(p, &s) && S_ISDIR(s.st_mode); }
+static int is_file(const char *p) { struct stat s; return !stat(p, &s) && S_ISREG(s.st_mode); }
+
+static int copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb"); if (!in) return 0;
+    FILE *out = fopen(dst, "wb"); if (!out) { fclose(in); return 0; }
+    char buf[65536]; size_t n; int ok = 1;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    fclose(in); if (fclose(out)) ok = 0;
+    return ok;
+}
 
 static void mkdirs(const char *path) {
     char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s", path);
@@ -72,11 +97,12 @@ static void trim(char *s) {
 
 static int cmp_str(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
-static void prune_logs(const char *dir, int keep) {   // keep the newest `keep` bo2zm-*.log (names sort by time)
+static void prune_logs(const char *dir, int keep) {   // keep the newest `keep` <exe>-*.log (names sort by time)
     DIR *d = opendir(dir); if (!d) return;
     char *names[4096]; int n = 0; struct dirent *e;
+    char prefix[300]; snprintf(prefix, sizeof prefix, "%s-", g_exe); size_t pl = strlen(prefix);
     while ((e = readdir(d)) && n < 4096)
-        if (!strncmp(e->d_name, "bo2zm-", 6) && strstr(e->d_name, ".log")) names[n++] = strdup(e->d_name);
+        if (!strncmp(e->d_name, prefix, pl) && strstr(e->d_name, ".log")) names[n++] = strdup(e->d_name);
     closedir(d);
     qsort(names, n, sizeof *names, cmp_str);
     for (int i = 0; i < n; i++) {
@@ -153,7 +179,7 @@ static void log_line(const char *logs, const char *msg) {
     char stamp[32]; time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
     strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tm);
     if (f) { fprintf(f, "[%s] %s\n", stamp, msg); fclose(f); }
-    fprintf(stderr, "bo2: %s\n", msg);
+    fprintf(stderr, "%s: %s\n", g_exe, msg);
 }
 
 static char *g_argv[MAXARGS]; static int g_argc;
@@ -178,8 +204,14 @@ static void read_args_file(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    char key[256];
+    if (info_string("RexGameExecutable", key, sizeof key) && !strchr(key, '/')) snprintf(g_exe, sizeof g_exe, "%s", key);
+    if (info_string("RexGameTitle", key, sizeof key)) snprintf(g_title, sizeof g_title, "%s", key);
+    if (info_string("RexSupportFolder", key, sizeof key) && !strchr(key, '/')) snprintf(g_folder, sizeof g_folder, "%s", key);
+    if (info_string("RexEnvPrefix", key, sizeof key)) snprintf(g_prefix, sizeof g_prefix, "%s", key);
+    char title_data[300]; snprintf(title_data, sizeof title_data, "%s: game data not found", g_title);
     char self[PATH_MAX]; uint32_t sz = sizeof self;
-    if (_NSGetExecutablePath(self, &sz)) { alert("Black Ops II", "cannot find the app's own path"); return 1; }
+    if (_NSGetExecutablePath(self, &sz)) { alert(g_title, "cannot find the app's own path"); return 1; }
     char real[PATH_MAX]; if (!realpath(self, real)) snprintf(real, sizeof real, "%s", self);
     char macos[PATH_MAX]; snprintf(macos, sizeof macos, "%s", real);
     *strrchr(macos, '/') = 0;
@@ -188,53 +220,67 @@ int main(int argc, char **argv) {
 
     const char *home = getenv("HOME"); if (!home) home = "/tmp";
     char support[PATH_MAX], logs[PATH_MAX], data[PATH_MAX] = "";
-    const char *sup_env = getenv("BO2_SUPPORT_DIR"), *log_env = getenv("BO2_LOG_DIR");
-    if (sup_env && *sup_env) snprintf(support, sizeof support, "%s", sup_env);
-    else snprintf(support, sizeof support, "%s/Library/Application Support/bo2-360-nx", home);
-    if (log_env && *log_env) snprintf(logs, sizeof logs, "%s", log_env);
-    else snprintf(logs, sizeof logs, "%s/Library/Logs/bo2-360-nx", home);
+    const char *sup_env = env_of("SUPPORT_DIR"), *log_env = env_of("LOG_DIR");
+    if (sup_env) snprintf(support, sizeof support, "%s", sup_env);
+    else snprintf(support, sizeof support, "%s/Library/Application Support/%s", home, g_folder);
+    if (log_env) snprintf(logs, sizeof logs, "%s", log_env);
+    else snprintf(logs, sizeof logs, "%s/Library/Logs/%s", home, g_folder);
     mkdirs(support); mkdirs(logs);
 
-    const char *env_data = getenv("BO2_DATA");
-    if (env_data && *env_data) snprintf(data, sizeof data, "%s", env_data);
+    const char *env_data = env_of("DATA");
+    if (env_data) snprintf(data, sizeof data, "%s", env_data);
     if (!*data) {
         char f[PATH_MAX]; snprintf(f, sizeof f, "%s/data_path.txt", support);
         FILE *fp = fopen(f, "r");
         if (fp) { if (fgets(data, sizeof data, fp)) trim(data); else data[0] = 0; fclose(fp); }
     }
-    if (!*data) info_string("BO2DataPath", data, sizeof data);
+    if (!*data && !info_string("RexDataPath", data, sizeof data)) info_string("BO2DataPath", data, sizeof data);
     if (!*data) { char p[PATH_MAX]; snprintf(p, sizeof p, "%s/data", res); if (is_dir(p)) snprintf(data, sizeof data, "%s", p); }
     if (!*data) {
         char m[PATH_MAX + 400];
-        snprintf(m, sizeof m, "No game data folder is set. Put the path of the folder that contains game/ and update/ on one line in\n%s/data_path.txt\nor set BO2_DATA.", support);
-        alert("Black Ops II: game data not found", m); return 1;
+        snprintf(m, sizeof m, "No game data folder is set. Put the path of the game's folder (the extracted disc, or the folder that contains game/ and update/) on one line in\n%s/data_path.txt\nor set %s_DATA.", support, g_prefix);
+        alert(title_data, m); return 1;
     }
     char probe[PATH_MAX + 32];
     snprintf(probe, sizeof probe, "%s/game", data);
-    if (!is_dir(probe)) {
-        char m[PATH_MAX + 200]; snprintf(m, sizeof m, "%s has no game/ folder. Point data_path.txt (in %s) at the folder that holds game/ and update/.", data, support);
-        alert("Black Ops II: game data not found", m); return 1;
+    int split = is_dir(probe);   // game/ + update/ (BO2), else the disc itself
+    snprintf(probe, sizeof probe, "%s/default.xex", data);
+    if (!split && !is_file(probe)) {
+        char m[PATH_MAX * 2 + 200]; snprintf(m, sizeof m, "%s has neither a game/ folder nor default.xex. Point data_path.txt (in %s) at the extracted disc or at the folder that holds game/ and update/.", data, support);
+        alert(title_data, m); return 1;
     }
 
     link_content(data, support);
 
     char opt[PATH_MAX + 64], ex[PATH_MAX];
-    snprintf(ex, sizeof ex, "%s/bo2zm", macos);
+    snprintf(ex, sizeof ex, "%s/%s", macos, g_exe);
     push(ex);
     time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
     char stamp[32]; strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
     int base = g_argc;
-    snprintf(opt, sizeof opt, "--game_data_root=%s/game", data); push(opt);
-    snprintf(opt, sizeof opt, "--update_data_root=%s/update", data); push(opt);
+    if (split) {
+        snprintf(opt, sizeof opt, "--game_data_root=%s/game", data); push(opt);
+        snprintf(opt, sizeof opt, "--update_data_root=%s/update", data); push(opt);
+    } else {
+        snprintf(opt, sizeof opt, "--game_data_root=%s", data); push(opt);
+    }
     snprintf(opt, sizeof opt, "--user_data_root=%s", support); push(opt);
+    if (info_string("RexSettingsFile", key, sizeof key) && !strchr(key, '/')) {
+        // The bundle is signed, so the settings the game loads and saves live in the support folder.
+        char cfg[PATH_MAX], seed[PATH_MAX];
+        snprintf(cfg, sizeof cfg, "%s/%s", support, key);
+        snprintf(seed, sizeof seed, "%s/runtime/%s", res, key);
+        if (!is_file(cfg) && is_file(seed) && !copy_file(seed, cfg)) unlink(cfg);
+        snprintf(opt, sizeof opt, "--config_file=%s", cfg); push(opt);
+    }
     const char *instance = getenv("REX_INSTANCE") ? getenv("REX_INSTANCE") : getenv("BO2_INSTANCE");
-    char instance_log[96];
+    char instance_log[400];
     char *instance_end = NULL;
     long instance_number = instance ? strtol(instance, &instance_end, 10) : -1;
     if (instance && instance_end && *instance_end == '\0' && instance_number >= 0 && instance_number < 16) {
-        snprintf(instance_log, sizeof instance_log, "bo2zm-%s-instance-%ld.log", stamp, instance_number);
+        snprintf(instance_log, sizeof instance_log, "%s-%s-instance-%ld.log", g_exe, stamp, instance_number);
     } else {
-        snprintf(instance_log, sizeof instance_log, "bo2zm-%s.log", stamp);
+        snprintf(instance_log, sizeof instance_log, "%s-%s.log", g_exe, stamp);
     }
     snprintf(opt, sizeof opt, "--log_file=%s/%s", logs, instance_log); push(opt);
     snprintf(opt, sizeof opt, "%s/args.txt", support); read_args_file(opt);
@@ -286,18 +332,18 @@ int main(int argc, char **argv) {
 
     prune_logs(logs, 20);
     setenv("MVK_CONFIG_FAST_MATH_ENABLED", "0", 0);   // the game's shaders expect IEEE results (see tools/mac/bo2zm.command)
-    setenv("BO2_LOG_DIR", logs, 0);
+    { char n[128]; snprintf(n, sizeof n, "%s_LOG_DIR", g_prefix); setenv(n, logs, 0); }
     chdir(support);
-    if (getenv("BO2_PRINT_COMMAND")) { for (int i = 0; i < g_argc; i++) printf("%s\n", g_argv[i]); return 0; }
+    if (env_of("PRINT_COMMAND")) { for (int i = 0; i < g_argc; i++) printf("%s\n", g_argv[i]); return 0; }
 
     signal(SIGTERM, forward); signal(SIGINT, forward); signal(SIGHUP, forward);
     int err = posix_spawn(&g_child, ex, NULL, NULL, g_argv, environ);
-    if (err) { char m[PATH_MAX]; snprintf(m, sizeof m, "cannot start %s: %s", ex, strerror(err)); alert("Black Ops II", m); return 1; }
+    if (err) { char m[PATH_MAX]; snprintf(m, sizeof m, "cannot start %s: %s", ex, strerror(err)); alert(g_title, m); return 1; }
     int st = 0;
     while (waitpid(g_child, &st, 0) < 0) if (errno != EINTR) break;
     if (WIFSIGNALED(st)) {
         char m[300]; snprintf(m, sizeof m, "The game stopped with signal %d. The log is in %s.", WTERMSIG(st), logs);
-        fprintf(stderr, "bo2: %s\n", m);
+        fprintf(stderr, "%s: %s\n", g_exe, m);
         return 128 + WTERMSIG(st);
     }
     return WEXITSTATUS(st);

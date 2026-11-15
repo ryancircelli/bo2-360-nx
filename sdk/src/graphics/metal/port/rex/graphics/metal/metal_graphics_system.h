@@ -37,6 +37,9 @@ class MetalGraphicsSystem : public GraphicsSystem {
   X_STATUS SetupGuestGpu(runtime::FunctionDispatcher* function_dispatcher,
                          system::KernelState* kernel_state) override;
 
+  // Joins the metal_frame_dump thread (metal_frame_dump.h) before the presenter is destroyed.
+  void Shutdown() override;
+
  protected:
   std::unique_ptr<CommandProcessor> CreateCommandProcessor() override;
 
