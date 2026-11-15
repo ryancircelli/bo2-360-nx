@@ -761,6 +761,17 @@ Ring* NewRing() {
 // Hot path
 // ---------------------------------------------------------------------------------------------
 
+inline void CopyArgs(const PPCContext& ctx, uint32_t* a) {
+  a[0] = ctx.r3.u32;
+  a[1] = ctx.r4.u32;
+  a[2] = ctx.r5.u32;
+  a[3] = ctx.r6.u32;
+  a[4] = ctx.r7.u32;
+  a[5] = ctx.r8.u32;
+  a[6] = ctx.r9.u32;
+  a[7] = ctx.r10.u32;
+}
+
 Entry* Begin(Site& site, PPCContext& ctx, uint8_t* /*base*/, uint64_t* seq_out) {
   if (__builtin_expect(!g_started.load(std::memory_order_relaxed), 0)) EnsureStarted();
   site.calls.fetch_add(1, std::memory_order_relaxed);
@@ -777,8 +788,10 @@ Entry* Begin(Site& site, PPCContext& ctx, uint8_t* /*base*/, uint64_t* seq_out) 
     h.site = &site;
     h.t_begin = Now();
     h.t_end.store(0, std::memory_order_relaxed);
-    const PPCRegister* regs = &ctx.r3;
-    for (int i = 0; i < 4; ++i) h.args[i] = regs[i].u32;
+    h.args[0] = ctx.r3.u32;
+    h.args[1] = ctx.r4.u32;
+    h.args[2] = ctx.r5.u32;
+    h.args[3] = ctx.r6.u32;
     h.lr = lr;
     h.has_out = 0;
     h.extra[0] = 0;
@@ -794,8 +807,8 @@ Entry* Begin(Site& site, PPCContext& ctx, uint8_t* /*base*/, uint64_t* seq_out) 
   e.t_begin = Now();
   e.t_end.store(0, std::memory_order_relaxed);
   e.site = &site;
-  const PPCRegister* regs = &ctx.r3;
-  for (int i = 0; i < 8; ++i) e.args[i] = regs[i].u32;
+  // PPCContext keeps r3 first (r0..r2 follow it), so the argument registers are not contiguous.
+  CopyArgs(ctx, e.args);
   e.lr = lr;
   e.result = 0;
   e.has_out = 0;
