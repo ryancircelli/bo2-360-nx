@@ -61,7 +61,22 @@ std::mutex g_probe_mutex;
 thread_local bool g_in_ntclose = false;
 std::atomic<int> g_offroute_logged{0};
 void HandleProbeInNtClose(bool on) { g_in_ntclose = on; }
+// TEST ONLY: REX_STALE_STASH_FORCE_EVENT=1 keeps the slot of an event removed outside NtClose (the fake event
+// GetNativeObject made over an enumerator) for the next event the game creates, so the enumerator's stale stash
+// names a live game event instead of whatever thread happens to be created next.
+std::atomic<uint32_t> g_reserved_slot{0};
+thread_local bool g_creating_wrapper = false;
+bool ForceEventSlot() {
+  static const bool on = [] { const char* v = std::getenv("REX_STALE_STASH_FORCE_EVENT"); return v && v[0] == '1'; }();
+  return on;
+}
+void HandleProbeCreatingWrapper(bool on) { g_creating_wrapper = on; }
 void HandleProbeRecordRemove(uint32_t handle, XObject* object) {
+  if (ForceEventSlot() && !g_in_ntclose && object->type() == XObject::Type::Event &&
+      object->guest_object() == 0) {
+    g_reserved_slot.store((handle - XObject::kHandleBase) >> 2);
+    REXLOG_ERROR("[stale-force] slot of {:08X} reserved for the next game event", handle);
+  }
   if (!HandleProbeOn() || object->type() != XObject::Type::Event) return;
   Removal r;
   r.n = backtrace(r.frames, 24);
@@ -281,6 +296,22 @@ X_STATUS ObjectTable::AddHandle(XObject* object, X_HANDLE* out_handle) {
     // Find a free slot.
     uint32_t slot = 0;
     result = FindFreeSlot(&slot);
+    // TEST ONLY (REX_STALE_STASH_FORCE_EVENT): the reserved slot goes to the next game event and nobody else.
+    if (XSUCCEEDED(result)) {
+      const uint32_t reserved = g_reserved_slot.load();
+      if (reserved && reserved < table_capacity_ && !table_[reserved].object) {
+        const bool game_event = object->type() == XObject::Type::Event && !g_creating_wrapper;
+        if (game_event) {
+          slot = reserved;
+          g_reserved_slot.store(0);
+          REXLOG_ERROR("[stale-force] reserved slot {:08X} given to a game event", XObject::kHandleBase + (slot << 2));
+        } else if (slot == reserved) {
+          for (uint32_t s2 = 1; s2 < table_capacity_; ++s2) {
+            if (s2 != reserved && !table_[s2].object) { slot = s2; break; }
+          }
+        }
+      }
+    }
 
     // Stash.
     if (XSUCCEEDED(result)) {

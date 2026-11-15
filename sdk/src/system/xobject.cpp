@@ -139,7 +139,7 @@ void XObject::RetainHandle() {
   kernel_state_->object_table()->RetainHandle(handles_[0]);
 }
 
-namespace util { void HandleProbeStaleRelease(XObject* object); }
+namespace util { void HandleProbeStaleRelease(XObject* object); void HandleProbeCreatingWrapper(bool on); }
 bool XObject::ReleaseHandle() {
   if (handles_.empty()) {
     util::HandleProbeStaleRelease(this);
@@ -548,7 +548,9 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
       case 0:  // EventNotificationObject
       case 1:  // EventSynchronizationObject
       {
+        util::HandleProbeCreatingWrapper(true);
         auto ev = new XEvent(kernel_state);
+        util::HandleProbeCreatingWrapper(false);
         ev->InitializeNative(native_ptr, header);
         object = ev;
       } break;
