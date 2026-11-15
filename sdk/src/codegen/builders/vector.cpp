@@ -557,21 +557,22 @@ bool build_vcmpbfp(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(true);
   // vcmpbfp: Vector Compare Bounds Floating Point
   // For each element i:
-  //   bit 0 (0x80000000) = 1 if vSrcA[i] > vSrcB[i]
-  //   bit 1 (0x40000000) = 1 if vSrcA[i] < -vSrcB[i]
+  //   bit 0 (0x80000000) = 1 unless vSrcA[i] <= vSrcB[i]
+  //   bit 1 (0x40000000) = 1 unless vSrcA[i] >= -vSrcB[i]
+  // so a NaN in either operand sets both bits (upstream ab61f2e6).
   auto vA = ctx.v(ctx.insn.operands[1]);
   auto vB = ctx.v(ctx.insn.operands[2]);
   auto vD = ctx.v(ctx.insn.operands[0]);
 
   // Use v_temp as intermediate storage
-  // gt_mask = (vA > vB) & 0x80000000
+  // gt_mask = !(vA <= vB) & 0x80000000
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_and_ps(simde_mm_cmpgt_ps(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, simde_mm_andnot_ps(simde_mm_cmple_ps(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
       ctx.v_temp(), vA, vB);
-  // lt_neg_mask = (vA < -vB) & 0x40000000
+  // lt_neg_mask = !(vA >= -vB) & 0x40000000
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_and_ps(simde_mm_cmplt_ps(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, simde_mm_andnot_ps(simde_mm_cmpge_ps(simde_mm_load_ps({}.f32), "
       "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
       "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
       "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x40000000)))));",
@@ -585,12 +586,15 @@ bool build_vcmpbfp(BuilderContext& ctx) {
   // CR6 from vD: movemask_ps only checks bit 31, but lower-bound violations only
   // set bit 30. Shift left by 1 to move bit 30 into bit 31, then OR with original
   // so movemask detects both upper and lower bound violations.
-  if (isRecordForm(ctx.insn))
+  // vcmpbfp. only ever sets CR6 bit 2 (all in bounds); bit 0 stays clear.
+  if (isRecordForm(ctx.insn)) {
     ctx.println(
         "\t{}.setFromMask(simde_mm_castsi128_ps(simde_mm_or_si128("
         "simde_mm_load_si128((simde__m128i*){}.f32), "
         "simde_mm_slli_epi32(simde_mm_load_si128((simde__m128i*){}.f32), 1))), 0xF);",
         ctx.cr(6), vD, vD);
+    ctx.println("\t{}.lt = 0;", ctx.cr(6));
+  }
   return true;
 }
 
