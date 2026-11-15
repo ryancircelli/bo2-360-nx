@@ -351,6 +351,9 @@ bool build_srad(BuilderContext& ctx) {
   ctx.println("\t{}.ca = ({}.s64 < 0) & ((({}.s64 >> {}.u64) << {}.u64) != {}.s64);", ctx.xer(),
               ctx.r(ctx.insn.operands[1]), ctx.r(ctx.insn.operands[1]), ctx.temp(), ctx.temp(),
               ctx.r(ctx.insn.operands[1]));
+  // Shift amount of 64 or more: CA is the sign bit (upstream 02a002f8)
+  ctx.println("\tif ({}.u8 & 0x40) {}.ca = {}.s64 < 0;", ctx.r(ctx.insn.operands[2]), ctx.xer(),
+              ctx.r(ctx.insn.operands[1]));
   ctx.println("\t{}.s64 = {}.s64 >> {}.u64;", ctx.r(ctx.insn.operands[0]),
               ctx.r(ctx.insn.operands[1]), ctx.temp());
   emitRecordFormCompare(ctx);
@@ -377,6 +380,9 @@ bool build_sraw(BuilderContext& ctx) {
   ctx.println("\tif ({}.u32 > 0x1F) {}.u32 = 0x1F;", ctx.temp(), ctx.temp());
   ctx.println("\t{}.ca = ({}.s32 < 0) & ((({}.s32 >> {}.u32) << {}.u32) != {}.s32);", ctx.xer(),
               ctx.r(ctx.insn.operands[1]), ctx.r(ctx.insn.operands[1]), ctx.temp(), ctx.temp(),
+              ctx.r(ctx.insn.operands[1]));
+  // Shift amount of 32 or more: CA is the sign bit (upstream 02a002f8)
+  ctx.println("\tif ({}.u8 & 0x20) {}.ca = {}.s32 < 0;", ctx.r(ctx.insn.operands[2]), ctx.xer(),
               ctx.r(ctx.insn.operands[1]));
   ctx.println("\t{}.s64 = {}.s32 >> {}.u32;", ctx.r(ctx.insn.operands[0]),
               ctx.r(ctx.insn.operands[1]), ctx.temp());
