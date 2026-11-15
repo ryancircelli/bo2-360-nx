@@ -25,6 +25,7 @@ target_include_directories(chrono_steady_cast_tests PRIVATE
 )
 
 target_link_libraries(chrono_steady_cast_tests PRIVATE
+    rex::core
     Catch2::Catch2WithMain
 )
 
