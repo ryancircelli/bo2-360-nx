@@ -40,7 +40,7 @@ REG = re.compile(r"(?<![.\w])(r(?:1[4-9]|2\d|3[01])|f(?:1[4-9]|2\d|3[01])|"
                  r"v(?:0|1[4-9]|[2-5]\d|6\d|[7-9]\d|1[01]\d|12[0-7])|cr[0-7]|ctr|xer)\b")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)(?:\.[\w\[\]]+)*\s*=(?!=)")
 SIMD_STORE_REG = re.compile(r"^simde_mm_store\w*\(\(?(?:simde__m128i\*\)\s*)?(v\d+)\.\w+,(.*)$")
-STORE_TO_STACK = re.compile(r"^REX_STORE_U(?:8|16|32|64)\(\s*(?:ctx\.r1\.u32|ctx\.r12\.u32|ea)\b[^,]*,\s*"
+STORE_TO_STACK = re.compile(r"^REX_(?:STACK_)?STORE_U(?:8|16|32|64)\(\s*(?:ctx\.r1\.u32|ctx\.r12\.u32|ea)\b[^,]*,\s*"
                             r"((?:r|f)\d+)\.(?:u8|u16|u32|u64|f64|s32|s64)\s*\);$")
 SIMD_STORE_MEM = re.compile(r"^simde_mm_store\w*\(\(simde__m128i\*\)(?:REX_RAW_ADDR\(|\(base \+)")
 CALL = re.compile(r"(?<![\w])(sub_[0-9A-F]{8})\(ctx, base\);")
