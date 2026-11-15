@@ -16,6 +16,10 @@ first_link_port = 1000               # BO2's VDP port; 1001 (UDP) and the side c
 [defaults]
 # Local MP and Zombies expose an offline profile for each controller port.
 offline_user_count = 4
+# macOS: guest timed sleeps on a NOTE_CRITICAL timer. macOS coalesces ordinary timers, so BO2's
+# Server thread's 1 ms sleeps woke ~5 ms late and the frame waited for it. Low Power 4p Town in-run
+# A/B: frames >33 ms 4.64% -> 1.42%, 45.3 -> 47.1 fps; Town replay 0 of 11,493 draws differ.
+mac_precise_sleep = true
 
 [renderer]
 # The Metal backend settings BO2 was measured and shipped with. They are the SDK's
