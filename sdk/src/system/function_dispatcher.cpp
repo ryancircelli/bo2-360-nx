@@ -15,6 +15,7 @@
 
 #include <rex/assert.h>
 #include <rex/dbg.h>
+#include <rex/kcall_recorder.h>
 #include <rex/logging.h>
 #include <rex/perf/counter.h>
 #include <rex/memory.h>
@@ -35,6 +36,14 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
 }  // namespace
 
 static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+  {
+    char note[128];
+    snprintf(note, sizeof(note),
+             "call to invalid or unregistered guest function 0x%08X (caller lr=0x%08X)",
+             ctx.last_indirect_target, uint32_t(ctx.lr));
+    rex::kcall::NoteFatal(note);
+    rex::kcall::DumpFatal("invalid-function");
+  }
   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
             ctx.last_indirect_target);
 }

@@ -16,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include <rex/kcall_recorder.h>
 #include <rex/logging.h>
 #include <rex/stream.h>
 #include <rex/system/util/object_table.h>
@@ -203,6 +204,7 @@ X_STATUS ObjectTable::AddHandle(XObject* object, X_HANDLE* out_handle) {
       object->Retain();
 
       REXSYS_NOISY_DEBUG("Added handle:{:08X} for {}", handle, typeid(*object).name());
+      rex::kcall::HandleEvent('A', handle, uint32_t(object->type()), 1);
     }
     ReleaseRetired();  // anything a busy RemoveHandle had to leave behind
   }
@@ -240,6 +242,8 @@ X_STATUS ObjectTable::RetainHandle(X_HANDLE handle) {
   }
 
   entry->handle_ref_count++;
+  rex::kcall::HandleEvent('+', handle, entry->object ? uint32_t(entry->object->type()) : 0,
+                          entry->handle_ref_count);
   return X_STATUS_SUCCESS;
 }
 
@@ -251,7 +255,10 @@ X_STATUS ObjectTable::ReleaseHandle(X_HANDLE handle) {
     return X_STATUS_INVALID_HANDLE;
   }
 
-  if (--entry->handle_ref_count == 0) {
+  --entry->handle_ref_count;
+  rex::kcall::HandleEvent('-', handle, entry->object ? uint32_t(entry->object->type()) : 0,
+                          entry->handle_ref_count);
+  if (entry->handle_ref_count == 0) {
     // No more references. Remove it from the table.
     return RemoveHandle(handle);
   }
@@ -289,6 +296,7 @@ X_STATUS ObjectTable::RemoveHandle(X_HANDLE handle) {
     }
 
     REXSYS_NOISY_DEBUG("Removed handle:{:08X} for {}", handle, typeid(*object).name());
+    rex::kcall::HandleEvent('R', handle, uint32_t(object->type()), 0);
 
     // Remove object name from mapping to prevent naming collision.
     if (!object->name().empty()) {
