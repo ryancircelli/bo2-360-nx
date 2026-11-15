@@ -332,7 +332,7 @@ bool build_mtmsrd(BuilderContext& ctx) {
     // Memory barrier for MSR write
     ctx.println("\tstd::atomic_thread_fence(std::memory_order_seq_cst);");
     // Update MSR bits
-    ctx.println("\tctx.msr = ({}.u32 & 0x8020) | (ctx.msr & ~0x8020);",
+    ctx.println("\tctx.msr = ({}.u32 & 0x8002) | (ctx.msr & ~0x8002);",
                 ctx.r(ctx.insn.operands[0]));
     // Global lock mechanism:
     // R13 = enter lock (disable interrupts)
