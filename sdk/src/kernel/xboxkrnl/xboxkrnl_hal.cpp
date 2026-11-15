@@ -28,10 +28,12 @@ void HalReturnToFirmware_entry(u32 routine) {
   // Routine must be 1 'HalRebootRoutine'
   assert_true(routine == 1);
 
-  // TODO(benvank): diediedie much more gracefully
-  // Not sure how to blast back up the stack in LLVM without exceptions, though.
+  // Leave the way XamLoaderTerminateTitle does: end the title's threads (this one included, so this
+  // does not return); the app sees the main thread finish and takes its window-close hard exit.
+  // exit(0) here ran static destructors under live guest, GPU and frame-dump threads, and
+  // std::terminate'd on the joinable frame-dump std::thread.
   REXKRNL_ERROR("Game requested shutdown via HalReturnToFirmware");
-  exit(0);
+  REX_KERNEL_STATE()->TerminateTitle();
 }
 
 }  // namespace rex::kernel::xboxkrnl
