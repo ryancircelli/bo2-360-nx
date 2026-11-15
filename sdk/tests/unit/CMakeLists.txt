@@ -2,6 +2,7 @@
 
 add_executable(codegen_branch_tests
     codegen/conditional_branch_test.cpp
+    codegen/stack_access_test.cpp
 )
 
 target_include_directories(codegen_branch_tests PRIVATE
@@ -71,6 +72,15 @@ target_include_directories(fpscr_tests PRIVATE
 )
 
 target_link_libraries(fpscr_tests PRIVATE
+add_executable(guest_stack_range_tests
+    runtime_stack_range_test.cpp
+)
+
+target_include_directories(guest_stack_range_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(guest_stack_range_tests PRIVATE
     rex::core
     Catch2::Catch2WithMain
 )
@@ -105,3 +115,4 @@ add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
 add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
+add_test(NAME guest_stack_range_tests COMMAND guest_stack_range_tests)

@@ -186,7 +186,9 @@ inline void emitLoadWithUpdate(BuilderContext& ctx, const char* load_macro) {
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
   // rD = MEM[EA]
-  ctx.println("\t{}.u64 = {}({});", ctx.r(ctx.insn.operands[0]), load_macro, ctx.ea());
+  ctx.println("\t{}.u64 = {}({});", ctx.r(ctx.insn.operands[0]),
+              ctx.insn.operands[2] == 1 ? BuilderContext::stack_macro(load_macro) : std::string(load_macro),
+              ctx.ea());
   // rA = EA (update)
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
 }
@@ -203,7 +205,9 @@ inline void emitLoadWithUpdate(BuilderContext& ctx, const char* load_macro) {
 inline void emitLoadXFormWithUpdate(BuilderContext& ctx, const char* load_macro) {
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.u64 = {}({});", ctx.r(ctx.insn.operands[0]), load_macro, ctx.ea());
+  ctx.println("\t{}.u64 = {}({});", ctx.r(ctx.insn.operands[0]),
+              ctx.insn.operands[1] == 1 ? BuilderContext::stack_macro(load_macro) : std::string(load_macro),
+              ctx.ea());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
 }
 
@@ -222,7 +226,9 @@ inline void emitStoreWithUpdate(BuilderContext& ctx, const char* store_macro, co
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
   // MEM[EA] = rS
-  ctx.println("\t{}({}, {}.{});", store_macro, ctx.ea(), ctx.r(ctx.insn.operands[0]), field);
+  ctx.println("\t{}({}, {}.{});",
+              ctx.insn.operands[2] == 1 ? BuilderContext::stack_macro(store_macro) : std::string(store_macro),
+              ctx.ea(), ctx.r(ctx.insn.operands[0]), field);
   // rA = EA (update)
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
 }
@@ -242,8 +248,11 @@ inline void emitStoreXFormWithUpdate(BuilderContext& ctx, const char* store_macr
                                      const char* mmio_macro, const char* field) {
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}({}, {}.{});", ctx.mmio_check_x_form() ? mmio_macro : store_macro, ctx.ea(),
-              ctx.r(ctx.insn.operands[0]), field);
+  ctx.println("\t{}({}, {}.{});",
+              ctx.mmio_check_x_form() ? std::string(mmio_macro)
+              : ctx.insn.operands[1] == 1 ? BuilderContext::stack_macro(store_macro)
+                                          : std::string(store_macro),
+              ctx.ea(), ctx.r(ctx.insn.operands[0]), field);
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
 }
 
@@ -328,7 +337,8 @@ inline void emitAtomicStoreConditional(BuilderContext& ctx, const char* ptr_type
  */
 inline void emitSignExtendLoadDForm(BuilderContext& ctx, const char* cast_type,
                                     const char* load_macro) {
-  ctx.print("\t{}.s64 = {}({}(", ctx.r(ctx.insn.operands[0]), cast_type, load_macro);
+  ctx.print("\t{}.s64 = {}({}(", ctx.r(ctx.insn.operands[0]), cast_type,
+            ctx.stack_d_form() ? BuilderContext::stack_macro(load_macro) : std::string(load_macro));
   if (ctx.insn.operands[2] != 0)
     ctx.print("{}.u32 + ", ctx.r(ctx.insn.operands[2]));
   ctx.println("{}));", static_cast<int32_t>(ctx.insn.operands[1]));
@@ -346,7 +356,8 @@ inline void emitSignExtendLoadDForm(BuilderContext& ctx, const char* cast_type,
  */
 inline void emitSignExtendLoadXForm(BuilderContext& ctx, const char* cast_type,
                                     const char* load_macro) {
-  ctx.print("\t{}.s64 = {}({}(", ctx.r(ctx.insn.operands[0]), cast_type, load_macro);
+  ctx.print("\t{}.s64 = {}({}(", ctx.r(ctx.insn.operands[0]), cast_type,
+            ctx.stack_x_form() ? BuilderContext::stack_macro(load_macro) : std::string(load_macro));
   if (ctx.insn.operands[1] != 0)
     ctx.print("{}.u32 + ", ctx.r(ctx.insn.operands[1]));
   ctx.println("{}.u32));", ctx.r(ctx.insn.operands[2]));
