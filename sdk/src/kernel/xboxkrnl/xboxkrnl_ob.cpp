@@ -25,6 +25,8 @@
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 
+namespace rex::system::util { void HandleProbeLog(const char* what, uint32_t handle, const std::string& detail); }
+namespace rex::system::util { void HandleProbeInNtClose(bool on); }
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
 
@@ -221,7 +223,12 @@ u32 NtDuplicateObject_entry(u32 handle, mapped_u32 new_handle_ptr, u32 options) 
 
 u32 NtClose_entry(u32 handle) {
   REXKRNL_IMPORT_TRACE("NtClose", "handle={:#x}", (uint32_t)handle);
+  rex::system::util::HandleProbeInNtClose(true);
   auto result = REX_KERNEL_OBJECTS()->ReleaseHandle(handle);
+  rex::system::util::HandleProbeInNtClose(false);
+  if (result == X_STATUS_INVALID_HANDLE) {
+    rex::system::util::HandleProbeLog("NtClose of dead handle", handle, "");
+  }
   REXKRNL_IMPORT_RESULT("NtClose", "{:#x}", result);
   return result;
 }

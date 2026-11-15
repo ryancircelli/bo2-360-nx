@@ -39,6 +39,7 @@
 #include <rex/thread/atomic.h>
 #include <rex/thread/mutex.h>
 
+namespace rex::system::util { void HandleProbeReportBad(uint32_t handle, const char* who); }
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
 using rex::runtime::current_ppc_context;
@@ -537,6 +538,7 @@ uint32_t xeNtSetEvent(uint32_t handle, rex::be<uint32_t>* previous_state_ptr) {
       *previous_state_ptr = static_cast<uint32_t>(was_signalled);
     }
   } else {
+    rex::system::util::HandleProbeReportBad(handle, "NtSetEvent");
     result = X_STATUS_INVALID_HANDLE;
   }
 

@@ -10,6 +10,13 @@
  */
 
 #include <atomic>
+#include <rex/logging.h>
+#include <cstdlib>
+#include <typeinfo>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/chrono/clock.h>
@@ -40,6 +47,25 @@ void PublishStash(X_DISPATCH_HEADER* header, uint32_t handle) {
       .store(rex::byte_swap(handle), std::memory_order_relaxed);
   std::atomic_ref<uint32_t>(header->wait_list_flink.value)
       .store(rex::byte_swap(static_cast<uint32_t>(kXObjSignature)), std::memory_order_release);
+}
+
+// Bodies the SDK allocated with CreateNative, by guest address, to their owner. Some of these bodies
+// (enumerators) have no dispatch header: their guest fields overwrite the stash words, so GetNativeObject must
+// find their owner here instead of mistaking the body for an event it has never seen.
+std::mutex g_created_bodies_mutex;
+std::unordered_map<uint32_t, XObject*> g_created_bodies;
+
+// True when guest addresses a and b are the same object body, also through the physical-memory views
+// (0xA0000000/0xC0000000/0xE0000000 map the same pages).
+bool SameBody(KernelState* kernel_state, uint32_t a, uint32_t b) {
+  if (a == b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  const uint32_t pa = kernel_state->memory()->GetPhysicalAddress(a);
+  return pa != UINT32_MAX && pa == kernel_state->memory()->GetPhysicalAddress(b);
 }
 
 bool ReadStash(X_DISPATCH_HEADER* header, uint32_t* handle) {
@@ -79,6 +105,10 @@ XObject::~XObject() {
   // assert_zero(pointer_ref_count_);
 
   if (allocated_guest_object_) {
+    {
+      std::lock_guard<std::mutex> lock(g_created_bodies_mutex);
+      g_created_bodies.erase(guest_object_ptr_);
+    }
     uint32_t ptr = guest_object_ptr_ - sizeof(X_OBJECT_HEADER);
     auto header = memory()->TranslateVirtual<X_OBJECT_HEADER*>(ptr);
 
@@ -109,7 +139,11 @@ void XObject::RetainHandle() {
   kernel_state_->object_table()->RetainHandle(handles_[0]);
 }
 
+namespace util { void HandleProbeStaleRelease(XObject* object); }
 bool XObject::ReleaseHandle() {
+  if (handles_.empty()) {
+    util::HandleProbeStaleRelease(this);
+  }
   // FIXME: Return true when handle is actually released.
   return kernel_state_->object_table()->ReleaseHandle(handles_[0]) == X_STATUS_SUCCESS;
 }
@@ -371,6 +405,10 @@ uint8_t* XObject::CreateNative(uint32_t size) {
   allocated_guest_object_ = true;
   memory()->Zero(mem, total_size);
   SetNativePointer(mem + sizeof(X_OBJECT_HEADER), true);
+  {
+    std::lock_guard<std::mutex> lock(g_created_bodies_mutex);
+    g_created_bodies[guest_object_ptr_] = this;
+  }
 
   auto header = memory()->TranslateVirtual<X_OBJECT_HEADER*>(mem);
 
@@ -405,6 +443,39 @@ void XObject::SetNativePointer(uint32_t native_ptr, bool uninitialized) {
   guest_object_ptr_ = native_ptr;
 }
 
+// TEST ONLY (not committed): REX_STALE_STASH_FIX=0 restores the old lookup for the control build;
+// REX_STALE_STASH_FORCE_MS=N makes an old-lookup stale hit wait up to N ms for an NtCreateEvent event to take the
+// stale slot, so the release always lands on a live game event.
+namespace {
+bool StaleStashFixOff() {
+  static const bool off = [] { const char* v = getenv("REX_STALE_STASH_FIX"); return v && v[0] == '0'; }();
+  return off;
+}
+int StaleStashForceMs() {
+  static const int ms = [] { const char* v = getenv("REX_STALE_STASH_FORCE_MS"); return v ? atoi(v) : 0; }();
+  return ms;
+}
+std::atomic<int> g_stale_logged{0};
+}  // namespace
+
+object_ref<XObject> XObject::FindCreatedBody(KernelState* kernel_state, uint32_t body) {
+  // ~XObject removes its body under this mutex before freeing anything, so an entry found here is still a live
+  // allocation; take a reference only if the object is not already on its way to deletion.
+  std::lock_guard<std::mutex> lock(g_created_bodies_mutex);
+  auto it = g_created_bodies.find(body);
+  if (it == g_created_bodies.end()) {
+    return nullptr;
+  }
+  XObject* object = it->second;
+  int32_t count = object->pointer_ref_count_.load(std::memory_order_acquire);
+  while (count > 0) {
+    if (object->pointer_ref_count_.compare_exchange_weak(count, count + 1, std::memory_order_acq_rel)) {
+      return object_ref<XObject>(object);
+    }
+  }
+  return nullptr;
+}
+
 object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* native_ptr,
                                              int32_t as_type) {
   assert_not_null(native_ptr);
@@ -423,27 +494,54 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
 
   // Already set up (every call after the first) needs no lock: the stash and the handle lookup are
   // both lock-free. Only the first use, which creates the object, takes the global critical region.
+  // A stash only counts if the handle still names the object made for this body. Without the check a stale stash
+  // (the handle was freed and the slot reused) hands back an unrelated object, and ObDereferenceObject then
+  // releases that object's handle: an event the game is still using dies with no NtClose.
+  const uint32_t body = kernel_state->memory()->HostToGuestVirtual(native_ptr);
   if (ReadStash(header, &handle)) {
-    if (auto object = kernel_state->object_table()->LookupObject<XObject>(handle)) {
+    auto object = kernel_state->object_table()->LookupObject<XObject>(handle);
+    if (object && SameBody(kernel_state, object->native_body(), body)) {
       return object;
+    }
+    if (StaleStashFixOff()) {
+      // TEST ONLY: old behaviour, the stash is trusted. Force: wait for a game event to take the slot.
+      const int force_ms = StaleStashForceMs();
+      for (int waited = 0; force_ms && waited < force_ms * 10; ++waited) {
+        if (object && object->type() == Type::Event && object->guest_object() != 0) break;  // NtCreateEvent event
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        object = kernel_state->object_table()->LookupObject<XObject>(handle);
+      }
+      if (g_stale_logged.fetch_add(1) < 100) {
+        REXLOG_ERROR("[stale-stash] body {:08X} stash handle {:08X} now names {} (body {:08X})", body, handle,
+                     object ? typeid(*object).name() : "nothing", object ? object->native_body() : 0);
+      }
+      if (object) return object;
     }
   }
 
   auto global_lock = rex::thread::global_critical_region::AcquireDirect();
 
+  // A body the SDK allocated belongs to its object, whatever its first bytes look like.
+  if (auto object = StaleStashFixOff() ? nullptr : FindCreatedBody(kernel_state, body)) {
+    return object;
+  }
+
   if (as_type == -1) {
     as_type = header->type;
   }
 
+  object_ref<XObject> stashed;
   if (ReadStash(header, &handle)) {
+    stashed = kernel_state->object_table()->LookupObject<XObject>(handle);
+  }
+  if (StaleStashFixOff() && ReadStash(header, &handle)) {
+    return stashed;  // TEST ONLY: old behaviour
+  }
+  if (stashed && SameBody(kernel_state, stashed->native_body(), body)) {
     // Already initialized.
-    // TODO: assert if the type of the object != as_type
-    auto object = kernel_state->object_table()->LookupObject<XObject>(handle);
-
-    // TODO(benvanik): assert nothing has been changed in the struct.
-    return object;
+    return stashed;
   } else {
-    // First use, create new.
+    // First use (or a stale stash), create new.
     // https://www.nirsoft.net/kernel_struct/vista/KOBJECTS.html
     XObject* object = nullptr;
     switch (as_type) {
@@ -486,8 +584,8 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
         return NULL;
     }
 
-    // Stash pointer in struct.
-    // FIXME: This assumes the object contains a dispatch header (some don't!)
+    // Stash pointer in struct. Bodies without a dispatch header are SDK-allocated and were returned above.
+    object->wrapped_native_ptr_ = body;
     PublishStash(header, object->handle());
 
     return object_ref<XObject>(object);

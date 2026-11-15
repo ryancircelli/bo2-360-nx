@@ -22,6 +22,97 @@
 #include <rex/system/xobject.h>
 #include <rex/system/xthread.h>
 
+// TEST-ONLY handle probe (REX_HANDLE_PROBE=1): remembers who removed each event handle, so a later
+// "invalid handle" can name the remover. Not for commit.
+#include <execinfo.h>
+#include <map>
+#include <mutex>
+#include <atomic>
+#include <string>
+namespace rex::system::util {
+namespace {
+bool HandleProbeOn() {
+  static const bool on = std::getenv("REX_HANDLE_PROBE") != nullptr;
+  return on;
+}
+std::string HostStack(int skip) {
+  void* frames[28];
+  int n = backtrace(frames, 28);
+  char** syms = backtrace_symbols(frames, n);
+  std::string out;
+  for (int i = skip; i < n && syms; ++i) {
+    std::string line = syms[i];
+    auto sp = line.find("0x");
+    out += " <- " + (sp == std::string::npos ? line : line.substr(sp));
+  }
+  free(syms);
+  return out;
+}
+struct Removal {
+  void* frames[24];
+  int n = 0;
+  uint32_t thread = 0;
+  const char* type = "";
+};
+std::map<uint32_t, Removal> g_removed_events;
+std::mutex g_probe_mutex;
+}  // namespace
+// Cheap on purpose (raw frames, events only): the stack is symbolized only when it is reported.
+thread_local bool g_in_ntclose = false;
+std::atomic<int> g_offroute_logged{0};
+void HandleProbeInNtClose(bool on) { g_in_ntclose = on; }
+void HandleProbeRecordRemove(uint32_t handle, XObject* object) {
+  if (!HandleProbeOn() || object->type() != XObject::Type::Event) return;
+  Removal r;
+  r.n = backtrace(r.frames, 24);
+  r.thread = XThread::IsInThread() ? XThread::GetCurrentThreadId() : 0;
+  r.type = typeid(*object).name();
+  // An event the guest made should only lose its last handle through NtClose. Anything else is the suspect
+  // route: log it now, with the host stack, without waiting for the crash.
+  if (!g_in_ntclose && g_offroute_logged.fetch_add(1) < 100) {
+    REXLOG_ERROR("[handle-probe] event handle {:08X} removed outside NtClose on thread {}{}", handle, r.thread,
+                 HostStack(2));
+  }
+  std::lock_guard<std::mutex> lock(g_probe_mutex);
+  g_removed_events[handle] = r;
+}
+void HandleProbeReportBad(uint32_t handle, const char* who) {
+  if (!HandleProbeOn()) return;
+  Removal r;
+  bool found = false;
+  {
+    std::lock_guard<std::mutex> lock(g_probe_mutex);
+    auto it = g_removed_events.find(handle);
+    if (it != g_removed_events.end()) {
+      r = it->second;
+      found = true;
+    }
+  }
+  std::string stack;
+  if (found) {
+    char** syms = backtrace_symbols(r.frames, r.n);
+    for (int i = 1; i < r.n && syms; ++i) {
+      std::string line = syms[i];
+      auto sp = line.find("0x");
+      stack += " <- " + (sp == std::string::npos ? line : line.substr(sp));
+    }
+    free(syms);
+  }
+  REXLOG_ERROR("[handle-probe] {} on dead handle {:08X}; last removal: {}", who, handle,
+               found ? std::string(r.type) + " on thread " + std::to_string(r.thread) + stack
+                     : std::string("none recorded"));
+}
+void HandleProbeLog(const char* what, uint32_t handle, const std::string& detail) {
+  if (!HandleProbeOn()) return;
+  REXLOG_ERROR("[handle-probe] {} {:08X} {} thread {}{}", what, handle, detail,
+               XThread::IsInThread() ? XThread::GetCurrentThreadId() : 0, HostStack(2));
+}
+void HandleProbeStaleRelease(XObject* object) {
+  REXLOG_ERROR("[handle-probe] ReleaseHandle on {} with no handles left (stale handles_[0]){}",
+               typeid(*object).name(), HostStack(1));
+}
+}  // namespace rex::system::util
+
 namespace rex::system::util {
 
 // Handle lookups without the global critical region.
@@ -295,6 +386,7 @@ X_STATUS ObjectTable::RemoveHandle(X_HANDLE handle) {
       RemoveNameMapping(object->name());
     }
     // Release now that the object has been removed from the table, once no lookup can still be reading it.
+    HandleProbeRecordRemove(handle, object);
     retired_objects_.push_back(object);
     ReleaseRetired();
   }

@@ -50,6 +50,10 @@ REXCVAR_DEFINE_STRING(content_backup_root, "", "Kernel",
                       "Folder where each save is copied, grouped by owner XUID and container. "
                       "Empty = nothing is copied");
 
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+namespace rex::system::util { void HandleProbeLog(const char* what, uint32_t handle, const std::string& detail); }
 namespace rex {
 namespace system {
 namespace xam {
@@ -720,6 +724,13 @@ void ContentManager::CloseOpenedFilesFromContent(const std::string_view root_nam
     bool is_file_inside_content = rex::string::utf8_starts_with(file_path, resolved_path);
 
     if (is_file_inside_content) {
+      rex::system::util::HandleProbeLog(
+          "content close force-releases file", file->handles().empty() ? 0u : file->handles()[0],
+          "'" + file_path + "' root '" + std::string(root_name) + "' resolved '" + resolved_path +
+              "' handles " + std::to_string(file->handles().size()));
+      if (const char* ms = std::getenv("REX_CONTENT_CLOSE_STRESS_MS")) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(ms)));
+      }
       file->ReleaseHandle();
     }
   }
