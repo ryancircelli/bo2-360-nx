@@ -17,19 +17,19 @@ namespace rex::kernel::crt {
 // Standard memory operations
 // ---------------------------------------------------------------------------
 
-static void* native_memcpy(void* dst, const void* src, size_t n) {
+static void* native_memcpy(void* dst, const void* src, uint32_t n) {
   return std::memcpy(dst, src, n);
 }
 
-static void* native_memmove(void* dst, const void* src, size_t n) {
+static void* native_memmove(void* dst, const void* src, uint32_t n) {
   return std::memmove(dst, src, n);
 }
 
-static void* native_memset(void* dst, int val, size_t n) {
+static void* native_memset(void* dst, int val, uint32_t n) {
   return std::memset(dst, val, n);
 }
 
-static void* native_memchr(const void* ptr, int val, size_t n) {
+static void* native_memchr(const void* ptr, int val, uint32_t n) {
   return const_cast<void*>(std::memchr(ptr, val, n));
 }
 
@@ -37,19 +37,19 @@ static void* native_memchr(const void* ptr, int val, size_t n) {
 // Xbox/VMX-optimized variants (same semantics, native speed)
 // ---------------------------------------------------------------------------
 
-static void* native_XMemCpy(void* dst, const void* src, size_t n) {
+static void* native_XMemCpy(void* dst, const void* src, uint32_t n) {
   return std::memcpy(dst, src, n);
 }
 
-static void* native_XMemSet(void* dst, int val, size_t n) {
+static void* native_XMemSet(void* dst, int val, uint32_t n) {
   return std::memset(dst, val, n);
 }
 
-static void* native_XMemSet128(void* dst, int val, size_t n) {
+static void* native_XMemSet128(void* dst, int val, uint32_t n) {
   return std::memset(dst, val, n);
 }
 
-static void* native_memset_vmx(void* dst, int val, size_t n) {
+static void* native_memset_vmx(void* dst, int val, uint32_t n) {
   return std::memset(dst, val, n);
 }
 
@@ -57,14 +57,14 @@ static void* native_memset_vmx(void* dst, int val, size_t n) {
 // Secure variants (return errno_t)
 // ---------------------------------------------------------------------------
 
-static int native_memcpy_s(void* dst, size_t dstsz, const void* src, size_t count) {
+static int native_memcpy_s(void* dst, uint32_t dstsz, const void* src, uint32_t count) {
   if (!dst || !src || count > dstsz)
     return 22;  // EINVAL
   std::memcpy(dst, src, count);
   return 0;
 }
 
-static int native_memmove_s(void* dst, size_t dstsz, const void* src, size_t count) {
+static int native_memmove_s(void* dst, uint32_t dstsz, const void* src, uint32_t count) {
   if (!dst || !src || count > dstsz)
     return 22;  // EINVAL
   std::memmove(dst, src, count);
