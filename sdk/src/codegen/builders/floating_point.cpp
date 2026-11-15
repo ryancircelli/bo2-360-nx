@@ -79,7 +79,7 @@ bool build_fctidz(BuilderContext& ctx) {
 bool build_fctiw(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println(
-      "\t{0}.s64 = std::isnan({1}.f64) ? int64_t(0x80000000U) : "
+      "\t{0}.s64 = std::isnan({1}.f64) ? int64_t(INT_MIN) : "
       "({1}.f64 >= double(INT_MAX)) ? INT_MAX : "
       "simde_mm_cvtsd_si32(simde_mm_load_sd(&{1}.f64));",
       ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]));
@@ -89,7 +89,7 @@ bool build_fctiw(BuilderContext& ctx) {
 bool build_fctiwz(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println(
-      "\t{0}.s64 = std::isnan({1}.f64) ? int64_t(0x80000000U) : "
+      "\t{0}.s64 = std::isnan({1}.f64) ? int64_t(INT_MIN) : "
       "({1}.f64 >= double(INT_MAX)) ? INT_MAX : "
       "simde_mm_cvttsd_si32(simde_mm_load_sd(&{1}.f64));",
       ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]));
