@@ -135,7 +135,12 @@ bool ParseWait(std::string_view entry, Step& step, bool& ok) {
   std::string_view rest = Trim(entry);
   double start = 0;
   const size_t colon = rest.find(':');
-  const size_t wait_at = rest.find("wait_");
+  size_t wait_at = rest.find("wait_");
+  const size_t until_at = rest.find("until_log");
+  if (until_at != std::string_view::npos &&
+      (wait_at == std::string_view::npos || until_at < wait_at)) {
+    wait_at = until_at;
+  }
   if (wait_at == std::string_view::npos) {
     return false;
   }
@@ -149,7 +154,12 @@ bool ParseWait(std::string_view entry, Step& step, bool& ok) {
     return false;
   }
   Step::Wait kind;
-  if (rest.starts_with("wait_event")) {
+  bool interrupt = false;
+  if (rest.starts_with("until_log")) {
+    kind = Step::Wait::kLog;
+    interrupt = true;
+    rest.remove_prefix(9);
+  } else if (rest.starts_with("wait_event")) {
     kind = Step::Wait::kEvent;
     rest.remove_prefix(10);
   } else if (rest.starts_with("wait_log")) {
@@ -190,6 +200,7 @@ bool ParseWait(std::string_view entry, Step& step, bool& ok) {
   }
   step = {};
   step.wait = kind;
+  step.interrupt = interrupt;
   step.target = std::move(target);
   step.timeout = timeout;
   step.start = start;
@@ -440,9 +451,17 @@ double ScriptInputDriver::Advance(size_t index, double now) {
       return now - pad.segment_start;
     }
     // The segment ends at its wait's own time or its last step, whichever is
-    // later.
+    // later. An until_log wait ends it as soon as the log line shows up.
     const Step& wait = pad.steps[pad.waits[pad.segment]];
     double end = wait.start;
+    if (wait.interrupt) {
+      uint64_t& used = pad.consumed[EventKey(wait)];
+      if (ScriptEventCount(EventKey(wait)) > used && now - pad.segment_start >= wait.start) {
+        pad.waiting = true;
+        pad.wait_start = now;
+        continue;
+      }
+    }
     for (const auto& step : pad.steps) {
       if (step.wait == Step::Wait::kNone && step.segment == pad.segment) {
         end = std::max(end, step.end);

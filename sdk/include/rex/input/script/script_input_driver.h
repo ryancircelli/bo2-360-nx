@@ -36,6 +36,8 @@ namespace rex::input::script {
 /// later steps count from the end of the wait. A wait gives up after its
 /// timeout (default kDefaultWaitTimeout) with a warning, and the script goes
 /// on. "30:wait_event x" starts waiting no sooner than 30 s.
+/// "until_log <text> [timeout_s]" is wait_log, but it cuts the steps before it
+/// short the moment the line is logged (for press-A-until-the-screen-changes).
 struct Step {
   enum class Wait { kNone, kEvent, kLog };
 
@@ -46,6 +48,7 @@ struct Step {
   Wait wait = Wait::kNone;
   std::string target;  // event name or log text
   double timeout = 0;
+  bool interrupt = false;  // until_log: ends the steps before it as soon as the line is logged
   uint32_t segment = 0;  // waits before this step
 };
 
