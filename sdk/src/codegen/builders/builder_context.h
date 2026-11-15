@@ -221,6 +221,15 @@ struct BuilderContext {
    */
   bool mmio_check_x_form();
 
+  /// True when the current D-form (rA = operands[2]) / X-form (rA = operands[1]) access is
+  /// based on r1 and is not MMIO: guest stacks lie below 0xE0000000, so the physical-alias
+  /// host offset can be skipped.
+  bool stack_d_form();
+  bool stack_x_form();
+
+  /// REX_LOAD_U32 -> REX_STACK_LOAD_U32, REX_STORE_U8 -> REX_STACK_STORE_U8; other names unchanged.
+  static std::string stack_macro(std::string_view plain);
+
   /**
    * @brief Find pre-resolved call target for an instruction site.
    * @param site Address of the call/branch instruction
