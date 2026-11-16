@@ -969,8 +969,17 @@ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock, bool change_i
   uint32_t pcr_addr = static_cast<uint32_t>(ctx->r13.u64);
   const uint32_t self = rex::byte_swap(pcr_addr);
   assert_true(lock->prcb_of_owner.value != self);  // self-deadlock detection
-  while (!rex::thread::atomic_cas(0u, self, &lock->prcb_of_owner.value)) {
-    rex::thread::MaybeYield();
+  if (!rex::thread::atomic_cas(0u, self, &lock->prcb_of_owner.value)) {
+    rex::thread::CountContendedSpin();
+    uint32_t yields = 0;
+    do {
+      rex::thread::MaybeYield();
+      // Switch off by default: after 64 lost yields in a row, sleep 20 us so the owner can run.
+      if (++yields > 64 && rex::thread::SpinSleepRequested()) {
+        rex::thread::CountSpinSleep();
+        rex::thread::Sleep(std::chrono::microseconds(20));
+      }
+    } while (!rex::thread::atomic_cas(0u, self, &lock->prcb_of_owner.value));
   }
   return old_irql;
 }

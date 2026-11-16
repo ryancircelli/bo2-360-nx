@@ -94,6 +94,16 @@ void MaybeYield() {
   MemoryBarrier();
 }
 
+bool DarwinYieldRequested() { return false; }
+void RequestDarwinYield(bool) {}
+bool SpinSleepRequested() { return false; }
+void RequestSpinSleep(bool) {}
+uint64_t YieldCallCount() { return 0; }
+uint64_t ContendedSpinCount() { return 0; }
+uint64_t SpinSleepCount() { return 0; }
+void CountContendedSpin() {}
+void CountSpinSleep() {}
+
 void SyncMemory() {
   MemoryBarrier();
 }

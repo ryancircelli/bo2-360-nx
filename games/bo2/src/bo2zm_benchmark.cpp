@@ -25,6 +25,8 @@
 #include <rex/cvar.h>
 #include <rex/graphics/metal_runtime.h>
 #include <rex/logging.h>
+#include <rex/thread.h>
+#include <cstdlib>
 #include <rex/system/xthread.h>
 
 #include "bo2zm_cheats.h"
@@ -190,6 +192,8 @@ struct Factor {
 const Factor kFactors[] = {
     {"waits_fence_wake", &bo2zm::waits::FenceWake, &bo2zm::waits::SetFenceWake},
     {"waits_group_own", &bo2zm::waits::GroupOwn, &bo2zm::waits::SetGroupOwn},
+    {"darwin_yield", &rex::thread::DarwinYieldRequested, &rex::thread::RequestDarwinYield},
+    {"spin_sleep", &rex::thread::SpinSleepRequested, &rex::thread::RequestSpinSleep},
 #if defined(__APPLE__)
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
     {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
@@ -841,8 +845,25 @@ uint64_t FramesSeen() {
   return g_frames_seen.load(std::memory_order_relaxed);
 }
 
+// REX_YIELD_STATS=1: once a second, MaybeYield calls, contended guest spinlock acquires and spin sleeps per second.
+void LogYieldStats() {
+  static const bool on = std::getenv("REX_YIELD_STATS") != nullptr;
+  if (!on) return;
+  static int64_t last_ns = 0;
+  static uint64_t last_y = 0, last_c = 0, last_s = 0;
+  const int64_t now = Now();
+  if (last_ns == 0) { last_ns = now; return; }
+  if (now - last_ns < 1000000000LL) return;
+  const double dt = double(now - last_ns) / 1e9;
+  const uint64_t y = rex::thread::YieldCallCount(), c = rex::thread::ContendedSpinCount(), sl = rex::thread::SpinSleepCount();
+  REXLOG_INFO("[yieldstats] yields/s={:.0f} contended_spins/s={:.0f} spin_sleeps/s={:.0f}", (y - last_y) / dt,
+              (c - last_c) / dt, (sl - last_s) / dt);
+  last_ns = now; last_y = y; last_c = c; last_s = sl;
+}
+
 void AnnotateFrame() {
   g_frames_seen.fetch_add(1, std::memory_order_relaxed);
+  LogYieldStats();
   const int64_t start = g_start.load(std::memory_order_relaxed);
   if (start == 0) {
     return;

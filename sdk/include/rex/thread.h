@@ -108,6 +108,20 @@ void set_current_thread_name(const std::string_view name);
 // Yields the current thread to the scheduler. Maybe.
 void MaybeYield();
 
+// Runtime switches (default off, env REX_DARWIN_YIELD=1 / REX_SPIN_SLEEP=1 at startup) and call counters.
+// darwin_yield: on macOS MaybeYield uses thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0) instead of
+//   sched_yield (which on Darwin drops the caller to the lowest priority for up to 10 ms).
+// spin_sleep: a guest spinlock acquire that lost 64 yields in a row sleeps 20 us per further attempt.
+bool DarwinYieldRequested();
+void RequestDarwinYield(bool on);
+bool SpinSleepRequested();
+void RequestSpinSleep(bool on);
+uint64_t YieldCallCount();       // MaybeYield calls so far
+uint64_t ContendedSpinCount();   // guest spinlock acquires that had to yield at least once
+uint64_t SpinSleepCount();       // 20 us spin sleeps taken
+void CountContendedSpin();
+void CountSpinSleep();
+
 // Memory barrier (request - may be ignored).
 void SyncMemory();
 

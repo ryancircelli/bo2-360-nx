@@ -35,6 +35,7 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #include <array>
 #include <cerrno>
 #include <climits>
+#include <cstdlib>
 #include <cstddef>
 #include <ctime>
 #include <deque>
@@ -285,8 +286,39 @@ uint32_t current_thread_system_id() {
 #endif
 }
 
+namespace {
+bool EnvOn(const char* name) {
+  const char* v = std::getenv(name);
+  return v && v[0] && v[0] != '0';
+}
+std::atomic<bool> g_darwin_yield{EnvOn("REX_DARWIN_YIELD")};
+std::atomic<bool> g_spin_sleep{EnvOn("REX_SPIN_SLEEP")};
+std::atomic<uint64_t> g_yield_calls{0};
+std::atomic<uint64_t> g_contended_spins{0};
+std::atomic<uint64_t> g_spin_sleeps{0};
+}  // namespace
+
+bool DarwinYieldRequested() { return g_darwin_yield.load(std::memory_order_relaxed); }
+void RequestDarwinYield(bool on) { g_darwin_yield.store(on, std::memory_order_relaxed); }
+bool SpinSleepRequested() { return g_spin_sleep.load(std::memory_order_relaxed); }
+void RequestSpinSleep(bool on) { g_spin_sleep.store(on, std::memory_order_relaxed); }
+uint64_t YieldCallCount() { return g_yield_calls.load(std::memory_order_relaxed); }
+uint64_t ContendedSpinCount() { return g_contended_spins.load(std::memory_order_relaxed); }
+uint64_t SpinSleepCount() { return g_spin_sleeps.load(std::memory_order_relaxed); }
+void CountContendedSpin() { g_contended_spins.fetch_add(1, std::memory_order_relaxed); }
+void CountSpinSleep() { g_spin_sleeps.fetch_add(1, std::memory_order_relaxed); }
+
 void MaybeYield() {
+  g_yield_calls.fetch_add(1, std::memory_order_relaxed);
+#if defined(__APPLE__)
+  if (g_darwin_yield.load(std::memory_order_relaxed)) {
+    thread_switch(MACH_PORT_NULL, SWITCH_OPTION_NONE, 0);
+  } else {
+    sched_yield();
+  }
+#else
   sched_yield();
+#endif
   __sync_synchronize();
 }
 
