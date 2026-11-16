@@ -45,7 +45,23 @@ endfunction()
 # Applied to both host apps and guest DLL modules. Compile/link flags only;
 # runtime DLL staging is the host's job (see rexglue_configure_target).
 #==========================================================
+# macOS: cross-file ThinLTO for the generated code of any game. Every translated function becomes a candidate for inlining
+# into the others across the generated files (the Switch build does the same with GCC LTO). Nothing per game: the
+# generated target is `<host>_recomp` (rexglue_setup_target) and its host is the target named without the suffix. Only
+# the recomp objects are compiled to bitcode; the host's link carries -flto=thin and an incremental cache so a relink
+# after a small change is cheap.
+option(REXGLUE_THINLTO "macOS: -flto=thin on the generated code and the host's link" OFF)
+set(REXGLUE_THINLTO_CACHE "${CMAKE_BINARY_DIR}/thinlto-cache" CACHE PATH "REXGLUE_THINLTO: the ThinLTO cache folder")
+
 function(rexglue_apply_target_settings target_name)
+    if(APPLE AND REXGLUE_THINLTO AND target_name MATCHES "_recomp$")
+        string(REGEX REPLACE "_recomp$" "" _rex_lto_host "${target_name}")
+        if(NOT TARGET ${_rex_lto_host})
+            message(FATAL_ERROR "REXGLUE_THINLTO: no host target '${_rex_lto_host}' for ${target_name}")
+        endif()
+        target_compile_options(${target_name} PRIVATE -flto=thin)
+        target_link_options(${_rex_lto_host} PRIVATE -flto=thin "LINKER:-cache_path_lto,${REXGLUE_THINLTO_CACHE}")
+    endif()
     if(UNIX AND NOT APPLE)
         # Large executable support
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
