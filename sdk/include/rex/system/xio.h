@@ -60,10 +60,6 @@ inline void XOverlappedSetLength(void* ptr, uint32_t value) {
   auto p = reinterpret_cast<uint32_t*>(ptr);
   memory::store_and_swap<uint32_t>(&p[1], value);
 }
-inline uint32_t XOverlappedGetContext(void* ptr) {
-  auto p = reinterpret_cast<uint32_t*>(ptr);
-  return memory::load_and_swap<uint32_t>(&p[2]);
-}
 inline void XOverlappedSetContext(void* ptr, uint32_t value) {
   auto p = reinterpret_cast<uint32_t*>(ptr);
   memory::store_and_swap<uint32_t>(&p[2], value);
