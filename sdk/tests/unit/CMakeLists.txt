@@ -50,3 +50,38 @@ add_library(patch_test_lib_v3 SHARED patch/patch_lib_v.cpp)
 target_include_directories(patch_test_lib_v3 PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_compile_definitions(patch_test_lib_v3 PRIVATE PATCH_RET=3)
 add_test(NAME patch_loader_tests COMMAND patch_loader_tests $<TARGET_FILE:patch_test_lib_v2> $<TARGET_FILE:patch_test_lib_v3> ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt)
+
+add_executable(fpscr_tests
+    ppc/fpscr_test.cpp
+)
+
+target_include_directories(fpscr_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(fpscr_tests PRIVATE
+    rex::core
+    Catch2::Catch2WithMain
+)
+
+add_test(NAME fpscr_tests COMMAND fpscr_tests)
+
+add_executable(xthread_tests
+    system/xthread_test.cpp
+)
+
+target_include_directories(xthread_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(xthread_tests PRIVATE
+    rexruntime
+    Catch2::Catch2WithMain
+)
+
+set_target_properties(xthread_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
+)
+
+add_test(NAME xthread_tests COMMAND xthread_tests)
