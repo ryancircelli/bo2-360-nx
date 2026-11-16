@@ -61,14 +61,17 @@ bool build_eieio(BuilderContext& ctx) {
 }
 
 bool build_db16cyc(BuilderContext& ctx) {
-  // Xenon-specific 16-cycle delay hint, no effect in recompiled code
-  (void)ctx;
+  // db16cyc is a guest-side spin hint. When enabled, yield the host thread so
+  // another guest worker can run; keep the default path a true no-op.
+  ctx.println("\tif (REXCVAR_GET(xenon_spin_hints)) std::this_thread::yield();");
   return true;
 }
 
 bool build_cctpl(BuilderContext& ctx) {
-  // Xenon-specific cache control thread priority low, no effect in recompiled code
-  (void)ctx;
+  // cctpl lowers a Xenon thread's priority. A short host sleep approximates
+  // that scheduling hint while remaining configurable for title-specific A/Bs.
+  ctx.println("\tif (REXCVAR_GET(xenon_spin_hints)) std::this_thread::sleep_for("
+              "std::chrono::microseconds(REXCVAR_GET(xenon_cctpl_sleep_us))); ");
   return true;
 }
 

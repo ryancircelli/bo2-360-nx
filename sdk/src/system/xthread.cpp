@@ -51,6 +51,12 @@ REXCVAR_DEFINE_BOOL(ignore_thread_priorities, true, "Kernel",
 REXCVAR_DEFINE_BOOL(ignore_thread_affinities, true, "Kernel",
                     "Ignores game-specified thread affinities");
 
+REXCVAR_DEFINE_BOOL(xenon_spin_hints, false, "Kernel",
+                    "Honor Xenon db16cyc and cctpl hints in generated code");
+REXCVAR_DEFINE_INT32(xenon_cctpl_sleep_us, 20, "Kernel",
+                     "Host sleep for Xenon cctpl hints, in microseconds")
+    .range(0, 50);
+
 #if REX_PLATFORM_SWITCH
 REXCVAR_DEFINE_STRING(switch_audio_guest_threads, "", "Kernel",
                       "Switch: guest threads that run at the audio priority (0x2B) instead of the guest one (0x3B): "
