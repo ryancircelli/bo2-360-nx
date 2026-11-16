@@ -20,7 +20,7 @@
   "24:start"
  ],
  "end_on_log": {
-  "text": " frames in ",
+  "text": "FPS average",
   "count": 1,
   "grace_s": 2
  },

@@ -112,6 +112,13 @@ DECLARE_bool(clear_memory_page_state);
 DECLARE_bool(async_shader_compilation);
 DECLARE_bool(submit_on_primary_buffer_end);
 
+DEFINE_bool(metal_unretained_cmdbuf, false,
+            "Create Metal command buffers with commandBufferWithUnretainedReferences "
+            "so the driver skips per-resource retain/release at encode time. "
+            "Every referenced object must outlive its command buffer's "
+            "completion handler.",
+            "Metal");
+
 DEFINE_bool(metal_capture_labels, false,
             "Label GPU captures with guest shader hashes and texture addresses.",
             "Metal");
@@ -283,6 +290,14 @@ namespace metal {
 // change): per command buffer GPUStartTime/GPUEndTime, command-processor idle/GPU waits and
 // per-frame CPU of named threads, written to the frame CSV. Events tagged frame F cover the
 // interval from guest swap F to swap F+1.
+namespace {
+MTL::CommandBuffer* NewCommandBuffer(MTL::CommandQueue* queue) {
+  static const bool unretained = REXCVAR_GET(metal_unretained_cmdbuf);
+  return unretained ? queue->commandBufferWithUnretainedReferences()
+                    : queue->commandBuffer();
+}
+}  // namespace
+
 namespace gpu_time_trace {
 bool Enabled() {
   static const bool on = [] {
@@ -2359,7 +2374,7 @@ void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
   // GPU work completes before the caller tears down resources.
   if (command_queue_) {
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
-    MTL::CommandBuffer* sync_cmd = command_queue_->commandBuffer();
+    MTL::CommandBuffer* sync_cmd = NewCommandBuffer(command_queue_);
     if (sync_cmd) {
       uint64_t wait_value = 0;
       if (wait_shared_event_) {
@@ -2515,6 +2530,12 @@ void MetalCommandProcessor::ShutdownContext() {
     }
   }
   retired_memexport_index_buffers_.clear();
+  for (RetiredObject& retired : retired_objects_) {
+    if (retired.object) {
+      retired.object->release();
+    }
+  }
+  retired_objects_.clear();
   view_bindless_heap_next_ = 0;
   sampler_bindless_heap_next_ = 0;
   view_bindless_heap_exhausted_logged_ = false;
@@ -10831,7 +10852,7 @@ bool MetalCommandProcessor::MorphReadbackScaled(uint32_t written_address,
   }
   if (!morph_downscale_buffer_ ||
       morph_downscale_buffer_->length() < written_length) {
-    if (morph_downscale_buffer_) morph_downscale_buffer_->release();
+    if (morph_downscale_buffer_) DeferRelease(morph_downscale_buffer_);
     morph_downscale_buffer_ = device_->newBuffer(
         std::max<size_t>(written_length, size_t(1) << 20),
         MTL::ResourceStorageModeShared);
@@ -11404,7 +11425,7 @@ MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   // Note: commandBuffer() returns an autoreleased object, we must retain it.
   {
     ScopedAutoreleasePool autorelease_pool;
-    current_command_buffer_ = command_queue_->commandBuffer();
+    current_command_buffer_ = NewCommandBuffer(command_queue_);
     if (current_command_buffer_) {
       current_command_buffer_->retain();
       if (EncoderDebugLabelsEnabled()) {
@@ -11516,6 +11537,22 @@ void MetalCommandProcessor::ProcessCompletedSubmissions() {
     }
     retired_memexport_index_buffers_.pop_front();
   }
+  while (!retired_objects_.empty() &&
+         retired_objects_.front().submission_id <= completed) {
+    if (retired_objects_.front().object) {
+      retired_objects_.front().object->release();
+    }
+    retired_objects_.pop_front();
+  }
+}
+
+void MetalCommandProcessor::DeferRelease(NS::Object* obj) {
+  if (!obj) {
+    return;
+  }
+  // GetCurrentSubmission covers the open command buffer; submissions complete
+  // in order on the queue, so earlier users are done by then too.
+  retired_objects_.push_back({obj, GetCurrentSubmission()});
 }
 
 void MetalCommandProcessor::WaitForFrameSlotSubmission(
@@ -12553,7 +12590,7 @@ MetalCommandProcessor::CreateStandaloneTransferCommandBuffer(
   MTL::CommandBuffer* cmd = nullptr;
   {
     ScopedAutoreleasePool autorelease_pool;
-    cmd = command_queue_->commandBuffer();
+    cmd = NewCommandBuffer(command_queue_);
     if (cmd) {
       cmd->retain();
       if (label && EncoderDebugLabelsEnabled()) {

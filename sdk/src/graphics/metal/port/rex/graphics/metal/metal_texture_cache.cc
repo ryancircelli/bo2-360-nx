@@ -934,7 +934,8 @@ bool MetalTextureCache::FlushDeferredUploadEncoderBatch() {
   }
   for (const DeferredUploadCopy& copy : deferred_upload_copies_) {
     if (copy.retained) {
-      copy.destination_texture->release();  // the command buffer holds it now
+      // Unretained cbs do not hold it: free once this submission completes.
+      command_processor_->DeferRelease(copy.destination_texture);
     }
   }
   deferred_upload_copies_.clear();
@@ -5674,7 +5675,9 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
           scaled_resolve_retired_bytes_ += retired.length_scaled;
         }
       } else if (scaled_resolve_buffers_[i].buffer) {
-        scaled_resolve_buffers_[i].buffer->release();
+        // An earlier in-flight cb may still bind it; unretained cbs won't
+        // keep it alive.
+        command_processor_->DeferRelease(scaled_resolve_buffers_[i].buffer);
       }
       continue;
     }

@@ -3493,7 +3493,8 @@ bool MetalRenderTargetCache::RtShrinkGrow(MetalRenderTarget* rt,
     }
     MTL::BlitCommandEncoder* blit = pass_trace::Blit(cmd, "rt_shrink_grow");
     if (!blit) {
-      texture->release();
+      // A clear encoder above may already reference it.
+      command_processor_.DeferRelease(texture);
       REXLOG_ERROR("[rt-shrink] no blit encoder to grow {}",
                    key.GetDebugName());
       return false;
@@ -3520,8 +3521,10 @@ bool MetalRenderTargetCache::RtShrinkGrow(MetalRenderTarget* rt,
                                                           : " copy")
                               : "");
   }
-  // The command buffer keeps the old texture alive until the copy has run.
-  rt->ReleaseTexturesForReplace();
+  // Unretained command buffers do not keep the old texture alive: release it
+  // when the submission that blits from it has completed.
+  rt->ReleaseTexturesForReplace(
+      [this](MTL::Texture* t) { command_processor_.DeferRelease(t); });
   rt->SetTexture(texture);
   SetUpRenderTargetViews(rt);
   if (dummy_color_target_owner_ && current_depth_target_ == rt) {
@@ -4184,6 +4187,11 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
         dummy_color_target_shape_key_ != dummy_key) {
       // Release the previous dummy first so its heap space is freed before the
       // new allocation.
+      if (dummy_color_target_owner_) {
+        // Earlier draws in the open command buffer may still attach it.
+        dummy_color_target_owner_->DeferAllTextures(
+            [this](MTL::Texture* t) { command_processor_.DeferRelease(t); });
+      }
       dummy_color_target_owner_.reset();
       dummy_color_target_ = nullptr;
       RenderTargetKey dummy_rt_key;

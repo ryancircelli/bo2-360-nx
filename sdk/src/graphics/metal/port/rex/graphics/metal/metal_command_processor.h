@@ -257,6 +257,10 @@ class MetalCommandProcessor final : public CommandProcessor {
   void CommitStandaloneAndWait(MTL::CommandBuffer* cmd);
 
   uint64_t GetCurrentSubmission() const;
+  // Releases obj once the current (and every earlier) submission has completed.
+  // Needed for objects an encoded command buffer references, because command
+  // buffers made with unretained references do not keep them alive.
+  void DeferRelease(NS::Object* obj);
   uint64_t GetCompletedSubmission() const;
   uint64_t GetLatestSubmissionStarted() const { return submission_current_; }
   // Newest main command buffer that has been committed (the open one, if
@@ -1577,6 +1581,11 @@ class MetalCommandProcessor final : public CommandProcessor {
     uint64_t submission_id = 0;
   };
   std::deque<RetiredMetalBuffer> retired_memexport_index_buffers_;
+  struct RetiredObject {
+    NS::Object* object = nullptr;
+    uint64_t submission_id = 0;
+  };
+  std::deque<RetiredObject> retired_objects_;
 
   MTL::Buffer* tessellator_tables_buffer_ = nullptr;
 
