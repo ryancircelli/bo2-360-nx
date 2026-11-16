@@ -115,23 +115,47 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
     uint32_t grow_count() const { return grow_count_; }
     void note_grow() { ++grow_count_; }
     // Releases the texture and its views (before installing a taller one).
-    void ReleaseTexturesForReplace() {
+    template <typename Defer>
+    void ReleaseTexturesForReplace(Defer&& defer) {
       if (stencil_view_) {
-        stencil_view_->release();
+        defer(stencil_view_);
         stencil_view_ = nullptr;
       }
       if (draw_texture_ && draw_texture_ != texture_) {
-        draw_texture_->release();
+        defer(draw_texture_);
       }
       draw_texture_ = nullptr;
       if (transfer_texture_ && transfer_texture_ != texture_) {
-        transfer_texture_->release();
+        defer(transfer_texture_);
       }
       transfer_texture_ = nullptr;
       if (texture_) {
-        texture_->release();
+        defer(texture_);
         texture_ = nullptr;
       }
+    }
+
+    // Hands every texture and view to defer (which owns the release) and
+    // clears them, so the destructor frees nothing. For targets an encoded
+    // command buffer may still reference.
+    template <typename Defer>
+    void DeferAllTextures(Defer&& defer) {
+      MTL::Texture* all[] = {stencil_view_,        draw_texture_,
+                             transfer_texture_,    msaa_draw_texture_,
+                             msaa_transfer_texture_, texture_, msaa_texture_};
+      MTL::Texture* done[7] = {};
+      size_t n = 0;
+      for (MTL::Texture* t : all) {
+        if (!t) continue;
+        bool dup = false;
+        for (size_t i = 0; i < n; ++i) dup |= done[i] == t;
+        if (dup) continue;
+        done[n++] = t;
+        defer(t);
+      }
+      stencil_view_ = draw_texture_ = transfer_texture_ = nullptr;
+      msaa_draw_texture_ = msaa_transfer_texture_ = nullptr;
+      texture_ = msaa_texture_ = nullptr;
     }
 
     // Public constructor for creating render targets
