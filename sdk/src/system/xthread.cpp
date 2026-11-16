@@ -1147,12 +1147,24 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
 }
 
 #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+void XThread::RequestStop() {
+  std::lock_guard<std::mutex> lock(suspend_mutex_);
+  stop_requested_ = true;
+  suspend_cv_.notify_all();
+}
+
 uint32_t XThread::SelfSuspend() {
   auto guest_thread = guest_object<X_KTHREAD>();
   std::unique_lock<std::mutex> lock(suspend_mutex_);
   uint32_t previous = guest_thread->suspend_count;
   guest_thread->suspend_count++;
-  suspend_cv_.wait(lock, [guest_thread]() { return guest_thread->suspend_count == 0; });
+  suspend_cv_.wait(lock, [this, guest_thread]() {
+    return guest_thread->suspend_count == 0 || stop_requested_;
+  });
+  if (stop_requested_) {
+    lock.unlock();
+    Exit(0);
+  }
   return previous;
 }
 #endif

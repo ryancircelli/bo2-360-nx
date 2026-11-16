@@ -1104,6 +1104,12 @@ void KernelState::TerminateTitle() {
     }
   }
 
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+  for (auto& thread : target_threads) {
+    thread->RequestStop();
+  }
+#endif
+
   // Wake blocked waiters: signal objects (non-alertable waiters) and a bare user
   // callback per target (alertable waits/delays).
   SignalAllWaitableObjects();
