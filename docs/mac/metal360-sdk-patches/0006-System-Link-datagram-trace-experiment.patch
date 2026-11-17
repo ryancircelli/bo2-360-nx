@@ -1,0 +1,55 @@
+From 12bed1262067c8365e1d2e73b59894c2e706d417 Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 04:06:50 -0500
+Subject: [PATCH 6/6] System Link datagram trace (experiment)
+
+---
+ src/system/xsocket.cpp | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index 84881520..6c1ed28f 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -14,6 +14,8 @@
+ #include <cstring>
+ 
+ #include <rex/kernel/xam/module.h>
++#include <rex/logging.h>
++#include <atomic>
+ #include <rex/platform.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/system_link.h>
+@@ -247,6 +249,14 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+ #endif
+     return -1;
+   }
++  {
++    static std::atomic<int> traced{0};
++    if (traced.fetch_add(1) < 400) {
++      REXSYS_WARN("[syslink-trace] recv {} bytes on port {} from {:08X}:{} first {:02X}{:02X}{:02X}{:02X}", ret,
++                  bound_port_, address, port, ret > 0 ? buf[0] : 0, ret > 1 ? buf[1] : 0, ret > 2 ? buf[2] : 0,
++                  ret > 3 ? buf[3] : 0);
++    }
++  }
+   if (from) {
+     from->sin_family = X_AF_INET;
+     from->sin_addr = address;
+@@ -291,6 +301,14 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+ 
+   uint32_t address = to->sin_addr;
+   uint16_t port = to->sin_port;
++  {
++    static std::atomic<int> traced{0};
++    if (traced.fetch_add(1) < 400) {
++      REXSYS_WARN("[syslink-trace] send {} bytes from port {} to {:08X}:{} first {:02X}{:02X}{:02X}{:02X}", buf_len,
++                  bound_port_, address, port, buf_len > 0 ? buf[0] : 0, buf_len > 1 ? buf[1] : 0,
++                  buf_len > 2 ? buf[2] : 0, buf_len > 3 ? buf[3] : 0);
++    }
++  }
+   auto instance = system_link::LocalInstance();
+   if (system_link::IsBroadcastAddress(address) && system_link::IsMappedPort(port)) {
+     system_link::BroadcastOnline(native_handle_, port, buf, buf_len, flags);
+-- 
+2.54.0 (Apple Git-157)
+

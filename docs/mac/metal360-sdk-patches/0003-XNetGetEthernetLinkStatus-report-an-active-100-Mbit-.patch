@@ -1,7 +1,7 @@
 From f211a92675560b869ca1a601200e5145b306898c Mon Sep 17 00:00:00 2001
 From: Ryan Circelli <ryancircelli@gmail.com>
 Date: Tue, 17 Nov 2026 02:00:40 -0500
-Subject: [PATCH 1/2] XNetGetEthernetLinkStatus: report an active 100 Mbit
+Subject: [PATCH 3/6] XNetGetEthernetLinkStatus: report an active 100 Mbit
  full-duplex link
 
 ---

@@ -1,7 +1,7 @@
 From 7409cef69b185bbd27a4b9bea1a825048a9dc256 Mon Sep 17 00:00:00 2001
 From: Ryan Circelli <ryancircelli@gmail.com>
 Date: Tue, 17 Nov 2026 02:56:22 -0500
-Subject: [PATCH 2/2] XNetGetConnectStatus: report connected instead of a stub
+Subject: [PATCH 4/6] XNetGetConnectStatus: report connected instead of a stub
 
 ---
  src/kernel/xam/xam_net.cpp | 9 ++++++++-

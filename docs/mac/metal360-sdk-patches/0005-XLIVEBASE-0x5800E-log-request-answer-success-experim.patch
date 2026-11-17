@@ -1,0 +1,40 @@
+From e70b3d294dfe03d747c8bca82b9575d82bc5cb3d Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 03:30:07 -0500
+Subject: [PATCH 5/6] XLIVEBASE 0x5800E: log request, answer success
+ (experiment)
+
+---
+ src/kernel/xam/apps/xlivebase_app.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
+index 3593403f..c24470c3 100644
+--- a/src/kernel/xam/apps/xlivebase_app.cpp
++++ b/src/kernel/xam/apps/xlivebase_app.cpp
+@@ -77,6 +77,22 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+       REXKRNL_DEBUG("XPresenceInitialize({:08X}, {:08X})", buffer_ptr, buffer_length);
+       return X_E_SUCCESS;
+     }
++    case 0x0005800E: {
++      // Polled by BO2's System Link join (about 10 per second). Meaning not documented; log the request words once
++      // and answer success so the join can go on.
++      static bool logged = false;
++      if (!logged) {
++        logged = true;
++        for (uint32_t i = 0; i < 0x80 && buffer; i += 16) {
++          REXKRNL_WARN("XLIVEBASE 5800E buf+{:02X}: {:08X} {:08X} {:08X} {:08X}", i,
++                       memory::load_and_swap<uint32_t>(buffer + i),
++                       memory::load_and_swap<uint32_t>(buffer + i + 4),
++                       memory::load_and_swap<uint32_t>(buffer + i + 8),
++                       memory::load_and_swap<uint32_t>(buffer + i + 12));
++        }
++      }
++      return X_E_SUCCESS;
++    }
+   }
+   REXKRNL_ERROR(
+       "Unimplemented XLIVEBASE message app={:08X}, msg={:08X}, arg1={:08X}, "
+-- 
+2.54.0 (Apple Git-157)
+
