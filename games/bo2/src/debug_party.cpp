@@ -9,6 +9,9 @@
 //     bit 0x2 clear.
 // The hook logs those fields whenever they change, then runs the original.
 
+#include <mach/mach.h>
+#include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -80,7 +83,23 @@ std::string GuestText(uint8_t* base, uint32_t value, bool escape_bytes = false) 
   if (value < 0x10000 || value >= 0xFFFF0000) {
     return {};
   }
-  const char* s = reinterpret_cast<const char*>(base + value);
+  // Copy through vm_read_overwrite page by page: a bad guest pointer must not fault the hook.
+  char copy[4097];
+  size_t have = 0;
+  while (have < 4096) {
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(base + value) + have;
+    size_t chunk = std::min<size_t>(4096 - have, 4096 - (addr & 4095));
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), addr, chunk, reinterpret_cast<vm_address_t>(copy + have), &got) !=
+            KERN_SUCCESS ||
+        got == 0) {
+      break;
+    }
+    have += got;
+    if (memchr(copy + have - got, 0, got)) break;
+  }
+  copy[have] = 0;
+  const char* s = copy;
   std::string text;
   size_t n = 0;
   for (; n < 4096 && s[n]; n++) {
