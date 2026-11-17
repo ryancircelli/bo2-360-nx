@@ -40,8 +40,12 @@
 #include <vector>
 
 #include <rex/cvar.h>
+#if defined(__SWITCH__)
 #include <rex/input/device_assignment.h>
+#endif
+#if defined(__SWITCH__)
 #include <rex/input/input_system.h>
+#endif
 #include <rex/logging.h>
 
 #if defined(__SWITCH__)
@@ -325,6 +329,7 @@ void RunScreen() {
   }
 }
 
+#if defined(__SWITCH__)
 // Game players by the system's numbering (see the top of this file). Devices of other drivers (the PC's, or a
 // stand-in) keep SlotAssignment's rule.
 class NpadAssignment final : public rex::input::DeviceAssignment {
@@ -363,6 +368,7 @@ class NpadAssignment final : public rex::input::DeviceAssignment {
 
   std::vector<rex::input::DeviceInfo> devices_;
 };
+#endif  // __SWITCH__
 
 }  // namespace
 

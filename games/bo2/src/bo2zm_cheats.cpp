@@ -2262,7 +2262,7 @@ void LogZoneMemory(const uint8_t* base, std::string_view where) {
   auto* memory = rex::Runtime::instance()->memory();
   for (const uint32_t address : {0x00000000u, 0x40000000u, 0xA0000000u, 0xC0000000u, 0xE0000000u}) {
     if (auto* heap = memory->LookupHeap(address)) {
-      const double page_mb = heap->page_size() / 1048576.0;
+      const double page_mb = 65536 / 1048576.0;
       heaps += fmt::format(" {:08X}: {:.1f} of {:.1f} MB free;", address, heap->GetUnreservedPageCount() * page_mb,
                            heap->GetTotalPageCount() * page_mb);
     }
