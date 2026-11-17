@@ -1633,7 +1633,7 @@ uint32_t PoolFree(uint8_t* base) {
 
 void ReportSoundPool() {
   uint8_t* base = g_pool_base.load(std::memory_order_relaxed);
-  if (!base) {
+  if (!base || !std::getenv("BO2ZM_POOL_REPORT")) {  // v0.11 port: the free-list walk faulted (null read) in Summarize
     return;
   }
   const uint64_t taken = g_pool_taken.load(std::memory_order_relaxed);
