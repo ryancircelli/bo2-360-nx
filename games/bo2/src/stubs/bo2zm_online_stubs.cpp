@@ -25,3 +25,38 @@ bool RunCommand(std::string_view, std::string_view) { return false; }
 namespace bo2zm::dlc {
 void EveryFrame(PPCContext&, uint8_t*) {}
 }  // namespace bo2zm::dlc
+
+// Relaunch (mode switch) is off on v0.11 until its kernel dependencies are ported: Zombies only, no restart.
+#include <filesystem>
+
+#include "../bo2zm_launch_options.h"
+#include "../bo2zm_relaunch.h"
+
+namespace bo2zm {
+void ApplyPendingRelaunch(const std::filesystem::path&) {}
+bool CampaignAvailable() { return false; }
+const launch::InstalledModes& ModesInstalled() {
+  static const launch::InstalledModes modes{};
+  return modes;
+}
+void HandOverEarly() {}
+void RequestRestart() {}
+bool RestartForScriptChanges() { return false; }
+}  // namespace bo2zm
+
+// Cheat sync (online) and the wait-primitive self-test (needs v0.10 kernel threads): off on v0.11.
+#include <functional>
+#include <string>
+#include "../bo2zm_cheat_sync.h"
+#include "../bo2zm_test_waits.h"
+
+namespace bo2zm::cheat_sync {
+void EveryFrame(PPCContext&, uint8_t*) {}
+bool Forward(int, std::string_view, std::string_view, bool) { return false; }
+void TraceFrame(bool, bool) {}
+}  // namespace bo2zm::cheat_sync
+
+namespace bo2zm::test_waits {
+bool Run(double, const std::function<void(const std::string&)>&) { return false; }
+void RunIfRequested() {}
+}  // namespace bo2zm::test_waits

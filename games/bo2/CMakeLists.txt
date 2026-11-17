@@ -27,7 +27,6 @@ rexglue_project(bo2zm OUTPUT_DIR generated/default_mp)
 set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/main.cpp
     ${BO2ZM_ROOT}/src/bo2zm_register.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_relaunch.cpp
     ${BO2ZM_ROOT}/src/debug_party.cpp
     ${BO2ZM_ROOT}/src/bo2zm_autoexec.cpp
     ${BO2ZM_ROOT}/src/stubs/bo2zm_online_stubs.cpp
@@ -42,7 +41,6 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_sound_waits.cpp
     ${BO2ZM_ROOT}/src/bo2zm_commands.cpp
     ${BO2ZM_ROOT}/src/bo2zm_cheats.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_cheat_sync.cpp
     ${BO2ZM_ROOT}/src/bo2zm_player_projection.cpp
     ${BO2ZM_ROOT}/src/bo2zm_dvars.cpp
     ${BO2ZM_ROOT}/src/bo2zm_extras.cpp
@@ -57,7 +55,6 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/../../core/bo2zm_heap_track.cpp
     ${BO2ZM_ROOT}/../../core/bo2zm_memcpy_callers.cpp
     ${BO2ZM_ROOT}/src/bo2zm_debug_options.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_test_waits.cpp
     ${BO2ZM_ROOT}/src/bo2zm_waits.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
