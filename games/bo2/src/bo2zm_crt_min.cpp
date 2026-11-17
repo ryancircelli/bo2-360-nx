@@ -1,0 +1,60 @@
+// BO2's memory copy and fill routines, as native code ([rexcrt] in games/bo2/overrides.toml).
+//
+// The codegen drops the recompiled bodies of the functions listed under [rexcrt] and calls rexcrt_<key> instead,
+// from every direct call and from the dispatch table (so function pointers land here too). The addresses, and the
+// evidence that each one is a plain memcpy/memmove/memset, are in games/bo2/overrides.toml:
+//   bo2zm_memcpy   0x82916330  CRT memcpy (forward)            bo2zm_memmove 0x82916270  CRT memmove
+//   bo2zm_memset   0x82916AE0  CRT memset                      bo2zm_xmemcpy 0x827D33F0  VMX memcpy (dcbzl)
+//   bo2zm_xmemset  0x827D2EC0  VMX memset (dcbzl)              bo2zm_bigcopy 0x827D3290, bo2zm_bigcopy2 0x827D3340
+//
+// Why not the SDK's own rexcrt_memcpy/memset (kernel/crt/memory.cpp): those go through HostToGuestFunction, which
+// sets r3 = host pointer - base. On PC, guest addresses from 0xE0000000 up sit 0x1000 further in host memory
+// (PhysicalHostOffset), so a copy into that physical view would return dst + 0x1000, and MSVC callers may use
+// memcpy's return value. Here r3 is left as it came in, which is dst: what every one of these routines returns.
+// No other register is written: the 360 routines only clobber volatile registers, which no caller may rely on.
+//
+// All copies use memmove semantics. That is a superset of each 360 routine wherever its result was defined: the
+// CRT memcpy only copies forwards (memmove's dst < src case), and the VMX copies clear destination lines with dcbzl
+// before reading the source, so they never supported overlap at all.
+
+#include <cstdint>
+#include <cstring>
+
+#include <rex/ppc/hook.h>
+#include <rex/ppc/context.h>
+#include <rex/memory/mapped_ptr.h>
+
+
+namespace {
+
+inline uint8_t* Host(uint8_t* base, uint32_t guest) {
+  return rex::memory::GuestPtr<uint8_t*>(base, guest);
+}
+
+// r3 = dst, r4 = src, r5 = byte count; returns dst in r3 (untouched).
+// Copies and fills into physical memory are stamped for the renderer's vertex reuse (bo2zm_page_writes.h): the
+// asset loader and the UP draws write vertex data this way.
+inline void Move(PPCContext& ctx, uint8_t* base) {
+  const uint32_t n = ctx.r5.u32;
+  if (n != 0) [[likely]] {
+    std::memmove(Host(base, ctx.r3.u32), Host(base, ctx.r4.u32), n);
+  }
+}
+
+// r3 = dst, r4 = value (its low byte), r5 = byte count; returns dst in r3 (untouched).
+inline void Fill(PPCContext& ctx, uint8_t* base) {
+  const uint32_t n = ctx.r5.u32;
+  if (n != 0) [[likely]] {
+    std::memset(Host(base, ctx.r3.u32), int(ctx.r4.u32 & 0xFF), n);
+  }
+}
+
+}  // namespace
+
+REX_HOOK_RAW(sub_82916330) { Move(ctx, base); }  // memcpy
+REX_HOOK_RAW(sub_82916270) { Move(ctx, base); }  // memmove
+REX_HOOK_RAW(sub_827D33F0) { Move(ctx, base); }  // xmemcpy
+REX_HOOK_RAW(sub_827D3290) { Move(ctx, base); }  // bigcopy
+REX_HOOK_RAW(sub_827D3340) { Move(ctx, base); }  // bigcopy2
+REX_HOOK_RAW(sub_82916AE0) { Fill(ctx, base); }  // memset
+REX_HOOK_RAW(sub_827D2EC0) { Fill(ctx, base); }  // xmemset

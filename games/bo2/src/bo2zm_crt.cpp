@@ -20,8 +20,9 @@
 #include <cstdint>
 #include <cstring>
 
-#include <rex/hook.h>
-#include <rex/system/xmemory.h>
+#include <rex/ppc/hook.h>
+#include <rex/ppc/context.h>
+#include <rex/memory/mapped_ptr.h>
 
 #include "bo2zm_page_writes.h"
 #if !defined(BO2_GAME_CAMPAIGN)
@@ -66,10 +67,10 @@ inline void Fill(PPCContext& ctx, uint8_t* base) {
 
 }  // namespace
 
-extern "C" REX_FUNC(rexcrt_bo2zm_memcpy) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_memmove) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_xmemcpy) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_bigcopy) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_bigcopy2) { Move(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_memset) { Fill(ctx, base); }
-extern "C" REX_FUNC(rexcrt_bo2zm_xmemset) { Fill(ctx, base); }
+REX_HOOK_RAW(sub_82916330) { Move(ctx, base); }  // memcpy
+REX_HOOK_RAW(sub_82916270) { Move(ctx, base); }  // memmove
+REX_HOOK_RAW(sub_827D33F0) { Move(ctx, base); }  // xmemcpy
+REX_HOOK_RAW(sub_827D3290) { Move(ctx, base); }  // bigcopy
+REX_HOOK_RAW(sub_827D3340) { Move(ctx, base); }  // bigcopy2
+REX_HOOK_RAW(sub_82916AE0) { Fill(ctx, base); }  // memset
+REX_HOOK_RAW(sub_827D2EC0) { Fill(ctx, base); }  // xmemset

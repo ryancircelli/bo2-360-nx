@@ -261,7 +261,7 @@ bool PlaneTest(PPCContext& ctx, uint8_t* base) {
   const V bias = simde_mm_castsi128_ps(LoadAligned(base, kPlaneBias));
   const V box_r5 = simde_mm_castsi128_ps(simde_mm_and_si128(LoadUnaligned(base, ctx.r5.u32), mask));
   const V box_r6 = simde_mm_castsi128_ps(simde_mm_and_si128(LoadUnaligned(base, ctx.r6.u32), mask));
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   const VI corner_r5 = simde_mm_castps_si128(simde_mm_sub_ps(box_r5, bias));  // v63
   const VI corner_r6 = simde_mm_castps_si128(simde_mm_sub_ps(box_r6, bias));  // v62
   if (count == 0) {
@@ -286,7 +286,7 @@ bool PlaneTest(PPCContext& ctx, uint8_t* base) {
       break;
     }
   }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const uint32_t at = (ctx.r1.u32 - 16) & ~3u;
   SetRawWord(base, at, __builtin_bswap32(word));
   ctx.r3.u64 = result;
@@ -310,7 +310,7 @@ void PlaneChecked(PPCContext& ctx, uint8_t* base) {
   const PPCContext game = ctx;
   const uint32_t word_game = RawWord(base, at);
   ctx = input;
-  ctx.fpscr.setcsr(ctx.fpscr.csr);
+  ctx.fpscr.SetCSR(ctx.fpscr.csr);
   SetRawWord(base, at, before);
   const uint64_t t2 = NowNs();
   const bool taken = PlaneTest(ctx, base);
@@ -339,7 +339,7 @@ void PlaneChecked(PPCContext& ctx, uint8_t* base) {
   }
   // The game goes on with its own function's results.
   ctx = game;
-  ctx.fpscr.setcsr(ctx.fpscr.csr);
+  ctx.fpscr.SetCSR(ctx.fpscr.csr);
   SetRawWord(base, at, word_game);
 }
 

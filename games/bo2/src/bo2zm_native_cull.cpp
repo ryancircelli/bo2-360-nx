@@ -249,11 +249,11 @@ void Item(Native& n, uint32_t box, uint32_t array, uint32_t index, const Plane* 
   V minimum = simde_mm_castsi128_ps(n.k.min_start);
   for (uint32_t i = 0; i < count; ++i) {
     const VI corner = ApplyPerm(corner_a, corner_b, planes[i].perm);
-    ctx.fpscr.enableFlushMode();
+    ctx.fpscr.EnableFlushMode();
     const V dot = simde_mm_dp_ps(simde_mm_castsi128_ps(planes[i].plane), simde_mm_castsi128_ps(corner), 0xFF);
     minimum = simde_mm_min_ps(minimum, dot);
   }
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   const V above = simde_mm_cmpgt_ps(minimum, simde_mm_castsi128_ps(n.k.keep));
   if (Element0(simde_mm_castps_si128(above)) == 0) {
     return;
@@ -299,7 +299,7 @@ void Cull(Native& n, uint32_t node, const Plane* planes, uint32_t count, uint32_
   for (uint32_t i = 0; i < count; ++i) {
     const VI far_corner = ApplyPerm(corner_b, corner_a, planes[i].perm);   // v56
     const VI near_corner = ApplyPerm(corner_a, corner_b, planes[i].perm);  // v54
-    ctx.fpscr.enableFlushMode();
+    ctx.fpscr.EnableFlushMode();
     const V plane = simde_mm_castsi128_ps(planes[i].plane);
     const V far_dot = simde_mm_dp_ps(plane, simde_mm_castsi128_ps(far_corner), 0xFF);
     const V near_dot = simde_mm_dp_ps(plane, simde_mm_castsi128_ps(near_corner), 0xFF);
@@ -313,7 +313,7 @@ void Cull(Native& n, uint32_t node, const Plane* planes, uint32_t count, uint32_
     minimum = simde_mm_min_ps(minimum, near_dot);
     kept_count = (kept_count + Element0(straddles)) & 0xFFFF;
   }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   if (!(double(Element0F(minimum)) > double(n.k.outside))) {
     return;  // outside
   }
@@ -469,7 +469,7 @@ void Checked(PPCContext& ctx, uint8_t* base) {
   static std::vector<uint8_t> marks_original;  // under g_check_mutex
   marks_original.assign(base + g_scratch, base + g_scratch + 2 * kArrayBytes);
   ctx = input;
-  ctx.fpscr.setcsr(ctx.fpscr.csr);
+  ctx.fpscr.SetCSR(ctx.fpscr.csr);
   std::memset(base + g_scratch, 0, 2 * kArrayBytes);
   const auto t1 = Clock::now();
   const bool native = NativeTop(ctx, base);
@@ -507,7 +507,7 @@ void Checked(PPCContext& ctx, uint8_t* base) {
   }
   // For real: the game's function on the view's arrays.
   ctx = input;
-  ctx.fpscr.setcsr(ctx.fpscr.csr);
+  ctx.fpscr.SetCSR(ctx.fpscr.csr);
   RunOriginal(ctx, base);
 }
 

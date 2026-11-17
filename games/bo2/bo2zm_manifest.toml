@@ -2,7 +2,7 @@
 
 [project]
 name = "bo2zm"
-sdk_version = "0.10.0"
+sdk_version = "0.11.0"
 game_root = "../../work/load_tu18"
 
 [entrypoint]

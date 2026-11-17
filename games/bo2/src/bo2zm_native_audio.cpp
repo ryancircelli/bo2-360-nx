@@ -571,7 +571,7 @@ void Call(Replacement& r, PPCContext& ctx, uint8_t* base, Function original, Fun
     snapshot_failed = true;
   }
   if (snapshot_failed) {
-    ctx.fpscr.setcsr(ctx.fpscr.csr);  // Exception handling/logging may change the host FP control state.
+    ctx.fpscr.SetCSR(ctx.fpscr.csr);  // Exception handling/logging may change the host FP control state.
     original(ctx, base);  // The input has not changed; run the original exactly once.
     return;
   }
@@ -590,13 +590,13 @@ void Call(Replacement& r, PPCContext& ctx, uint8_t* base, Function original, Fun
     snapshot_failed = true;
   }
   if (snapshot_failed) {
-    ctx.fpscr.setcsr(ctx.fpscr.csr);
+    ctx.fpscr.SetCSR(ctx.fpscr.csr);
     return;
   }
   const PPCContext ctx_original = ctx;
   Restore(base, rg, t_before);
   ctx = ctx_input;
-  ctx.fpscr.setcsr(ctx.fpscr.csr);
+  ctx.fpscr.SetCSR(ctx.fpscr.csr);
   const uint64_t t2 = NowNs();
   native(ctx, base);
   const uint64_t t3 = NowNs();
@@ -608,7 +608,7 @@ void Call(Replacement& r, PPCContext& ctx, uint8_t* base, Function original, Fun
   // The game goes on with the original's memory and registers.
   Restore(base, rg, t_original);
   ctx = ctx_original;
-  ctx.fpscr.setcsr(ctx.fpscr.csr);
+  ctx.fpscr.SetCSR(ctx.fpscr.csr);
   r.ns_original.fetch_add(t1 - t0, std::memory_order_relaxed);
   r.ns_native.fetch_add(t3 - t2, std::memory_order_relaxed);
   r.timed.fetch_add(1, std::memory_order_relaxed);
@@ -642,14 +642,14 @@ void Scale(PPCContext& ctx, uint8_t* base) {
   const uint32_t n = ctx.r3.u32;
   const uint32_t src = ctx.r5.u32;
   const uint32_t dst = ctx.r6.u32;
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const float g = float(ctx.f1.f64);
   Save(Host(base, ctx.r1.u32 + 28), g);
   const uint32_t vectors = VectorsScalar(n, src);
   if (vectors == 0) {
     return;
   }
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   // vmulfp128 on whole vectors, as the original (a scalar loop with a byte swap per float was slower on the Switch).
   const V gv = simde_mm_set1_ps(g);
   for (uint32_t k = 0; k < vectors; ++k) {
@@ -686,10 +686,10 @@ bool MixFast(PPCContext& ctx, uint8_t* base) {
   const uint32_t r1 = ctx.r1.u32;
   Save32(Host(base, r1 - 8), uint32_t(ctx.lr));
   Save32(Host(base, r1 - 96), r1);
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const float g = float(ctx.f1.f64);
   Save(Host(base, r1 - 96 + 28), g);
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   const F4 gain = simde_vdupq_n_f32(g);
   const uint8_t* s = Host(base, src);
   uint8_t* t = Host(base, tmp);
@@ -724,7 +724,7 @@ void Mix(PPCContext& ctx, uint8_t* base) {
     return;
   }
   const uint32_t vectors = ((n - 1) >> 2) + 1;
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   for (uint32_t k = 0; k < vectors; ++k) {  // vaddfp128 v63,v62,v63: tmp + acc
     SaveV(base, acc + 16 * k, simde_mm_add_ps(LoadV(base, tmp + 16 * k), LoadV(base, acc + 16 * k)));
   }
@@ -755,7 +755,7 @@ void Filter(PPCContext& ctx, uint8_t* base) {
   uint8_t* state = Host(base, ctx.r7.u32);
   const double a = ctx.f1.f64;
   const double b = ctx.f2.f64;
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   float earlier = Load(state);
   for (uint32_t i = 0; i < n; ++i) {
     const float product = float(double(earlier) * b);
@@ -838,7 +838,7 @@ void BiquadNative(PPCContext& ctx, uint8_t* base) {
   const float s_lanes[4] = {Load(state), Load(state + 4), Load(state + 8), Load(state + 12)};
   F4 s = simde_vld1q_f32(s_lanes);
   if (r6 < end) {
-    ctx.fpscr.enableFlushMode();
+    ctx.fpscr.EnableFlushMode();
     const F4 c = simde_vld1q_f32(c_lanes);
     const F4 b0v = simde_vdupq_n_f32(b0);
     const F4 k = LoadBE(Host(base, BO2_GAME_ADDR(0x82070E10, 0x8206BCA0)));
@@ -863,7 +863,7 @@ void BiquadNative(PPCContext& ctx, uint8_t* base) {
       StoreBE(at, simde_vcopyq_laneq_f32(out, 3, y3, 3));
     }
   }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   float s_out[4];
   simde_vst1q_f32(s_out, s);
   for (int i = 0; i < 4; ++i) {
@@ -952,7 +952,7 @@ void Reverb(PPCContext& ctx, uint8_t* base) {
   auto P = [&](uint32_t off) { return Load(Host(base, params + off)); };
 
   // Scalars (fsubs/fmuls: in double, then rounded to float; no flush to zero).
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const double c0 = Load(Host(base, BO2_GAME_ADDR(0x82000DB0, 0x82000C60)));
   const double c13 = Load(Host(base, BO2_GAME_ADDR(0x820034CC, 0x82002A6C)));
   const float f12 = P(0x18C), f11 = P(0x198), f5 = P(0x188), f8 = P(0x194), f7 = P(0x190);
@@ -998,7 +998,7 @@ void Reverb(PPCContext& ctx, uint8_t* base) {
     v0 = LoadV(base, params + 304), v63 = LoadV(base, params + 320), v60 = LoadV(base, params + 336);
   uint32_t pos = Load32(Host(base, params + 0x250));
 
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   for (uint32_t i = 0; i < n; ++i) {
     const uint32_t p = pos + 0x8000;
     auto tap = [&](int k, int j) { return Load(line[k] + (((p - t[j]) << 2) & 0x1FFFCu)); };
@@ -1064,7 +1064,7 @@ void Reverb(PPCContext& ctx, uint8_t* base) {
   SaveV(base, params + 304, v0);
   SaveV(base, params + 320, v63);
   SaveV(base, params + 336, v60);
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
 }
 
 // What the original writes outside its own frame: the object and the parameters (via sub_82592EE8 too), the window
@@ -1163,7 +1163,7 @@ void Resample(const Resampler& m, PPCContext& ctx, uint8_t* base) {
   CleanBlocks(base, b_s1, m.clean);
   CleanBlocks(base, b_frac, m.clean);
 
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const float pos = Load(Host(base, position));
   uint32_t remaining = Load32(Host(base, state + 8));
   const uint32_t written = Load32(Host(base, state + 4));
@@ -1219,7 +1219,7 @@ void Resample(const Resampler& m, PPCContext& ctx, uint8_t* base) {
                                Load32(Host(base, input + 116))};
   // lvx128 / stvx128 round both addresses down to 16 bytes.
   const uint8_t* source[3] = {Host(base, b_s0 & ~15u), Host(base, b_s1 & ~15u), Host(base, b_frac & ~15u)};
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   const bool fast = AudioFast();
   for (int k = 0; k < 3; ++k) {
     uint8_t* d = Host(base, target[k] & ~15u);
@@ -1240,7 +1240,7 @@ void Resample(const Resampler& m, PPCContext& ctx, uint8_t* base) {
   }
 
   // The read position back: fcfid, frsp, fmuls by the constant at 0x82020D90.
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const double fraction_d = double(float(double(int64_t(uint64_t(frac)))));
   Save(Host(base, position), float(fraction_d * double(Load(Host(base, BO2_GAME_ADDR(0x82020D90, 0x82007B20))))));
 
@@ -1266,7 +1266,7 @@ void Resample(const Resampler& m, PPCContext& ctx, uint8_t* base) {
   }
   if (apart) {
     g_fast_interpolation.fast.fetch_add(1, std::memory_order_relaxed);
-    ctx.fpscr.enableFlushMode();
+    ctx.fpscr.EnableFlushMode();
     const F4 one = LoadBE(Host(base, BO2_GAME_ADDR(0x820D5460, 0x82088C70)));
     uint8_t* s0 = Host(base, target[0]);
     uint8_t* s1 = Host(base, target[1]);
@@ -1295,7 +1295,7 @@ void Resample(const Resampler& m, PPCContext& ctx, uint8_t* base) {
     ctx.lr = lr;
   }
   ctx.r1.u64 = input;
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
 }
 
 template <const Resampler& m>

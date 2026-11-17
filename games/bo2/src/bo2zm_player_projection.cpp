@@ -126,7 +126,7 @@ REX_HOOK_RAW(sub_821AFC90) {
     __imp__sub_821AFC90(ctx, base);
     return;
   }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   PPCContext call = ctx;
   call.r1.u64 = (ctx.r1.u32 - 256) & ~uint32_t(15);
   ctx.f1.f64 = LocalFov(call, base, local, array + local * 0x87700, ctx.r4.u32, scale);
@@ -136,7 +136,7 @@ REX_HOOK_RAW(sub_82687AF8) {
   const uint32_t ps = ctx.r3.u32, position = ctx.r4.u32, output = ctx.r5.u32;
   const float height = SelectedHeight(base, ps);
   if (height == 39.0f) { __imp__sub_82687AF8(ctx, base); return; }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const float ceiling = float(Scalar(base, ps + 196) + height);
   if (!(Scalar(base, position + 8) < ceiling)) { ctx.r3.u64 = 0; return; }
   PPCContext call = ctx;
@@ -152,7 +152,7 @@ REX_HOOK_RAW(sub_82687B80) {
   const uint32_t ps = ctx.r3.u32;
   const float height = SelectedHeight(base, ps);
   if (height == 39.0f) { __imp__sub_82687B80(ctx, base); return; }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const float ceiling = float(Scalar(base, ps + 196) + height);
   ctx.r3.u64 = !(Scalar(base, ps + 48) < ceiling);
 }
@@ -161,7 +161,7 @@ REX_HOOK_RAW(sub_82687D98) {
   const uint32_t ps = ctx.r3.u32, previous = ctx.r4.u32;
   const float height = SelectedHeight(base, ps);
   if (height == 39.0f) { __imp__sub_82687D98(ctx, base); return; }
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   const float z = Scalar(base, ps + 48);
   if (!(float(z - Scalar(base, previous + 8)) > 0.0f)) return;
   const float remaining = float(float(Scalar(base, ps + 196) + height) - z);

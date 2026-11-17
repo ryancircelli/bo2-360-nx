@@ -534,7 +534,7 @@ void Kernel(PPCContext& ctx, uint8_t* base, General general, FastForm fast_form)
     return;
   }
   const Constants k = Read(ctx, base);
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   const bool fast = k.position_simple && (!kWeights || (k.weight_simple && (ctx.r4.u32 & 1) == 0)) && FastWanted();
   Timed(kKernel, count, fast, [&] {
     if (fast) {

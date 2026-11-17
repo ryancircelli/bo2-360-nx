@@ -177,7 +177,7 @@ inline void Ready(float& v) {
 // sub_8258AC98(r3 = n, r5 = X, f1 = g): the gain stored as a float (stfs) four times and loaded as one vector, then
 // X = g * X over ceil(n/4) vectors (vmulfp128 v63,v62,v63), flush to zero on; it leaves it on.
 void Scale(PPCContext& ctx, uint8_t* x, uint32_t n, float g) {
-  ctx.fpscr.enableFlushMode();
+  ctx.fpscr.EnableFlushMode();
   Fence();
   const F4 gain = simde_vdupq_n_f32(g);
   for (uint32_t k = 0; k < n / 4; ++k) {
@@ -196,7 +196,7 @@ double GameF1(PPCContext& ctx, uint8_t* base, Function f, uint32_t sp, uint32_t 
   f(ctx, base);
   ctx.r1.u64 = r1;
   ctx.lr = lr;
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   return ctx.f1.f64;
 }
 
@@ -300,7 +300,7 @@ void Limit(PPCContext& ctx, uint8_t* base) {
 
   // X *= P+4 (bl 0x8258ac98 at 0x8258BE48).
   Scale(ctx, X, n, Load(P + 4));
-  ctx.fpscr.disableFlushMode();
+  ctx.fpscr.DisableFlushMode();
   Fence();
 
   // The setup, 0x8258BE4C-0x8258BEA4. The rate stays in f2 for both coefficients (fmr f2,f1).

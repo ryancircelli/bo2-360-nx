@@ -1,6 +1,6 @@
 # bo2zm: Black Ops II Zombies, recompiled for the Nintendo Switch and for Windows.
 #
-# The program has two parts. bo2zm_recomp is the game's code, translated from PowerPC to C++ by the ReXGlue code
+# The program has two parts. bo2zm_recompiled is the game's code, translated from PowerPC to C++ by the ReXGlue code
 # generator (tools/codegen.sh writes it to generated/, from the player's own copy of the game). bo2zm is everything
 # written by hand around it: the hooks that replace or extend game functions, the native renderer, the sound and
 # streaming work, the menus' Lua, and the platform layer for each system. The SDK's boilerplate for both targets is
@@ -16,18 +16,21 @@ file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" BO2ZM_ROOT)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-include("${BO2ZM_ROOT}/generated/rexglue.cmake")
+if(NOT DEFINED REXSDK_DIR)
+  set(REXSDK_DIR "${BO2ZM_ROOT}/../../sdk" CACHE PATH "Path to the rexglue-sdk source tree")
+endif()
+add_subdirectory("${REXSDK_DIR}" rexglue-sdk)
+rexglue_project(bo2zm OUTPUT_DIR generated/default_mp)
 
 # Sources: games/bo2/ is the BO2 build project; core/ holds the game-neutral services and games/bo2/src/ the BO2 code. Both
 # directories are on the include path, so "bo2zm_x.h" resolves whichever one it lives in.
 set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/main.cpp
     ${BO2ZM_ROOT}/src/bo2zm_register.cpp
-    ${BO2ZM_ROOT}/src/kernel/xboxkrnl_usbcam.cpp
     ${BO2ZM_ROOT}/src/bo2zm_relaunch.cpp
     ${BO2ZM_ROOT}/src/debug_party.cpp
     ${BO2ZM_ROOT}/src/bo2zm_autoexec.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_dlc.cpp
+    ${BO2ZM_ROOT}/src/stubs/bo2zm_online_stubs.cpp
     ${BO2ZM_ROOT}/src/bo2zm_gsc_mods.cpp
     ${BO2ZM_ROOT}/src/bo2zm_mod_hud_fit.cpp
     ${BO2ZM_ROOT}/src/bo2zm_script_manager.cpp
@@ -43,9 +46,7 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_player_projection.cpp
     ${BO2ZM_ROOT}/src/bo2zm_dvars.cpp
     ${BO2ZM_ROOT}/src/bo2zm_extras.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_name.cpp
     # Internet play from the home menu: the menu side of the SDK's online_link (UPnP, STUN, join codes).
-    ${BO2ZM_ROOT}/src/bo2zm_online.cpp
     ${BO2ZM_ROOT}/../../core/bo2zm_pc_profiler.cpp
     ${BO2ZM_ROOT}/src/bo2zm_controllers.cpp
     ${BO2ZM_ROOT}/src/bo2zm_pad.cpp
@@ -109,10 +110,13 @@ set(BO2ZM_SOURCES
     # The SDK's Xenos shader interpreter, for the vertex shaders that write memory (memexport): BO2 copies
     # streamed texture data with them. These files belong to the Xenos GPU plugin, which the app does not link
     # (it is loaded at runtime on PC), so the native renderer compiles its own copy.
-    ${REXSDK_DIR}/src/graphics/pipeline/shader/interpreter.cpp
-    ${REXSDK_DIR}/src/graphics/format/ucode.cpp
-    ${REXSDK_DIR}/src/graphics/register_file.cpp
 )
+
+option(BO2ZM_MIN "v0.11 port stage 1: manifest + native memcpy hooks only" ON)
+if(BO2ZM_MIN)
+  set(BO2ZM_SOURCES ${BO2ZM_ROOT}/src/main.cpp ${BO2ZM_ROOT}/src/bo2zm_min_register.cpp ${BO2ZM_ROOT}/src/bo2zm_crt_min.cpp)
+  set(BO2ZM_DEVLINK OFF CACHE BOOL "" FORCE)
+endif()
 
 # BO2ZM_DEVLINK: the PC link for development consoles, which take new builds from a PC, send their logs back and run a
 # watchdog during benchmarks; their home screen gets CHECK FOR UPDATES against that PC. Off, the program has no code
@@ -124,7 +128,8 @@ else()
     set(BO2ZM_DEVLINK OFF CACHE BOOL "Development consoles: the link to a PC (its sources are not in this tree)" FORCE)
 endif()
 message(STATUS "bo2zm: BO2ZM_DEVLINK ${BO2ZM_DEVLINK}")
-if(BO2ZM_DEVLINK)
+if(BO2ZM_MIN)
+elseif(BO2ZM_DEVLINK)
     list(APPEND BO2ZM_SOURCES ${BO2ZM_ROOT}/src/bo2zm_devlink.cpp ${BO2ZM_ROOT}/src/bo2zm_updates.cpp)
 else()
     list(APPEND BO2ZM_SOURCES ${BO2ZM_ROOT}/src/bo2zm_lifecycle.cpp)
@@ -141,7 +146,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/../../core/bo2zm_linux.cpp)
 endif()
 # macOS (tools/build_mac.sh): the relaunch.
-if(APPLE)
+if(APPLE AND NOT BO2ZM_MIN)
     target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/../../core/bo2zm_mac.cpp)
 endif()
 
@@ -159,17 +164,22 @@ if(WIN32)
 endif()
 
 # xenos: ReXGlue's emulated Xbox 360 GPU, which the PC build can use instead of the native renderer.
-rexglue_setup_target(bo2zm GPU_PLUGINS xenos)
+rexglue_setup_target(bo2zm)
 
 # The game-neutral services (core/) and the BO2 sources (games/bo2/src/): a quoted "bo2zm_x.h" include finds its file in
 # either directory, as it did when both were app/src. Not the repository root: "core/threading_switch.h" is the SDK's.
 target_include_directories(bo2zm PRIVATE "${BO2ZM_ROOT}/../../core" "${BO2ZM_ROOT}/src")
+if(NOT BO2ZM_MIN)
+  # v0.10 headers (cvar, logging, ...) kept alive on v0.11: games/bo2/compat/rex
+  target_include_directories(bo2zm BEFORE PRIVATE "${BO2ZM_ROOT}/compat" "${REXSDK_DIR}/thirdparty/cli11/include" "${REXSDK_DIR}/thirdparty/spdlog/include" "${REXSDK_DIR}/thirdparty/tomlplusplus/include" "${REXSDK_DIR}/src/gpu/xenos/metal/include")
+  target_sources(bo2zm PRIVATE "${BO2ZM_ROOT}/compat/src/cvar.cpp")
+endif()
 
 # Hot leaf functions copied with their ctx registers as locals (tools/localize.py, from games/bo2/locals.txt; run by
 # tools/codegen.sh). Same target as the generated code, so the same flags and precompiled header.
 set(BO2ZM_LOCALS "${BO2ZM_ROOT}/generated/default_mp/bo2zm_locals.cpp")
-if(EXISTS "${BO2ZM_LOCALS}" AND TARGET bo2zm_recomp)
-  target_sources(bo2zm_recomp PRIVATE "${BO2ZM_LOCALS}")
+if(EXISTS "${BO2ZM_LOCALS}" AND TARGET bo2zm_recompiled)
+  target_sources(bo2zm_recompiled PRIVATE "${BO2ZM_LOCALS}")
   target_compile_definitions(bo2zm PRIVATE BO2ZM_HAS_LOCALS=1)
 endif()
 
@@ -178,17 +188,17 @@ endif()
 # BO2ZM_GUEST_MEMORY_PLAIN the guest loads and stores are plain accesses instead of volatile ones.
 option(BO2ZM_GUEST_MEMORY_PLAIN "Generated code: plain guest loads and stores, with compiler barriers on guest memory"
        OFF)
-if(TARGET bo2zm_recomp)
-  target_precompile_headers(bo2zm_recomp PRIVATE "${BO2ZM_ROOT}/../../core/bo2zm_guest_memory.h")
+if(TARGET bo2zm_recompiled)
+  target_precompile_headers(bo2zm_recompiled PRIVATE "${BO2ZM_ROOT}/../../core/bo2zm_guest_memory.h")
   if(BO2ZM_GUEST_MEMORY_PLAIN)
-    target_compile_definitions(bo2zm_recomp PRIVATE BO2ZM_GUEST_MEMORY_PLAIN=1)
+    target_compile_definitions(bo2zm_recompiled PRIVATE BO2ZM_GUEST_MEMORY_PLAIN=1)
   endif()
   # macOS: the function registration table (1.6 MB, run once at startup) takes Apple clang 30 minutes at -O3 on a
   # loaded machine. At -O0, without the PCH and without GlobalISel it takes seconds and runs as fast. The idea comes
   # from the Fable II Recomp for macOS project.
   if(APPLE)
     set_source_files_properties("${BO2ZM_ROOT}/generated/default_mp/bo2zm_register.cpp"
-                                TARGET_DIRECTORY bo2zm_recomp
+                                TARGET_DIRECTORY bo2zm_recompiled
                                 PROPERTIES COMPILE_OPTIONS "-O0;-fno-global-isel" SKIP_PRECOMPILE_HEADERS ON)
   endif()
 endif()
@@ -201,7 +211,7 @@ endif()
 # build and the final one look for the same names.
 set(BO2ZM_PGO "" CACHE STRING "Switch: profile-guided optimization of the generated code: generate, use or empty")
 set(BO2ZM_PGO_DIR "" CACHE PATH "Switch, BO2ZM_PGO=use: the folder with the training run's profile")
-if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
+if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recompiled AND BO2ZM_PGO)
   file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" _bo2zm_pgo_prefix)
   # The app's own hot native code takes the same profile: the renderer (its ring and recorder threads use about 16 ms
   # of CPU per frame on the console), the native game routines, the sound mixer's native stages, skinning, culling and
@@ -221,7 +231,7 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
     # profiler's) through tpidr_el0, which is 0 on Horizon's threads (libnx keeps its thread data elsewhere), so a
     # training build with value profiling faults at address 0xd68 in __gcov_indirect_call_profiler_v4 on the first
     # guest thread. Without value profiling the counters are plain globals; only indirect-call promotion is lost.
-    target_compile_options(bo2zm_recomp PRIVATE -fprofile-generate=/switch/bo2zm/pgo -fno-profile-values
+    target_compile_options(bo2zm_recompiled PRIVATE -fprofile-generate=/switch/bo2zm/pgo -fno-profile-values
                            -fprofile-update=single "-fprofile-prefix-path=${_bo2zm_pgo_prefix}")
     set_property(SOURCE ${_bo2zm_pgo_native} APPEND PROPERTY COMPILE_OPTIONS -fprofile-generate=/switch/bo2zm/pgo
                  -fno-profile-values -fprofile-update=single "-fprofile-prefix-path=${_bo2zm_pgo_prefix}")
@@ -229,7 +239,7 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
     target_link_libraries(bo2zm PRIVATE gcov)
     target_link_options(bo2zm PRIVATE "-Wl,--wrap=fopen")
   elseif(BO2ZM_PGO STREQUAL "use")
-    target_compile_options(bo2zm_recomp PRIVATE "-fprofile-use=${BO2ZM_PGO_DIR}"
+    target_compile_options(bo2zm_recompiled PRIVATE "-fprofile-use=${BO2ZM_PGO_DIR}"
                            "-fprofile-prefix-path=${_bo2zm_pgo_prefix}" -fprofile-partial-training -fprofile-correction
                            -Wno-missing-profile -Wno-coverage-mismatch)
     # A profile trained before these files were in it has none for them: they build as without one.
@@ -282,7 +292,7 @@ set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_webm.cpp PROPERTIES INCLUDE_
 
 # The native renderer (games/bo2/src/native/render) draws the game image with the SDK
 # presenter's precompiled SPIR-V, and fingerprints with the SDK's xxHash.
-target_include_directories(bo2zm PRIVATE "${REXSDK_DIR}/src/ui/shaders")
+target_include_directories(bo2zm PRIVATE "${REXSDK_DIR}/src/ui/shaders" "${REXSDK_DIR}/src/ui/overlay")
 find_path(BO2ZM_XXHASH_INCLUDE xxhash.h HINTS "${REXSDK_DIR}/thirdparty/xxHash" NO_CMAKE_FIND_ROOT_PATH REQUIRED)
 target_include_directories(bo2zm PRIVATE "${BO2ZM_XXHASH_INCLUDE}")
 
