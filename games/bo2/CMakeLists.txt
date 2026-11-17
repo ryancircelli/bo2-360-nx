@@ -422,4 +422,7 @@ if(NOT BO2ZM_MIN)
         target_link_libraries(bo2zm PRIVATE spdlog::spdlog)
     endif()
     target_link_options(bo2zm PRIVATE -Wl,-undefined,dynamic_lookup)
+    # fmt::vformat is not exported by any SDK dylib: with dynamic_lookup it stayed null and every direct fmt::format call
+    # in game code crashed. Header-only fmt compiles it into bo2zm.
+    target_compile_definitions(bo2zm PRIVATE FMT_HEADER_ONLY=1)
 endif()
