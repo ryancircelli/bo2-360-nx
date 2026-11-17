@@ -1,0 +1,33 @@
+From 390eb61a59991c87b97578d5e1beea83ab8940ce Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 06:55:01 -0500
+Subject: [PATCH 1/2] trace: hex dump of large received datagrams (experiment)
+
+---
+ src/system/xsocket.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index 6c1ed28f..6108fa74 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -255,6 +255,16 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+       REXSYS_WARN("[syslink-trace] recv {} bytes on port {} from {:08X}:{} first {:02X}{:02X}{:02X}{:02X}", ret,
+                   bound_port_, address, port, ret > 0 ? buf[0] : 0, ret > 1 ? buf[1] : 0, ret > 2 ? buf[2] : 0,
+                   ret > 3 ? buf[3] : 0);
++      static std::atomic<int> dumped{0};
++      if (ret >= 300 && dumped.fetch_add(1) < 6) {
++        std::string hex;
++        for (int i = 0; i < ret; ++i) {
++          char b[4];
++          snprintf(b, sizeof(b), "%02X", buf[i]);
++          hex += b;
++        }
++        REXSYS_WARN("[syslink-trace] recv-hex {}", hex);
++      }
+     }
+   }
+   if (from) {
+-- 
+2.54.0 (Apple Git-157)
+

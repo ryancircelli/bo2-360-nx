@@ -1,0 +1,42 @@
+From 01a738b2f5d64066bf571e356aa67ee2b7a16226 Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 07:34:22 -0500
+Subject: [PATCH 2/2] experiment: REX_EXPERIMENT_INGAME0 rewrites isInGame 1 ->
+ 0 in sent infoResponse
+
+---
+ src/system/xsocket.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index 6108fa74..0cebd52a 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -11,6 +11,7 @@
+  */
+ 
+ #include <cerrno>
++#include <cstdlib>
+ #include <cstring>
+ 
+ #include <rex/kernel/xam/module.h>
+@@ -311,6 +312,16 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+ 
+   uint32_t address = to->sin_addr;
+   uint16_t port = to->sin_port;
++  if (std::getenv("REX_EXPERIMENT_INGAME0")) {
++    // Experiment: advertise a hosted lobby as not in game (isInGame 0).
++    static const char kNeedle[] = "\\isInGame\\1";
++    for (int i = 0; i + int(sizeof(kNeedle)) - 1 <= int(buf_len); ++i) {
++      if (memcmp(buf + i, kNeedle, sizeof(kNeedle) - 1) == 0) {
++        buf[i + sizeof(kNeedle) - 2] = '0';
++        break;
++      }
++    }
++  }
+   {
+     static std::atomic<int> traced{0};
+     if (traced.fetch_add(1) < 400) {
+-- 
+2.54.0 (Apple Git-157)
+
