@@ -14,7 +14,6 @@
 namespace bo2zm::native {
 namespace {
 std::unique_ptr<rex::IDriver> CreateDriver() { return CreateGraphicsSystem(); }
-constexpr std::array<rex::InterfaceType, 1> kRequired = {rex::gpu::IGraphicsSystem::kInterface};
 constexpr std::array<rex::DriverRegistration, 1> kDrivers = {rex::DriverRegistration{
     rex::DriverType::kGraphics, "bo2native", rex::GraphicsFamily::kXenos, &CreateDriver}};
 
@@ -22,7 +21,7 @@ class NativeModule final : public rex::IModule, public rex::IDriverModule {
  public:
   REX_MODULE_SERVES(::rex::IDriverModule)
   std::string_view GetName() const override { return "bo2zm-native"; }
-  std::span<const rex::InterfaceType> GetRequiredInterfaces() const override { return kRequired; }
+  std::span<const rex::InterfaceType> GetRequiredInterfaces() const override { return {}; }
   [[nodiscard]] rex::Result<void> Connect(rex::IInterfaceFactory&) override { return {}; }
   void Disconnect() override {}
   [[nodiscard]] rex::Result<void> Init() override { return {}; }
