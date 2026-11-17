@@ -73,7 +73,7 @@ void AnalyzeConstants(bo2zm::native::ShaderInput& e) {
 #if defined(__SWITCH__)
   try {
     rex::graphics::Shader analysis(
-        e.vertices ? rex::graphics::xenos::ShaderType::kVertex : rex::graphics::xenos::ShaderType::kPixel, 0,
+        e.vertices ? rex::xenos::ShaderType::kVertex : rex::xenos::ShaderType::kPixel, 0,
         e.microcode.data(), e.microcode.size(), std::endian::native);
     rex::string::StringBuffer disassembly;
     analysis.AnalyzeUcode(disassembly);

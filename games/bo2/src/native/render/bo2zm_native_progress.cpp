@@ -4,9 +4,7 @@
 #include "bo2zm_native_capture.h"
 
 #include <rex/logging.h>
-#include <rex/ui/presenter.h>
-#include <rex/ui/vulkan/device.h>
-#include <rex/ui/vulkan/presenter.h>
+#include "bo2zm_native_vk.h"
 
 #include <algorithm>
 #include <array>
@@ -27,7 +25,7 @@
 namespace bo2zm::native {
 namespace {
 
-using OutputContext = rex::ui::vulkan::VulkanPresenter::VulkanGuestOutputRefreshContext;
+using OutputContext = rex::gpu::vulkan::VulkanPresenter::VulkanGuestOutputRefreshContext;
 
 constexpr uint32_t kWidth = 1280;  // the guest output, as the renderer's own frames
 constexpr uint32_t kHeight = 720;
@@ -153,8 +151,8 @@ VkClearRect Rect(int x, int y, int width, int height) {
 }  // namespace
 
 struct ProgressScreen::Vulkan {
-  rex::ui::Presenter* presenter = nullptr;
-  const rex::ui::vulkan::VulkanDevice* device = nullptr;
+  rex::gpu::Presenter* presenter = nullptr;
+  const rex::gpu::vulkan::VulkanDevice* device = nullptr;
   VkRenderPass render_pass = VK_NULL_HANDLE;
   VkCommandPool pool = VK_NULL_HANDLE;
   VkCommandBuffer commands = VK_NULL_HANDLE;
@@ -177,17 +175,17 @@ struct ProgressScreen::Vulkan {
 };
 
 bool ProgressScreen::Vulkan::Setup() {
-  const auto& dfn = device->functions();
-  const VkDevice vk_device = device->device();
+  const auto& dfn = device->GetFunctions();
+  const VkDevice vk_device = device->GetDevice();
   VkAttachmentDescription attachment{};
-  attachment.format = rex::ui::vulkan::VulkanPresenter::kGuestOutputFormat;
+  attachment.format = rex::gpu::vulkan::VulkanPresenter::kGuestOutputFormat;
   attachment.samples = VK_SAMPLE_COUNT_1_BIT;
   attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
   attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
   attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  attachment.finalLayout = rex::ui::vulkan::VulkanPresenter::kGuestOutputInternalLayout;
+  attachment.finalLayout = rex::gpu::vulkan::VulkanPresenter::kGuestOutputInternalLayout;
   VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
   VkSubpassDescription subpass{};
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -205,7 +203,7 @@ bool ProgressScreen::Vulkan::Setup() {
   }
   VkCommandPoolCreateInfo pool_info{};
   pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  pool_info.queueFamilyIndex = device->queue_family_graphics_compute();
+  pool_info.queueFamilyIndex = device->GetQueueFamilyGraphicsCompute();
   if (dfn.vkCreateCommandPool(vk_device, &pool_info, nullptr, &pool) != VK_SUCCESS) {
     pool = VK_NULL_HANDLE;
     return false;
@@ -230,18 +228,18 @@ bool ProgressScreen::Vulkan::Setup() {
 
 VkFramebuffer ProgressScreen::Vulkan::FramebufferFor(const OutputContext& context) {
   for (const Framebuffer& f : framebuffers) {
-    if (f.framebuffer != VK_NULL_HANDLE && f.version == context.image_version()) {
+    if (f.framebuffer != VK_NULL_HANDLE && f.version == context.GetImageVersion()) {
       return f.framebuffer;
     }
   }
-  const auto& dfn = device->functions();
+  const auto& dfn = device->GetFunctions();
   Framebuffer& f = framebuffers[next_framebuffer];
   next_framebuffer = (next_framebuffer + 1) % framebuffers.size();
   if (f.framebuffer != VK_NULL_HANDLE) {
-    dfn.vkDestroyFramebuffer(device->device(), f.framebuffer, nullptr);  // its frame is done (WaitIdle)
+    dfn.vkDestroyFramebuffer(device->GetDevice(), f.framebuffer, nullptr);  // its frame is done (WaitIdle)
     f.framebuffer = VK_NULL_HANDLE;
   }
-  VkImageView view = context.image_view();
+  VkImageView view = context.GetImageView();
   VkFramebufferCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
   info.renderPass = render_pass;
@@ -250,27 +248,27 @@ VkFramebuffer ProgressScreen::Vulkan::FramebufferFor(const OutputContext& contex
   info.width = kWidth;
   info.height = kHeight;
   info.layers = 1;
-  if (dfn.vkCreateFramebuffer(device->device(), &info, nullptr, &f.framebuffer) != VK_SUCCESS) {
+  if (dfn.vkCreateFramebuffer(device->GetDevice(), &info, nullptr, &f.framebuffer) != VK_SUCCESS) {
     f.framebuffer = VK_NULL_HANDLE;
     return VK_NULL_HANDLE;
   }
-  f.version = context.image_version();
+  f.version = context.GetImageVersion();
   return f.framebuffer;
 }
 
 void ProgressScreen::Vulkan::WaitIdle() {
   if (fence_pending) {
-    const auto& dfn = device->functions();
-    dfn.vkWaitForFences(device->device(), 1, &fence, VK_TRUE, UINT64_MAX);
-    dfn.vkResetFences(device->device(), 1, &fence);
+    const auto& dfn = device->GetFunctions();
+    dfn.vkWaitForFences(device->GetDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+    dfn.vkResetFences(device->GetDevice(), 1, &fence);
     fence_pending = false;
   }
 }
 
 bool ProgressScreen::Vulkan::Record(OutputContext& context, int percent, bool blank) {
-  const auto& dfn = device->functions();
+  const auto& dfn = device->GetFunctions();
   WaitIdle();  // one command buffer: the previous frame's must be done (it is, 100 ms later)
-  dfn.vkResetCommandPool(device->device(), pool, 0);
+  dfn.vkResetCommandPool(device->GetDevice(), pool, 0);
   const VkFramebuffer framebuffer = FramebufferFor(context);
   if (framebuffer == VK_NULL_HANDLE) {
     return false;
@@ -327,8 +325,8 @@ bool ProgressScreen::Vulkan::Record(OutputContext& context, int percent, bool bl
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &commands;
   {
-    const auto queue = device->AcquireQueue(device->queue_family_graphics_compute(), 0);
-    if (dfn.vkQueueSubmit(queue.queue(), 1, &submit, fence) != VK_SUCCESS) {
+    const auto queue = device->AcquireQueue(device->GetQueueFamilyGraphicsCompute(), 0);
+    if (dfn.vkQueueSubmit(queue.GetQueue(), 1, &submit, fence) != VK_SUCCESS) {
       return false;
     }
   }
@@ -342,8 +340,8 @@ void ProgressScreen::Vulkan::Destroy() {
     return;
   }
   WaitIdle();
-  const auto& dfn = device->functions();
-  const VkDevice vk_device = device->device();
+  const auto& dfn = device->GetFunctions();
+  const VkDevice vk_device = device->GetDevice();
   for (Framebuffer& f : framebuffers) {
     if (f.framebuffer != VK_NULL_HANDLE) {
       dfn.vkDestroyFramebuffer(vk_device, f.framebuffer, nullptr);
@@ -365,7 +363,7 @@ void ProgressScreen::Vulkan::Destroy() {
   }
 }
 
-ProgressScreen::ProgressScreen(rex::ui::Presenter* presenter, const rex::ui::vulkan::VulkanDevice* device)
+ProgressScreen::ProgressScreen(rex::gpu::Presenter* presenter, const rex::gpu::vulkan::VulkanDevice* device)
     : vk_(std::make_unique<Vulkan>()) {
   vk_->presenter = presenter;
   vk_->device = device;
@@ -389,7 +387,7 @@ void ProgressScreen::Draw(int percent, bool blank) {
   }
   bool recorded = false;
   vk_->presenter->RefreshGuestOutput(kWidth, kHeight, kWidth, kHeight,
-                                     [&](rex::ui::Presenter::GuestOutputRefreshContext& context) {
+                                     [&](rex::gpu::Presenter::GuestOutputRefreshContext& context) {
                                        recorded = vk_->Record(static_cast<OutputContext&>(context), percent, blank);
                                        return recorded;
                                      });

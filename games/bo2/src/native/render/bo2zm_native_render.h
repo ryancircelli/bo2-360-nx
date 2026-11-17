@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <memory>
 
-#include <rex/system/interfaces/graphics.h>
+#include "bo2zm_native_driver.h"
 
 namespace bo2zm::native {
 
@@ -36,6 +36,6 @@ uint64_t SwapsNative();
 
 // The native graphics system: the SDK presenter, a reserved MMIO range, the vblank
 // thread and the command ring sink.
-std::unique_ptr<rex::system::IGraphicsSystem> CreateSystemGraphics();
+std::unique_ptr<rex::gpu::IGraphicsDriver> CreateSystemGraphics();
 
 }  // namespace bo2zm::native

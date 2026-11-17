@@ -19,14 +19,14 @@
 
 #pragma once
 
-#include <rex/ui/vulkan/device.h>
+#include "bo2zm_native_vk.h"
 
 namespace bo2zm::native::deferred {
 
-using Functions = rex::ui::vulkan::VulkanDevice::Functions;
+using Functions = rex::gpu::vulkan::VulkanDevice::Functions;
 
 // The renderer's function table (built on first use from the device's; one device per process).
-const Functions& Table(const rex::ui::vulkan::VulkanDevice& device);
+const Functions& Table(const rex::gpu::vulkan::VulkanDevice& device);
 
 // The wrapper of a vkCmd* function loaded separately (vkGetDeviceProcAddr), by name; 'real' if it has none.
 PFN_vkVoidFunction Wrap(const char* name, PFN_vkVoidFunction real);

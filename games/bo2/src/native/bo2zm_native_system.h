@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <memory>
 
-#include <rex/system/interfaces/graphics.h>
+#include "bo2zm_native_driver.h"
 
 namespace bo2zm::native {
 
@@ -44,6 +44,6 @@ bool ClearQuads();
 uint64_t Swaps();
 
 // The system the cvar selects (call only when Active()).
-std::unique_ptr<rex::system::IGraphicsSystem> CreateGraphicsSystem();
+std::unique_ptr<rex::gpu::IGraphicsDriver> CreateGraphicsSystem();
 
 }  // namespace bo2zm::native

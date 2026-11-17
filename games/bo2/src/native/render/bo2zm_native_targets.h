@@ -19,10 +19,10 @@
 namespace rex::memory {
 class Memory;
 }
-namespace rex::ui {
+namespace rex::gpu {
 class Presenter;
 }
-namespace rex::ui::vulkan {
+namespace rex::gpu::vulkan {
 class VulkanDevice;
 }
 
@@ -77,7 +77,7 @@ struct SwapTexture {
 class NativeTargets {
  public:
   // nullptr if the device is missing or presentation could not be set up.
-  static std::unique_ptr<NativeTargets> Create(const rex::ui::vulkan::VulkanDevice* vulkan_device,
+  static std::unique_ptr<NativeTargets> Create(const rex::gpu::vulkan::VulkanDevice* vulkan_device,
                                                 rex::memory::Memory* guest_memory);
   virtual ~NativeTargets() = default;
 
@@ -93,7 +93,7 @@ class NativeTargets {
 
   // Submits pending work and draws the Swap's texture into the presenter's output. false if that Swap has
   // no resolved texture.
-  virtual bool Present(rex::ui::Presenter* ui_presenter, const SwapTexture& swap, uint32_t width,
+  virtual bool Present(rex::gpu::Presenter* ui_presenter, const SwapTexture& swap, uint32_t width,
                          uint32_t height) = 0;
 
   // 256-entry gamma ramp loaded by the game, 10 bits per channel (red, green, blue). Subsequent outputs

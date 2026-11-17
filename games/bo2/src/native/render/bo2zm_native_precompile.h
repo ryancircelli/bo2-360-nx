@@ -22,10 +22,7 @@
 #include <filesystem>
 #include <functional>
 
-namespace rex::ui {
-class ImGuiDrawer;
-}
-namespace rex::ui::vulkan {
+namespace rex::gpu::vulkan {
 class VulkanDevice;
 }
 
@@ -37,10 +34,10 @@ namespace precompile {
 
 // UI thread, in place of starting the game: true when the game waits for the precompile; start is then called once
 // it is over (from the ring thread). Waits for the ring thread's decision (normally made already).
-bool Hold(std::function<void()> start, rex::ui::ImGuiDrawer* drawer);
+bool Hold(std::function<void()> start, void* drawer);
 
 // Ring thread, at its start (before the game's first command): whether the precompile runs now. Once.
-bool Decide(const rex::ui::vulkan::VulkanDevice* device, const NativeShaders* library);
+bool Decide(const rex::gpu::vulkan::VulkanDevice* device, const NativeShaders* library);
 // This start's stamp (0 before Decide), and whether the pipelines file on disk was vouched for at start.
 uint64_t Stamp();
 bool KnownWarm();

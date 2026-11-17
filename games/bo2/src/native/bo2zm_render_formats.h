@@ -13,7 +13,7 @@
 
 #include <cstdint>
 
-#include <rex/graphics/xenos.h>
+#include "bo2zm_xenos.h"
 #include <rex/logging.h>
 
 namespace bo2zm_formats {

@@ -43,7 +43,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
-#include <rex/thread.h>
+#include "../bo2zm_thread.h"
 
 #if REX_PLATFORM_SWITCH
 #include "core/threading_switch.h"  // the SDK's src/ is on the include path (CMakeLists.txt)
@@ -1171,7 +1171,7 @@ void ApplyAbCore() {
 #endif
 
 void Loop(int ring_core) {
-  rex::thread::set_current_thread_name("GPU native recorder");
+  bo2zm::SetThreadName("GPU native recorder");
 #if REX_PLATFORM_SWITCH
   {
     const int32_t priority = REXCVAR_GET(bo2zm_native_recorder_priority);
@@ -1254,8 +1254,8 @@ void Loop(int ring_core) {
   }
 }
 
-void Build(const rex::ui::vulkan::VulkanDevice& device) {
-  g_real = device.functions();
+void Build(const rex::gpu::vulkan::VulkanDevice& device) {
+  g_real = device.GetFunctions();
   g_table = g_real;
   g_enabled = REXCVAR_GET(bo2zm_native_deferred_recording);
   if (!g_enabled) {
@@ -1263,17 +1263,17 @@ void Build(const rex::ui::vulkan::VulkanDevice& device) {
     return;
   }
   // Every vkCmd* entry: drain and call at once on the job buffer, call at once on any other.
-#define XE_UI_VULKAN_FUNCTION(name) InstallDirect<&Functions::name, PFN_##name>(g_table);
-#define XE_UI_VULKAN_FUNCTION_PROMOTED(extension_name, core_name) \
+#define REX_VK_FUNCTION(name) InstallDirect<&Functions::name, PFN_##name>(g_table);
+#define REX_VK_FUNCTION_PROMOTED(extension_name, core_name) \
   InstallDirect<&Functions::core_name, PFN_##core_name>(g_table);
-#include <rex/ui/vulkan/functions/device_1_0.inc>
-#include <rex/ui/vulkan/functions/device_khr_swapchain.inc>
-#include <rex/ui/vulkan/functions/device_1_1_khr_get_memory_requirements2.inc>
-#include <rex/ui/vulkan/functions/device_1_1_khr_bind_memory2.inc>
-#include <rex/ui/vulkan/functions/device_1_3_khr_maintenance4.inc>
-#include <rex/ui/vulkan/functions/device_1_3_khr_dynamic_rendering.inc>
-#undef XE_UI_VULKAN_FUNCTION_PROMOTED
-#undef XE_UI_VULKAN_FUNCTION
+#include "gpu/xenos/host/vulkan/functions/device_1_0.inc"
+#include "gpu/xenos/host/vulkan/functions/device_khr_swapchain.inc"
+#include "gpu/xenos/host/vulkan/functions/device_1_1_khr_get_memory_requirements2.inc"
+#include "gpu/xenos/host/vulkan/functions/device_1_1_khr_bind_memory2.inc"
+#include "gpu/xenos/host/vulkan/functions/device_1_3_khr_maintenance4.inc"
+#include "gpu/xenos/host/vulkan/functions/device_1_3_khr_dynamic_rendering.inc"
+#undef REX_VK_FUNCTION_PROMOTED
+#undef REX_VK_FUNCTION
   // The ones the renderer uses per draw and per pass: queued.
   g_table.vkCmdBindPipeline = &CmdBindPipeline;
   g_table.vkCmdBindDescriptorSets = &CmdBindDescriptorSets;
@@ -1325,7 +1325,7 @@ bool StartRecorder() {
 
 }  // namespace
 
-const Functions& Table(const rex::ui::vulkan::VulkanDevice& device) {
+const Functions& Table(const rex::gpu::vulkan::VulkanDevice& device) {
   std::call_once(g_once, [&] { Build(device); });
   return g_table;
 }

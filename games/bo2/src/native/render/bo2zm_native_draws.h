@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include <rex/ui/vulkan/device.h>
+#include "bo2zm_native_vk.h"
 
 #include <array>
 #include <atomic>
@@ -293,7 +293,7 @@ struct DrawStats {
 class VulkanDraws {
  public:
   // nullptr if the device lacks capabilities (the reason is logged).
-  static std::unique_ptr<VulkanDraws> Create(const rex::ui::vulkan::VulkanDevice* vulkan_device,
+  static std::unique_ptr<VulkanDraws> Create(const rex::gpu::vulkan::VulkanDevice* vulkan_device,
                                               rex::memory::Memory* guest_memory,
                                               TargetContext* context);
   virtual ~VulkanDraws() = default;

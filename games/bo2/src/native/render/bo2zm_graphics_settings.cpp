@@ -8,7 +8,6 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#include <rex/ui/overlay/settings_overlay.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -333,7 +332,7 @@ void HideSettingsNoEffect() {
     std::string& list = rex::cvar::GetFlagInfo(label) ? registered : not_registered;
     list += (list.empty() ? "" : ", ") + label;
   }
-  rex::ui::HideSettingsInMenu(hidden);
+  // v0.10 hid these in the SDK settings overlay (rex::ui::HideSettingsInMenu); v0.11 has no such overlay.
   REXLOG_INFO("[settings] menu: removed, because they do nothing with the native renderer or the Graphics category "
               "replaces them: {}; not registered in this build: {}",
               registered.empty() ? "none" : registered, not_registered.empty() ? "none" : not_registered);

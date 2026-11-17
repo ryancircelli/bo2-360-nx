@@ -41,15 +41,12 @@
 #include "../../bo2zm_perf_log.h"  // bo2zm_perf_log: GPU time per frame, GPU name
 
 #include <rex/cvar.h>
-#include <rex/graphics/xenos.h>
+#include "bo2zm_xenos.h"
 #include <rex/logging.h>
 #include <rex/math.h>
-#include <rex/graphics/registers.h>
+#include "bo2zm_xenos.h"
 #include <rex/system/xmemory.h>
-#include <rex/ui/presenter.h>
-#include <rex/ui/vulkan/device.h>
-#include <rex/ui/vulkan/presenter.h>
-#include <rex/ui/vulkan/util.h>
+#include "bo2zm_native_vk.h"
 
 #include "bo2zm_native_draws.h"  // g_probe_vertex_address
 #include "bo2zm_native_depth_resolve.h"
@@ -441,7 +438,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_invalidate_textures_every_copy, false, "BO2",
  * Without it, the ring thread waited almost a whole 60 Hz vsync per frame for the previous presentation to finish,
  * which pushes a frame that should land on one vsync onto the next.
  *
- * The SDK already keeps a mailbox of three output images for exactly this (kGuestOutputMailboxSize = 3: presenting
+ * The SDK already keeps a mailbox of three output images for exactly this (shaders::kGuestOutputMailboxSize = 3: presenting
  * without long interlocking between refreshing the guest output and painting it), and hands out a different image on
  * each refresh. Painting the next one while the previous one is still being presented is the intended use, and the
  * image does not change.
@@ -537,8 +534,8 @@ namespace bo2zm::native {
 namespace shaders {
 // The same SPIR-V the SDK presenter uses to draw the game image
 // (vulkan_presenter.cpp:128-141).
-#include "vulkan_spirv/guest_output_bilinear_ps.h"
-#include "vulkan_spirv/guest_output_triangle_strip_rect_vs.h"
+#include "gpu/xenos/host/shaders/vulkan_spirv/guest_output_bilinear_ps.h"
+#include "gpu/xenos/host/shaders/vulkan_spirv/guest_output_triangle_strip_rect_vs.h"
 // The same sampling as guest_output_bilinear_ps with the game's gamma ramp
 // (shaders/bo2zm_output_gamma_ramp.frag).
 #include "shaders/bo2zm_output_gamma_ramp_ps.h"
@@ -559,8 +556,8 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_float_targets, true, "BO2",
 namespace {
 
 namespace xenos = rex::graphics::xenos;
-using rex::ui::vulkan::VulkanDevice;
-using rex::ui::vulkan::VulkanPresenter;
+using rex::gpu::vulkan::VulkanDevice;
+using rex::gpu::vulkan::VulkanPresenter;
 
 constexpr VkFormat kFormatColor = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr uint32_t kHeightMaxTarget = 2048;
@@ -837,9 +834,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   VulkanTargets(const VulkanDevice* vulkan_device, rex::memory::Memory* guest_memory)
       : vulkan_device_(vulkan_device),
         dfn_(deferred::Table(*vulkan_device)),  // the device's, with the vkCmd* calls queued (deferred.h)
-        device_(vulkan_device->device()),
+        device_(vulkan_device->GetDevice()),
         memory_(guest_memory),
-        family_(vulkan_device->queue_family_graphics_compute()) {}
+        family_(vulkan_device->GetQueueFamilyGraphicsCompute()) {}
 
   ~VulkanTargets() override {
     WaitGpu();
@@ -941,18 +938,18 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // vkCmdWriteTimestamp go through deferred::Wrap (queued on the job buffer, bo2zm_native_deferred.h).
     copy_image_ = reinterpret_cast<FnCopyImage>(deferred::Wrap(
         "vkCmdCopyImage",
-        vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
     if (!copy_image_) {
       REXLOG_ERROR("[native] C2: the driver does not provide vkCmdCopyImage");
       return false;
     }
     clear_depth_ = reinterpret_cast<FnClearDepth>(deferred::Wrap(
         "vkCmdClearDepthStencilImage",
-        vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_,
                                                                           "vkCmdClearDepthStencilImage")));
     blit_ = reinterpret_cast<FnBlit>(deferred::Wrap(
         "vkCmdBlitImage",
-        vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdBlitImage")));
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdBlitImage")));
     // Attachment, copy and clear source and destination, and sampling of the resolved ones (shadows).
     const VkFormatFeatureFlags kUsesDepth =
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
@@ -964,8 +961,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     VkFormatFeatureFlags uses_chosen = 0;
     for (const VkFormat candidate : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT}) {
       VkFormatProperties properties{};
-      vulkan_device_->vulkan_instance()->functions().vkGetPhysicalDeviceFormatProperties(
-          vulkan_device_->physical_device(), candidate, &properties);
+      vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetPhysicalDeviceFormatProperties(
+          vulkan_device_->GetPhysicalDevice(), candidate, &properties);
       const VkFormatFeatureFlags uses = properties.optimalTilingFeatures & kUsesDepth;
       if (!(uses & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
         continue;
@@ -1049,15 +1046,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                 marks_precise_ ? "SI" : "no", alternate_marks_s_);
     // GPU time per work unit: two timestamps per slot. Without timestamp bits on the queue, it is not measured.
     {
-      const auto& ifn = vulkan_device_->vulkan_instance()->functions();
+      const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
       uint32_t families = 0;
-      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->physical_device(), &families,
+      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->GetPhysicalDevice(), &families,
                                                    nullptr);
       std::vector<VkQueueFamilyProperties> queues(families);
-      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->physical_device(), &families,
+      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->GetPhysicalDevice(), &families,
                                                    queues.data());
       VkPhysicalDeviceProperties physical{};
-      ifn.vkGetPhysicalDeviceProperties(vulkan_device_->physical_device(), &physical);
+      ifn.vkGetPhysicalDeviceProperties(vulkan_device_->GetPhysicalDevice(), &physical);
       write_mark_ = reinterpret_cast<FnWriteMark>(
           deferred::Wrap("vkCmdWriteTimestamp", ifn.vkGetDeviceProcAddr(device_, "vkCmdWriteTimestamp")));
       read_queries_ = reinterpret_cast<FnReadQueries>(
@@ -1086,7 +1083,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
           dfn_.vkCreateQueryPool(device_, &info_occlusions, nullptr, &occlusions_) != VK_SUCCESS) {
         occlusions_ = VK_NULL_HANDLE;
       }
-      occlusion_precise_ = vulkan_device_->properties().occlusionQueryPrecise;
+      occlusion_precise_ = vulkan_device_->GetProperties().occlusionQueryPrecise;
       REXLOG_INFO("[native] C2: host occlusion queries {} ({})",
                   occlusions_ != VK_NULL_HANDLE ? "available" : "not available: fake count",
                   occlusion_precise_ ? "precise" : "not precise: they count whether there was any sample");
@@ -1105,7 +1102,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       // Pipeline statistics per pass. The order of the counters is the order of the bits,
       // not the order of this list: vertices, clipped primitives and fragments.
-      if (vulkan_device_->properties().pipelineStatisticsQuery && read_queries_) {
+      if (vulkan_device_->GetProperties().pipelineStatisticsQuery && read_queries_) {
         VkQueryPoolCreateInfo info_stats{};
         info_stats.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         info_stats.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
@@ -1222,9 +1219,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       OutputRamp& ramp = ramps_output_[i];
       uint32_t type = 0;
       void* mapped = nullptr;
-      if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
+      if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationBuffer(
               vulkan_device_, sizeof(ramp_values_) + sizeof(bo2zm::native::output::Crosshairs), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-              rex::ui::vulkan::util::MemoryPurpose::kUpload, ramp.buffer, ramp.guest_memory, &type) ||
+              rex::gpu::vulkan::objects::MemoryPurpose::kUpload, ramp.buffer, ramp.guest_memory, &type) ||
           dfn_.vkMapMemory(device_, ramp.guest_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
         REXLOG_WARN("[native] C2: could not create the gamma ramp buffer: the output goes without it");
         ramp_gamma_ = false;
@@ -1253,13 +1250,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
     VkShaderModuleCreateInfo module_info{};
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    module_info.codeSize = sizeof(shaders::guest_output_triangle_strip_rect_vs);
-    module_info.pCode = shaders::guest_output_triangle_strip_rect_vs;
+    module_info.codeSize = sizeof(shaders::kGuestOutputTriangleStripRectVS);
+    module_info.pCode = shaders::kGuestOutputTriangleStripRectVS;
     if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &vs_) != VK_SUCCESS) {
       return false;
     }
-    module_info.codeSize = sizeof(shaders::guest_output_bilinear_ps);
-    module_info.pCode = shaders::guest_output_bilinear_ps;
+    module_info.codeSize = sizeof(shaders::kGuestOutputBilinearPS);
+    module_info.pCode = shaders::kGuestOutputBilinearPS;
     if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &fs_) != VK_SUCCESS) {
       return false;
     }
@@ -1439,8 +1436,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-            vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, c.image, c.memory)) {
+    if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationImage(
+            vulkan_device_, info, rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal, c.image, c.memory)) {
       REXLOG_ERROR("[native] credits: could not create the image: no credits line");
       return false;
     }
@@ -1457,15 +1454,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // The picture's bytes, copied into the image by the first output that draws it (RecordCreditsUpload).
     uint32_t type = 0;
     void* mapped = nullptr;
-    if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
+    if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationBuffer(
             vulkan_device_, picture->rgba.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            rex::ui::vulkan::util::MemoryPurpose::kUpload, c.staging, c.staging_memory, &type) ||
+            rex::gpu::vulkan::objects::MemoryPurpose::kUpload, c.staging, c.staging_memory, &type) ||
         dfn_.vkMapMemory(device_, c.staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
       REXLOG_ERROR("[native] credits: could not create the upload buffer: no credits line");
       return false;
     }
     std::memcpy(mapped, picture->rgba.data(), picture->rgba.size());
-    rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, c.staging_memory, type);
+    rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, c.staging_memory, type);
     dfn_.vkUnmapMemory(device_, c.staging_memory);
     const VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
                                            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
@@ -1622,7 +1619,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                         command == uint32_t(xenos::CopyCommand::kConvert);
     const uint32_t pitch = reg.rb_surface_info & 0x3FFF;
     const uint32_t msaa = (reg.rb_surface_info >> 16) & 0x3;
-    if (msaa != uint32_t(xenos::MsaaSamples::k1X) && warned_.insert(1).second) {
+    if (msaa != uint32_t(xenos::MSAASamples::k1X) && warned_.insert(1).second) {
       REXLOG_INFO("[native] C2: target with MSAA: used with 1 sample");
     }
     if (source >= xenos::kMaxColorRenderTargets) {
@@ -2398,7 +2395,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     ++version_ramp_;
   }
 
-  bool Present(rex::ui::Presenter* ui_presenter, const SwapTexture& swap, uint32_t width,
+  bool Present(rex::gpu::Presenter* ui_presenter, const SwapTexture& swap, uint32_t width,
                  uint32_t height) override {
     bo2zm::reflection_demand::AnnotateSwap();  // reflection on demand
     // The per-draw diagnostic window opens here, on the PM4 ring thread, which is the one that records the
@@ -2599,7 +2596,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (tiled) {
       bool painted_tiled = false;
       ui_presenter->RefreshGuestOutput(
-          1280, 720, 1280, 720, [&](rex::ui::Presenter::GuestOutputRefreshContext& base_context) {
+          1280, 720, 1280, 720, [&](rex::gpu::Presenter::GuestOutputRefreshContext& base_context) {
             auto& context =
                 static_cast<VulkanPresenter::VulkanGuestOutputRefreshContext&>(base_context);
             painted_tiled = PaintOutput(context, tiled_, 1280, 720);
@@ -2626,7 +2623,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     auto output_call = before_refresh;
     bool call = false;
     ui_presenter->RefreshGuestOutput(
-        w, h, 1280, 720, [&](rex::ui::Presenter::GuestOutputRefreshContext& base_context) {
+        w, h, 1280, 720, [&](rex::gpu::Presenter::GuestOutputRefreshContext& base_context) {
           input_call = std::chrono::steady_clock::now();
           call = true;
           auto& context =
@@ -2677,10 +2674,10 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     for (VkDeviceSize i = 0; i < bytes; i += 4096) {
       sum += host[i];  // a first touch commits the page on the Switch
     }
-    const auto& ifn = vulkan_device_->vulkan_instance()->functions();
+    const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
     const auto properties_of = reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
         ifn.vkGetDeviceProcAddr(device_, "vkGetMemoryHostPointerPropertiesEXT"));
-    if (!vulkan_device_->extensions().ext_EXT_external_memory_host || !properties_of) {
+    if (!vulkan_device_->GetExtensions().ext_EXT_external_memory_host || !properties_of) {
       REXLOG_WARN("[native] host import probe: VK_EXT_external_memory_host is not available on this device");
       return;
     }
@@ -2705,7 +2702,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     const auto t1 = std::chrono::steady_clock::now();
     const VkResult r_import = dfn_.vkAllocateMemory(device_, &reserve, nullptr, &imported);
     const auto t2 = std::chrono::steady_clock::now();
-    const auto& types = vulkan_device_->memory_types();
+    const auto& types = vulkan_device_->GetMemoryTypes();
     if (r_import != VK_SUCCESS) {
       REXLOG_WARN("[native] host import probe ({} MB at guest {:08X}): vkAllocateMemory with the host pointer FAILED "
                   "(VkResult {}) in {:.2f} ms; memory types {:#x}",
@@ -2737,9 +2734,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     if (dfn_.vkCreateBuffer(device_, &info, nullptr, &source) != VK_SUCCESS ||
         dfn_.vkBindBufferMemory(device_, source, imported, 0) != VK_SUCCESS) {
       failed = "binding the imported memory to a buffer";
-    } else if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
+    } else if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationBuffer(
                    vulkan_device_, kProbeBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                   rex::ui::vulkan::util::MemoryPurpose::kReadback, target, target_memory, &target_type) ||
+                   rex::gpu::vulkan::objects::MemoryPurpose::kReadback, target, target_memory, &target_type) ||
                dfn_.vkMapMemory(device_, target_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
       failed = "the readback buffer";
     } else if (dfn_.vkCreateCommandPool(device_, &info_pool, nullptr, &pool) != VK_SUCCESS ||
@@ -2768,7 +2765,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       VkResult r_submit;
       {
         const auto queue = vulkan_device_->AcquireQueue(family_, 0);
-        r_submit = dfn_.vkQueueSubmit(queue.queue(), 1, &submit, fence);
+        r_submit = dfn_.vkQueueSubmit(queue.GetQueue(), 1, &submit, fence);
       }
       const VkResult r_wait =
           r_submit == VK_SUCCESS ? dfn_.vkWaitForFences(device_, 1, &fence, VK_TRUE, 2'000'000'000ull) : r_submit;
@@ -3935,8 +3932,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
       info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
       info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(vulkan_device_, info,
-                                                                 rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
+      if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationImage(vulkan_device_, info,
+                                                                 rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal,
                                                                  v.image.image, v.image.guest_memory)) {
         return nullptr;
       }
@@ -4045,7 +4042,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   void CreateVolumeGather(const OwnedImage& flat, ResolvedVolume& v) {
     if (!gather_tried_) {
       gather_tried_ = true;
-      const auto& ifn = vulkan_device_->vulkan_instance()->functions();
+      const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
       gather_address_fn_ =
           reinterpret_cast<PFN_vkGetBufferDeviceAddress>(ifn.vkGetDeviceProcAddr(device_, "vkGetBufferDeviceAddress"));
       VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -4117,7 +4114,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     allocate.pNext = &flags;
     allocate.allocationSize = requirements.size;
-    if (!rex::bit_scan_forward(requirements.memoryTypeBits & vulkan_device_->memory_types().host_visible, &type) ||
+    if (!rex::bit_scan_forward(requirements.memoryTypeBits & vulkan_device_->GetMemoryTypes().host_visible, &type) ||
         (allocate.memoryTypeIndex = type,
          dfn_.vkAllocateMemory(device_, &allocate, nullptr, &memory) != VK_SUCCESS) ||
         dfn_.vkBindBufferMemory(device_, buffer, memory, 0) != VK_SUCCESS ||
@@ -5992,14 +5989,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     info.usage = use;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-            vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image,
+    if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationImage(
+            vulkan_device_, info, rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal, image.image,
             image.guest_memory)) {
       // The GPU can run out of memory here too. Render targets are few and large, so one that does not fit
       // shows up at once: the texture cache is asked to release memory and the allocation is retried once.
       if (!draws_ || !draws_->ReleaseTexturesOnOutOfMemory() ||
-          !rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-              vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image,
+          !rex::gpu::vulkan::objects::CreateDedicatedAllocationImage(
+              vulkan_device_, info, rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal, image.image,
               image.guest_memory)) {
         REXLOG_ERROR("[native] C2: out of GPU memory for a {}x{} target (format {}) and releasing the cache was not "
                      "enough",
@@ -6512,7 +6509,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         const auto before_latch = std::chrono::steady_clock::now();  // "C2: present" report
         const auto queue = vulkan_device_->AcquireQueue(family_, 0);
         const auto before_submit = std::chrono::steady_clock::now();
-        if (dfn_.vkQueueSubmit(queue.queue(), 1, &submit, slots_[slot_].fence) != VK_SUCCESS) {
+        if (dfn_.vkQueueSubmit(queue.GetQueue(), 1, &submit, slots_[slot_].fence) != VK_SUCCESS) {
           return false;
         }
         ns_latch_job_ += Ns(before_latch, before_submit);
@@ -6814,9 +6811,9 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     Readback& read = *pointer;
     if (read.bytes < bytes) {
       uint32_t type = 0;
-      if (!rex::ui::vulkan::util::CreateDedicatedAllocationBuffer(
+      if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationBuffer(
               vulkan_device_, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-              rex::ui::vulkan::util::MemoryPurpose::kReadback, read.buffer, read.guest_memory, &type)) {
+              rex::gpu::vulkan::objects::MemoryPurpose::kReadback, read.buffer, read.guest_memory, &type)) {
         read = Readback{};
         Reject(16, "could not create a readback buffer for a resolved texture");
         return;
@@ -6829,7 +6826,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       }
       read.data = static_cast<uint8_t*>(mapped);
       read.bytes = bytes;
-      read.coherent = (vulkan_device_->memory_types().host_coherent >> type) & 0x1;
+      read.coherent = (vulkan_device_->GetMemoryTypes().host_coherent >> type) & 0x1;
     }
     VkBufferImageCopy copy{};
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -7111,14 +7108,14 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       if (table_changed) std::memcpy(ramp.data, ramp_values_.data(), sizeof(ramp_values_));
       if (table_changed || overlays_changed) {
         std::memcpy(ramp.data + sizeof(ramp_values_), &crosshairs, sizeof(crosshairs));
-        rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, ramp.guest_memory, ramp.type);
+        rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, ramp.guest_memory, ramp.type);
         ramp.version = version_ramp_;
         ramp.crosshairs = crosshairs;
       }
     }
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
     for (const auto& f : framebuffers_) {
-      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.image_version()) {
+      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.GetImageVersion()) {
         framebuffer = f.framebuffer;
       }
     }
@@ -7130,7 +7127,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         dfn_.vkDestroyFramebuffer(device_, f.framebuffer, nullptr);
         f.framebuffer = VK_NULL_HANDLE;
       }
-      VkImageView view = context.image_view();
+      VkImageView view = context.GetImageView();
       VkFramebufferCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
       info.renderPass = render_pass_output_;
@@ -7143,7 +7140,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         f.framebuffer = VK_NULL_HANDLE;
         return false;
       }
-      f.version = context.image_version();
+      f.version = context.GetImageVersion();
       framebuffer = f.framebuffer;
     }
 
@@ -7269,7 +7266,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       const auto before_latch = std::chrono::steady_clock::now();  // "C2: present" report
       const auto queue = vulkan_device_->AcquireQueue(family_, 0);
       const auto before_submit = std::chrono::steady_clock::now();
-      if (dfn_.vkQueueSubmit(queue.queue(), 1, &submit, fences_output_[s]) != VK_SUCCESS) {
+      if (dfn_.vkQueueSubmit(queue.GetQueue(), 1, &submit, fences_output_[s]) != VK_SUCCESS) {
         return false;
       }
       ns_latch_output_ += Ns(before_latch, before_submit);

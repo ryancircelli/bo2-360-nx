@@ -44,26 +44,14 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/game_info.h>
-#include <rex/graphics/pipeline/shader/interpreter.h>  // memexport on the CPU
-#include <rex/graphics/register_file.h>
-#include <rex/graphics/registers.h>
-#include <rex/graphics/xenos.h>
-#include <rex/kernel/xboxkrnl/video.h>
+#include "gpu/xenos/pipeline/shader/interpreter.h"  // memexport on the CPU
+#include "bo2zm_xenos.h"
 #include <rex/logging.h>
 #include <rex/memory/utils.h>
-#include <rex/system/function_dispatcher.h>
-#include <rex/system/kernel_state.h>
+#include "bo2zm_native_vk.h"
 #include <rex/system/xmemory.h>
-#include <rex/system/xobject.h>
-#include <rex/system/xthread.h>
-#include <rex/system/xtypes.h>
-#include <rex/system/xvideo.h>
-#include <rex/thread.h>
-#include <rex/ui/presenter.h>
-#include <rex/ui/vulkan/device.h>
-#include <rex/ui/vulkan/presenter.h>
-#include <rex/ui/vulkan/provider.h>
-#include <rex/ui/windowed_app_context.h>
+#include "../bo2zm_thread.h"
+#include "bo2zm_native_vk.h"
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -175,13 +163,13 @@ namespace bo2zm::memexport {
 // stream constant's fixed bits; red/blue swap; packing by color format and number format; endian swap; each eM#
 // goes to element index + #, if below the stream's index count. The write happens when the next alloc starts and
 // at the end of the invocation (Fin), as in the translator.
-class Sink final : public rex::graphics::ShaderInterpreter::ExportSink {
+class Sink final : public rex::gpu::ShaderInterpreter::ExportSink {
  public:
   explicit Sink(uint8_t* physical) : physical_(physical) {}
 
-  void AllocExport(rex::graphics::ucode::AllocType, uint32_t) override { Dump(); }
+  void AllocExport(rex::xenos::ucode::AllocType, uint32_t) override { Dump(); }
 
-  void Export(rex::graphics::ucode::ExportRegister reg_index, const float* value, uint32_t mask) override {
+  void Export(rex::xenos::ucode::ExportRegister reg_index, const float* value, uint32_t mask) override {
     const uint32_t r = uint32_t(reg_index);
     float* target = r == 32 ? ea_ : (r >= 33 && r <= 37) ? em_[r - 33] : nullptr;
     if (!target) {
@@ -525,7 +513,7 @@ class ReportQueue {
   static constexpr size_t kMaxLines = 4096;
 
   void Loop() {
-    rex::thread::set_current_thread_name("BO2 reports");
+    bo2zm::SetThreadName("BO2 reports");
 #if REX_PLATFORM_SWITCH
     const bool priority = RexSwitchSetCurrentThreadPriorityOk(REX_SWITCH_PRIO_GUEST);
 #else
@@ -786,9 +774,8 @@ namespace bo2zm::native {
 namespace {
 
 namespace xenos = rex::graphics::xenos;
-using rex::X_STATUS;  // X_STATUS_SUCCESS and X_STATUS_UNSUCCESSFUL need it too
 using Clock = std::chrono::steady_clock;
-using RampOutputContext = rex::ui::vulkan::VulkanPresenter::VulkanGuestOutputRefreshContext;
+using RampOutputContext = rex::gpu::vulkan::VulkanPresenter::VulkanGuestOutputRefreshContext;
 
 std::atomic<uint64_t> g_swaps_native{0};  // SwapsNative(), for the watchdog
 
@@ -1072,55 +1059,15 @@ bool Compares(uint32_t info, uint32_t value, uint32_t reference) {
   }
 }
 
-class NativeRenderSystem final : public rex::system::IGraphicsSystem {
+class NativeRenderSystem final : public NativeDriverBase {
  public:
   NativeRenderSystem() : registers_(kNumRegisters, 0), seen_(kNumRegisters) {}
-  ~NativeRenderSystem() override { Shutdown(); }
 
-  X_STATUS SetupPresentation(rex::ui::WindowedAppContext* app_context) override {
-    if (presenter_) {
-      return X_STATUS_SUCCESS;
-    }
-    app_context_ = app_context;
-    if (!provider_) {
-      // The shader library's SPIR-V (from XenosRecomp) needs capabilities that the VkDevice only enables if they are
-      // requested before it is created.
-      rex::cvar::SetFlagByName("vulkan_native_shader_features", "true");
-      provider_ = rex::ui::vulkan::VulkanProvider::Create(true, true);
-      if (!provider_) {
-        REXLOG_ERROR("[native] Could not create the Vulkan device");
-        return X_STATUS_UNSUCCESSFUL;
-      }
-    }
-    auto create = [this]() { presenter_ = provider_->CreatePresenter(); };
-    if (app_context_) {
-      app_context_->CallInUIThreadSynchronous(create);
-    } else {
-      create();
-    }
-    if (!presenter_) {
-      REXLOG_ERROR("[native] Could not create the presenter");
-      return X_STATUS_UNSUCCESSFUL;
-    }
-    REXLOG_INFO("[native] Native graphics system (C1): the SDK's presenter, without Xenos emulation");
-    return X_STATUS_SUCCESS;
-  }
-
-  X_STATUS SetupGuestGpu(rex::runtime::FunctionDispatcher* dispatcher,
-                         rex::system::KernelState* kernel_state) override {
-    dispatcher_ = dispatcher;
-    kernel_state_ = kernel_state;
-    memory_ = dispatcher->memory();
-    if (!mmio_registered_) {
-      mmio_registered_ = memory_->AddVirtualMappedRange(kBaseMmio, kMaskMmio, kSizeMmio, this,
-                                                        &ReadMmio, &WriteMmio);
-      if (!mmio_registered_) {
-        REXLOG_ERROR("[native] Could not register the GPU MMIO range");
-        return X_STATUS_UNSUCCESSFUL;
-      }
-    }
+  // The SDK made the provider and presenter (SetSurface). OnAttach runs when the title attaches, with its memory and
+  // interrupts.
+  bool OnAttach() override {
     if (active_.exchange(true)) {
-      return X_STATUS_SUCCESS;
+      return true;
     }
     // The SPIR-V shader library sits next to the executable. It is built from the player's own game data, so it is
     // never distributed. Without it the game still runs, but no shader can be identified.
@@ -1129,15 +1076,15 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     std::unique_ptr<ProgressScreen> progress;
     const auto show = [&](uint64_t done, uint64_t total) {
       if (!progress) {
-        progress = std::make_unique<ProgressScreen>(presenter_.get(),
-                                                    provider_ ? provider_->vulkan_device() : nullptr);
+        progress = std::make_unique<ProgressScreen>(presenter(),
+                                                    provider_ ? provider_->GetVulkanDevice() : nullptr);
       }
       progress->Update(done, total);
     };
     const bool library = shaders_.Load(rex::filesystem::GetExecutableFolder() / (rex::Game().shader_pack.empty()
                                                                        ? std::string(BO2ZM_SHADER_LIBRARY_FILE)
                                                                        : rex::Game().shader_pack),
-                                       presenter_ ? NativeShaders::IndexProgress(show) : nullptr);
+                                       presenter() ? NativeShaders::IndexProgress(show) : nullptr);
     if (progress) {
       progress->Finish();
       progress.reset();
@@ -1148,28 +1095,18 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     last_report_ = Clock::now();
     last_time_report_ = last_report_;
     start_system_ = last_report_;
-    thread_vblank_ = rex::system::object_ref<rex::system::XHostThread>(new rex::system::XHostThread(
-        kernel_state_, 128 * 1024, 0, [this]() { return LoopVblank(); }));
-    thread_vblank_->set_name("GPU native VSync");
-    thread_vblank_->Create();
-    thread_ring_ = rex::system::object_ref<rex::system::XHostThread>(new rex::system::XHostThread(
-        kernel_state_, 128 * 1024, 0, [this]() { return LoopRing(); }));
-    thread_ring_->set_name("GPU native ring");
-    thread_ring_->Create();
+    if (!StartThread("GPU native VSync", [this]() { LoopVblank(); }) ||
+        !StartThread("GPU native ring", [this]() { LoopRing(); })) {
+      return false;
+    }
     // From here on FlushState can write the composite marker (ProcessMarker).
     ActivateConsumerMarkers(true);
-    return X_STATUS_SUCCESS;
+    return true;
   }
 
-  bool has_presentation() const override { return presenter_ != nullptr; }
-  rex::ui::GraphicsProvider* provider() const override { return provider_.get(); }
-  rex::ui::Presenter* presenter() const override { return presenter_.get(); }
-
-  void SetInterruptCallback(uint32_t callback, uint32_t user_data) override {
-    callback_data_.store(user_data, std::memory_order_release);
-    callback_.store(callback, std::memory_order_release);
-    REXLOG_INFO("[native] Interrupt callback {:08X} ({:08X})", callback, user_data);
-  }
+  // The SDK routes the guest's accesses to the GPU range (0x7FC80000, 64 KB) here, by register index.
+  uint32_t ReadRegister(uint32_t index) override { return ReadRegisterMmio(index * 4); }
+  void WriteRegister(uint32_t index, uint32_t value) override { WriteRegisterMmio(index * 4, value); }
 
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) override {
     // As in CommandProcessor::InitializeRingBuffer: (1 << (size_log2 + 3)) bytes.
@@ -1184,7 +1121,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     read_returned_.store(ptr, std::memory_order_release);
   }
 
-  void Shutdown() override {
+  void OnDetach() override {
     ActivateHooks(nullptr);  // the game hooks stop touching the library
     ActivateConsumerMarkers(false);  // FlushState goes back to the game's own path
     if (active_.exchange(false)) {
@@ -1192,39 +1129,17 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         std::lock_guard<std::mutex> lock(ring_mutex_);
       }
       ring_cv_.notify_all();
-      if (thread_ring_) {
-        thread_ring_->Wait(0, 0, 0, nullptr);
-        thread_ring_.reset();
-      }
-      if (thread_vblank_) {
-        thread_vblank_->Wait(0, 0, 0, nullptr);
-        thread_vblank_.reset();
-      }
-      Report(true);
+      Report(true);  // the loops end with DetachTitle's join, which follows; the report reads counters only
     }
+  }
+
+  ~NativeRenderSystem() override {
     // The framebuffers point to presenter images: destroy them before it.
     DestroyVulkan();
-    if (presenter_) {
-      if (app_context_) {
-        app_context_->CallInUIThreadSynchronous([this]() { presenter_.reset(); });
-      }
-      presenter_.reset();
-    }
-    provider_.reset();
   }
 
  private:
   // --- MMIO registers -------------------------------------------------------
-
-  static uint32_t ReadMmio(void* ppc_context, void* context, uint32_t address) {
-    (void)ppc_context;
-    return static_cast<NativeRenderSystem*>(context)->ReadRegisterMmio(address);
-  }
-
-  static void WriteMmio(void* ppc_context, void* context, uint32_t address, uint32_t value) {
-    (void)ppc_context;
-    static_cast<NativeRenderSystem*>(context)->WriteRegisterMmio(address, value);
-  }
 
   uint32_t ReadRegisterMmio(uint32_t address) {
     const uint32_t r = (address & 0xFFFF) / 4;
@@ -1234,17 +1149,15 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       case kRegRbBcControl:
         return 0x0000200E;
       case kRegD1ModeVCounter: {
-        rex::system::X_VIDEO_MODE mode;
-        rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
-        return std::min(uint32_t(mode.display_height), uint32_t(0x0FFF));
+        const auto& mode = title_info_.video_mode;
+        return std::min(uint32_t(mode.height), uint32_t(0x0FFF));
       }
       case kRegD1ModeVblankVlineStatus:
         return 1;  // vblank
       case kRegD1ModeViewportSize: {
-        rex::system::X_VIDEO_MODE mode;
-        rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
-        const uint32_t width = std::min(uint32_t(mode.display_width), uint32_t(0x0FFF));
-        const uint32_t height = std::min(uint32_t(mode.display_height), uint32_t(0x0FFF));
+        const auto& mode = title_info_.video_mode;
+        const uint32_t width = std::min(uint32_t(mode.width), uint32_t(0x0FFF));
+        const uint32_t height = std::min(uint32_t(mode.height), uint32_t(0x0FFF));
         return (width << 16) | height;
       }
       default:
@@ -1495,7 +1408,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   // D3D writes one and then waits with WAIT_REG_MEM until it shows up at SCRATCH_ADDR
   // (measured on the PC: without this the game stops within the first second).
   // COHER_STATUS_HOST stays marked as pending until the next poll.
-  void WriteRegister(uint32_t index, uint32_t value) {
+  void RingWriteRegister(uint32_t index, uint32_t value) {
     if (index >= kNumRegisters) {
       return;
     }
@@ -1802,7 +1715,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         linear.end = n;
         if (count < 2 || !WriteRegistersInBlock(index, count, linear)) {
           for (uint32_t k = 0; k < count; ++k) {
-            WriteRegister(index + k, rex::memory::load_and_swap<uint32_t>(p + size_t(i + 1 + k) * 4));
+            RingWriteRegister(index + k, rex::memory::load_and_swap<uint32_t>(p + size_t(i + 1 + k) * 4));
           }
         }
       }
@@ -1975,24 +1888,13 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   // --- Threads ------------------------------------------------------------------
 
   void Interrupt(uint32_t source_kind, uint32_t cpu) {
-    const uint32_t callback = callback_.load(std::memory_order_acquire);
-    if (!callback || !dispatcher_) {
-      return;
-    }
-    auto* thread = rex::system::XThread::GetCurrentThread();
-    if (!thread) {
-      return;
-    }
-    thread->SetActiveCpu(uint8_t(cpu));
-    uint64_t args[] = {source_kind, callback_data_.load(std::memory_order_acquire)};
-    dispatcher_->ExecuteInterrupt(thread->thread_state(), callback, args, 2);
-    interrupts_.fetch_add(1, std::memory_order_relaxed);  // NOTE: also called from LoopVblank (another thread)
+    NativeDriverBase::Interrupt(source_kind, cpu);
+    interrupts_count_.fetch_add(1, std::memory_order_relaxed);  // NOTE: also called from LoopVblank (another thread)
     WarnProgressRing();  // some D3D waits also check the interrupt counter
   }
 
   int LoopVblank() {
-    rex::system::X_VIDEO_MODE mode;
-    rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
+    const auto& mode = title_info_.video_mode;
     const double hz = std::max(1.0, double(float(mode.refresh_rate)));
     const auto interval =
         std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz));
@@ -2009,7 +1911,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         Interrupt(0, 2);
         next += interval;
       }
-      rex::thread::Sleep(std::chrono::milliseconds(1));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return 0;
   }
@@ -2066,7 +1968,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     // The pipeline precompile at start-up (bo2zm_native_precompile.h). Decided here, as the graphics system starts and
     // before the game is launched. When it runs, the renderer is prepared now instead of at the game's first
     // copy, and the game waits for the pass (Bo2zmApp::OnHoldModuleLaunch).
-    if (bo2zm::native::precompile::Decide(provider_ ? provider_->vulkan_device() : nullptr,
+    if (bo2zm::native::precompile::Decide(provider_ ? provider_->GetVulkanDevice() : nullptr,
                                           shaders_.loaded() ? &shaders_ : nullptr)) {
       if (EnsureTargets()) {
         targets_->Precompile();
@@ -2200,7 +2102,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         const bool a_register = (packet >> 15) & 0x1;
         if (a_register || !WriteRegistersInBlock(index, load, data)) {
           for (uint32_t i = 0; i < load; ++i) {
-            WriteRegister(a_register ? index : index + i, data.Read());
+            RingWriteRegister(a_register ? index : index + i, data.Read());
           }
           words_loose_ += load;  // Measurement only
         } else {
@@ -2215,8 +2117,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       case 1: {
         const uint32_t value1 = data.Read();
         const uint32_t value2 = data.Read();
-        WriteRegister(packet & 0x7FF, value1);
-        WriteRegister((packet >> 11) & 0x7FF, value2);
+        RingWriteRegister(packet & 0x7FF, value1);
+        RingWriteRegister((packet >> 11) & 0x7FF, value2);
         if (time) {
           time_registers_ns_ += NanosecondsSince(start) * kStopwatchPacketsEvery;
         }
@@ -2325,7 +2227,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
             break;
           }
           const int32_t pause_us = REXCVAR_GET(bo2zm_native_regmem_wait_us);
-          rex::thread::Sleep(std::chrono::microseconds(pause_us > 50 ? pause_us : 50));
+          std::this_thread::sleep_for(std::chrono::microseconds(pause_us > 50 ? pause_us : 50));
           ++loops;
         }
         /*
@@ -2359,7 +2261,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         uint32_t value = DvarRecord(info & 0x1FFF);
         value &= ((info >> 31) & 0x1) ? DvarRecord(y & 0x1FFF) : y;
         value |= ((info >> 30) & 0x1) ? DvarRecord(o & 0x1FFF) : o;
-        WriteRegister(info & 0x1FFF, value);
+        RingWriteRegister(info & 0x1FFF, value);
         break;
       }
       case xenos::PM4_REG_TO_MEM: {
@@ -2394,14 +2296,14 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
             BeforeFence();
             WriteMemory(target, datum);
           } else {
-            WriteRegister(target, datum);
+            RingWriteRegister(target, datum);
           }
         }
         break;
       }
       case xenos::PM4_EVENT_WRITE:
         if (words < 1) break;
-        WriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, data.Read() & 0x3F);
+        RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, data.Read() & 0x3F);
         break;
       case xenos::PM4_EVENT_WRITE_SHD: {
         if (words < 3) break;
@@ -2409,7 +2311,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         const uint32_t initiator = data.Read();
         const uint32_t address = data.Read();
         const uint32_t value = data.Read();
-        WriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
+        RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
         WriteMemory(address, ((initiator >> 31) & 0x1)
                                        ? counter_.load(std::memory_order_relaxed)
                                        : value);
@@ -2419,7 +2321,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         if (words < 2) break;
         const uint32_t initiator = data.Read();
         const uint32_t address = data.Read();
-        WriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
+        RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
         // Screen extent of the previous draw: the maximum is faked.
         const uint16_t extension[] = {0, kExtensionMax, 0, kExtensionMax, 0, 1};
         uint8_t* target = memory_->TranslatePhysical(address & ~uint32_t(0x3));
@@ -2430,7 +2332,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       }
       case xenos::PM4_EVENT_WRITE_ZPD: {
         if (words < 1) break;
-        WriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, data.Read() & 0x3F);
+        RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, data.Read() & 0x3F);
         const uint32_t address = DvarRecord(rex::graphics::XE_GPU_REG_RB_SAMPLE_COUNT_ADDR);
         if (!address) break;
         QueryOcclusion(address);
@@ -2451,7 +2353,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         if (base != UINT32_MAX) {
           const uint32_t index = base + (type_index & 0x7FF);
           for (uint32_t i = 1; i < words; ++i) {
-            WriteRegister(index + i - 1, data.Read());
+            RingWriteRegister(index + i - 1, data.Read());
           }
         }
         break;
@@ -2492,7 +2394,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         if (words < 1) break;
         const uint32_t index = data.Read() & 0xFFFF;
         for (uint32_t i = 1; i < words; ++i) {
-          WriteRegister(index + i - 1, data.Read());
+          RingWriteRegister(index + i - 1, data.Read());
         }
         break;
       }
@@ -2515,7 +2417,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
           const uint8_t* source = memory_->TranslatePhysical(address);
           const uint32_t index = base + (type_index & 0x7FF);
           for (uint32_t i = 0; i < amount; ++i) {
-            WriteRegister(index + i, rex::memory::load_and_swap<uint32_t>(source + size_t(i) * 4));
+            RingWriteRegister(index + i, rex::memory::load_and_swap<uint32_t>(source + size_t(i) * 4));
           }
         }
         break;
@@ -2527,9 +2429,9 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         const uint32_t datum = data.Read();
         const uint32_t id = datum & 0x3F;
         if (!(datum & 0x100)) {
-          WriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, xenos::VIZQUERY_START);
+          RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, xenos::VIZQUERY_START);
         } else {
-          WriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, xenos::VIZQUERY_END);
+          RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_EVENT_INITIATOR, xenos::VIZQUERY_END);
           const uint32_t reg_index = id < 32 ? uint32_t(rex::graphics::XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_0)
                                             : uint32_t(rex::graphics::XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_1);
           const uint32_t bit = UINT32_C(1) << (id < 32 ? id : id - 32);
@@ -2549,15 +2451,15 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
           data.Read();
         }
         const uint32_t initiator = data.Read();
-        WriteRegister(rex::graphics::XE_GPU_REG_VGT_DRAW_INITIATOR, initiator);
+        RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_DRAW_INITIATOR, initiator);
         // Indices in a buffer (DMA): the base and size come in the packet and are
         // stored in their registers, like ExecutePacketType3Draw
         // (graphics/command_processor.cpp:1379-1390). Without this, indexed draws
         // read VGT_DMA_SIZE as zero.
         if (((initiator >> 6) & 0x3) == uint32_t(xenos::SourceSelect::kDMA)) {
           if (words < skip + 3) break;
-          WriteRegister(rex::graphics::XE_GPU_REG_VGT_DMA_BASE, data.Read());
-          WriteRegister(rex::graphics::XE_GPU_REG_VGT_DMA_SIZE, data.Read());
+          RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_DMA_BASE, data.Read());
+          RingWriteRegister(rex::graphics::XE_GPU_REG_VGT_DMA_SIZE, data.Read());
         }
         AddOnlyRing(draws_);
         // No fetch_add, which on the A57 is an ldxr/stxr loop on every draw. Only this thread writes
@@ -2765,12 +2667,12 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     const auto start = std::chrono::steady_clock::now();
     if (!copy || verify) {
       if (!interpreter_bo2zm_) {
-        registers_interpreter_bo2zm_ = std::make_unique<g::RegisterFile>();
-        interpreter_bo2zm_ = std::make_unique<g::ShaderInterpreter>(*registers_interpreter_bo2zm_, *memory_);
+        registers_interpreter_bo2zm_ = std::make_unique<rex::xenos::RegisterFile>();
+        interpreter_bo2zm_ = std::make_unique<rex::gpu::ShaderInterpreter>(*registers_interpreter_bo2zm_, *physical_);
       }
       std::memcpy(registers_interpreter_bo2zm_->values, registers_.data(),
-                  std::min(registers_.size(), g::RegisterFile::kRegisterCount) * sizeof(uint32_t));
-      interpreter_bo2zm_->SetShader(g::xenos::ShaderType::kVertex, vs_microcode_.data());
+                  std::min(registers_.size(), rex::xenos::RegisterFile::kRegisterCount) * sizeof(uint32_t));
+      interpreter_bo2zm_->SetShader(rex::xenos::ShaderType::kVertex, vs_microcode_.data());
     }
     bo2zm::memexport::Sink sink(memory_->TranslatePhysical(0));
     sink.tracing = memexport_done_ < 2;  // the "memexport trace" line below
@@ -2816,7 +2718,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       interpreter_bo2zm_->SetExportSink(&target);
       uint32_t index;
       for (uint32_t i = 0; i < num_indices && index_of(i, index); ++i) {
-        interpreter_bo2zm_->temp_registers()[0] = float(index);
+        interpreter_bo2zm_->GetTempRegisters()[0] = float(index);
         interpreter_bo2zm_->Execute();
         target.End();
       }
@@ -2861,8 +2763,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     }
     return true;
   }
-  std::unique_ptr<rex::graphics::RegisterFile> registers_interpreter_bo2zm_;
-  std::unique_ptr<rex::graphics::ShaderInterpreter> interpreter_bo2zm_;
+  std::unique_ptr<rex::xenos::RegisterFile> registers_interpreter_bo2zm_;
+  std::unique_ptr<rex::gpu::ShaderInterpreter> interpreter_bo2zm_;
   uint64_t memexport_done_ = 0;
   uint64_t memexport_direct_ = 0;
   uint64_t memexport_verified_ = 0;
@@ -2886,7 +2788,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     namespace g = rex::graphics;
     // Vertex fetch constant 95 (const_index 31, select 2 in both shaders' vfetch words; Xenia's disassembly prints
     // it as vf0), where D3D binds stream 0.
-    g::xenos::xe_gpu_vertex_fetch_t vf;
+    rex::xenos::VertexFetch vf;
     vf.dword_0 = DvarRecord(g::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95);
     vf.dword_1 = DvarRecord(g::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 2 * 95 + 1);
     const auto constant = [this](uint32_t c, uint32_t k) {
@@ -2928,7 +2830,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     const float scale[4] = {constant(255, 0), constant(255, 1), constant(255, 0), constant(255, 0)};
     const float c0[4] = {constant(0, 0), constant(0, 1), constant(0, 2), constant(0, 3)};
     for (uint32_t group = 0; group < n; ++group) {
-      sink.AllocExport(g::ucode::AllocType::kMemory, 2);
+      sink.AllocExport(rex::xenos::ucode::AllocType::kMemory, 2);
       float ea[4];
       for (uint32_t i = 0; i < 4; ++i) {
         ea[i] = groups[group] * scale[i] + c0[i];
@@ -2938,11 +2840,11 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       if (sink.Integers16(a, &r[group * 4])) {
         continue;
       }
-      sink.Export(g::ucode::ExportRegister(32), ea, 0xF);
+      sink.Export(rex::xenos::ucode::ExportRegister(32), ea, 0xF);
       for (uint32_t e = 0; e < 4; ++e) {
         const uint16_t* b = r[group * 4 + e];
         const float values[4] = {float(b[0]), float(b[1]), float(b[2]), float(b[3])};
-        sink.Export(g::ucode::ExportRegister(33 + e), values, 0xF);
+        sink.Export(rex::xenos::ucode::ExportRegister(33 + e), values, 0xF);
       }
     }
     sink.End();
@@ -3228,7 +3130,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   // a clear.
   bool EnsureTargets() {
     if (!targets_ && !targets_failed_) {
-      targets_ = NativeTargets::Create(provider_ ? provider_->vulkan_device() : nullptr, memory_);
+      targets_ = NativeTargets::Create(provider_ ? provider_->GetVulkanDevice() : nullptr, memory_);
       if (!targets_) {
         targets_failed_ = true;
         REXLOG_ERROR("[native] Could not create the native targets (C2)");
@@ -5150,11 +5052,12 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
   void Present() {
     swaps_.fetch_add(1, std::memory_order_relaxed);
+    NotifySwap();
     bo2zm::benchmark::AnnotateFrame();  // bo2zm_benchmark's frame times
     bo2zm::pc_profiler::NoteFrame();    // bo2zm_pc_profile_stalls (PC test helper)
     g_swaps_native.fetch_add(1, std::memory_order_relaxed);
     counter_.fetch_add(1, std::memory_order_relaxed);
-    if (!presenter_) {
+    if (!presenter()) {
       return;
     }
     // The game image, if this Swap has a resolved texture.
@@ -5165,7 +5068,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         targets_->RampGamma(ramp_gamma_);
       }
       const auto start = Clock::now();
-      const bool presented = targets_->Present(presenter_.get(), GetSwapTexture(),
+      const bool presented = targets_->Present(presenter(), GetSwapTexture(),
                                                    swap_width_.load(std::memory_order_relaxed),
                                                    swap_height_.load(std::memory_order_relaxed));
       time_present_ns_ += NanosecondsSince(start);
@@ -5177,28 +5080,28 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         return;
       }
     }
-    presenter_->RefreshGuestOutput(
+    presenter()->RefreshGuestOutput(
         kOutputWidth, kOutputHeight, kOutputWidth, kOutputHeight,
-        [this](rex::ui::Presenter::GuestOutputRefreshContext& context) {
+        [this](rex::gpu::Presenter::GuestOutputRefreshContext& context) {
           return CleanOutput(static_cast<RampOutputContext&>(context));
         });
   }
 
   bool CleanOutput(RampOutputContext& context) {
-    const rex::ui::vulkan::VulkanDevice* vulkan_device = provider_->vulkan_device();
-    const auto& dfn = vulkan_device->functions();
-    const VkDevice device = vulkan_device->device();
+    const rex::gpu::vulkan::VulkanDevice* vulkan_device = provider_->GetVulkanDevice();
+    const auto& dfn = vulkan_device->GetFunctions();
+    const VkDevice device = vulkan_device->GetDevice();
 
     if (render_pass_ == VK_NULL_HANDLE) {
       VkAttachmentDescription attachment{};
-      attachment.format = rex::ui::vulkan::VulkanPresenter::kGuestOutputFormat;
+      attachment.format = rex::gpu::vulkan::VulkanPresenter::kGuestOutputFormat;
       attachment.samples = VK_SAMPLE_COUNT_1_BIT;
       attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
       attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
       attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
       attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
       attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      attachment.finalLayout = rex::ui::vulkan::VulkanPresenter::kGuestOutputInternalLayout;
+      attachment.finalLayout = rex::gpu::vulkan::VulkanPresenter::kGuestOutputInternalLayout;
       VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
       VkSubpassDescription subpass{};
       subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -5219,7 +5122,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     if (pool_ == VK_NULL_HANDLE) {
       VkCommandPoolCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-      info.queueFamilyIndex = vulkan_device->queue_family_graphics_compute();
+      info.queueFamilyIndex = vulkan_device->GetQueueFamilyGraphicsCompute();
       if (dfn.vkCreateCommandPool(device, &info, nullptr, &pool_) != VK_SUCCESS) {
         pool_ = VK_NULL_HANDLE;
         return false;
@@ -5252,7 +5155,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
     for (const Framebuffer& f : framebuffers_) {
-      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.image_version()) {
+      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.GetImageVersion()) {
         framebuffer = f.framebuffer;
       }
     }
@@ -5263,7 +5166,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         dfn.vkDestroyFramebuffer(device, f.framebuffer, nullptr);
         f.framebuffer = VK_NULL_HANDLE;
       }
-      VkImageView view = context.image_view();
+      VkImageView view = context.GetImageView();
       VkFramebufferCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
       info.renderPass = render_pass_;
@@ -5276,7 +5179,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         f.framebuffer = VK_NULL_HANDLE;
         return false;
       }
-      f.version = context.image_version();
+      f.version = context.GetImageVersion();
       framebuffer = f.framebuffer;
     }
 
@@ -5307,8 +5210,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &commands_;
     {
-      const auto queue = vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
-      if (dfn.vkQueueSubmit(queue.queue(), 1, &submit, fence_) != VK_SUCCESS) {
+      const auto queue = vulkan_device->AcquireQueue(vulkan_device->GetQueueFamilyGraphicsCompute(), 0);
+      if (dfn.vkQueueSubmit(queue.GetQueue(), 1, &submit, fence_) != VK_SUCCESS) {
         return false;
       }
     }
@@ -5319,12 +5222,12 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
   void DestroyVulkan() {
     targets_.reset();  // uses the device: before everything else
-    if (!provider_ || !provider_->vulkan_device()) {
+    if (!provider_ || !provider_->GetVulkanDevice()) {
       return;
     }
-    const rex::ui::vulkan::VulkanDevice* vulkan_device = provider_->vulkan_device();
-    const auto& dfn = vulkan_device->functions();
-    const VkDevice device = vulkan_device->device();
+    const rex::gpu::vulkan::VulkanDevice* vulkan_device = provider_->GetVulkanDevice();
+    const auto& dfn = vulkan_device->GetFunctions();
+    const VkDevice device = vulkan_device->GetDevice();
     if (fence_ != VK_NULL_HANDLE) {
       if (fence_pending_) {
         dfn.vkWaitForFences(device, 1, &fence_, VK_TRUE, UINT64_MAX);
@@ -5365,7 +5268,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     BO2ZM_REPORT_BY(defer_report,
         "[native] swaps={} vblanks={} packets={} interrupts={} indirect={} memory_writes={} timed_out_waits={} draws={} "
         "copies={}",
-        swaps_.load(), vblanks_.load(), packets_.load(), interrupts_.load(),
+        swaps_.load(), vblanks_.load(), packets_.load(), interrupts_count_.load(),
         indirect_.load(), writes_memory_.load(), waits_exhausted_.load(), draws_.load(),
         copies_.load());
     // Ring thread cost since the previous report. "ring" includes the
@@ -6199,20 +6102,11 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
   };
 
-  rex::ui::WindowedAppContext* app_context_ = nullptr;
-  std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider_;
-  std::unique_ptr<rex::ui::Presenter> presenter_;
 
-  rex::memory::Memory* memory_ = nullptr;
-  rex::runtime::FunctionDispatcher* dispatcher_ = nullptr;
-  rex::system::KernelState* kernel_state_ = nullptr;
-  bool mmio_registered_ = false;
 
   std::vector<uint32_t> registers_;
   std::vector<std::atomic<uint8_t>> seen_;
 
-  std::atomic<uint32_t> callback_{0};
-  std::atomic<uint32_t> callback_data_{0};
   std::atomic<uint32_t> ring_base_{0};
   std::atomic<uint32_t> ring_words_{0};
   std::atomic<uint32_t> generation_ring_{0};
@@ -6238,13 +6132,11 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   std::atomic<bool> active_{false};
   std::mutex ring_mutex_;
   std::condition_variable ring_cv_;
-  rex::system::object_ref<rex::system::XHostThread> thread_vblank_;
-  rex::system::object_ref<rex::system::XHostThread> thread_ring_;
 
   std::atomic<uint64_t> swaps_{0};
   std::atomic<uint64_t> vblanks_{0};
   std::atomic<uint64_t> packets_{0};
-  std::atomic<uint64_t> interrupts_{0};
+  std::atomic<uint64_t> interrupts_count_{0};
   uint64_t fences_total_ = 0;       // AnnotateFenceCopies, ring thread only
   uint64_t fences_with_copies_ = 0;
   size_t fences_copies_max_ = 0;
@@ -6571,7 +6463,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   VkCommandBuffer commands_ = VK_NULL_HANDLE;
   VkFence fence_ = VK_NULL_HANDLE;
   bool fence_pending_ = false;
-  std::array<Framebuffer, rex::ui::vulkan::VulkanPresenter::kMaxActiveGuestOutputImageVersions>
+  std::array<Framebuffer, rex::gpu::vulkan::VulkanPresenter::kMaxActiveGuestOutputImageVersions>
       framebuffers_{};
   size_t next_framebuffer_ = 0;
 };
@@ -6587,7 +6479,7 @@ bool IsActive() {
   return bo2zm::native::PortedRendererActive();
 }
 
-std::unique_ptr<rex::system::IGraphicsSystem> CreateSystemGraphics() {
+std::unique_ptr<rex::gpu::IGraphicsDriver> CreateSystemGraphics() {
   return std::make_unique<NativeRenderSystem>();
 }
 

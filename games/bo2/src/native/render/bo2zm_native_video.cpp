@@ -12,7 +12,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#include <rex/ui/presenter.h>
+#include "bo2zm_native_rawimage.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -73,7 +73,7 @@ void WriteInfo(const std::filesystem::path& path, uint32_t w, uint32_t h, int fp
   info << w << ' ' << h << ' ' << fps << ' ' << count << '\n';
 }
 
-void Loop(std::function<rex::ui::Presenter*()> get_presenter, std::filesystem::path path) {
+void Loop(std::function<rex::gpu::Presenter*()> get_presenter, std::filesystem::path path) {
   const int fps = REXCVAR_GET(video_fps);
   const auto period = std::chrono::nanoseconds(1'000'000'000LL / fps);
   const auto start = std::chrono::steady_clock::now() + std::chrono::seconds(REXCVAR_GET(video_from_s));
@@ -111,9 +111,9 @@ void Loop(std::function<rex::ui::Presenter*()> get_presenter, std::filesystem::p
       ++repeats;
     }
     next += period;
-    rex::ui::Presenter* presenter = get_presenter ? get_presenter() : nullptr;
-    rex::ui::RawImage image;
-    if (!presenter || !presenter->CaptureGuestOutput(image) || !image.width || !image.height) {
+    rex::gpu::Presenter* presenter = get_presenter ? get_presenter() : nullptr;
+    bo2zm::native::RawImage image;
+    if (!presenter || !bo2zm::native::CaptureGuestOutput(presenter, image) || !image.width || !image.height) {
       continue;  // nothing on screen yet
     }
     if (!width) {
@@ -146,7 +146,7 @@ void Loop(std::function<rex::ui::Presenter*()> get_presenter, std::filesystem::p
 
 }  // namespace
 
-void Boot(std::function<rex::ui::Presenter*()> get_presenter) {
+void Boot(std::function<rex::gpu::Presenter*()> get_presenter) {
   const std::string path = OutputPath();
   if (path.empty() || g_thread.joinable()) {
     return;

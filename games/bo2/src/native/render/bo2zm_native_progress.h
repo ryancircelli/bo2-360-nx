@@ -12,10 +12,10 @@
 #include <cstdint>
 #include <memory>
 
-namespace rex::ui {
+namespace rex::gpu {
 class Presenter;
 }
-namespace rex::ui::vulkan {
+namespace rex::gpu::vulkan {
 class VulkanDevice;
 }
 
@@ -23,7 +23,7 @@ namespace bo2zm::native {
 
 class ProgressScreen {
  public:
-  ProgressScreen(rex::ui::Presenter* presenter, const rex::ui::vulkan::VulkanDevice* device);
+  ProgressScreen(rex::gpu::Presenter* presenter, const rex::gpu::vulkan::VulkanDevice* device);
   ~ProgressScreen();  // waits for its last frame and frees what it made
   ProgressScreen(const ProgressScreen&) = delete;
   ProgressScreen& operator=(const ProgressScreen&) = delete;
