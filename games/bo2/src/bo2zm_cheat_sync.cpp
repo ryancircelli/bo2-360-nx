@@ -66,6 +66,7 @@
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/online_link.h>
+#include <rex/system/system_link.h>
 #include <rex/system/xsocket.h>
 
 #include "bo2zm_cheats.h"
@@ -903,8 +904,8 @@ void Host(const uint8_t* base) {
     return;
   }
   while (Receive(buffer, in)) {
-    if (in.type == kOptions) HostOptions(base, in);
-    else if (in.type == kCommand) HostCommand(base, in);
+    if (in.type == cs::kOptions) HostOptions(base, in);
+    else if (in.type == cs::kCommand) HostCommand(base, in);
     else if (in.type == cs::kMenuAsk) MenuAsked(in);
     // Answers, results and pushes are a host's: another match's.
   }
