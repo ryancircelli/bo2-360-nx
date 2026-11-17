@@ -5,7 +5,7 @@
 // Why it exists
 //
 //   Without the pool, every texture gets its own dedicated allocation: CreateTexture ->
-//   rex::ui::vulkan::util::CreateDedicatedAllocationImage -> vkAllocateMemory with
+//   rex::gpu::vulkan::objects::CreateDedicatedAllocationImage -> vkAllocateMemory with
 //   VkMemoryDedicatedAllocateInfo. On Horizon that is not a cheap call.
 //
 //   What every texture pays, following the chain in the Mesa tree:
@@ -89,7 +89,7 @@
 
 #pragma once
 
-#include <rex/ui/vulkan/device.h>
+#include "bo2zm_native_vk.h"
 
 #include <cstdint>
 #include <string>
@@ -160,7 +160,7 @@ class TexturePool {
    * slab could be created. In that case Reserve() always fails and everything keeps using
    * the usual dedicated path, exactly the behavior without the pool.
    */
-  bool Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max);
+  bool Start(const rex::gpu::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max);
 
   // Frees every slab. The images must already be destroyed.
   void Finish();
@@ -221,7 +221,7 @@ class TexturePool {
   bool CreateSlab(bool in_hot);
   bool ChooseMemoryType(uint32_t& type_out, uint64_t& alignment_view_out) const;
 
-  const rex::ui::vulkan::VulkanDevice* vulkan_device_ = nullptr;
+  const rex::gpu::vulkan::VulkanDevice* vulkan_device_ = nullptr;
   VkDevice device_ = VK_NULL_HANDLE;
   bool active_ = false;
   uint32_t type_memory_ = UINT32_MAX;

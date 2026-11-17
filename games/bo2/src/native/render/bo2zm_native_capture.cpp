@@ -10,7 +10,7 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
-#include <rex/ui/presenter.h>
+#include "bo2zm_native_vk.h"
 
 #include <algorithm>
 #include <array>
@@ -59,7 +59,7 @@ std::mutex g_mutex;
 std::condition_variable g_cv;
 bool g_stop = false;
 std::thread g_thread;
-std::function<rex::ui::Presenter*()> g_get_presenter;  // for RequestCapture
+std::function<rex::gpu::Presenter*()> g_get_presenter;  // for RequestCapture
 // The captures RequestCapture asked for: their names and when each falls due, sorted by that time.
 struct Requested {
   std::string label;
@@ -102,8 +102,8 @@ void Chunk(std::vector<uint8_t>& output, const char type[4], const std::vector<u
   PutBe32(output, crc);
 }
 
-// RGBX (R8 G8 B8 X8, like rex::ui::RawImage) to 8-bit RGB PNG.
-std::vector<uint8_t> EncodePng(const rex::ui::RawImage& image) {
+// RGBX (R8 G8 B8 X8, like rex::gpu::RawImage) to 8-bit RGB PNG.
+std::vector<uint8_t> EncodePng(const rex::gpu::RawImage& image) {
   const uint32_t width = image.width;
   const uint32_t height = image.height;
   std::vector<uint8_t> raw;
@@ -164,7 +164,7 @@ std::filesystem::path CaptureFolder() {
 // The capture thread. It takes one capture every every_s seconds (starting after bo2zm_capture_from_s, at most max
 // of them; every_s 0 means none), plus the captures RequestCapture asks for, each when it falls due and under its own
 // name.
-void Loop(std::function<rex::ui::Presenter*()> get_presenter, int every_s, int max) {
+void Loop(std::function<rex::gpu::Presenter*()> get_presenter, int every_s, int max) {
   const std::filesystem::path folder = CaptureFolder();
   const auto start = std::chrono::steady_clock::now();
   auto next = start + std::chrono::seconds(REXCVAR_GET(capture_from_s)) + std::chrono::seconds(every_s);
@@ -203,8 +203,8 @@ void Loop(std::function<rex::ui::Presenter*()> get_presenter, int every_s, int m
         continue;
       }
     }
-    rex::ui::Presenter* ui_presenter = get_presenter ? get_presenter() : nullptr;
-    rex::ui::RawImage image;
+    rex::gpu::Presenter* ui_presenter = get_presenter ? get_presenter() : nullptr;
+    rex::gpu::RawImage image;
     if (!ui_presenter || !ui_presenter->CaptureGuestOutput(image) || !image.width ||
         !image.height) {
       REXLOG_WARN("[capture] {}: there is no game image to capture", requested.empty() ? std::to_string(n) : requested);
@@ -232,7 +232,7 @@ void Loop(std::function<rex::ui::Presenter*()> get_presenter, int every_s, int m
 
 }  // namespace
 
-void Boot(std::function<rex::ui::Presenter*()> get_presenter) {
+void Boot(std::function<rex::gpu::Presenter*()> get_presenter) {
   const int every_s = REXCVAR_GET(capture_every_s);
   {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -276,11 +276,11 @@ void RequestCapture(std::string label, std::chrono::milliseconds delay) {
   g_cv.notify_all();
 }
 
-void CaptureNowForTests(rex::ui::Presenter* presenter, const std::string& label) {
+void CaptureNowForTests(rex::gpu::Presenter* presenter, const std::string& label) {
   if (REXCVAR_GET(capture_every_s) <= 0 || !presenter) {
     return;
   }
-  rex::ui::RawImage image;
+  rex::gpu::RawImage image;
   if (!presenter->CaptureGuestOutput(image) || !image.width || !image.height) {
     REXLOG_WARN("[capture] {}: there is no image to capture", label);
     return;

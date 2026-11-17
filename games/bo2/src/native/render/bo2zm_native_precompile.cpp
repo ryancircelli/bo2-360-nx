@@ -12,7 +12,7 @@
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
-#include <rex/ui/vulkan/device.h>
+#include "bo2zm_native_vk.h"
 
 #include <fmt/format.h>
 #include <imgui.h>
@@ -140,7 +140,7 @@ std::string ExtraLists() {
 // pipelines; on the Switch it also contains the driver, which is linked into the NRO), the driver as the device reports
 // it, the shader pack and the extra lists. pipelineCacheUUID follows the driver build on the PC; the Switch build of
 // NVK derives it from the Mesa version alone, which is why the build identifier is part of the stamp.
-uint64_t ComputeStamp(const rex::ui::vulkan::VulkanDevice* device, const NativeShaders* library) {
+uint64_t ComputeStamp(const rex::gpu::vulkan::VulkanDevice* device, const NativeShaders* library) {
   std::string bytes;
   const auto add = [&](const void* data, size_t size) { bytes.append(static_cast<const char*>(data), size); };
   add(&kStampVersion, sizeof(kStampVersion));
@@ -148,7 +148,7 @@ uint64_t ComputeStamp(const rex::ui::vulkan::VulkanDevice* device, const NativeS
   bytes += '\n';
   if (device) {
     VkPhysicalDeviceProperties properties{};
-    device->vulkan_instance()->functions().vkGetPhysicalDeviceProperties(device->physical_device(), &properties);
+    device->vulkan_instance()->GetFunctions().vkGetPhysicalDeviceProperties(device->physical_device(), &properties);
     add(&properties.vendorID, sizeof(properties.vendorID));
     add(&properties.deviceID, sizeof(properties.deviceID));
     add(&properties.driverVersion, sizeof(properties.driverVersion));
@@ -284,7 +284,7 @@ bool Hold(std::function<void()> start, rex::ui::ImGuiDrawer* drawer) {
   return true;
 }
 
-bool Decide(const rex::ui::vulkan::VulkanDevice* device, const NativeShaders* library) {
+bool Decide(const rex::gpu::vulkan::VulkanDevice* device, const NativeShaders* library) {
   g.decided_at = Clock::now();
   g.stamp = ComputeStamp(device, library);
   std::error_code ec;

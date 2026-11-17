@@ -7,7 +7,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#include <rex/ui/vulkan/util.h>
+#include "bo2zm_native_vk.h"
 
 #include <algorithm>
 #include <string>
@@ -112,7 +112,7 @@ bool TexturePool::ChooseMemoryType(uint32_t& type_out, uint64_t& alignment_view_
    * driver which memory types it accepts and with what alignment. It is destroyed right
    * away; it does not allocate memory.
    */
-  const auto& dfn = vulkan_device_->functions();
+  const auto& dfn = vulkan_device_->GetFunctions();
   VkImageCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   info.imageType = VK_IMAGE_TYPE_2D;
@@ -136,9 +136,9 @@ bool TexturePool::ChooseMemoryType(uint32_t& type_out, uint64_t& alignment_view_
 
   // The same criterion CreateDedicatedAllocationImage uses for textures, so the slab lands
   // in the same memory type the dedicated allocation would.
-  const uint32_t type = rex::ui::vulkan::util::ChooseMemoryType(
-      vulkan_device_->memory_types(), requirements.memoryTypeBits,
-      rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal);
+  const uint32_t type = rex::gpu::vulkan::objects::ChooseMemoryType(
+      vulkan_device_->GetMemoryTypes(), requirements.memoryTypeBits,
+      rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal);
   if (type == UINT32_MAX) {
     return false;
   }
@@ -147,7 +147,7 @@ bool TexturePool::ChooseMemoryType(uint32_t& type_out, uint64_t& alignment_view_
   return true;
 }
 
-bool TexturePool::Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max) {
+bool TexturePool::Start(const rex::gpu::vulkan::VulkanDevice* vulkan_device, int32_t mb_cache_max) {
   if (!REXCVAR_GET(bo2zm_native_texture_pool)) {
     REXLOG_INFO("[native] C3: texture pool (bo2zm_native_texture_pool) = no; each texture will ask for its dedicated "
                 "allocation, as before");
@@ -157,7 +157,7 @@ bool TexturePool::Start(const rex::ui::vulkan::VulkanDevice* vulkan_device, int3
     return false;
   }
   vulkan_device_ = vulkan_device;
-  device_ = vulkan_device->device();
+  device_ = vulkan_device->GetDevice();
 
   uint64_t alignment_view = 0;
   if (!ChooseMemoryType(type_memory_, alignment_view)) {
@@ -237,7 +237,7 @@ bool TexturePool::CreateSlab(bool in_hot) {
   reserve.memoryTypeIndex = type_memory_;
 
   VkDeviceMemory guest_memory = VK_NULL_HANDLE;
-  if (vulkan_device_->functions().vkAllocateMemory(device_, &reserve, nullptr, &guest_memory) != VK_SUCCESS) {
+  if (vulkan_device_->GetFunctions().vkAllocateMemory(device_, &reserve, nullptr, &guest_memory) != VK_SUCCESS) {
     ++slabs_failed_;
     return false;
   }
@@ -258,7 +258,7 @@ bool TexturePool::CreateSlab(bool in_hot) {
 
 void TexturePool::Finish() {
   if (device_ != VK_NULL_HANDLE) {
-    const auto& dfn = vulkan_device_->functions();
+    const auto& dfn = vulkan_device_->GetFunctions();
     for (Slab& slab : slabs_) {
       if (slab.guest_memory != VK_NULL_HANDLE) {
         dfn.vkFreeMemory(device_, slab.guest_memory, nullptr);

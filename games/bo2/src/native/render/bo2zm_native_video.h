@@ -5,14 +5,14 @@
 
 #include <functional>
 
-namespace rex::ui {
+namespace rex::gpu {
 class Presenter;
 }
 
 namespace bo2zm::video {
 
 // Starts recording when bo2zm_video_rgba (or REX_BO2ZM_VIDEO_RGBA / BO2ZM_VIDEO_RGBA) names a file.
-void Boot(std::function<rex::ui::Presenter*()> get_presenter);
+void Boot(std::function<rex::gpu::Presenter*()> get_presenter);
 // Closes the file and writes the final .txt.
 void Stop();
 

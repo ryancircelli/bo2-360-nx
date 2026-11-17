@@ -76,12 +76,12 @@ static const uint32_t kSpirvGlowSmooth[1] = {0};
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 
-#include <rex/graphics/registers.h>
-#include <rex/graphics/xenos.h>
+#include "bo2zm_xenos.h"
+#include "bo2zm_xenos.h"
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 #include <rex/thread.h>
-#include <rex/ui/vulkan/util.h>
+#include "bo2zm_native_vk.h"
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -1546,7 +1546,7 @@ inline uint32_t TargetCategory(uint32_t pitch, const uint64_t* keys) {
 
 namespace gr = rex::graphics;
 namespace xenos = rex::graphics::xenos;
-using rex::ui::vulkan::VulkanDevice;
+using rex::gpu::vulkan::VulkanDevice;
 
 constexpr uint32_t kRegConstantsVs = 0x4000;
 constexpr uint32_t kRegConstantsPs = 0x4400;
@@ -2892,7 +2892,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                     TargetContext* context)
       : vulkan_device_(vulkan_device),
         dfn_(deferred::Table(*vulkan_device)),  // the device's, with the vkCmd* calls queued (deferred.h)
-        device_(vulkan_device->device()),
+        device_(vulkan_device->GetDevice()),
         memory_(guest_memory),
         context_(context) {}
 
@@ -2989,7 +2989,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     reuse_textures_on_ = REXCVAR_GET(bo2zm_native_reuse_textures);  // texture words reuse (Draw)
     dedupe_keep_flush_ = REXCVAR_GET(bo2zm_native_dedupe_keep_on_flush_waits);
     g_syncs_on_flush_waits.store(!dedupe_keep_flush_, std::memory_order_relaxed);
-    const auto& properties = vulkan_device_->properties();
+    const auto& properties = vulkan_device_->GetProperties();
     const std::pair<bool, const char*> requirements[] = {
         {properties.shaderInt64, "shaderInt64"},
         {properties.bufferDeviceAddress, "bufferDeviceAddress"},
@@ -3009,11 +3009,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     }
     address_buffer_ = reinterpret_cast<FnBufferAddress>(
-        vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_,
+        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_,
                                                                           "vkGetBufferDeviceAddress"));
     copy_image_ = reinterpret_cast<FnCopyImage>(deferred::Wrap(
         "vkCmdCopyImage",
-        vulkan_device_->vulkan_instance()->functions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
+        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
     LoadCachePipelines();
     LoadStateDynamic();  // dynamic state phases 1 and 2
     if (!address_buffer_ || !CreateUpload() || !CreateDescriptors()) {
@@ -6123,12 +6123,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
       DispatchSkinTable();
     }
     if (upload_used_ && !upload_coherent_) {
-      rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, upload_memory_, upload_type_, 0,
+      rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, upload_memory_, upload_type_, 0,
                                                     upload_size_real_, upload_used_);
     }
     PublishVertexPools();  // bo2zm_native_vertex_cache: the copies made into the pools in this submission
     if (shared_separate_ && shared_used_ && !shared_coherent_) {
-      rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, shared_memory_, shared_type_, 0,
+      rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, shared_memory_, shared_type_, 0,
                                                     shared_size_real_, shared_used_);
       shared_bytes_published_ += shared_used_;
     }
@@ -6691,9 +6691,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!instance) {
       return;
     }
-    const auto& ifn = instance->functions();
+    const auto& ifn = instance->GetFunctions();
     const VkPhysicalDevice physical = vulkan_device_->physical_device();
-    const bool has_budget = vulkan_device_->extensions().ext_EXT_memory_budget &&
+    const bool has_budget = vulkan_device_->GetExtensions().ext_EXT_memory_budget &&
                                  ifn.vkGetPhysicalDeviceMemoryProperties2 != nullptr;
     VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
     budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
@@ -9421,7 +9421,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // On-disk pipeline cache (derived from the game's shaders: not distributed). If the driver rejects it
   // (another driver or corrupt data), it starts from scratch.
   void LoadCachePipelines() {
-    const auto& ifn = vulkan_device_->vulkan_instance()->functions();
+    const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
     const auto create = reinterpret_cast<FnCreatePipelineCache>(
         ifn.vkGetDeviceProcAddr(device_, "vkCreatePipelineCache"));
     data_cache_ = reinterpret_cast<FnPipelineCacheData>(
@@ -9740,7 +9740,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         return false;
       }
     }
-    const auto& types = vulkan_device_->memory_types();
+    const auto& types = vulkan_device_->GetMemoryTypes();
     REXLOG_INFO("[native] C6: upload buffer in memory type {} ({}, {}; bo2zm_native_upload_memory = {})",
                 upload_type_, ((types.host_cached >> upload_type_) & 1) ? "with CPU cache" : "without CPU cache",
                 upload_coherent_ ? "coherent, not published" : "published before submitting",
@@ -10306,12 +10306,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
       return;
     }
     if (!upload_coherent_) {
-      rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, skin_table_memory_, upload_type_, 0,
+      rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, skin_table_memory_, upload_type_, 0,
                                                     VK_WHOLE_SIZE, VK_WHOLE_SIZE);
       for (uint32_t p = 0; p < 2; ++p) {
         SkinPool& pool = skin_pools_[p];
         if (pool.dirty_lo < pool.dirty_hi) {
-          rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, skin_pool_memory_, upload_type_, 0,
+          rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, skin_pool_memory_, upload_type_, 0,
                                                         VK_WHOLE_SIZE, VK_WHOLE_SIZE);
           break;
         }
@@ -10574,7 +10574,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       if (pool.dirty_hi > pool.dirty_lo) {
         if (!vcache_coherent_) {
           const VkDeviceSize lo = pool.dirty_lo & ~VkDeviceSize(255);
-          rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, pool.memory, upload_type_, lo, pool.size_real,
+          rex::gpu::vulkan::objects::FlushMappedMemoryRange(vulkan_device_, pool.memory, upload_type_, lo, pool.size_real,
                                                         pool.dirty_hi - lo);
         }
         pool.dirty_lo = ~VkDeviceSize(0);
@@ -10638,7 +10638,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
       REXLOG_INFO("[native] C6: shared constants in the upload buffer (bo2zm_native_shared_constants_cache = false)");
       return;
     }
-    const auto& types = vulkan_device_->memory_types();
+    const auto& types = vulkan_device_->GetMemoryTypes();
     for (UploadBuffer& c : shared_bufs_) {
       VkBufferCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -10697,7 +10697,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     dfn_.vkGetBufferMemoryRequirements(device_, upload_, &requirements);
     // bo2zm_native_upload_memory: with 1 or 2, a host-visible type with or without CPU caching is looked
     // for; if there is none, the SDK's.
-    const auto& types = vulkan_device_->memory_types();
+    const auto& types = vulkan_device_->GetMemoryTypes();
     upload_type_ = UINT32_MAX;
     const int32_t preference = REXCVAR_GET(bo2zm_native_upload_memory);
     if (preference == 1 || preference == 2) {
@@ -10708,13 +10708,13 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     }
     if (upload_type_ == UINT32_MAX) {
-      upload_type_ = rex::ui::vulkan::util::ChooseMemoryType(types, requirements.memoryTypeBits,
-                                                             rex::ui::vulkan::util::MemoryPurpose::kUpload);
+      upload_type_ = rex::gpu::vulkan::objects::ChooseMemoryType(types, requirements.memoryTypeBits,
+                                                             rex::gpu::vulkan::objects::MemoryPurpose::kUpload);
     }
     if (upload_type_ == UINT32_MAX) {
       return false;
     }
-    upload_coherent_ = (vulkan_device_->memory_types().host_coherent >> upload_type_) & 0x1;
+    upload_coherent_ = (vulkan_device_->GetMemoryTypes().host_coherent >> upload_type_) & 0x1;
     VkMemoryAllocateFlagsInfo flags{};
     flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
     flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
@@ -10753,7 +10753,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     for (size_t i = 0; i < source.size(); ++i) {
       source[i] = uint8_t((i * 131) ^ (i >> 11));
     }
-    const auto& types = vulkan_device_->memory_types();
+    const auto& types = vulkan_device_->GetMemoryTypes();
     std::string report;
     for (uint32_t type = 0; type < 32; ++type) {
       if (!((types.host_visible >> type) & 1)) {
@@ -10874,7 +10874,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (diag_mips_) {
       REXLOG_INFO("[native] C3: mip diagnostic (bo2zm_native_diag_mips) = YES");
     }
-    alignment_ubo_ = std::max<VkDeviceSize>(16, vulkan_device_->properties().minUniformBufferOffsetAlignment);
+    alignment_ubo_ = std::max<VkDeviceSize>(16, vulkan_device_->GetProperties().minUniformBufferOffsetAlignment);
     alternate_ubo_s_ = REXCVAR_GET(bo2zm_native_constants_ubo_alternate_s);
     REXLOG_INFO("[native] C6: constants by dynamic UBO (bo2zm_native_constants_ubo) = {}; alternate every {} s; "
                 "alignment {} bytes",
@@ -10962,8 +10962,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
       info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
       info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
       info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      if (!rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-              vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal,
+      if (!rex::gpu::vulkan::objects::CreateDedicatedAllocationImage(
+              vulkan_device_, info, rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal,
               empty_[i].image, empty_[i].guest_memory)) {
         return false;
       }
@@ -13208,8 +13208,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     }
     if (!reserved) {
       image.pool_block = 0xFFFFFFFFu;
-      reserved = rex::ui::vulkan::util::CreateDedicatedAllocationImage(
-          vulkan_device_, info, rex::ui::vulkan::util::MemoryPurpose::kDeviceLocal, image.image,
+      reserved = rex::gpu::vulkan::objects::CreateDedicatedAllocationImage(
+          vulkan_device_, info, rex::gpu::vulkan::objects::MemoryPurpose::kDeviceLocal, image.image,
           image.guest_memory);
     }
     return reserved;
@@ -13465,7 +13465,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,   VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,   VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE};
-    const bool mirror = vulkan_device_->properties().samplerMirrorClampToEdge;
+    const bool mirror = vulkan_device_->GetProperties().samplerMirrorClampToEdge;
     const auto mode = [&](uint32_t value) {
       const VkSamplerAddressMode m = kModes[value & 0x7];
       return m == VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE && !mirror
@@ -13494,7 +13494,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // adds it to explicit LODs too, like D3D's MipLODBias). Anisotropy: the fetch constant's aniso_filter (word 3,
     // bits 25-27: 0 off, 1 = 1:1, 2 = 2:1, 3 = 4:1 ...) gives at most 2^(n-1) samples; BO2 asks 2:1 and 4:1 on most
     // world textures. Before, both were only logged, and textures came out blurrier than on Xenos (the hands up close).
-    const auto& properties_game = vulkan_device_->properties();
+    const auto& properties_game = vulkan_device_->GetProperties();
     if (!point) {
       // +-15: maxSamplerLodBias of desktop NVIDIA and of NVK (the SDK's Properties do not carry the limit).
       info.mipLodBias = std::clamp(float(bias_lod) / 32.0f, -15.0f, 15.0f);
@@ -13509,7 +13509,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // start-up, so it does not need to be in the key: every sampler is created with the same one.
     {
       static const uint32_t aniso_requested = uint32_t(std::max(0, int32_t(REXCVAR_GET(bo2zm_native_anisotropic))));
-      const auto& properties = vulkan_device_->properties();
+      const auto& properties = vulkan_device_->GetProperties();
       if (aniso_requested > 1 && properties.samplerAnisotropy && info.minFilter == VK_FILTER_LINEAR &&
           info.mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR && info.maxLod > info.minLod) {
         info.anisotropyEnable = VK_TRUE;
@@ -15089,7 +15089,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * 1.3 or with any of them missing, phase 1 is not used at all and one log line says so.
    */
   void LoadStateDynamic() {
-    const auto& ifn = vulkan_device_->vulkan_instance()->functions();
+    const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
     // Through deferred::Wrap: on the job buffer these are queued like the table's (bo2zm_native_deferred.h).
     const auto request = [&](const char* label) {
       return deferred::Wrap(label, ifn.vkGetDeviceProcAddr(device_, label));
@@ -15104,7 +15104,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     set_function_z_ = reinterpret_cast<PFN_vkCmdSetDepthCompareOp>(request("vkCmdSetDepthCompareOp"));
     set_stencil_ = reinterpret_cast<PFN_vkCmdSetStencilTestEnable>(request("vkCmdSetStencilTestEnable"));
     set_stencil_ops_ = reinterpret_cast<PFN_vkCmdSetStencilOp>(request("vkCmdSetStencilOp"));
-    const uint32_t api = vulkan_device_->properties().apiVersion;
+    const uint32_t api = vulkan_device_->GetProperties().apiVersion;
     eds12_available_ = api >= VK_MAKE_API_VERSION(0, 1, 3, 0) && set_face_ && set_frontface_ && set_topology_ &&
                         set_restart_ && set_bias_ && set_test_z_ && set_writes_z_ && set_function_z_ &&
                         set_stencil_ && set_stencil_ops_;
@@ -15117,8 +15117,8 @@ class VulkanDrawsImpl final : public VulkanDraws {
     set_blend_active_ = reinterpret_cast<PFN_vkCmdSetColorBlendEnableEXT>(request("vkCmdSetColorBlendEnableEXT"));
     set_equation_ = reinterpret_cast<PFN_vkCmdSetColorBlendEquationEXT>(request("vkCmdSetColorBlendEquationEXT"));
     set_mask_ = reinterpret_cast<PFN_vkCmdSetColorWriteMaskEXT>(request("vkCmdSetColorWriteMaskEXT"));
-    const auto& p3 = vulkan_device_->properties();
-    eds3_available_ = vulkan_device_->extensions().ext_EXT_extended_dynamic_state3 &&
+    const auto& p3 = vulkan_device_->GetProperties();
+    eds3_available_ = vulkan_device_->GetExtensions().ext_EXT_extended_dynamic_state3 &&
                        p3.extendedDynamicState3ColorBlendEnable && p3.extendedDynamicState3ColorBlendEquation &&
                        p3.extendedDynamicState3ColorWriteMask && set_blend_active_ && set_equation_ && set_mask_;
     REXLOG_INFO("[native] C6 dynamic state: EDS3 (blend, equation and color mask) {}",
@@ -16252,12 +16252,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
   bool AsyncCompiles() {
     if (async_compiles_ < 0) {
       async_compiles_ = REXCVAR_GET(bo2zm_native_async_pipelines) &&
-                                vulkan_device_->properties().pipelineCreationCacheControl
+                                vulkan_device_->GetProperties().pipelineCreationCacheControl
                             ? 1
                             : 0;
       REXLOG_INFO("[native] C6 pipelines compiled on a thread (bo2zm_native_async_pipelines) = {}{}",
                   async_compiles_ ? "YES" : "no",
-                  vulkan_device_->properties().pipelineCreationCacheControl ? ""
+                  vulkan_device_->GetProperties().pipelineCreationCacheControl ? ""
                                                                              : " (the driver lacks pipelineCreationCacheControl)");
       compile_first_ = uint32_t(REXCVAR_GET(bo2zm_native_compile_first));
       if (async_compiles_) {

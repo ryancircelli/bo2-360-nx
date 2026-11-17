@@ -45,9 +45,9 @@
 #include <rex/filesystem.h>
 #include <rex/game_info.h>
 #include <rex/graphics/pipeline/shader/interpreter.h>  // memexport on the CPU
-#include <rex/graphics/register_file.h>
-#include <rex/graphics/registers.h>
-#include <rex/graphics/xenos.h>
+#include "bo2zm_xenos.h"
+#include "bo2zm_xenos.h"
+#include "bo2zm_xenos.h"
 #include <rex/kernel/xboxkrnl/video.h>
 #include <rex/logging.h>
 #include <rex/memory/utils.h>
@@ -59,10 +59,7 @@
 #include <rex/system/xtypes.h>
 #include <rex/system/xvideo.h>
 #include <rex/thread.h>
-#include <rex/ui/presenter.h>
-#include <rex/ui/vulkan/device.h>
-#include <rex/ui/vulkan/presenter.h>
-#include <rex/ui/vulkan/provider.h>
+#include "bo2zm_native_vk.h"
 #include <rex/ui/windowed_app_context.h>
 
 #if defined(__aarch64__)
@@ -788,7 +785,7 @@ namespace {
 namespace xenos = rex::graphics::xenos;
 using rex::X_STATUS;  // X_STATUS_SUCCESS and X_STATUS_UNSUCCESSFUL need it too
 using Clock = std::chrono::steady_clock;
-using RampOutputContext = rex::ui::vulkan::VulkanPresenter::VulkanGuestOutputRefreshContext;
+using RampOutputContext = rex::gpu::vulkan::VulkanPresenter::VulkanGuestOutputRefreshContext;
 
 std::atomic<uint64_t> g_swaps_native{0};  // SwapsNative(), for the watchdog
 
@@ -1086,7 +1083,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       // The shader library's SPIR-V (from XenosRecomp) needs capabilities that the VkDevice only enables if they are
       // requested before it is created.
       rex::cvar::SetFlagByName("vulkan_native_shader_features", "true");
-      provider_ = rex::ui::vulkan::VulkanProvider::Create(true, true);
+      provider_ = rex::gpu::vulkan::VulkanProvider::Create(true, true);
       if (!provider_) {
         REXLOG_ERROR("[native] Could not create the Vulkan device");
         return X_STATUS_UNSUCCESSFUL;
@@ -1130,7 +1127,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     const auto show = [&](uint64_t done, uint64_t total) {
       if (!progress) {
         progress = std::make_unique<ProgressScreen>(presenter_.get(),
-                                                    provider_ ? provider_->vulkan_device() : nullptr);
+                                                    provider_ ? provider_->GetVulkanDevice() : nullptr);
       }
       progress->Update(done, total);
     };
@@ -1162,8 +1159,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   }
 
   bool has_presentation() const override { return presenter_ != nullptr; }
-  rex::ui::GraphicsProvider* provider() const override { return provider_.get(); }
-  rex::ui::Presenter* presenter() const override { return presenter_.get(); }
+  rex::gpu::GraphicsProvider* provider() const override { return provider_.get(); }
+  rex::gpu::Presenter* presenter() const override { return presenter_.get(); }
 
   void SetInterruptCallback(uint32_t callback, uint32_t user_data) override {
     callback_data_.store(user_data, std::memory_order_release);
@@ -2066,7 +2063,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     // The pipeline precompile at start-up (bo2zm_native_precompile.h). Decided here, as the graphics system starts and
     // before the game is launched. When it runs, the renderer is prepared now instead of at the game's first
     // copy, and the game waits for the pass (Bo2zmApp::OnHoldModuleLaunch).
-    if (bo2zm::native::precompile::Decide(provider_ ? provider_->vulkan_device() : nullptr,
+    if (bo2zm::native::precompile::Decide(provider_ ? provider_->GetVulkanDevice() : nullptr,
                                           shaders_.loaded() ? &shaders_ : nullptr)) {
       if (EnsureTargets()) {
         targets_->Precompile();
@@ -3228,7 +3225,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   // a clear.
   bool EnsureTargets() {
     if (!targets_ && !targets_failed_) {
-      targets_ = NativeTargets::Create(provider_ ? provider_->vulkan_device() : nullptr, memory_);
+      targets_ = NativeTargets::Create(provider_ ? provider_->GetVulkanDevice() : nullptr, memory_);
       if (!targets_) {
         targets_failed_ = true;
         REXLOG_ERROR("[native] Could not create the native targets (C2)");
@@ -5179,26 +5176,26 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     }
     presenter_->RefreshGuestOutput(
         kOutputWidth, kOutputHeight, kOutputWidth, kOutputHeight,
-        [this](rex::ui::Presenter::GuestOutputRefreshContext& context) {
+        [this](rex::gpu::Presenter::GuestOutputRefreshContext& context) {
           return CleanOutput(static_cast<RampOutputContext&>(context));
         });
   }
 
   bool CleanOutput(RampOutputContext& context) {
-    const rex::ui::vulkan::VulkanDevice* vulkan_device = provider_->vulkan_device();
-    const auto& dfn = vulkan_device->functions();
-    const VkDevice device = vulkan_device->device();
+    const rex::gpu::vulkan::VulkanDevice* vulkan_device = provider_->GetVulkanDevice();
+    const auto& dfn = vulkan_device->GetFunctions();
+    const VkDevice device = vulkan_device->GetDevice();
 
     if (render_pass_ == VK_NULL_HANDLE) {
       VkAttachmentDescription attachment{};
-      attachment.format = rex::ui::vulkan::VulkanPresenter::kGuestOutputFormat;
+      attachment.format = rex::gpu::vulkan::VulkanPresenter::kGuestOutputFormat;
       attachment.samples = VK_SAMPLE_COUNT_1_BIT;
       attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
       attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
       attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
       attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
       attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      attachment.finalLayout = rex::ui::vulkan::VulkanPresenter::kGuestOutputInternalLayout;
+      attachment.finalLayout = rex::gpu::vulkan::VulkanPresenter::kGuestOutputInternalLayout;
       VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
       VkSubpassDescription subpass{};
       subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -5219,7 +5216,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     if (pool_ == VK_NULL_HANDLE) {
       VkCommandPoolCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-      info.queueFamilyIndex = vulkan_device->queue_family_graphics_compute();
+      info.queueFamilyIndex = vulkan_device->GetQueueFamilyGraphicsCompute();
       if (dfn.vkCreateCommandPool(device, &info, nullptr, &pool_) != VK_SUCCESS) {
         pool_ = VK_NULL_HANDLE;
         return false;
@@ -5252,7 +5249,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
     VkFramebuffer framebuffer = VK_NULL_HANDLE;
     for (const Framebuffer& f : framebuffers_) {
-      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.image_version()) {
+      if (f.framebuffer != VK_NULL_HANDLE && f.version == context.GetImageVersion()) {
         framebuffer = f.framebuffer;
       }
     }
@@ -5263,7 +5260,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         dfn.vkDestroyFramebuffer(device, f.framebuffer, nullptr);
         f.framebuffer = VK_NULL_HANDLE;
       }
-      VkImageView view = context.image_view();
+      VkImageView view = context.GetImageView();
       VkFramebufferCreateInfo info{};
       info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
       info.renderPass = render_pass_;
@@ -5276,7 +5273,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         f.framebuffer = VK_NULL_HANDLE;
         return false;
       }
-      f.version = context.image_version();
+      f.version = context.GetImageVersion();
       framebuffer = f.framebuffer;
     }
 
@@ -5307,7 +5304,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &commands_;
     {
-      const auto queue = vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
+      const auto queue = vulkan_device->AcquireQueue(vulkan_device->GetQueueFamilyGraphicsCompute(), 0);
       if (dfn.vkQueueSubmit(queue.queue(), 1, &submit, fence_) != VK_SUCCESS) {
         return false;
       }
@@ -5319,12 +5316,12 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
 
   void DestroyVulkan() {
     targets_.reset();  // uses the device: before everything else
-    if (!provider_ || !provider_->vulkan_device()) {
+    if (!provider_ || !provider_->GetVulkanDevice()) {
       return;
     }
-    const rex::ui::vulkan::VulkanDevice* vulkan_device = provider_->vulkan_device();
-    const auto& dfn = vulkan_device->functions();
-    const VkDevice device = vulkan_device->device();
+    const rex::gpu::vulkan::VulkanDevice* vulkan_device = provider_->GetVulkanDevice();
+    const auto& dfn = vulkan_device->GetFunctions();
+    const VkDevice device = vulkan_device->GetDevice();
     if (fence_ != VK_NULL_HANDLE) {
       if (fence_pending_) {
         dfn.vkWaitForFences(device, 1, &fence_, VK_TRUE, UINT64_MAX);
@@ -6200,8 +6197,8 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   };
 
   rex::ui::WindowedAppContext* app_context_ = nullptr;
-  std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider_;
-  std::unique_ptr<rex::ui::Presenter> presenter_;
+  std::unique_ptr<rex::gpu::vulkan::VulkanProvider> provider_;
+  std::unique_ptr<rex::gpu::Presenter> presenter_;
 
   rex::memory::Memory* memory_ = nullptr;
   rex::runtime::FunctionDispatcher* dispatcher_ = nullptr;
@@ -6571,7 +6568,7 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   VkCommandBuffer commands_ = VK_NULL_HANDLE;
   VkFence fence_ = VK_NULL_HANDLE;
   bool fence_pending_ = false;
-  std::array<Framebuffer, rex::ui::vulkan::VulkanPresenter::kMaxActiveGuestOutputImageVersions>
+  std::array<Framebuffer, rex::gpu::vulkan::VulkanPresenter::kMaxActiveGuestOutputImageVersions>
       framebuffers_{};
   size_t next_framebuffer_ = 0;
 };
