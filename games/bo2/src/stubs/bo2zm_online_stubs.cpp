@@ -28,12 +28,22 @@ void EveryFrame(PPCContext&, uint8_t*) {}
 
 // Relaunch (mode switch) is off on v0.11 until its kernel dependencies are ported: Zombies only, no restart.
 #include <filesystem>
+#include <vector>
+
+#include <rex/xam/launch_data.h>
 
 #include "../bo2zm_launch_options.h"
 #include "../bo2zm_relaunch.h"
 
 namespace bo2zm {
-void ApplyPendingRelaunch(const std::filesystem::path&) {}
+// The game starts Zombies when its launch data is 1000 bytes with [3] = 0x0B and [860] = 1 (captured from the
+// game's own relaunch); the SDK hands this to XamLoaderGetLaunchData.
+void ApplyPendingRelaunch(const std::filesystem::path&) {
+  std::vector<uint8_t> data(1000, 0);
+  data[3] = 0x0B;
+  data[860] = 1;
+  rex::xam::SetInitialLaunchData(std::move(data), 0, "game:\\default_mp.xex");
+}
 bool CampaignAvailable() { return false; }
 const launch::InstalledModes& ModesInstalled() {
   static const launch::InstalledModes modes{};
