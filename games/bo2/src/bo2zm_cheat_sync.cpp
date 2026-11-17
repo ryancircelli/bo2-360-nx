@@ -69,6 +69,8 @@
 #include <rex/system/xsocket.h>
 
 #include "bo2zm_cheats.h"
+#include "bo2_cheat_sync_pkg/cheat_sync_logic.h"
+#include "bo2_cheat_sync_pkg/cheat_sync_wire.h"
 #include "bo2zm_mod_hud_fit.h"
 #include "bo2zm_mod_hud_wire.h"
 #include "bo2zm_mode.h"
@@ -87,84 +89,35 @@ namespace link = rex::system::system_link;
 namespace detail = bo2zm::cheats::detail;
 using Clock = std::chrono::steady_clock;
 
-constexpr uint32_t kMagic = 0x425A4353;  // "BZCS"
-constexpr uint8_t kVersion = 2;
-enum : uint8_t {
-  kOptions = 1, kAnswer = 2, kCommand = 3, kResult = 4, kCatalog = 5, kWorld = 6, kBlasts = 7, kMenuAsk = 8, kMenus = 9
-};
-constexpr size_t kHeader = 12;
-constexpr size_t kRevisions = 8;
+namespace cs = bo2cs;  // clean-room wire codec and decision logic (metal360 packages/bo2-cheat-sync, vendored)
+
+constexpr size_t kMaxArgument = cs::kMaxArgument;
 constexpr int kMaxPlayers = 4;
-constexpr size_t kOptionsEntry = 8 + detail::kSyncedCount;
-constexpr size_t kAnswerEntry = 9;
-constexpr size_t kMaxDatagram = 1400;
-constexpr size_t kCatalogPart = 1200;
-constexpr int kMaxCatalogParts = 16;
-constexpr int kMaxBlasts = 8;
-constexpr size_t kMaxArgument = 64;
 constexpr uint8_t kNoClient = 255;
 constexpr uint16_t kGamePort = 1000;  // BO2's game socket (the server's and the client's)
-constexpr uint16_t kSidePort = 1002;  // ours, moved like the game's (link::HostPort)
-constexpr auto kPeerFresh = std::chrono::milliseconds(5000);  // a game peer heard from this recently is live
-constexpr std::chrono::milliseconds kResends[] = {std::chrono::milliseconds(1000), std::chrono::milliseconds(3000)};
-constexpr int kLast = int(std::size(kResends));
-constexpr int kHostPollEvery = 4;  // frames between the host's looks at its socket
-constexpr int kJoinPollEvery = 2;  // and the joiner's (the host's explosions should show without delay)
+constexpr uint16_t kSidePort = cs::kGuestSidePort;  // ours, moved like the game's (link::HostPort)
+constexpr auto kPeerFresh = std::chrono::milliseconds(cs::kPeerLiveMs);  // a game peer heard from this recently is live
+static_assert(detail::kSyncedCount == int(cs::kOptionCount), "synced options and the wire's option count differ");
 
 // The commands a joiner sends, by number (the message's aux byte).
 constexpr std::string_view kCommands[] = {
     "", "bo2zm_perk", "bo2zm_remove_perks", "bo2zm_give_weapon", "bo2zm_pap_weapon", "bo2zm_max_points",
     "bo2zm_powerup", "bo2zm_kill_zombies", "bo2zm_doors", "bo2zm_power", "bo2zm_debris", "bo2zm_goto_round",
     "bo2zm_zm_nospawn", "bo2zm_hold", "bo2zm_release"};
+static_assert(std::size(kCommands) == 15, "the wire's command ids are 1..14");
 
 bool Trace() { return REXCVAR_GET(bo2zm_cheat_sync_trace); }
+
+int64_t NowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+}
 
 std::string Ip(uint32_t ip) {
   return fmt::format("{}.{}.{}.{}", ip >> 24, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
 }
 
-void Put16(uint8_t* at, uint16_t v) {
-  at[0] = uint8_t(v >> 8);
-  at[1] = uint8_t(v);
-}
-void Put32(uint8_t* at, uint32_t v) {
-  for (int i = 0; i < 4; ++i) at[i] = uint8_t(v >> (24 - 8 * i));
-}
-void Put64(uint8_t* at, uint64_t v) {
-  for (int i = 0; i < 8; ++i) at[i] = uint8_t(v >> (56 - 8 * i));
-}
-uint16_t Get16(const uint8_t* at) { return uint16_t(at[0] << 8 | at[1]); }
-uint32_t Get32(const uint8_t* at) {
-  return uint32_t(at[0]) << 24 | uint32_t(at[1]) << 16 | uint32_t(at[2]) << 8 | at[3];
-}
-uint64_t Get64(const uint8_t* at) { return uint64_t(Get32(at)) << 32 | Get32(at + 4); }
-
-// A message being built.
-struct Message {
-  std::array<uint8_t, kMaxDatagram> bytes{};
-  size_t size = kHeader;
-  Message(uint8_t type, uint8_t count, uint8_t aux, uint32_t sequence) {
-    Put32(bytes.data(), kMagic);
-    bytes[4] = kVersion;
-    bytes[5] = type;
-    bytes[6] = count;
-    bytes[7] = aux;
-    Put32(bytes.data() + 8, sequence);
-  }
-  bool Room(size_t more) const { return size + more <= bytes.size(); }
-  void U8(uint8_t v) { bytes[size++] = v; }
-  void U16(uint16_t v) { Put16(bytes.data() + size, v); size += 2; }
-  void U32(uint32_t v) { Put32(bytes.data() + size, v); size += 4; }
-  void U64(uint64_t v) { Put64(bytes.data() + size, v); size += 8; }
-  void Text(std::string_view text) { std::memcpy(bytes.data() + size, text.data(), text.size()); size += text.size(); }
-};
-
 // A command argument or result text: what the menu itself sends (names, numbers, a dvar and its value).
-bool PlainText(std::string_view text, size_t most) {
-  return text.size() <= most &&
-         text.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_. ,()'-") ==
-             std::string_view::npos;
-}
+bool PlainText(std::string_view text, size_t most) { return cs::ValidCommandText(std::string(text), most); }
 
 // The XUID the game plays this controller's profile with (UserProfile::xuid), 0 without one.
 uint64_t ControllerXuid(int controller) {
@@ -208,46 +161,46 @@ int64_t Socket() {
   return socket;
 }
 
-int Send(uint32_t ip, uint16_t port, const Message& message) {
+int Send(uint32_t ip, uint16_t port, const cs::Bytes& message) {
   const int64_t socket = Socket();
-  return socket < 0 ? -1 : link::SideSend(socket, ip, port, message.bytes.data(), uint32_t(message.size));
+  return socket < 0 ? -1 : link::SideSend(socket, ip, port, message.data(), uint32_t(message.size()));
+}
+int Send(uint32_t ip, uint16_t port, const std::optional<cs::Bytes>& message) {
+  return message ? Send(ip, port, *message) : -1;
 }
 
-// A received datagram whose header is ours: its type, count, aux and sequence, the body after the header.
+// A received datagram whose magic and version are ours: the whole datagram (each message type is checked by its own
+// decoder in bo2cs), where it came from, and its type.
 struct Received {
-  uint8_t type = 0, count = 0, aux = 0;
-  uint32_t sequence = 0;
-  const uint8_t* body = nullptr;
-  size_t body_size = 0;
+  uint8_t type = 0;
+  const uint8_t* data = nullptr;
+  size_t size = 0;
   uint32_t ip = 0;
   uint16_t port = 0;
 };
 
-bool Receive(std::array<uint8_t, 2048>& buffer, Received& out) {
+bool Receive(std::array<uint8_t, cs::kReceiveBuffer>& buffer, Received& out) {
   const int64_t socket = Socket();
   if (socket < 0) return false;
   for (;;) {
     const int got = link::SideReceive(socket, buffer.data(), uint32_t(buffer.size()), &out.ip, &out.port);
     if (got < 0) return false;
     const size_t size = size_t(got);
-    if (size < kHeader || Get32(buffer.data()) != kMagic) {
+    if (size < cs::kHeaderSize || std::memcmp(buffer.data(), "BZCS", 4) != 0) {
       if (Trace()) REXLOG_INFO("[cheat sync] ignored a {}-byte datagram from {}:{} (not ours)", size, Ip(out.ip), out.port);
       continue;
     }
-    if (buffer[4] != kVersion) {
+    if (buffer[4] != cs::kVersion) {
       static int logged = 0;
       if (logged++ < 3) {
         REXLOG_WARN("[cheat sync] {} sends version {} messages (this build reads {}); ignored", Ip(out.ip), buffer[4],
-                    kVersion);
+                    cs::kVersion);
       }
       continue;
     }
     out.type = buffer[5];
-    out.count = buffer[6];
-    out.aux = buffer[7];
-    out.sequence = Get32(buffer.data() + 8);
-    out.body = buffer.data() + kHeader;
-    out.body_size = size - kHeader;
+    out.data = buffer.data();
+    out.size = size;
     return true;
   }
 }
@@ -256,17 +209,12 @@ bool Receive(std::array<uint8_t, 2048>& buffer, Received& out) {
 
 namespace wire = bo2zm::mod_hud_wire;
 constexpr auto kMenuAskEvery = std::chrono::milliseconds(2000);
-constexpr auto kMenuPeerFresh = std::chrono::milliseconds(6000);
 constexpr auto kMenuEvery = std::chrono::milliseconds(1000);
 constexpr size_t kMaxTables = 32;
 
-// The host: the consoles that asked for the menus, and what each player's table was when last sent.
-struct MenuPeer {
-  uint32_t ip = 0;
-  uint16_t port = 0;
-  Clock::time_point heard{};
-};
-std::array<MenuPeer, 8> g_menu_peers;
+// The host: the consoles that asked for the menus (cs::MenuRequesters keeps up to eight for 6 s after their latest
+// ask), and what each player's table was when last sent.
+cs::MenuRequesters g_menu_peers;
 struct MenuSent {
   bool used = false;
   uint16_t client = 0;
@@ -275,36 +223,28 @@ struct MenuSent {
   int empty_sends = 0;
 };
 std::array<MenuSent, kMaxTables> g_menu_sent;
+size_t g_menu_peer_count = 0;
 
 void MenuAsked(const Received& in) {
-  if (in.aux != wire::kFormat || in.body_size != 0) return;  // another format: that console cannot read these tables
-  const auto now = Clock::now();
-  MenuPeer* slot = nullptr;
-  for (auto& peer : g_menu_peers) if (peer.ip == in.ip && peer.port == in.port) slot = &peer;
-  if (!slot) {
-    slot = &g_menu_peers[0];
-    for (auto& peer : g_menu_peers) if (!peer.ip || peer.heard < slot->heard) slot = &peer;
-    if (slot->ip) REXLOG_WARN("[cheat sync] mod menus: too many consoles ask; {} is dropped", Ip(slot->ip));
+  if (!cs::DecodeMenuAsk(in.data, in.size)) return;  // another format: that console cannot read these tables
+  const int64_t now = NowMs();
+  bool known = false;
+  for (const auto& peer : g_menu_peers.Active(now)) known |= peer.first == in.ip && peer.second == in.port;
+  if (!known) {
     REXLOG_INFO("[cheat sync] mod menus: {}:{} fits the host's menus; sending it the players' tables", Ip(in.ip),
                 in.port);
-    *slot = {in.ip, in.port, now};
   }
-  slot->heard = now;
+  g_menu_peers.Note(in.ip, in.port, now);
 }
 
 // Each player's table to every console that asked recently: when it changes, every second while it has entries, and
 // an emptied one once more a second later.
 void MenuPush() {
   const auto now = Clock::now();
-  int peers = 0;
-  for (auto& peer : g_menu_peers) {
-    if (peer.ip && now - peer.heard > kMenuPeerFresh) {
-      REXLOG_INFO("[cheat sync] mod menus: {} stopped asking", Ip(peer.ip));
-      peer = {};
-    }
-    peers += peer.ip != 0;
-  }
-  if (!peers) return;
+  const auto peers = g_menu_peers.Active(NowMs());
+  if (peers.size() < g_menu_peer_count) REXLOG_INFO("[cheat sync] mod menus: a console stopped asking");
+  g_menu_peer_count = peers.size();
+  if (peers.empty()) return;
   static std::array<wire::Table, kMaxTables> tables;  // 38 KB, off the stack; only the main frame comes here
   const size_t count = bo2zm::mod_hud_fit::HostTables(tables.data(), tables.size());
   for (size_t i = 0; i < count; ++i) {
@@ -318,25 +258,33 @@ void MenuPush() {
     }
     const bool changed = sent->revision != table.revision;
     if (!changed && (now - sent->at < kMenuEvery || (!table.count && sent->empty_sends >= 2))) continue;
-    Message message(kMenus, table.count, wire::kFormat, table.revision);
-    if (!message.Room(wire::kBodyHeader + size_t(table.count) * wire::kEntryBytes)) continue;
-    const size_t size = wire::Encode(table, message.bytes.data() + message.size);
-    if (!size) continue;
-    message.size += size;
-    for (const auto& peer : g_menu_peers)
-      if (peer.ip) Send(peer.ip, peer.port, message);
+    cs::Menus menus;
+    menus.revision = table.revision;
+    menus.session = table.session;
+    menus.epoch = table.epoch;
+    menus.client = table.client;
+    for (uint8_t e = 0; e < table.count; ++e) {
+      cs::MenuEntry entry;
+      entry.slot = table.entries[e].slot;
+      std::memcpy(entry.identity, table.entries[e].id.data(), cs::kIdentitySize);
+      menus.entries.push_back(entry);
+    }
+    const auto message = cs::EncodeMenus(menus);
+    if (!message) continue;
+    for (const auto& peer : peers) Send(peer.first, peer.second, message);
     sent->empty_sends = table.count ? 0 : changed ? 1 : sent->empty_sends + 1;
     sent->revision = table.revision;
     sent->at = now;
     if (Trace()) {
       REXLOG_INFO("[cheat sync] mod menus: player {} table {} ({} elements) to {} console(s)", table.client,
-                  table.revision, table.count, peers);
+                  table.revision, table.count, peers.size());
     }
   }
 }
 
 void MenuHostStop() {
-  g_menu_peers = {};
+  g_menu_peers.Clear();
+  g_menu_peer_count = 0;
   g_menu_sent = {};
 }
 
@@ -356,8 +304,7 @@ void MenuAsk() {
   bool broadcast = false;
   const uint32_t to = g_menu_host ? g_menu_host : Destination(false, broadcast);
   if (!to) return;
-  Message message(kMenuAsk, 0, wire::kFormat, 0);
-  const int sent = Send(to, link::HostPort(kSidePort), message);
+  const int sent = Send(to, link::HostPort(kSidePort), cs::EncodeMenuAsk());
   if (Trace() || sent < 0) {
     REXLOG_INFO("[cheat sync] mod menus: asked {}{}{}", Ip(to), broadcast ? " (the LAN's broadcast)" : "",
                 sent < 0 ? " -- the send failed" : "");
@@ -367,11 +314,25 @@ void MenuAsk() {
 void MenuReceived(const Received& in) {
   if (!REXCVAR_GET(bo2zm_mod_hud_fit)) return;
   wire::Table table;
-  if (!wire::Decode(in.aux, in.count, in.sequence, in.body, in.body_size, table)) {
+  bool ok = false;
+  if (const auto menus = cs::DecodeMenus(in.data, in.size)) {
+    table.session = menus->session;
+    table.epoch = menus->epoch;
+    table.client = menus->client;
+    table.revision = menus->revision;
+    table.count = uint8_t(menus->entries.size());
+    ok = true;
+    for (size_t e = 0; e < menus->entries.size() && ok; ++e) {
+      table.entries[e].slot = menus->entries[e].slot;
+      std::memcpy(table.entries[e].id.data(), menus->entries[e].identity, cs::kIdentitySize);
+      // The fitting takes only text and material elements.
+      ok = cs::IdentityFittable(menus->entries[e].identity);
+    }
+  }
+  if (!ok) {
     static int logged = 0;
     if (logged++ < 3) {
-      REXLOG_WARN("[cheat sync] mod menus: ignored a table from {} (format {}, {} entries, {} bytes)", Ip(in.ip),
-                  in.aux, in.count, in.body_size);
+      REXLOG_WARN("[cheat sync] mod menus: ignored a table from {} ({} bytes)", Ip(in.ip), in.size);
     }
     return;
   }
@@ -398,8 +359,8 @@ struct Command {
   uint8_t id = 0;
   bool pap = false;
   std::string argument;
-  Clock::time_point first_at{}, sent_at{};
-  int resends = 0;
+  std::optional<cs::RetryTimer> retry;  // from the first send; resend at 1 s and 3 s, give up at 4 s
+  Clock::time_point sent_at{};
 };
 
 struct Joiner {
@@ -410,15 +371,12 @@ struct Joiner {
   std::array<std::array<int, detail::kSyncedCount>, kMaxPlayers> values{};
   std::array<int, kMaxPlayers> clients{};  // as the host answered, -1 not yet
   bool answered = false;  // the host answered the latest message for every player, with this console's revisions
-  Clock::time_point first_at{};  // the latest message's first send
-  Clock::time_point sent_at{};   // its last send
-  int resends = 0;
+  std::optional<cs::RetryTimer> retry;  // the latest message's schedule, from its first send
   bool sent_broadcast = false;
+  bool options_host_resent = false;  // the message already went again once the host's address was known
   uint32_t host_ip = 0;  // from the host's messages
   uint32_t catalog_revision = 0, world_revision = 0;  // what this console has from the host
-  uint32_t catalog_building = 0;                      // the revision whose parts are arriving
-  std::vector<std::string> catalog_parts;
-  std::vector<bool> catalog_have;
+  cs::CatalogAssembler catalog_assembler;
   uint32_t command_sequence = 0;
   std::vector<Command> commands;  // waiting for their result
 };
@@ -426,45 +384,72 @@ Joiner g_join;
 std::mutex g_forward_mutex;
 std::vector<Command> g_forwarded;  // from Forward (any thread), sent by the next frame; under g_forward_mutex
 
+// The peer the game socket last heard on BO2's game port (0 when none is live), for cs::DestinationInputs.
+std::optional<uint32_t> GamePeer(int64_t& age_ms) {
+  uint32_t ip = 0;
+  int64_t age = 0;
+  if (!link::LastPeer(kGamePort, &ip, &age)) return std::nullopt;
+  age_ms = age;
+  return ip;
+}
+
 // The host's address, 0 when not known yet.
 uint32_t HostAddress() {
   if (g_join.host_ip) return g_join.host_ip;
-  uint32_t ip = 0;
   int64_t age = 0;
-  return link::LastPeer(kGamePort, &ip, &age) && age < kPeerFresh.count() ? ip : 0;
+  const auto peer = GamePeer(age);
+  return peer && age < kPeerFresh.count() ? *peer : 0;
 }
 
-// Where a joiner's message goes: the host, or the LAN's broadcast address. 0: nowhere (no LAN). Joined by a code
-// over the internet, a broadcast would never reach the host: the code's address stands in for it.
+// Where a joiner's message goes (cs::ChooseDestination): the host, or the code's address when joined online, or the
+// LAN's broadcast address. 0: nowhere (no LAN). `broadcast` asks for the final fallback, which skips the host.
 uint32_t Destination(bool broadcast, bool& sent_broadcast) {
-  uint32_t to = broadcast ? 0 : HostAddress();
-  if (!to) to = rex::system::online::Target();
-  sent_broadcast = to == 0;
-  if (!to) {
-    uint32_t ip = 0, mask = 0;
-    if (!link::LanAddress(&ip, &mask) || !mask) {
-      REXLOG_WARN("[cheat sync] no LAN address: nothing is sent");
-      return 0;
-    }
-    to = ip | ~mask;
+  cs::DestinationInputs in;
+  if (g_join.host_ip) in.learned_host = g_join.host_ip;
+  int64_t age = 0;
+  if (const auto peer = GamePeer(age)) {
+    in.peer_ip = *peer;
+    in.peer_age_ms = age;
   }
-  return to;
+  in.online_target = rex::system::online::Target();
+  uint32_t lan_ip = 0, lan_mask = 0;
+  if (link::LanAddress(&lan_ip, &lan_mask) && lan_mask) {
+    in.have_lan = true;
+    in.lan_ip = lan_ip;
+    in.lan_mask = lan_mask;
+  }
+  in.broadcast_fallback = broadcast;
+  const auto to = cs::ChooseDestination(in);
+  if (!to) {
+    REXLOG_WARN("[cheat sync] no LAN address: nothing is sent");
+    return 0;
+  }
+  const bool host_known = !broadcast && (in.learned_host || (in.peer_ip && age >= 0 && age < cs::kPeerLiveMs));
+  sent_broadcast = !host_known && !in.online_target;
+  return *to;
 }
 
 void SendOptions(const char* why, bool broadcast = false) {
   if (g_join.count == 0) return;
-  Message message(kOptions, uint8_t(g_join.count), uint8_t(detail::kSyncedCount), g_join.sequence);
-  message.U32(g_join.catalog_revision);
-  message.U32(g_join.world_revision);
+  cs::Options options;
+  options.sequence = g_join.sequence;
+  options.catalog_rev = g_join.catalog_revision;
+  options.world_rev = g_join.world_revision;
   for (int p = 0; p < g_join.count; ++p) {
-    message.U64(g_join.xuids[p]);
-    for (int i = 0; i < detail::kSyncedCount; ++i) message.U8(uint8_t(g_join.values[p][i]));
+    cs::PlayerOptions player;
+    player.xuid = g_join.xuids[p];
+    for (int i = 0; i < detail::kSyncedCount; ++i) player.value[i] = uint8_t(g_join.values[p][i]);
+    options.players.push_back(player);
+  }
+  const auto message = cs::EncodeOptions(options);
+  if (!message) {
+    REXLOG_WARN("[cheat sync] options message {} is not valid; not sent", g_join.sequence);
+    return;
   }
   const uint32_t to = Destination(broadcast, g_join.sent_broadcast);
   if (!to) return;
   const uint16_t port = link::HostPort(kSidePort);
   const int sent = Send(to, port, message);
-  g_join.sent_at = Clock::now();
   for (int p = 0; p < g_join.count; ++p) {
     REXLOG_INFO("[cheat sync] sent options ({}, message {}) to {}:{}{}: player {:016X} {}{}", why, g_join.sequence,
                 Ip(to), port, g_join.sent_broadcast ? " (the LAN's broadcast)" : "", g_join.xuids[p],
@@ -477,18 +462,24 @@ void SendOptions(const char* why, bool broadcast = false) {
 void SendNew(const char* why) {
   ++g_join.sequence;
   g_join.answered = false;
-  g_join.resends = 0;
   g_join.clients.fill(-1);
-  g_join.first_at = Clock::now();
+  g_join.options_host_resent = false;
+  g_join.retry.emplace(NowMs());
   SendOptions(why);
 }
 
 void SendCommand(Command& command, const char* why, bool broadcast = false) {
-  Message message(kCommand, 1, command.id, command.sequence);
-  message.U64(command.xuid);
-  message.U8(command.pap ? 1 : 0);
-  message.U8(uint8_t(command.argument.size()));
-  message.Text(command.argument);
+  cs::Command wire_command;
+  wire_command.sequence = command.sequence;
+  wire_command.id = command.id;
+  wire_command.xuid = command.xuid;
+  wire_command.pack_a_punch = command.pap;
+  wire_command.argument = command.argument;
+  const auto message = cs::EncodeCommand(wire_command);
+  if (!message) {
+    REXLOG_WARN("[cheat sync] command {} {} is not valid; not sent", kCommands[command.id], command.argument);
+    return;
+  }
   bool sent_broadcast = false;
   const uint32_t to = Destination(broadcast, sent_broadcast);
   if (!to) return;
@@ -501,22 +492,20 @@ void SendCommand(Command& command, const char* why, bool broadcast = false) {
 }
 
 void JoinerReceived(PPCContext& ctx, uint8_t* base, const Received& in) {
-  if (in.type == kAnswer) {
-    const int count = in.count;
-    if (count < 1 || count > kMaxPlayers || in.body_size != kRevisions + count * kAnswerEntry) {
+  if (in.type == cs::kAnswer) {
+    const auto answer = cs::DecodeAnswer(in.data, in.size);
+    if (!answer) {
       REXLOG_WARN("[cheat sync] ignored a malformed answer from {}", Ip(in.ip));
       return;
     }
-    if (in.sequence != g_join.sequence) {
-      if (Trace()) REXLOG_INFO("[cheat sync] answer from {} to an older message ({}); ignored", Ip(in.ip), in.sequence);
+    if (answer->sequence != g_join.sequence) {
+      if (Trace()) REXLOG_INFO("[cheat sync] answer from {} to an older message ({}); ignored", Ip(in.ip), answer->sequence);
       return;
     }
-    const uint32_t catalog = Get32(in.body), world = Get32(in.body + 4);
-    for (int a = 0; a < count; ++a) {
-      const uint8_t* entry = in.body + kRevisions + a * kAnswerEntry;
-      const uint64_t xuid = Get64(entry);
+    const uint32_t catalog = answer->catalog_rev, world = answer->world_rev;
+    for (const auto& entry : answer->entries) {
       for (int p = 0; p < g_join.count; ++p) {
-        if (g_join.xuids[p] == xuid) g_join.clients[p] = entry[8] == kNoClient ? -1 : entry[8];
+        if (g_join.xuids[p] == entry.xuid) g_join.clients[p] = entry.client == kNoClient ? -1 : entry.client;
       }
     }
     bool all = true;
@@ -536,83 +525,61 @@ void JoinerReceived(PPCContext& ctx, uint8_t* base, const Received& in) {
     g_join.answered = all && current;
     return;
   }
-  if (in.type == kResult) {
-    if (in.body_size < 9 || in.body_size != 9 + size_t(in.body[8]) || in.aux > 1) {
+  if (in.type == cs::kResult) {
+    const auto result = cs::DecodeResult(in.data, in.size);
+    if (!result) {
       REXLOG_WARN("[cheat sync] ignored a malformed result from {}", Ip(in.ip));
       return;
     }
-    const std::string_view text(reinterpret_cast<const char*>(in.body + 9), in.body[8]);
     const auto it = std::find_if(g_join.commands.begin(), g_join.commands.end(),
-                                 [&](const Command& command) { return command.sequence == in.sequence; });
+                                 [&](const Command& command) { return command.sequence == result->sequence; });
     if (it == g_join.commands.end()) return;  // a repeated answer
-    if (!PlainText(text, 255)) return;
-    REXLOG_INFO("[cheat sync] the host {} {} {} for player {:016X}{}{}", in.aux == 0 ? "ran" : "refused",
-                kCommands[it->id], it->argument, it->xuid, text.empty() ? "" : ": ", text);
+    REXLOG_INFO("[cheat sync] the host {} {} {} for player {:016X}{}{}", result->refused ? "refused" : "ran",
+                kCommands[it->id], it->argument, it->xuid, result->text.empty() ? "" : ": ", result->text);
     g_join.commands.erase(it);
     return;
   }
-  if (in.type == kCatalog) {
-    const int part = in.count, parts = in.aux;
-    if (parts < 1 || parts > kMaxCatalogParts || part >= parts || in.body_size > kCatalogPart) {
+  if (in.type == cs::kCatalog) {
+    const auto part = cs::DecodeCatalogPart(in.data, in.size);
+    if (!part) {
       REXLOG_WARN("[cheat sync] ignored a malformed catalog part from {}", Ip(in.ip));
       return;
     }
-    if (in.sequence == g_join.catalog_revision) return;  // have it
-    if (in.sequence != g_join.catalog_building || int(g_join.catalog_parts.size()) != parts) {
-      g_join.catalog_building = in.sequence;
-      g_join.catalog_parts.assign(parts, std::string());
-      g_join.catalog_have.assign(parts, false);
-    }
-    g_join.catalog_parts[part].assign(reinterpret_cast<const char*>(in.body), in.body_size);
-    g_join.catalog_have[part] = true;
-    if (std::all_of(g_join.catalog_have.begin(), g_join.catalog_have.end(), [](bool have) { return have; })) {
-      std::string text;
-      for (const auto& piece : g_join.catalog_parts) text += piece;
-      bo2zm::cheats::ApplyCatalog(ctx, base, text);
-      g_join.catalog_revision = in.sequence;
-      g_join.catalog_parts.clear();
-      g_join.catalog_have.clear();
-      REXLOG_INFO("[cheat sync] the host's catalog {} received ({} bytes)", in.sequence, text.size());
+    if (part->revision == g_join.catalog_revision) return;  // have it
+    if (const auto text = g_join.catalog_assembler.Add(*part)) {
+      bo2zm::cheats::ApplyCatalog(ctx, base, *text);
+      g_join.catalog_revision = part->revision;
+      REXLOG_INFO("[cheat sync] the host's catalog {} received ({} bytes)", part->revision, text->size());
     }
     return;
   }
-  if (in.type == kWorld) {
-    if (in.body_size < 2 || in.body_size != 2 + size_t(Get16(in.body)) || in.body_size > 512) {
+  if (in.type == cs::kWorld) {
+    const auto world = cs::DecodeWorld(in.data, in.size);
+    if (!world) {
       REXLOG_WARN("[cheat sync] ignored malformed world settings from {}", Ip(in.ip));
       return;
     }
-    if (in.sequence == g_join.world_revision) return;
-    const std::string_view text(reinterpret_cast<const char*>(in.body + 2), Get16(in.body));
-    if (text.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.=;") !=
-        std::string_view::npos) {
-      REXLOG_WARN("[cheat sync] the host's world settings have unexpected characters; ignored");
-      return;
-    }
-    bo2zm::cheats::ApplyWorldState(text);
-    g_join.world_revision = in.sequence;
-    REXLOG_INFO("[cheat sync] the host's world settings {}: {}", in.sequence, text.empty() ? "the game's own" : text);
+    if (world->revision == g_join.world_revision) return;
+    bo2zm::cheats::ApplyWorldState(world->text);
+    g_join.world_revision = world->revision;
+    REXLOG_INFO("[cheat sync] the host's world settings {}: {}", world->revision,
+                world->text.empty() ? "the game's own" : world->text);
     return;
   }
-  if (in.type == kBlasts) {
-    const int count = in.count;
-    if (count < 1 || count > kMaxBlasts || in.body_size != 8 + size_t(count) * 12) return;
-    const uint64_t xuid = Get64(in.body);
+  if (in.type == cs::kBlasts) {
+    const auto blasts = cs::DecodeBlasts(in.data, in.size);
+    if (!blasts) return;
     bool ours = false;
-    for (int p = 0; p < g_join.count; ++p) ours |= g_join.xuids[p] == xuid;
+    for (int p = 0; p < g_join.count; ++p) ours |= g_join.xuids[p] == blasts->xuid;
     if (!ours) return;
-    for (int h = 0; h < count; ++h) {
-      float at[3];
-      for (int i = 0; i < 3; ++i) {
-        const uint32_t bits = Get32(in.body + 8 + h * 12 + i * 4);
-        std::memcpy(&at[i], &bits, 4);
-      }
-      if (!std::isfinite(at[0]) || !std::isfinite(at[1]) || !std::isfinite(at[2])) return;
+    for (const auto& hit : blasts->hits) {
+      float at[3] = {hit.x, hit.y, hit.z};
       bo2zm::cheats::PlayRemoteBlast(at);
     }
-    if (Trace()) REXLOG_INFO("[cheat sync] {} explosive hit(s) from the host to draw", count);
+    if (Trace()) REXLOG_INFO("[cheat sync] {} explosive hit(s) from the host to draw", blasts->hits.size());
     return;
   }
-  if (in.type == kMenus) {
+  if (in.type == cs::kMenus) {
     MenuReceived(in);
     return;
   }
@@ -620,10 +587,10 @@ void JoinerReceived(PPCContext& ctx, uint8_t* base, const Received& in) {
 }
 
 void JoinerPoll(PPCContext& ctx, uint8_t* base) {
-  std::array<uint8_t, 2048> buffer{};
+  std::array<uint8_t, cs::kReceiveBuffer> buffer{};
   Received in;
   while (Receive(buffer, in)) {
-    if (in.type == kOptions || in.type == kCommand || in.type == kMenuAsk) continue;  // another joiner's broadcast
+    if (in.type == cs::kOptions || in.type == cs::kCommand || in.type == cs::kMenuAsk) continue;  // another joiner's broadcast
     if (g_join.host_ip != in.ip) {
       REXLOG_INFO("[cheat sync] the host is {}", Ip(in.ip));
       g_join.host_ip = in.ip;
@@ -634,7 +601,7 @@ void JoinerPoll(PPCContext& ctx, uint8_t* base) {
 
 void Join(PPCContext& ctx, uint8_t* base) {
   static int frames = 0;
-  if (++frames >= kJoinPollEvery) {
+  if (++frames >= 2) {
     frames = 0;
     JoinerPoll(ctx, base);
   }
@@ -674,19 +641,21 @@ void Join(PPCContext& ctx, uint8_t* base) {
     g_join.values = now.values;
     SendNew("options changed");
   } else if (!g_join.answered) {
-    const auto now_time = Clock::now();
-    if (g_join.resends < kLast) {
-      if (g_join.sent_broadcast && g_join.resends == 0 && HostAddress()) {
-        SendOptions("the host is known now");  // the same message, now to the host itself
-      } else if (now_time - g_join.first_at >= kResends[g_join.resends]) {
-        ++g_join.resends;
+    const bool again = g_join.sent_broadcast && g_join.retry && !g_join.retry->Finished() && HostAddress();
+    if (again && !g_join.options_host_resent) {
+      g_join.options_host_resent = true;
+      SendOptions("the host is known now");  // the same message, now to the host itself
+    } else if (g_join.retry) {
+      switch (g_join.retry->Poll(NowMs())) {
+        case cs::RetryAction::kResend: SendOptions("resend"); break;
         // The last try goes to the whole LAN, in case the address taken for the host was another player's.
-        SendOptions("resend", g_join.resends == kLast);
+        case cs::RetryAction::kResendFallback: SendOptions("resend", true); break;
+        case cs::RetryAction::kGiveUp:
+          REXLOG_WARN("[cheat sync] the host did not answer options message {} for every player; it is sent again "
+                      "on the next change", g_join.sequence);
+          break;
+        case cs::RetryAction::kNone: break;
       }
-    } else if (g_join.resends == kLast && now_time - g_join.sent_at >= std::chrono::seconds(1)) {
-      ++g_join.resends;
-      REXLOG_WARN("[cheat sync] the host did not answer options message {} for every player; it is sent again on the "
-                  "next change", g_join.sequence);
     }
   }
 
@@ -702,24 +671,21 @@ void Join(PPCContext& ctx, uint8_t* base) {
       continue;
     }
     command.sequence = ++g_join.command_sequence;
-    command.first_at = Clock::now();
+    command.retry.emplace(NowMs());
     SendCommand(command, "picked");
     g_join.commands.push_back(std::move(command));
   }
-  const auto now_time = Clock::now();
   for (auto it = g_join.commands.begin(); it != g_join.commands.end();) {
-    if (it->resends < kLast) {
-      if (now_time - it->first_at >= kResends[it->resends]) {
-        ++it->resends;
-        SendCommand(*it, "resend", it->resends == kLast);
-      }
-      ++it;
-    } else if (now_time - it->sent_at >= std::chrono::seconds(1)) {
-      REXLOG_WARN("[cheat sync] the host did not answer {} {}; it was not run", kCommands[it->id], it->argument);
-      it = g_join.commands.erase(it);
-    } else {
-      ++it;
+    switch (it->retry->Poll(NowMs())) {
+      case cs::RetryAction::kResend: SendCommand(*it, "resend"); break;
+      case cs::RetryAction::kResendFallback: SendCommand(*it, "resend", true); break;
+      case cs::RetryAction::kGiveUp:
+        REXLOG_WARN("[cheat sync] the host did not answer {} {}; it was not run", kCommands[it->id], it->argument);
+        it = g_join.commands.erase(it);
+        continue;
+      case cs::RetryAction::kNone: break;
     }
+    ++it;
   }
 }
 
@@ -733,20 +699,12 @@ struct Peer {
   uint32_t catalog_sent = 0, world_sent = 0;  // the revisions last sent to it
 };
 std::array<Peer, 8> g_peers;
-struct Done {
-  uint32_t ip = 0;
-  uint64_t xuid = 0;
-  uint32_t sequence = 0;
-  uint8_t status = 0;
-  std::string why;
-};
-std::array<Done, 16> g_done;  // the latest commands run, so a resend gets the same answer and runs nothing again
-size_t g_done_next = 0;
+cs::OutcomeCache g_done;  // the latest 16 commands run, so a resend gets the same answer and runs nothing again
 uint32_t g_world_revision = 1;
 std::string g_world_text;
-Clock::time_point g_world_again{};  // a second push of a change, a second later (pushes are not answered)
+cs::DoublePush g_world_push;    // a changed world is pushed twice, a second apart (pushes are not answered)
 uint32_t g_catalog_pushed = 0;
-Clock::time_point g_catalog_again{};  // the second push of a new catalog
+cs::DoublePush g_catalog_push;  // and so is a new catalog
 
 Peer* PeerAt(uint32_t ip, uint16_t port, bool add) {
   for (auto& peer : g_peers) {
@@ -768,165 +726,132 @@ Peer* PeerAt(uint32_t ip, uint16_t port, bool add) {
 }
 
 void SendCatalog(Peer& peer, const std::string& text, uint32_t revision) {
-  const int parts = int((text.size() + kCatalogPart - 1) / kCatalogPart);
-  if (parts < 1 || parts > kMaxCatalogParts) {
+  const auto parts = cs::SplitCatalog(revision, text);
+  if (parts.empty()) {
     REXLOG_WARN("[cheat sync] the catalog ({} bytes) is too big to send", text.size());
     return;
   }
-  for (int part = 0; part < parts; ++part) {
-    Message message(kCatalog, uint8_t(part), uint8_t(parts), revision);
-    message.Text(std::string_view(text).substr(part * kCatalogPart, kCatalogPart));
-    Send(peer.ip, peer.port, message);
-  }
+  for (const auto& part : parts) Send(peer.ip, peer.port, cs::EncodeCatalogPart(part));
   peer.catalog_sent = revision;
-  REXLOG_INFO("[cheat sync] sent the catalog {} ({} bytes in {} part(s)) to {}", revision, text.size(), parts,
+  REXLOG_INFO("[cheat sync] sent the catalog {} ({} bytes in {} part(s)) to {}", revision, text.size(), parts.size(),
               Ip(peer.ip));
 }
 
 void SendWorld(Peer& peer) {
-  Message message(kWorld, 0, 0, g_world_revision);
-  message.U16(uint16_t(g_world_text.size()));
-  message.Text(g_world_text);
-  Send(peer.ip, peer.port, message);
+  Send(peer.ip, peer.port, cs::EncodeWorld({g_world_revision, g_world_text}));
   peer.world_sent = g_world_revision;
   REXLOG_INFO("[cheat sync] sent the world settings {} to {}: {}", g_world_revision, Ip(peer.ip),
               g_world_text.empty() ? "the game's own" : g_world_text);
 }
 
 void HostOptions(const uint8_t* base, const Received& in) {
-  const int count = in.count;
-  if (count < 1 || count > kMaxPlayers || in.aux != detail::kSyncedCount ||
-      in.body_size != kRevisions + count * kOptionsEntry) {
-    REXLOG_WARN("[cheat sync] ignored a malformed options message from {} ({} players, {} options)", Ip(in.ip), count,
-                in.aux);
+  const auto decoded = cs::DecodeOptions(in.data, in.size);
+  if (!decoded) {
+    REXLOG_WARN("[cheat sync] ignored a malformed options message from {}", Ip(in.ip));
     return;
   }
-  Message answer(kAnswer, 0, 0, in.sequence);
+  const auto& options = decoded->options;
   std::string catalog;
   uint32_t catalog_revision = 0;
   bo2zm::cheats::CatalogText(catalog, catalog_revision);
-  answer.U32(catalog_revision);
-  answer.U32(g_world_revision);
+  cs::Answer answer;
+  answer.sequence = options.sequence;
+  answer.catalog_rev = catalog_revision;
+  answer.world_rev = g_world_revision;
   Peer* peer = PeerAt(in.ip, in.port, true);
   int answered = 0;
-  for (int p = 0; p < count; ++p) {
-    const uint8_t* entry = in.body + kRevisions + p * kOptionsEntry;
-    const uint64_t xuid = Get64(entry);
-    int values[detail::kSyncedCount];
-    bool valid = xuid != 0;
-    for (int i = 0; i < detail::kSyncedCount; ++i) {
-      values[i] = entry[8 + i];
-      valid &= values[i] <= detail::OptionMaximum(detail::kSyncedOptions[i]);
-    }
-    if (!valid) {
+  for (size_t p = 0; p < options.players.size(); ++p) {
+    const uint64_t xuid = options.players[p].xuid;
+    if (!decoded->entry_valid[p]) {
       REXLOG_WARN("[cheat sync] ignored player {:016X} from {}: a value out of range", xuid, Ip(in.ip));
       continue;
     }
+    int values[detail::kSyncedCount];
+    for (int i = 0; i < detail::kSyncedCount; ++i) values[i] = options.players[p].value[i];
     if (OwnXuid(xuid)) {
       if (Trace()) REXLOG_INFO("[cheat sync] {:016X} from {} is one of this console's players; ignored", xuid, Ip(in.ip));
       continue;
     }
     int client = -1;
     bool changed = false;
-    if (!bo2zm::cheats::SetRemotePlayer(base, xuid, in.sequence, values, &client, &changed)) {
-      if (Trace()) REXLOG_INFO("[cheat sync] options {} for {:016X} from {} not taken", in.sequence, xuid, Ip(in.ip));
+    if (!bo2zm::cheats::SetRemotePlayer(base, xuid, options.sequence, values, &client, &changed)) {
+      if (Trace()) REXLOG_INFO("[cheat sync] options {} for {:016X} from {} not taken", options.sequence, xuid, Ip(in.ip));
       continue;
     }
     if (changed || Trace()) {
-      REXLOG_INFO("[cheat sync] received options {} from {}: player {:016X} {} -> {}", in.sequence, Ip(in.ip), xuid,
+      REXLOG_INFO("[cheat sync] received options {} from {}: player {:016X} {} -> {}", options.sequence, Ip(in.ip), xuid,
                   OptionsText(values),
                   client >= 0 ? fmt::format("applied to server client {}", client)
                               : std::string("kept until that player is among the server's"));
     }
-    answer.U64(xuid);
-    answer.U8(client >= 0 ? uint8_t(client) : kNoClient);
+    answer.entries.push_back({xuid, client >= 0 ? uint8_t(client) : kNoClient});
     if (answered < kMaxPlayers) peer->xuids[answered] = xuid;
     ++answered;
   }
   if (!answered) return;
   peer->count = answered;
-  answer.bytes[6] = uint8_t(answered);
-  const int sent = Send(in.ip, in.port, answer);
+  const int sent = Send(in.ip, in.port, cs::EncodeAnswer(answer));
   if (Trace() || sent < 0) {
-    REXLOG_INFO("[cheat sync] answered options {} to {}:{} for {} player(s){}", in.sequence, Ip(in.ip), in.port,
+    REXLOG_INFO("[cheat sync] answered options {} to {}:{} for {} player(s){}", options.sequence, Ip(in.ip), in.port,
                 answered, sent < 0 ? " -- the send failed" : "");
   }
   // What the joiner does not have yet.
-  if (!catalog.empty() && Get32(in.body) != catalog_revision) SendCatalog(*peer, catalog, catalog_revision);
-  if (Get32(in.body + 4) != g_world_revision) SendWorld(*peer);
+  if (!catalog.empty() && options.catalog_rev != catalog_revision) SendCatalog(*peer, catalog, catalog_revision);
+  if (options.world_rev != g_world_revision) SendWorld(*peer);
 }
 
 void HostCommand(const uint8_t* base, const Received& in) {
-  if (in.count != 1 || in.aux < 1 || in.aux >= std::size(kCommands) || in.body_size < 10 ||
-      in.body_size != 10 + size_t(in.body[9]) || in.body[9] > kMaxArgument || in.body[8] > 1) {
+  const auto decoded = cs::DecodeCommand(in.data, in.size);
+  if (!decoded) {
     REXLOG_WARN("[cheat sync] ignored a malformed command from {}", Ip(in.ip));
     return;
   }
-  const uint64_t xuid = Get64(in.body);
-  const bool pap = in.body[8] == 1;
-  const std::string_view argument(reinterpret_cast<const char*>(in.body + 10), in.body[9]);
-  const std::string_view name = kCommands[in.aux];
-  uint8_t status = 1;
+  const cs::Command& command = decoded->command;
+  const uint64_t xuid = command.xuid;
+  const std::string_view name = kCommands[command.id];
+  bool refused = true;
   std::string why;
-  const auto previous = std::find_if(g_done.begin(), g_done.end(), [&](const Done& done) {
-    return done.ip == in.ip && done.xuid == xuid && done.sequence == in.sequence;
-  });
-  if (previous != g_done.end()) {
-    status = previous->status;  // a resend: the same answer, nothing runs again
-    why = previous->why;
+  if (const cs::Outcome* previous = g_done.Find(in.ip, xuid, command.sequence)) {
+    refused = previous->refused;  // a resend: the same answer, nothing runs again
+    why = previous->text;
   } else {
-    if (!PlainText(argument, kMaxArgument)) {
+    if (!decoded->text_valid) {
       why = "the argument has unexpected characters";
     } else if (OwnXuid(xuid)) {
       why = "that is one of the host's own players";
     } else {
-      status = uint8_t(bo2zm::cheats::RunRemoteCommand(base, xuid, name, argument, pap, why) == 0 ? 0 : 1);
+      refused = bo2zm::cheats::RunRemoteCommand(base, xuid, name, command.argument, command.pack_a_punch, why) != 0;
     }
-    g_done[g_done_next++ % g_done.size()] = {in.ip, xuid, in.sequence, status, why};
-    REXLOG_INFO("[cheat sync] received command {} from {}: player {:016X} {} {} -> {}{}{}", in.sequence, Ip(in.ip),
-                xuid, name, argument, status == 0 ? "run" : "refused", why.empty() ? "" : ": ", why);
+    g_done.Remember({in.ip, xuid, command.sequence, refused, why});
+    REXLOG_INFO("[cheat sync] received command {} from {}: player {:016X} {} {} -> {}{}{}", command.sequence,
+                Ip(in.ip), xuid, name, command.argument, refused ? "refused" : "run", why.empty() ? "" : ": ", why);
   }
   PeerAt(in.ip, in.port, true);
-  Message result(kResult, 0, status, in.sequence);
-  result.U64(xuid);
-  const std::string text = why.substr(0, 200);
-  result.U8(uint8_t(text.size()));
-  result.Text(text);
-  Send(in.ip, in.port, result);
+  Send(in.ip, in.port, cs::EncodeResult({command.sequence, refused, xuid, why}));
 }
 
 void HostPush() {
   // The world settings and the catalog, to every joiner when they change (twice, a second apart: no answers come).
   const std::string world = bo2zm::cheats::WorldStateText();
-  const auto now = Clock::now();
-  bool push_world = false;
+  const int64_t now = NowMs();
   if (world != g_world_text) {
     g_world_text = world;
     ++g_world_revision;
-    push_world = true;
-    g_world_again = now + std::chrono::seconds(1);
-  } else if (g_world_again != Clock::time_point{} && now >= g_world_again) {
-    g_world_again = {};
-    for (auto& peer : g_peers) peer.world_sent = 0;
-    push_world = true;
+    g_world_push.Changed(now);
   }
   std::string catalog;
   uint32_t catalog_revision = 0;
   const bool has_catalog = bo2zm::cheats::CatalogText(catalog, catalog_revision);
-  bool push_catalog = false;
   if (has_catalog && catalog_revision != g_catalog_pushed) {
     g_catalog_pushed = catalog_revision;
-    push_catalog = true;
-    g_catalog_again = now + std::chrono::seconds(1);
-  } else if (has_catalog && g_catalog_again != Clock::time_point{} && now >= g_catalog_again) {
-    g_catalog_again = {};
-    for (auto& peer : g_peers) peer.catalog_sent = 0;
-    push_catalog = true;
+    g_catalog_push.Changed(now);
   }
+  const bool push_world = g_world_push.Poll(now);
+  const bool push_catalog = has_catalog && g_catalog_push.Poll(now);
   for (auto& peer : g_peers) {
     if (!peer.ip) continue;
-    if (push_world && peer.world_sent != g_world_revision) SendWorld(peer);
-    if (push_catalog && peer.catalog_sent != catalog_revision) SendCatalog(peer, catalog, catalog_revision);
+    if (push_world) SendWorld(peer);
+    if (push_catalog) SendCatalog(peer, catalog, catalog_revision);
   }
 
   // Remote players' explosive bullet hits, to the consoles they play on.
@@ -940,18 +865,12 @@ void HostPush() {
         if (peer.xuids[p] == xuid) to = &peer;
       }
     }
-    int n = 0;
-    Message message(kBlasts, 0, 0, 0);
-    message.U64(xuid);
-    for (; h < count && hits[h].xuid == xuid && n < kMaxBlasts; ++h, ++n) {
-      for (const float v : hits[h].at) {
-        uint32_t bits;
-        std::memcpy(&bits, &v, 4);
-        message.U32(bits);
-      }
+    cs::Blasts blasts;
+    blasts.xuid = xuid;
+    for (; h < count && hits[h].xuid == xuid && blasts.hits.size() < 8; ++h) {
+      blasts.hits.push_back({hits[h].at[0], hits[h].at[1], hits[h].at[2]});
     }
-    message.bytes[6] = uint8_t(n);
-    if (to) Send(to->ip, to->port, message);
+    if (to) Send(to->ip, to->port, cs::EncodeBlasts(blasts));
   }
 }
 
@@ -969,10 +888,10 @@ void Host(const uint8_t* base) {
     }
     return;
   }
-  if (++frames < kHostPollEvery) return;
+  if (++frames < 4) return;
   frames = 0;
   if (Socket() < 0) return;
-  std::array<uint8_t, 2048> buffer{};
+  std::array<uint8_t, cs::kReceiveBuffer> buffer{};
   Received in;
   if (!polling) {
     // Whatever waited while this console was not listening belongs to an earlier match: dropped.
@@ -986,7 +905,7 @@ void Host(const uint8_t* base) {
   while (Receive(buffer, in)) {
     if (in.type == kOptions) HostOptions(base, in);
     else if (in.type == kCommand) HostCommand(base, in);
-    else if (in.type == kMenuAsk) MenuAsked(in);
+    else if (in.type == cs::kMenuAsk) MenuAsked(in);
     // Answers, results and pushes are a host's: another match's.
   }
   HostPush();
@@ -1011,10 +930,10 @@ void MenusOnly(const uint8_t* base) {
       }
       return;
     }
-    if (++frames < kHostPollEvery) return;
+    if (++frames < 4) return;
     frames = 0;
     if (Socket() < 0) return;
-    std::array<uint8_t, 2048> buffer{};
+    std::array<uint8_t, cs::kReceiveBuffer> buffer{};
     Received in;
     if (!polling) {
       polling = true;  // whatever waited belongs to an earlier match
@@ -1022,7 +941,7 @@ void MenusOnly(const uint8_t* base) {
       return;
     }
     while (Receive(buffer, in)) {
-      if (in.type == kMenuAsk) MenuAsked(in);
+      if (in.type == cs::kMenuAsk) MenuAsked(in);
     }
     MenuPush();
     return;
@@ -1032,12 +951,12 @@ void MenusOnly(const uint8_t* base) {
     MenuHostStop();
   }
   if (!joined || !REXCVAR_GET(bo2zm_mod_hud_fit)) return;
-  if (++frames >= kJoinPollEvery) {
+  if (++frames >= 2) {
     frames = 0;
-    std::array<uint8_t, 2048> buffer{};
+    std::array<uint8_t, cs::kReceiveBuffer> buffer{};
     Received in;
     while (Receive(buffer, in)) {
-      if (in.type == kMenus) MenuReceived(in);
+      if (in.type == cs::kMenus) MenuReceived(in);
     }
   }
   MenuAsk();
