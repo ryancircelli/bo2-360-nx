@@ -377,8 +377,8 @@ void Summarize() {
     for (auto [name, c] : {std::pair<const char*, FastCount*>{"scale and add", &g_fast_mix},
                            std::pair<const char*, FastCount*>{"resampler interpolation", &g_fast_interpolation}}) {
       const uint64_t fast = c->fast.load(std::memory_order_relaxed), other = c->other.load(std::memory_order_relaxed);
-      line += fmt::format("{}{} {} fast, {} not", line.empty() ? "" : "; ", name, fast - c->fast_said,
-                          other - c->other_said);
+      line += std::string(line.empty() ? "" : "; ") + name + " " + std::to_string(fast - c->fast_said) + " fast, " +
+              std::to_string(other - c->other_said) + " not";
       c->fast_said = fast;
       c->other_said = other;
     }
