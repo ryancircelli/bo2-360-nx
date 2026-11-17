@@ -113,7 +113,7 @@ void Loop(std::function<rex::gpu::Presenter*()> get_presenter, std::filesystem::
     next += period;
     rex::gpu::Presenter* presenter = get_presenter ? get_presenter() : nullptr;
     bo2zm::native::RawImage image;
-    if (!presenter || !bo2zm::native::CaptureGuestOutput(presenter, image) || !image.width || !image.height) {
+    if (!bo2zm::native::CaptureGuestOutput(presenter, image) || !image.width || !image.height) {
       continue;  // nothing on screen yet
     }
     if (!width) {

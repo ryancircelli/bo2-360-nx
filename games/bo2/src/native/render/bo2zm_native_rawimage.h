@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <rex/graphics/metal_runtime.h>
+
 #include "../bo2zm_native_vk.h"
 
 namespace bo2zm::native {
@@ -21,6 +23,17 @@ struct RawImage {
   std::vector<uint8_t> data;
 };
 
-inline bool CaptureGuestOutput(rex::gpu::Presenter*, RawImage&) { return false; }
+// v0.11 + Metal plugin: the plugin's live presenter reads its guest output back (rex::gpu::v10::metal::CaptureGuestOutputRgba);
+// the presenter argument is not needed. Without the Metal plugin there is nothing to read.
+inline bool CaptureGuestOutput(rex::gpu::Presenter*, RawImage& image) {
+  uint32_t w = 0, h = 0, stride = 0;
+  std::vector<uint8_t> data;
+  if (!rex::gpu::v10::metal::CaptureGuestOutputRgba(w, h, stride, data)) return false;
+  image.width = w;
+  image.height = h;
+  image.stride = stride;
+  image.data = std::move(data);
+  return true;
+}
 
 }  // namespace bo2zm::native

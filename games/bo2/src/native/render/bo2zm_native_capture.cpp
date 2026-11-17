@@ -205,7 +205,7 @@ void Loop(std::function<rex::gpu::Presenter*()> get_presenter, int every_s, int 
     }
     rex::gpu::Presenter* ui_presenter = get_presenter ? get_presenter() : nullptr;
     bo2zm::native::RawImage image;
-    if (!ui_presenter || !bo2zm::native::CaptureGuestOutput(ui_presenter, image) || !image.width ||
+    if (!bo2zm::native::CaptureGuestOutput(ui_presenter, image) || !image.width ||
         !image.height) {
       REXLOG_WARN("[capture] {}: there is no game image to capture", requested.empty() ? std::to_string(n) : requested);
       continue;
@@ -277,7 +277,7 @@ void RequestCapture(std::string label, std::chrono::milliseconds delay) {
 }
 
 void CaptureNowForTests(rex::gpu::Presenter* presenter, const std::string& label) {
-  if (REXCVAR_GET(capture_every_s) <= 0 || !presenter) {
+  if (REXCVAR_GET(capture_every_s) <= 0) {
     return;
   }
   bo2zm::native::RawImage image;
