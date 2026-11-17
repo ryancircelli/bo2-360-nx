@@ -113,7 +113,7 @@ std::string GuestText(uint8_t* base, uint32_t value, bool escape_bytes = false) 
     } else if (c >= 0x20 && c < 0x7F) {
       text += c;
     } else if (escape_bytes) {
-      text += fmt::format("\\x{:02X}", uint8_t(c));
+      { char b[8]; snprintf(b, sizeof b, "\\x%02X", uint8_t(c)); text += b; }
     } else {
       return {};  // not a text string
     }
@@ -126,10 +126,12 @@ std::string GuestStringOrHex(uint8_t* base, uint32_t value) {
   if (value >= 0x82000000 && value < 0x84CE0000) {
     const std::string text = GuestText(base, value);
     if (text.size() >= 2) {
-      return fmt::format("\"{}\"", text);
+      return "\"" + text + "\"";
     }
   }
-  return fmt::format("{:#x}", value);
+  char hex[16];
+  snprintf(hex, sizeof hex, "%#x", value);
+  return hex;
 }
 
 // The conversions of a printf format, in order ('s', 'd', ...).
@@ -163,7 +165,7 @@ std::string ComErrorArgs(uint8_t* base, uint32_t format_address, const uint32_t 
     }
     const bool is_string = i < conv.size() && conv[i] == 's';
     const std::string text = is_string ? GuestText(base, args[i], true) : std::string();
-    out += !text.empty() ? fmt::format("\"{}\"", text) : GuestStringOrHex(base, args[i]);
+    out += !text.empty() ? "\"" + text + "\"" : GuestStringOrHex(base, args[i]);
   }
   return out;
 }
