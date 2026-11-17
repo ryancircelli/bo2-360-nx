@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <bit>
 #include <cstdint>
 
 #include <rex/xenos/fetch.h>
@@ -49,7 +51,39 @@ struct alignas(uint32_t) xe_gpu_depth_sample_counts {
 };
 static_assert(sizeof(xe_gpu_depth_sample_counts) == 32);
 
+inline float GpuSwap(float value, Endian endian) {
+  return std::bit_cast<float>(GpuSwap(std::bit_cast<uint32_t>(value), endian));
+}
+
 }  // namespace rex::xenos
+
+namespace rex {
+// Float to the Xenos 16-bit float (v0.10 rex/math.h).
+inline uint16_t float_to_xenos_half(float value, bool preserve_denormal = false, bool round_to_nearest_even = false) {
+  uint32_t integer_value = std::bit_cast<uint32_t>(value);
+  uint32_t abs_value = integer_value & 0x7FFFFFFFu;
+  uint32_t result;
+  if (abs_value >= 0x47FFE000u) {
+    result = 0x7FFFu;  // saturate
+  } else {
+    if (abs_value < 0x38800000u) {
+      if (preserve_denormal) {
+        uint32_t shift = std::min(uint32_t(113u - (abs_value >> 23u)), uint32_t(24u));
+        result = (0x800000u | (abs_value & 0x7FFFFFu)) >> shift;
+      } else {
+        result = 0u;
+      }
+    } else {
+      result = abs_value + 0xC8000000u;  // rebias the exponent
+    }
+    if (round_to_nearest_even) {
+      result += 0xFFFu + ((result >> 13u) & 1u);
+    }
+    result = (result >> 13u) & 0x7FFFu;
+  }
+  return uint16_t(result | ((integer_value & 0x80000000u) >> 16u));
+}
+}  // namespace rex
 
 namespace rex::graphics {
 namespace xenos = rex::xenos;

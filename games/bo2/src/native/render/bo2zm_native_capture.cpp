@@ -10,7 +10,7 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
-#include "bo2zm_native_vk.h"
+#include "bo2zm_native_rawimage.h"
 
 #include <algorithm>
 #include <array>
@@ -102,8 +102,8 @@ void Chunk(std::vector<uint8_t>& output, const char type[4], const std::vector<u
   PutBe32(output, crc);
 }
 
-// RGBX (R8 G8 B8 X8, like rex::gpu::RawImage) to 8-bit RGB PNG.
-std::vector<uint8_t> EncodePng(const rex::gpu::RawImage& image) {
+// RGBX (R8 G8 B8 X8, like bo2zm::native::RawImage) to 8-bit RGB PNG.
+std::vector<uint8_t> EncodePng(const bo2zm::native::RawImage& image) {
   const uint32_t width = image.width;
   const uint32_t height = image.height;
   std::vector<uint8_t> raw;
@@ -204,8 +204,8 @@ void Loop(std::function<rex::gpu::Presenter*()> get_presenter, int every_s, int 
       }
     }
     rex::gpu::Presenter* ui_presenter = get_presenter ? get_presenter() : nullptr;
-    rex::gpu::RawImage image;
-    if (!ui_presenter || !ui_presenter->CaptureGuestOutput(image) || !image.width ||
+    bo2zm::native::RawImage image;
+    if (!ui_presenter || !bo2zm::native::CaptureGuestOutput(ui_presenter, image) || !image.width ||
         !image.height) {
       REXLOG_WARN("[capture] {}: there is no game image to capture", requested.empty() ? std::to_string(n) : requested);
       continue;
@@ -280,8 +280,8 @@ void CaptureNowForTests(rex::gpu::Presenter* presenter, const std::string& label
   if (REXCVAR_GET(capture_every_s) <= 0 || !presenter) {
     return;
   }
-  rex::gpu::RawImage image;
-  if (!presenter->CaptureGuestOutput(image) || !image.width || !image.height) {
+  bo2zm::native::RawImage image;
+  if (!bo2zm::native::CaptureGuestOutput(presenter, image) || !image.width || !image.height) {
     REXLOG_WARN("[capture] {}: there is no image to capture", label);
     return;
   }

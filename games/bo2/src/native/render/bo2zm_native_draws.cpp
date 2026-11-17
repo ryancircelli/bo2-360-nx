@@ -77,10 +77,9 @@ static const uint32_t kSpirvGlowSmooth[1] = {0};
 #include <rex/filesystem.h>
 
 #include "bo2zm_xenos.h"
-#include "bo2zm_xenos.h"
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
-#include <rex/thread.h>
+#include "../bo2zm_thread.h"
 #include "bo2zm_native_vk.h"
 
 #if defined(__aarch64__)
@@ -3009,11 +3008,11 @@ class VulkanDrawsImpl final : public VulkanDraws {
       }
     }
     address_buffer_ = reinterpret_cast<FnBufferAddress>(
-        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_,
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_,
                                                                           "vkGetBufferDeviceAddress"));
     copy_image_ = reinterpret_cast<FnCopyImage>(deferred::Wrap(
         "vkCmdCopyImage",
-        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
     LoadCachePipelines();
     LoadStateDynamic();  // dynamic state phases 1 and 2
     if (!address_buffer_ || !CreateUpload() || !CreateDescriptors()) {
@@ -6687,12 +6686,12 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * sizes are visible. It goes with the cache report, every 256 new textures.
    */
   void AnnotateGpuMemory() {
-    const auto* instance = vulkan_device_->vulkan_instance();
+    const auto* instance = vulkan_device_->GetVulkanInstance();
     if (!instance) {
       return;
     }
     const auto& ifn = instance->GetFunctions();
-    const VkPhysicalDevice physical = vulkan_device_->physical_device();
+    const VkPhysicalDevice physical = vulkan_device_->GetPhysicalDevice();
     const bool has_budget = vulkan_device_->GetExtensions().ext_EXT_memory_budget &&
                                  ifn.vkGetPhysicalDeviceMemoryProperties2 != nullptr;
     VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
@@ -7389,7 +7388,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // The thread: the requests' vkBindImageMemory calls, in order. It sleeps on a decision taken under the
   // lock; it never spins. It does not write to the log (the ring records the figures in ReportBindings).
   void LoopBindings() {
-    rex::thread::set_current_thread_name("BO2 texture binds");
+    bo2zm::SetThreadName("BO2 texture binds");
 #if REX_PLATFORM_SWITCH
     const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(bindings_priority_));
 #else
@@ -8410,7 +8409,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // under the lock; it never spins. It does not write to the log (the ring records the figures when
   // collecting).
   void LoopHashes() {
-    rex::thread::set_current_thread_name("BO2 texture hashes");
+    bo2zm::SetThreadName("BO2 texture hashes");
 #if REX_PLATFORM_SWITCH
     const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(hashes_priority_));
     const bool core_ok = RexSwitchSetCurrentThreadCore(int(hashes_core_));
@@ -8849,7 +8848,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
 #endif
       try {
         copies_thread_ = std::thread([this, ring_core] {
-          rex::thread::set_current_thread_name("BO2 vertex copies");
+          bo2zm::SetThreadName("BO2 vertex copies");
 #if REX_PLATFORM_SWITCH
           // bo2zm_native_upload_thread_priority (see the cvar).
           const int32_t priority = REXCVAR_GET(bo2zm_native_upload_thread_priority);
@@ -9421,7 +9420,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // On-disk pipeline cache (derived from the game's shaders: not distributed). If the driver rejects it
   // (another driver or corrupt data), it starts from scratch.
   void LoadCachePipelines() {
-    const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
+    const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
     const auto create = reinterpret_cast<FnCreatePipelineCache>(
         ifn.vkGetDeviceProcAddr(device_, "vkCreatePipelineCache"));
     data_cache_ = reinterpret_cast<FnPipelineCacheData>(
@@ -9547,7 +9546,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   void StartWriterCache() {
     if (!writer_cache_.joinable()) {
       writer_cache_ = std::thread([this] {
-        rex::thread::set_current_thread_name("BO2 pipeline cache");
+        bo2zm::SetThreadName("BO2 pipeline cache");
         WriterCacheMain();
       });
     }
@@ -15089,7 +15088,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * 1.3 or with any of them missing, phase 1 is not used at all and one log line says so.
    */
   void LoadStateDynamic() {
-    const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
+    const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
     // Through deferred::Wrap: on the job buffer these are queued like the table's (bo2zm_native_deferred.h).
     const auto request = [&](const char* label) {
       return deferred::Wrap(label, ifn.vkGetDeviceProcAddr(device_, label));
@@ -15927,7 +15926,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // Helper, the second thread (bo2zm_native_prewarm_threads): it walks the list from its end while no
   // match is on, only into the driver's cache (it writes no state), and stops where the first thread has been.
   void LoopPrewarm(bool helper) {
-    rex::thread::set_current_thread_name(helper ? "BO2 pipeline prewarm 2" : "BO2 pipeline prewarm");
+    bo2zm::SetThreadName(helper ? "BO2 pipeline prewarm 2" : "BO2 pipeline prewarm");
     int32_t priority = -1;
 #if REX_PLATFORM_SWITCH
     // The lowest priority the system accepts, and never above the guest's (0x3B): compiling at the priority
@@ -16061,7 +16060,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     std::atomic<uint32_t> done{0}, compiled{0}, no_shader{0}, other_mode{0}, failed{0};
     std::atomic<uint64_t> ns_compiled{0}, ns_cached{0};
     const auto work = [&](uint32_t index) {
-      rex::thread::set_current_thread_name("BO2 pipeline precompile");
+      bo2zm::SetThreadName("BO2 pipeline precompile");
 #if REX_PLATFORM_SWITCH
       // Below the UI thread (0x2C), which draws the screen, and the ring (0x2D); one core each.
       RexSwitchSetCurrentThreadPriorityOk(0x2E);
@@ -16385,7 +16384,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // helper: the second thread (bo2zm_native_compile_threads), which only takes a job outside a match and while
   // another one waits behind it, so the first thread always has one.
   void CompilePipelinesLoop(bool helper) {
-    rex::thread::set_current_thread_name(helper ? "BO2 pipeline compiles 2" : "BO2 pipeline compiles");
+    bo2zm::SetThreadName(helper ? "BO2 pipeline compiles 2" : "BO2 pipeline compiles");
 #if REX_PLATFORM_SWITCH
     RexSwitchSetCurrentThreadPriorityOk(0x3B);  // the guest threads' priority: it shares their cores
 #endif

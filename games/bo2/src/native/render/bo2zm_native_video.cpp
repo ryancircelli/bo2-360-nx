@@ -12,7 +12,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#include "bo2zm_native_vk.h"
+#include "bo2zm_native_rawimage.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -112,8 +112,8 @@ void Loop(std::function<rex::gpu::Presenter*()> get_presenter, std::filesystem::
     }
     next += period;
     rex::gpu::Presenter* presenter = get_presenter ? get_presenter() : nullptr;
-    rex::gpu::RawImage image;
-    if (!presenter || !presenter->CaptureGuestOutput(image) || !image.width || !image.height) {
+    bo2zm::native::RawImage image;
+    if (!presenter || !bo2zm::native::CaptureGuestOutput(presenter, image) || !image.width || !image.height) {
       continue;  // nothing on screen yet
     }
     if (!width) {

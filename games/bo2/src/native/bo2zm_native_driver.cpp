@@ -61,10 +61,11 @@ rex::Result<void> NativeDriverBase::SetSurface(const rex::NativeWindow& window) 
   return {};
 }
 
-rex::Result<void> NativeDriverBase::AttachTitle(const rex::TitleInfo& info, rex::IPhysicalMemory&,
+rex::Result<void> NativeDriverBase::AttachTitle(const rex::TitleInfo& info, rex::IPhysicalMemory& physical,
                                                 rex::IPhysicalWriteWatch&, rex::IGuestInterrupts& interrupts) {
   title_info_ = info;
   interrupts_ = &interrupts;
+  physical_ = &physical;
   auto* runtime = rex::Runtime::instance();
   memory_ = runtime ? runtime->memory() : nullptr;
   if (!memory_) {

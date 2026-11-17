@@ -10,8 +10,6 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
-#include <rex/ui/imgui_dialog.h>
-#include <rex/ui/imgui_drawer.h>
 #include "bo2zm_native_vk.h"
 
 #include <fmt/format.h>
@@ -148,7 +146,7 @@ uint64_t ComputeStamp(const rex::gpu::vulkan::VulkanDevice* device, const Native
   bytes += '\n';
   if (device) {
     VkPhysicalDeviceProperties properties{};
-    device->vulkan_instance()->GetFunctions().vkGetPhysicalDeviceProperties(device->physical_device(), &properties);
+    device->GetVulkanInstance()->GetFunctions().vkGetPhysicalDeviceProperties(device->GetPhysicalDevice(), &properties);
     add(&properties.vendorID, sizeof(properties.vendorID));
     add(&properties.deviceID, sizeof(properties.deviceID));
     add(&properties.driverVersion, sizeof(properties.driverVersion));
@@ -182,86 +180,12 @@ void NotifyDecision(bool wanted) {
   g.decided.notify_all();
 }
 
-// The full-screen progress screen. It exists from the hold to the end of the pass, and draws nothing until the first
-// pipeline that really needs compiling (a black screen, as before the game's first frame); then it closes and deletes
-// itself (ImGuiDialog::Close).
-class Screen final : public rex::ui::ImGuiDialog {
- public:
-  explicit Screen(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
-
- protected:
-  void OnDraw(ImGuiIO& io) override {
-    if (g.ended_flag.load(std::memory_order_acquire)) {
-      Close();
-      return;
-    }
-    if (!g.visible.load(std::memory_order_acquire)) {
-      return;
-    }
-    const ImVec2 size = io.DisplaySize;
-    // The SDK's one font is ProggyTiny at 10 px: whole-number scales keep it sharp. Laid out for 720 lines.
-    const float unit = size.y / 720.0f;
-    const float scale_title = std::max(1.0f, std::round(3.0f * unit));
-    const float scale_text = std::max(1.0f, std::round(2.0f * unit));
-    const uint32_t total = g.total.load(std::memory_order_relaxed);
-    const uint32_t done = std::min(g.done.load(std::memory_order_relaxed), total);
-    const uint32_t compiled = g.compiled.load(std::memory_order_relaxed);
-
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(size);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(0, 0, 0, 255));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(40, 40, 40, 255));
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(230, 140, 20, 255));
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
-                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (ImGui::Begin("##bo2zm_precompile", nullptr, flags)) {
-      const auto centered = [&](const char* text, float scale, float y, ImU32 color) {
-        ImGui::SetWindowFontScale(scale);
-        const ImVec2 extent = ImGui::CalcTextSize(text);
-        ImGui::SetCursorPos(ImVec2(std::floor((size.x - extent.x) * 0.5f), std::floor(y)));
-        ImGui::PushStyleColor(ImGuiCol_Text, color);
-        ImGui::TextUnformatted(text);
-        ImGui::PopStyleColor();
-      };
-      const float top = size.y * 0.36f;
-      centered("PREPARING SHADERS", scale_title, top, IM_COL32(255, 255, 255, 255));
-      centered("Once after an update or a driver change, the game's shaders are compiled before it starts.",
-               scale_text, top + 48.0f * unit, IM_COL32(170, 170, 170, 255));
-      const float width = std::floor(size.x * 0.5f);
-      const float height = std::floor(24.0f * unit);
-      const float bar_y = top + 110.0f * unit;
-      ImGui::SetCursorPos(ImVec2(std::floor((size.x - width) * 0.5f), std::floor(bar_y)));
-      ImGui::SetWindowFontScale(scale_text);
-      char label[64];
-      std::snprintf(label, sizeof(label), "%u / %u", done, total);
-      ImGui::ProgressBar(total ? float(done) / float(total) : 0.0f, ImVec2(width, height), label);
-      // The time left, from the pace since the screen came up (the records before were already in the cache).
-      char status[128];
-      const double since_visible =
-          std::chrono::duration<double>(Clock::now() - g.began_at).count() -
-          double(g.visible_ns.load(std::memory_order_relaxed)) / 1e9;
-      const uint32_t walked = done - std::min(done, g.done_when_visible.load(std::memory_order_relaxed));
-      if (since_visible >= 2.0 && walked > 0 && done < total) {
-        const double left = double(total - done) * since_visible / double(walked);
-        std::snprintf(status, sizeof(status), "%u compiled, about %.0f s left", compiled, std::ceil(left));
-      } else {
-        std::snprintf(status, sizeof(status), "%u compiled", compiled);
-      }
-      centered(status, scale_text, bar_y + height + 16.0f * unit, IM_COL32(170, 170, 170, 255));
-    }
-    ImGui::End();
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(3);
-  }
-};
+// v0.10 drew a full-screen progress screen through the SDK's ImGuiDialog. v0.11 has no dialog host for it, so the
+// pass runs with a black window and logs its progress ([precompile] lines) instead.
 
 }  // namespace
 
-bool Hold(std::function<void()> start, rex::ui::ImGuiDrawer* drawer) {
+bool Hold(std::function<void()> start, void* /*drawer: no overlay host in v0.11*/) {
   if (!bo2zm::native::PortedRendererActive() || !REXCVAR_GET(bo2zm_native_precompile)) {
     return false;
   }
@@ -277,9 +201,6 @@ bool Hold(std::function<void()> start, rex::ui::ImGuiDrawer* drawer) {
     return false;
   }
   g.start = std::move(start);
-  if (drawer) {
-    new Screen(drawer);  // deletes itself when the pass is over
-  }
   REXLOG_INFO("[precompile] the game waits for the pipeline precompile");
   return true;
 }

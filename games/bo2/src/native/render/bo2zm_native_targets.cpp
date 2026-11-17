@@ -438,7 +438,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_invalidate_textures_every_copy, false, "BO2",
  * Without it, the ring thread waited almost a whole 60 Hz vsync per frame for the previous presentation to finish,
  * which pushes a frame that should land on one vsync onto the next.
  *
- * The SDK already keeps a mailbox of three output images for exactly this (kGuestOutputMailboxSize = 3: presenting
+ * The SDK already keeps a mailbox of three output images for exactly this (shaders::kGuestOutputMailboxSize = 3: presenting
  * without long interlocking between refreshing the guest output and painting it), and hands out a different image on
  * each refresh. Painting the next one while the previous one is still being presented is the intended use, and the
  * image does not change.
@@ -534,8 +534,8 @@ namespace bo2zm::native {
 namespace shaders {
 // The same SPIR-V the SDK presenter uses to draw the game image
 // (vulkan_presenter.cpp:128-141).
-#include "vulkan_spirv/guest_output_bilinear_ps.h"
-#include "vulkan_spirv/guest_output_triangle_strip_rect_vs.h"
+#include "gpu/xenos/host/shaders/vulkan_spirv/guest_output_bilinear_ps.h"
+#include "gpu/xenos/host/shaders/vulkan_spirv/guest_output_triangle_strip_rect_vs.h"
 // The same sampling as guest_output_bilinear_ps with the game's gamma ramp
 // (shaders/bo2zm_output_gamma_ramp.frag).
 #include "shaders/bo2zm_output_gamma_ramp_ps.h"
@@ -938,18 +938,18 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // vkCmdWriteTimestamp go through deferred::Wrap (queued on the job buffer, bo2zm_native_deferred.h).
     copy_image_ = reinterpret_cast<FnCopyImage>(deferred::Wrap(
         "vkCmdCopyImage",
-        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdCopyImage")));
     if (!copy_image_) {
       REXLOG_ERROR("[native] C2: the driver does not provide vkCmdCopyImage");
       return false;
     }
     clear_depth_ = reinterpret_cast<FnClearDepth>(deferred::Wrap(
         "vkCmdClearDepthStencilImage",
-        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_,
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_,
                                                                           "vkCmdClearDepthStencilImage")));
     blit_ = reinterpret_cast<FnBlit>(deferred::Wrap(
         "vkCmdBlitImage",
-        vulkan_device_->vulkan_instance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdBlitImage")));
+        vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetDeviceProcAddr(device_, "vkCmdBlitImage")));
     // Attachment, copy and clear source and destination, and sampling of the resolved ones (shadows).
     const VkFormatFeatureFlags kUsesDepth =
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
@@ -961,8 +961,8 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     VkFormatFeatureFlags uses_chosen = 0;
     for (const VkFormat candidate : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT}) {
       VkFormatProperties properties{};
-      vulkan_device_->vulkan_instance()->GetFunctions().vkGetPhysicalDeviceFormatProperties(
-          vulkan_device_->physical_device(), candidate, &properties);
+      vulkan_device_->GetVulkanInstance()->GetFunctions().vkGetPhysicalDeviceFormatProperties(
+          vulkan_device_->GetPhysicalDevice(), candidate, &properties);
       const VkFormatFeatureFlags uses = properties.optimalTilingFeatures & kUsesDepth;
       if (!(uses & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
         continue;
@@ -1046,15 +1046,15 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                 marks_precise_ ? "SI" : "no", alternate_marks_s_);
     // GPU time per work unit: two timestamps per slot. Without timestamp bits on the queue, it is not measured.
     {
-      const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
+      const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
       uint32_t families = 0;
-      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->physical_device(), &families,
+      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->GetPhysicalDevice(), &families,
                                                    nullptr);
       std::vector<VkQueueFamilyProperties> queues(families);
-      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->physical_device(), &families,
+      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device_->GetPhysicalDevice(), &families,
                                                    queues.data());
       VkPhysicalDeviceProperties physical{};
-      ifn.vkGetPhysicalDeviceProperties(vulkan_device_->physical_device(), &physical);
+      ifn.vkGetPhysicalDeviceProperties(vulkan_device_->GetPhysicalDevice(), &physical);
       write_mark_ = reinterpret_cast<FnWriteMark>(
           deferred::Wrap("vkCmdWriteTimestamp", ifn.vkGetDeviceProcAddr(device_, "vkCmdWriteTimestamp")));
       read_queries_ = reinterpret_cast<FnReadQueries>(
@@ -1250,13 +1250,13 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
 
     VkShaderModuleCreateInfo module_info{};
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    module_info.codeSize = sizeof(shaders::guest_output_triangle_strip_rect_vs);
-    module_info.pCode = shaders::guest_output_triangle_strip_rect_vs;
+    module_info.codeSize = sizeof(shaders::kGuestOutputTriangleStripRectVS);
+    module_info.pCode = shaders::kGuestOutputTriangleStripRectVS;
     if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &vs_) != VK_SUCCESS) {
       return false;
     }
-    module_info.codeSize = sizeof(shaders::guest_output_bilinear_ps);
-    module_info.pCode = shaders::guest_output_bilinear_ps;
+    module_info.codeSize = sizeof(shaders::kGuestOutputBilinearPS);
+    module_info.pCode = shaders::kGuestOutputBilinearPS;
     if (dfn_.vkCreateShaderModule(device_, &module_info, nullptr, &fs_) != VK_SUCCESS) {
       return false;
     }
@@ -1619,7 +1619,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
                         command == uint32_t(xenos::CopyCommand::kConvert);
     const uint32_t pitch = reg.rb_surface_info & 0x3FFF;
     const uint32_t msaa = (reg.rb_surface_info >> 16) & 0x3;
-    if (msaa != uint32_t(xenos::MsaaSamples::k1X) && warned_.insert(1).second) {
+    if (msaa != uint32_t(xenos::MSAASamples::k1X) && warned_.insert(1).second) {
       REXLOG_INFO("[native] C2: target with MSAA: used with 1 sample");
     }
     if (source >= xenos::kMaxColorRenderTargets) {
@@ -2674,7 +2674,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     for (VkDeviceSize i = 0; i < bytes; i += 4096) {
       sum += host[i];  // a first touch commits the page on the Switch
     }
-    const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
+    const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
     const auto properties_of = reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
         ifn.vkGetDeviceProcAddr(device_, "vkGetMemoryHostPointerPropertiesEXT"));
     if (!vulkan_device_->GetExtensions().ext_EXT_external_memory_host || !properties_of) {
@@ -2765,7 +2765,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       VkResult r_submit;
       {
         const auto queue = vulkan_device_->AcquireQueue(family_, 0);
-        r_submit = dfn_.vkQueueSubmit(queue.queue(), 1, &submit, fence);
+        r_submit = dfn_.vkQueueSubmit(queue.GetQueue(), 1, &submit, fence);
       }
       const VkResult r_wait =
           r_submit == VK_SUCCESS ? dfn_.vkWaitForFences(device_, 1, &fence, VK_TRUE, 2'000'000'000ull) : r_submit;
@@ -4042,7 +4042,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
   void CreateVolumeGather(const OwnedImage& flat, ResolvedVolume& v) {
     if (!gather_tried_) {
       gather_tried_ = true;
-      const auto& ifn = vulkan_device_->vulkan_instance()->GetFunctions();
+      const auto& ifn = vulkan_device_->GetVulkanInstance()->GetFunctions();
       gather_address_fn_ =
           reinterpret_cast<PFN_vkGetBufferDeviceAddress>(ifn.vkGetDeviceProcAddr(device_, "vkGetBufferDeviceAddress"));
       VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -6509,7 +6509,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
         const auto before_latch = std::chrono::steady_clock::now();  // "C2: present" report
         const auto queue = vulkan_device_->AcquireQueue(family_, 0);
         const auto before_submit = std::chrono::steady_clock::now();
-        if (dfn_.vkQueueSubmit(queue.queue(), 1, &submit, slots_[slot_].fence) != VK_SUCCESS) {
+        if (dfn_.vkQueueSubmit(queue.GetQueue(), 1, &submit, slots_[slot_].fence) != VK_SUCCESS) {
           return false;
         }
         ns_latch_job_ += Ns(before_latch, before_submit);
@@ -7266,7 +7266,7 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
       const auto before_latch = std::chrono::steady_clock::now();  // "C2: present" report
       const auto queue = vulkan_device_->AcquireQueue(family_, 0);
       const auto before_submit = std::chrono::steady_clock::now();
-      if (dfn_.vkQueueSubmit(queue.queue(), 1, &submit, fences_output_[s]) != VK_SUCCESS) {
+      if (dfn_.vkQueueSubmit(queue.GetQueue(), 1, &submit, fences_output_[s]) != VK_SUCCESS) {
         return false;
       }
       ns_latch_output_ += Ns(before_latch, before_submit);

@@ -72,6 +72,7 @@ class NativeDriverBase : public rex::gpu::IXenosGraphicsDriver, public rex::gpu:
   bool CreateProvider(bool with_presentation);
 
   rex::memory::Memory* memory_ = nullptr;  // the title's address space, for TranslatePhysical
+  rex::IPhysicalMemory* physical_ = nullptr;  // for the shader interpreter (memexport)
   rex::IGuestInterrupts* interrupts_ = nullptr;
   rex::TitleInfo title_info_;
   std::unique_ptr<rex::gpu::vulkan::VulkanProvider> provider_;
