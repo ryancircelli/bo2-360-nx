@@ -175,7 +175,8 @@ void rex::RegisterGame(rex::GameApi& api) {
   // With bo2zm_renderer = "native" the graphics system is the port's own
   // (native/bo2zm_native_system.cpp); ReXApp only loads the Xenos plugin when
   // config.graphics is empty.
-  api.OnPreSetup([](rex::GameApp&, rex::RuntimeConfig& config) {
+  api.OnPreSetup([](rex::GameApp&, rex::SettingsRegistry& settings) {
+    rex::RuntimeConfig config;  // v0.11: input/graphics factories are gone; the native driver is a module
     if (const auto instance = Bo2InstanceIndex()) {
       rex::cvar::SetFlagByName("net_system_port_offset", std::to_string(30000 + 16 * *instance));
     }
@@ -198,7 +199,7 @@ void rex::RegisterGame(rex::GameApi& api) {
     bo2zm::controllers::WrapInput(config);  // Switch: the system's player numbers
     bo2zm::test_pad::WrapInput(config);  // test runs only (bo2zm_test_buttons)
     if (bo2zm::native::Active()) {
-      config.graphics = bo2zm::native::CreateGraphicsSystem();
+      (void)settings.SetText(rex::SettingLayer::kTitle, "gpu.driver", "bo2native");
     }
   });
 
@@ -218,11 +219,7 @@ void rex::RegisterGame(rex::GameApi& api) {
     bo2zm::gsc::Configure();
     // PNG captures of the game image (bo2zm_capture_every_s, off by default), to
     // compare the native renderer with Xenos emulation without watching the screen.
-    auto get_presenter = [&app]() -> rex::ui::Presenter* {
-      const auto* rt = app.runtime();
-      const auto* graphics = rt ? rt->graphics_system() : nullptr;
-      return graphics ? graphics->presenter() : nullptr;
-    };
+    auto get_presenter = []() -> rex::gpu::Presenter* { return nullptr; };  // v0.11: no presenter readback yet
     bo2zm::capture::Boot(get_presenter);
     // Raw test video (bo2zm_video_rgba, off by default) for tools/mac/boot_test.sh --video.
     bo2zm::video::Boot(get_presenter);
@@ -231,7 +228,7 @@ void rex::RegisterGame(rex::GameApi& api) {
   // The game waits while the native renderer compiles the pipelines that earlier runs used and that this build,
   // driver or shader pack has not compiled yet, behind its progress screen (native/render/bo2zm_native_precompile.h).
   api.OnHoldModuleLaunch([](rex::GameApp& app, std::function<void()> start) {
-    return bo2zm::native::precompile::Hold(std::move(start), app.imgui_drawer());
+    return bo2zm::native::precompile::Hold(std::move(start), nullptr);
   });
 
   api.OnShutdown([](rex::GameApp&) {

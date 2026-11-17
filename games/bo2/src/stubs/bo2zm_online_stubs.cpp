@@ -60,3 +60,24 @@ namespace bo2zm::test_waits {
 bool Run(double, const std::function<void(const std::string&)>&) { return false; }
 void RunIfRequested() {}
 }  // namespace bo2zm::test_waits
+
+// Link-time stand-ins for the removed relaunch module and SDK settings (v0.11).
+#include <rex/cvar.h>
+#include <rex/ui/image_decode.h>
+#include "../bo2zm_launch_options.h"
+#include "../bo2zm_mode.h"
+namespace bo2zm::mode {
+bool IsZombies() { return true; }
+}  // namespace bo2zm::mode
+namespace bo2zm::launch {
+void RestartCurrentMode() {}
+}  // namespace bo2zm::launch
+// The SDK's old "fullscreen" and "mnk_mode" cvars are gone in v0.11; bo2zm_extras reads them through the vendored cvar lib.
+REXCVAR_DEFINE_BOOL(fullscreen, false, "Graphics", "Fullscreen window (v0.10 compat)");
+REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Keyboard and mouse mode (v0.10 compat)");
+namespace rex::ui {
+std::vector<uint8_t> DecodeImageRGBA(const uint8_t*, size_t, int& w, int& h) {
+  w = h = 0;
+  return {};  // v0.11 does not export the SDK's decoder; the credits images stay empty
+}
+}  // namespace rex::ui

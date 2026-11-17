@@ -77,6 +77,8 @@ set(BO2ZM_SOURCES
     # The game's D3D functions in native code, each checked against the game's own result first.
     ${BO2ZM_ROOT}/src/bo2zm_d3d_native.cpp
     ${BO2ZM_ROOT}/src/native/bo2zm_native_system.cpp
+    ${BO2ZM_ROOT}/src/native/bo2zm_native_driver.cpp
+    ${BO2ZM_ROOT}/src/native/bo2zm_native_module.cpp
     ${BO2ZM_ROOT}/src/bo2zm_switch.cpp
     # The home screen's credits line, drawn over the menu.
     ${BO2ZM_ROOT}/src/bo2zm_credits.cpp
@@ -166,6 +168,7 @@ rexglue_setup_target(bo2zm)
 # The game-neutral services (core/) and the BO2 sources (games/bo2/src/): a quoted "bo2zm_x.h" include finds its file in
 # either directory, as it did when both were app/src. Not the repository root: "core/threading_switch.h" is the SDK's.
 target_include_directories(bo2zm PRIVATE "${BO2ZM_ROOT}/../../core" "${BO2ZM_ROOT}/src")
+target_include_directories(bo2zm PRIVATE "${BO2ZM_ROOT}/src/native" "${BO2ZM_ROOT}/src/native/render" "${REXSDK_DIR}/src" "${REXSDK_DIR}/src/gpu")
 if(NOT BO2ZM_MIN)
   # v0.10 headers (cvar, logging, ...) kept alive on v0.11: games/bo2/compat/rex
   target_include_directories(bo2zm BEFORE PRIVATE "${BO2ZM_ROOT}/compat" "${REXSDK_DIR}/thirdparty/cli11/include" "${REXSDK_DIR}/thirdparty/spdlog/include" "${REXSDK_DIR}/thirdparty/tomlplusplus/include" "${REXSDK_DIR}/src/gpu/xenos/metal/include")
@@ -219,7 +222,9 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recompiled AND BO2ZM_PGO)
       ${BO2ZM_ROOT}/src/native/render/bo2zm_native_draws.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_deferred.cpp
       ${BO2ZM_ROOT}/src/native/render/bo2zm_native_shaders.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_shader_library.cpp
       ${BO2ZM_ROOT}/src/native/render/bo2zm_native_hooks.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_texture_pool.cpp
-      ${BO2ZM_ROOT}/src/native/bo2zm_native_system.cpp ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
+      ${BO2ZM_ROOT}/src/native/bo2zm_native_system.cpp
+    ${BO2ZM_ROOT}/src/native/bo2zm_native_driver.cpp
+    ${BO2ZM_ROOT}/src/native/bo2zm_native_module.cpp ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
       ${BO2ZM_ROOT}/src/bo2zm_native_skin.cpp ${BO2ZM_ROOT}/src/bo2zm_gpu_skin.cpp ${BO2ZM_ROOT}/src/bo2zm_native_cull.cpp ${BO2ZM_ROOT}/src/bo2zm_native_entities.cpp
       ${BO2ZM_ROOT}/src/bo2zm_native_lzx.cpp ${BO2ZM_ROOT}/../../core/bo2zm_page_writes.cpp ${BO2ZM_ROOT}/src/bo2zm_volume_writes.cpp ${BO2ZM_ROOT}/src/bo2zm_d3d_marker.cpp
       ${BO2ZM_ROOT}/src/bo2zm_d3d_native.cpp ${BO2ZM_ROOT}/src/bo2zm_crt.cpp)
@@ -405,3 +410,16 @@ endif()
 set(BO2ZM_BUILD_ID "dev" CACHE STRING "Build identifier shown in the log")
 set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_switch.cpp ${BO2ZM_ROOT}/src/bo2zm_perf_log.cpp PROPERTIES
     COMPILE_DEFINITIONS "BO2ZM_BUILD_ID=\"${BO2ZM_BUILD_ID}\"")
+
+# v0.11 link: the Metal plugin's public hooks (swap hook, metal_runtime), fmt from spdlog, and the native renderer's
+# not-yet-exported SDK internals (XenosPresentation, vulkan objects, ShaderInterpreter), resolved at run time (the
+# native renderer is off in the Metal gate).
+if(NOT BO2ZM_MIN)
+    if(TARGET rexgpu-xenos-metal)
+        target_link_libraries(bo2zm PRIVATE rexgpu-xenos-metal)
+    endif()
+    if(TARGET spdlog::spdlog)
+        target_link_libraries(bo2zm PRIVATE spdlog::spdlog)
+    endif()
+    target_link_options(bo2zm PRIVATE -Wl,-undefined,dynamic_lookup)
+endif()
