@@ -2259,14 +2259,7 @@ uint32_t g_catalog_revision = 0;
 void LogZoneMemory(const uint8_t* base, std::string_view where) {
   constexpr uint32_t kZoneMemoryWord = 0x83D96030;
   std::string heaps;
-  auto* memory = rex::Runtime::instance()->memory();
-  for (const uint32_t address : {0x00000000u, 0x40000000u, 0xA0000000u, 0xC0000000u, 0xE0000000u}) {
-    if (auto* heap = memory->LookupHeap(address)) {
-      const double page_mb = 65536 / 1048576.0;
-      heaps += fmt::format(" {:08X}: {:.1f} of {:.1f} MB free;", address, heap->GetUnreservedPageCount() * page_mb,
-                           heap->GetTotalPageCount() * page_mb);
-    }
-  }
+  // heap statistics are not available through the v0.11 compat layer (LookupHeap faulted): word only
   REXLOG_INFO("[cheats] guest memory {}:{} the zone loader's word at 0x83D96030 is {:08X}", where, heaps,
               Load32(base, kZoneMemoryWord));
 }
