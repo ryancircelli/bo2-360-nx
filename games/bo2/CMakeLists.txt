@@ -111,7 +111,7 @@ set(BO2ZM_SOURCES
     # (it is loaded at runtime on PC), so the native renderer compiles its own copy.
 )
 
-option(BO2ZM_MIN "v0.11 port stage 1: manifest + native memcpy hooks only" ON)
+option(BO2ZM_MIN "v0.11 port stage 1 (ON): manifest + native memcpy hooks only; default OFF = full glue" OFF)
 if(BO2ZM_MIN)
   set(BO2ZM_SOURCES ${BO2ZM_ROOT}/src/main.cpp ${BO2ZM_ROOT}/src/bo2zm_min_register.cpp ${BO2ZM_ROOT}/src/bo2zm_crt_min.cpp)
   set(BO2ZM_DEVLINK OFF CACHE BOOL "" FORCE)
