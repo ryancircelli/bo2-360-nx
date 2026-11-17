@@ -1,0 +1,61 @@
+From 64b29bd3999762d528e9306fce3b92c2428105a2 Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 05:41:02 -0500
+Subject: [PATCH 8/8] app trace: dump XGI words (experiment)
+
+---
+ src/system/xam/app_manager.cpp | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/src/system/xam/app_manager.cpp b/src/system/xam/app_manager.cpp
+index db5291bd..8438a541 100644
+--- a/src/system/xam/app_manager.cpp
++++ b/src/system/xam/app_manager.cpp
+@@ -10,6 +10,8 @@
+  */
+ 
+ #include <atomic>
++#include <string>
++#include <rex/memory.h>
+ #include <rex/logging.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xam/app_manager.h>
+@@ -27,8 +29,16 @@ void AppManager::RegisterApp(std::unique_ptr<App> app) {
+   apps_.push_back(std::move(app));
+ }
+ 
+-static void Trace(const char* kind, uint32_t app, uint32_t msg, uint32_t a, uint32_t b, uint32_t r) {
++static void Trace(const char* kind, uint32_t app, uint32_t msg, uint32_t a, uint32_t b, uint32_t r,
++                  const uint8_t* buf = nullptr) {
+   static std::atomic<int> n{0};
++  if (app == 0xFB && msg != 0x000B0006 && buf && b >= 16 && b <= 64) {
++    std::string w;
++    for (uint32_t i = 0; i + 4 <= b; i += 4) {
++      w += fmt::format(" {:08X}", memory::load_and_swap<uint32_t>(buf + i));
++    }
++    REXKRNL_WARN("[app-trace] words msg={:08X}:{}", msg, w);
++  }
+   if (n.fetch_add(1) < 3000) {
+     REXKRNL_WARN("[app-trace] {} app={:08X} msg={:08X} arg1={:08X} arg2={:08X} -> {:08X}", kind, app, msg, a, b, r);
+   }
+@@ -45,7 +55,7 @@ X_HRESULT AppManager::DispatchMessageSync(uint32_t app_id, uint32_t message, uin
+     app = it->second;
+   }
+   auto r = app->DispatchMessageSync(message, buffer_ptr, buffer_length);
+-  Trace("sync", app_id, message, buffer_ptr, buffer_length, r);
++  Trace("sync", app_id, message, buffer_ptr, buffer_length, r, REX_KERNEL_STATE()->memory()->TranslateVirtual(buffer_ptr));
+   return r;
+ }
+ 
+@@ -60,7 +70,7 @@ X_HRESULT AppManager::DispatchMessageAsync(uint32_t app_id, uint32_t message, ui
+     app = it->second;
+   }
+   auto r = app->DispatchMessageSync(message, buffer_ptr, buffer_length);
+-  Trace("async", app_id, message, buffer_ptr, buffer_length, r);
++  Trace("async", app_id, message, buffer_ptr, buffer_length, r, REX_KERNEL_STATE()->memory()->TranslateVirtual(buffer_ptr));
+   return r;
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

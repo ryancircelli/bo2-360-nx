@@ -1,0 +1,3719 @@
+From 8c3c3eac926d2d17bf42c411e757d7778c7ae694 Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 00:05:35 -0500
+Subject: [PATCH 1/8] WIP: online link/relay workers, System Link integration,
+ text input stub
+
+---
+ PROVENANCE.md                           |    1 +
+ include/rex/kernel/xam/text_input.h     |   15 +
+ include/rex/system/online_link.h        |   47 ++
+ include/rex/system/online_relay.h       |   48 ++
+ include/rex/system/system_link.h        |    9 +
+ include/rex/system/xsocket.h            |   20 +
+ src/kernel/xam/xam_net.cpp              |   58 +-
+ src/kernel/xam/xam_ui.cpp               |   58 +-
+ src/system/CMakeLists.txt               |    4 +
+ src/system/online_link.cpp              | 1006 +++++++++++++++++++++++
+ src/system/online_net.h                 |    1 +
+ src/system/online_relay.cpp             |  931 +++++++++++++++++++++
+ src/system/system_link.cpp              |  136 ++-
+ src/system/system_link_socket.cpp       |  552 +++++++++++++
+ src/system/system_link_socket.h         |   18 +
+ src/system/xsocket.cpp                  |   59 +-
+ src/ui/rex_app.cpp                      |    5 +
+ tests/unit/CMakeLists.txt               |    5 +
+ tests/unit/kernel/session_info_test.cpp |   16 +-
+ tests/unit/kernel/text_input_test.cpp   |   36 +
+ tests/unit/system/join_code_test.cpp    |   36 +-
+ tests/unit/system/online_link_test.cpp  |   44 +
+ tests/unit/system/online_net_test.cpp   |    3 +-
+ tests/unit/system/online_relay_test.cpp |   97 +++
+ tests/unit/system/relay_wire_test.cpp   |   47 +-
+ 25 files changed, 3190 insertions(+), 62 deletions(-)
+ create mode 100644 include/rex/kernel/xam/text_input.h
+ create mode 100644 include/rex/system/online_link.h
+ create mode 100644 include/rex/system/online_relay.h
+ create mode 100644 src/system/online_link.cpp
+ create mode 100644 src/system/online_relay.cpp
+ create mode 100644 src/system/system_link_socket.cpp
+ create mode 100644 src/system/system_link_socket.h
+ create mode 100644 tests/unit/kernel/text_input_test.cpp
+ create mode 100644 tests/unit/system/online_link_test.cpp
+ create mode 100644 tests/unit/system/online_relay_test.cpp
+
+diff --git a/PROVENANCE.md b/PROVENANCE.md
+index c5015bd0..79eaace3 100644
+--- a/PROVENANCE.md
++++ b/PROVENANCE.md
+@@ -220,6 +220,7 @@ Written from behaviour specs by an implementer that never read his code, the old
+ | Manifest default `offline_user_count` accepted as `local_profile_count`; unknown defaults warn | a517144f | `src/core/game_manifest.cpp`, `tests/unit/core/game_defaults_test.cpp` |
+ | `XamPartyGetUserList` writes an empty list when there is no party | 84ab88b1 | `src/kernel/xam/xam_party.cpp` |
+ | System Link session create fills the host session info and nonce; session leave and QoS listen succeed | be4e2268 | `src/kernel/xam/apps/xgi_app.cpp`, `src/kernel/xam/xam_net.cpp`, `include/rex/kernel/xam/session_info.h` (new), `tests/unit/kernel/session_info_test.cpp` |
++| Internet play (join codes, UPnP/STUN/MQTT relay), standalone text input, and System Link side channel | this stream | `include/rex/system/{join_code,online_link,online_relay,relay_wire}.h`, `src/system/{online_link,online_relay,system_link_socket}.cpp`, `include/rex/kernel/xam/text_input.h` (all clean-room from G5/G8) |
+ 
+ Specs written but not implemented (only needed if a game shows the gap): System Link across Macs, XMA decode
+ continuity across input buffers, real flush of file buffers, input enumeration rate limit and thread safety,
+diff --git a/include/rex/kernel/xam/text_input.h b/include/rex/kernel/xam/text_input.h
+new file mode 100644
+index 00000000..f4b5f455
+--- /dev/null
++++ b/include/rex/kernel/xam/text_input.h
+@@ -0,0 +1,15 @@
++// SPDX-License-Identifier: 0BSD
++#pragma once
++
++#include <cstddef>
++#include <functional>
++#include <optional>
++#include <string>
++
++namespace rex::kernel::xam {
++
++bool ShowTextInput(std::string title, std::string default_text, size_t max_length,
++                   std::function<void(std::optional<std::string>)> done);
++bool TextInputOpen();
++
++}  // namespace rex::kernel::xam
+diff --git a/include/rex/system/online_link.h b/include/rex/system/online_link.h
+new file mode 100644
+index 00000000..387bcba2
+--- /dev/null
++++ b/include/rex/system/online_link.h
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: 0BSD
++#pragma once
++
++#include <cstdint>
++
++#include <rex/system/online_relay.h>
++
++namespace rex::system::online {
++
++enum class Role { kNone, kHost, kJoin };
++enum class State { kIdle, kPreparing, kReady, kFailed };
++enum class Failure { kNone, kNoNetwork, kNoPublicAddress, kSameNetwork };
++
++struct Report {
++  State state = State::kIdle;
++  Role role = Role::kNone;
++  Failure failure = Failure::kNone;
++  uint32_t lan_ip = 0;
++  uint32_t public_ip = 0;
++  uint32_t target_ip = 0;
++  uint32_t router_ip = 0;
++  uint32_t router_external_ip = 0;
++  bool router_found = false;
++  int ports_mapped = 0;
++  int port_count = 3;
++  uint16_t first_port = 31000;
++  int upnp_error = 0;
++  uint32_t conflict_ip = 0;
++  bool stun_ok = false;
++  uint16_t stun_local_port = 0;
++  uint16_t stun_mapped_port = 0;
++  bool double_nat = false;
++  relay::Status relay{};
++  uint64_t version = 0;
++};
++
++void Start(Role role, uint32_t target_ip);
++void Stop();
++void Shutdown();
++Report Current();
++uint64_t Version();
++uint32_t PublicAddress();
++uint32_t Target();
++uint16_t FirstPort();
++int PortCount();
++
++}  // namespace rex::system::online
+diff --git a/include/rex/system/online_relay.h b/include/rex/system/online_relay.h
+new file mode 100644
+index 00000000..934f699b
+--- /dev/null
++++ b/include/rex/system/online_relay.h
+@@ -0,0 +1,48 @@
++// SPDX-License-Identifier: 0BSD
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <string>
++
++namespace rex::system::online {
++
++enum class Datagram { kTitle, kStun, kPunch };
++
++Datagram Classify(uint16_t local_port, uint32_t ip, uint16_t port, const uint8_t* data, int size);
++
++namespace relay {
++
++struct BrokerStatus {
++  enum State { kChecking, kWorking, kDown };
++  std::string name;
++  State state = kChecking;
++  bool posted = false;
++  int found = 0;
++  bool operator==(const BrokerStatus&) const = default;
++};
++
++struct Status {
++  bool active = false;
++  std::array<BrokerStatus, 8> broker_list{};
++  int brokers = 0;
++  int brokers_up = 0;
++  int brokers_failed = 0;
++  int ports = 0;
++  int port_count = 3;
++  bool symmetric = false;
++  int peers = 0;
++  int peers_heard = 0;
++  bool operator==(const Status&) const = default;
++};
++
++void Start(bool host, uint32_t code_ip, uint32_t public_ip);
++void Stop();
++void Shutdown();
++Status Current();
++uint64_t Version();
++uint64_t TagSession();
++
++}  // namespace relay
++}  // namespace rex::system::online
+diff --git a/include/rex/system/system_link.h b/include/rex/system/system_link.h
+index 02758114..63dc78a8 100644
+--- a/include/rex/system/system_link.h
++++ b/include/rex/system/system_link.h
+@@ -42,7 +42,16 @@ struct GuestEndpoint {
+ // The copy and guest port behind a mapped host port, if it is one.
+ std::optional<GuestEndpoint> GuestEndpointOfHostPort(uint16_t host_port);
+ 
++// Host port used when no per-process copy mapping applies, and its reverse.
++uint16_t HostPort(uint16_t guest_port);
++uint16_t GuestPort(uint16_t host_port);
++
+ // 255.255.255.255 or a subnet broadcast address (host byte order).
+ bool IsBroadcastAddress(uint32_t address);
+ 
++bool LanAddress(uint32_t* ip, uint32_t* mask);
++bool TitleAddress(uint32_t* ip);
++bool IsSelf(uint32_t ip);
++bool OnLan(uint32_t ip);
++
+ }  // namespace rex::system::system_link
+diff --git a/include/rex/system/xsocket.h b/include/rex/system/xsocket.h
+index b3ecd937..675eb0a2 100644
+--- a/include/rex/system/xsocket.h
++++ b/include/rex/system/xsocket.h
+@@ -1,3 +1,4 @@
++// SPDX-License-Identifier: BSD-3-Clause
+ #pragma once
+ /**
+  ******************************************************************************
+@@ -149,4 +150,23 @@ class XSocket : public XObject {
+   std::queue<uint8_t*> incoming_packets_;
+ };
+ 
++namespace system_link {
++
++bool LastPeer(uint16_t guest_port, uint32_t* ip, int64_t* age_ms);
++int64_t OpenSideSocket(uint16_t port, bool* bound);
++void CloseSideSocket(int64_t socket);
++int SideSend(int64_t socket, uint32_t ip, uint16_t port, const void* data, uint32_t size);
++int SideReceive(int64_t socket, void* data, uint32_t capacity, uint32_t* ip, uint16_t* port);
++void PumpSideSocket();
++int SendFromPort(uint16_t host_port, uint32_t ip, uint16_t port, const void* data, size_t size);
++void SeedInternetPeer(uint32_t ip, uint16_t guest_port, uint16_t host_port, uint64_t console);
++bool HeardInternetPeer(uint32_t ip, uint16_t host_port, uint16_t* guest_port);
++void ForgetInternetPeers();
++void NameConsoleLan(uint32_t ip, uint64_t console, uint32_t lan_ip);
++void MakeXnAddr(uint32_t ip, uint8_t out[36]);
++void MakeOwnXnAddr(uint8_t out[36]);
++void MakeTitleXnAddr(uint32_t ip, uint8_t out[36]);
++uint32_t XnAddrToTitleIp(const uint8_t address[36]);
++
++}  // namespace system_link
+ }  // namespace rex::system
+diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
+index 577eece1..657bfd16 100644
+--- a/src/kernel/xam/xam_net.cpp
++++ b/src/kernel/xam/xam_net.cpp
+@@ -1,3 +1,4 @@
++// SPDX-License-Identifier: BSD-3-Clause
+ /**
+  ******************************************************************************
+  * Xenia : Xbox 360 Emulator Research Project                                 *
+@@ -29,6 +30,7 @@
+ #include <rex/types.h>
+ #include <rex/string.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/online_link.h>
+ #include <rex/system/system_link.h>
+ #include <rex/system/xevent.h>
+ #include <rex/system/xsocket.h>
+@@ -459,26 +461,12 @@ static u32 FillTitleXnAddr(XNADDR* addr_ptr) {
+     return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+   }
+ 
+-  // Just return a loopback address atm.
+-  addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
+-  addr_ptr->inaOnline.s_addr = 0;
+-  addr_ptr->wPortOnline = 0;
+-
+-  // TODO(gibbed): A proper mac address.
+-  // RakNet's 360 version appears to depend on abEnet to create "random" 64-bit
+-  // numbers. A zero value will cause RakPeer::Startup to fail. This causes
+-  // 58411436 to crash on startup.
+-  // The 360-specific code is scrubbed from the RakNet repo, but there's still
+-  // traces of what it's doing which match the game code.
+-  // https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L382
+-  // https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L4527
+-  // https://github.com/facebookarchive/RakNet/blob/master/Source/RakPeer.cpp#L4467
+-  // "Mac address is a poor solution because you can't have multiple connections
+-  // from the same system"
+-  std::memset(addr_ptr->abEnet, 0xCC, 6);
+-
+-  std::memset(addr_ptr->abOnline, 0, 20);
+-
++  system_link::MakeOwnXnAddr(reinterpret_cast<uint8_t*>(addr_ptr));
++  uint32_t lan = 0;
++  if (system_link::LanAddress(&lan, nullptr) || online::PublicAddress()) {
++    return XnAddrStatus::XNET_GET_XNADDR_ETHERNET | XnAddrStatus::XNET_GET_XNADDR_STATIC |
++           XnAddrStatus::XNET_GET_XNADDR_GATEWAY | XnAddrStatus::XNET_GET_XNADDR_DNS;
++  }
+   return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+ }
+ 
+@@ -517,25 +505,37 @@ void NetDll_XNetInAddrToString_entry(u32 caller, u32 in_addr, mapped_string stri
+ // subsequent socket calls (like a handle to a XNet address)
+ u32 NetDll_XNetXnAddrToInAddr_entry(u32 caller, ppc_ptr_t<XNADDR> xn_addr, mapped_void xid,
+                                     ppc_ptr_t<in_addr> in_addr) {
+-  // System Link copies on this host are reached at their title address.
+-  if (system_link::LocalInstance() && xn_addr && in_addr &&
+-      system_link::InstanceOfAddress(ntohl(xn_addr->ina.s_addr))) {
+-    in_addr->s_addr = xn_addr->ina.s_addr;
+-    return 0;
++  if (!xn_addr || !in_addr) {
++    return 1;
+   }
+-  return 1;
++  const uint32_t address = system_link::XnAddrToTitleIp(
++      reinterpret_cast<const uint8_t*>(xn_addr.host_address()));
++  in_addr->s_addr = htonl(address);
++  return 0;
+ }
+ 
+ // Does the reverse of the above. The IN_ADDR is passed by value.
+ u32 NetDll_XNetInAddrToXnAddr_entry(u32 caller, u32 in_addr, ppc_ptr_t<XNADDR> xn_addr,
+                                     mapped_void xid) {
+-  if (system_link::LocalInstance() && xn_addr) {
+-    if (auto instance = system_link::InstanceOfAddress(in_addr)) {
++  if (!xn_addr) {
++    return 1;
++  }
++  const uint32_t address = ntohl(in_addr);
++  if (system_link::LocalInstance()) {
++    if (auto instance = system_link::InstanceOfAddress(address)) {
+       FillInstanceXnAddr(xn_addr, *instance);
+       return 0;
+     }
+   }
+-  return 1;
++  uint32_t own = 0;
++  system_link::TitleAddress(&own);
++  if (address == 0 || address == 0xFFFFFFFFu || address == own ||
++      address == system_link::kLoopbackAddress) {
++    system_link::MakeOwnXnAddr(reinterpret_cast<uint8_t*>(xn_addr.host_address()));
++  } else {
++    system_link::MakeTitleXnAddr(address, reinterpret_cast<uint8_t*>(xn_addr.host_address()));
++  }
++  return 0;
+ }
+ 
+ // https://www.google.com/patents/WO2008112448A1?cl=en
+diff --git a/src/kernel/xam/xam_ui.cpp b/src/kernel/xam/xam_ui.cpp
+index 3a26a154..f4d9c3a9 100644
+--- a/src/kernel/xam/xam_ui.cpp
++++ b/src/kernel/xam/xam_ui.cpp
+@@ -1,3 +1,4 @@
++// SPDX-License-Identifier: BSD-3-Clause
+ /**
+  ******************************************************************************
+  * Xenia : Xbox 360 Emulator Research Project                                 *
+@@ -22,6 +23,7 @@
+ REXCVAR_DEFINE_BOOL(headless, false, "Kernel",
+                     "Don't display any UI, using defaults for prompts as needed");
+ #include <rex/kernel/xam/private.h>
++#include <rex/kernel/xam/text_input.h>
+ #include <rex/hook.h>
+ #include <rex/types.h>
+ #include <rex/system/xtypes.h>
+@@ -383,13 +385,13 @@ class KeyboardInputDialog : public XamDialog {
+       }
+       if (ImGui::InputText("##body", text_buffer_.data(), text_buffer_.size(),
+                            ImGuiInputTextFlags_EnterReturnsTrue)) {
+-        text_ = std::string(text_buffer_.data(), text_buffer_.size());
++        text_ = std::string(text_buffer_.data());
+         cancelled_ = false;
+         ImGui::CloseCurrentPopup();
+         Close();
+       }
+       if (ImGui::Button("OK")) {
+-        text_ = std::string(text_buffer_.data(), text_buffer_.size());
++        text_ = std::string(text_buffer_.data());
+         cancelled_ = false;
+         ImGui::CloseCurrentPopup();
+         Close();
+@@ -419,6 +421,58 @@ class KeyboardInputDialog : public XamDialog {
+   bool cancelled_ = true;
+ };
+ 
++namespace {
++
++std::atomic<bool> text_input_open_{false};
++std::atomic<int64_t> text_input_closed_ms_{std::numeric_limits<int64_t>::min() / 2};
++
++int64_t TextInputNow() {
++  return std::chrono::duration_cast<std::chrono::milliseconds>(
++             std::chrono::steady_clock::now().time_since_epoch())
++      .count();
++}
++
++}  // namespace
++
++bool ShowTextInput(std::string title, std::string default_text, size_t max_length,
++                   std::function<void(std::optional<std::string>)> done) {
++  bool expected = false;
++  if (!text_input_open_.compare_exchange_strong(expected, true)) {
++    return false;
++  }
++  try {
++    std::thread([title = std::move(title), default_text = std::move(default_text), max_length,
++                 done = std::move(done)]() mutable {
++      std::optional<std::string> result;
++      auto* kernel_state = REX_KERNEL_STATE();
++      const Runtime* emulator = kernel_state ? kernel_state->emulator() : nullptr;
++      ui::ImGuiDrawer* drawer = emulator ? emulator->imgui_drawer() : nullptr;
++      if (drawer) {
++        auto close = [&result](KeyboardInputDialog* dialog) -> X_RESULT {
++          if (!dialog->cancelled()) {
++            result = dialog->text();
++          }
++          return X_ERROR_SUCCESS;
++        };
++        xeXamDispatchDialog<KeyboardInputDialog>(
++            new KeyboardInputDialog(drawer, title, "", default_text, max_length + 1), close, 0);
++      }
++      text_input_closed_ms_ = TextInputNow();
++      text_input_open_ = false;
++      done(std::move(result));
++    }).detach();
++  } catch (const std::system_error&) {
++    text_input_open_ = false;
++    return false;
++  }
++  return true;
++}
++
++bool TextInputOpen() {
++  return text_input_open_.load(std::memory_order_relaxed) ||
++         TextInputNow() - text_input_closed_ms_.load(std::memory_order_relaxed) < 300;
++}
++
+ // https://www.se7ensins.com/forums/threads/release-how-to-use-xshowkeyboardui-release.906568/
+ u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_text,
+                             mapped_wstring title, mapped_wstring description, mapped_wstring buffer,
+diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
+index d4ebec45..b8bda65f 100644
+--- a/src/system/CMakeLists.txt
++++ b/src/system/CMakeLists.txt
+@@ -1,3 +1,4 @@
++# SPDX-License-Identifier: BSD-3-Clause
+ set(REXSYSTEM_SOURCES
+     runtime.cpp
+     embedded_metadata.cpp
+@@ -19,6 +20,9 @@ set(REXSYSTEM_SOURCES
+     xenumerator.cpp
+     xsocket.cpp
+     system_link.cpp
++    system_link_socket.cpp
++    online_link.cpp
++    online_relay.cpp
+     xsymboliclink.cpp
+     xobject.cpp
+     xmodule.cpp
+diff --git a/src/system/online_link.cpp b/src/system/online_link.cpp
+new file mode 100644
+index 00000000..ef1e13c5
+--- /dev/null
++++ b/src/system/online_link.cpp
+@@ -0,0 +1,1006 @@
++// SPDX-License-Identifier: 0BSD
++#include <rex/platform.h>
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <cctype>
++#include <cstring>
++#include <mutex>
++#include <optional>
++#include <random>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <vector>
++
++#include <rex/cvar.h>
++#include <rex/logging.h>
++#include <rex/system/join_code.h>
++#include <rex/system/online_link.h>
++#include <rex/system/system_link.h>
++
++#include "online_net.h"
++
++#if REX_PLATFORM_WIN32
++#include <WinSock2.h>
++#include <WS2tcpip.h>
++using SocketHandle = SOCKET;
++constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
++#else
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <poll.h>
++#include <sys/socket.h>
++#include <unistd.h>
++using SocketHandle = int;
++constexpr SocketHandle kInvalidSocket = -1;
++#endif
++
++REXCVAR_DEFINE_BOOL(net_online_trace, false, "Kernel", "Verbose internet-play networking log");
++REXCVAR_DEFINE_BOOL(net_online_upnp, true, "Kernel", "Request UDP port forwarding with UPnP");
++REXCVAR_DEFINE_INT32(net_online_lease_s, 3600, "Kernel", "UPnP port-forwarding lease in seconds");
++REXCVAR_DEFINE_STRING(
++    net_online_stun,
++    "stun.l.google.com:19302,stun.cloudflare.com:3478,stun1.l.google.com:19302,"
++    "stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302",
++    "Kernel", "STUN servers used to discover the public address");
++
++namespace rex::system::online {
++namespace {
++
++using Clock = std::chrono::steady_clock;
++using Seconds = std::chrono::seconds;
++
++struct Url {
++  std::string host;
++  uint16_t port = 80;
++  std::string path = "/";
++};
++
++struct Service {
++  std::string type;
++  std::string url;
++  int rank = 0;
++};
++
++struct MappingState {
++  Service service;
++  std::string internal_ip;
++  std::vector<uint16_t> ports;
++  uint32_t lease = 3600;
++};
++
++struct LinkRuntime {
++  std::mutex mutex;
++  std::condition_variable wake;
++  std::thread worker;
++  std::atomic<bool> shutdown{false};
++  std::atomic<bool> exiting{false};
++  std::atomic<uint64_t> job{0};
++  uint64_t handled = 0;
++  std::atomic<uint64_t> report_version{0};
++  Role requested_role = Role::kNone;
++  uint32_t requested_target = 0;
++  Report report;
++  MappingState mappings;
++  std::atomic<uint32_t> public_address{0};
++  std::atomic<uint32_t> target_address{0};
++
++  ~LinkRuntime() {
++    exiting = true;
++    shutdown = true;
++    public_address = 0;
++    target_address = 0;
++    wake.notify_all();
++    if (worker.joinable()) {
++      worker.join();
++    }
++  }
++};
++
++LinkRuntime link;
++
++std::string Trim(std::string_view value) {
++  size_t first = 0;
++  while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first]))) {
++    ++first;
++  }
++  size_t last = value.size();
++  while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1]))) {
++    --last;
++  }
++  return std::string(value.substr(first, last - first));
++}
++
++std::string Lower(std::string_view value) {
++  std::string result(value);
++  std::transform(result.begin(), result.end(), result.begin(),
++                 [](unsigned char c) { return char(std::tolower(c)); });
++  return result;
++}
++
++std::string AddressText(uint32_t ip) {
++  const in_addr address{htonl(ip)};
++  char text[INET_ADDRSTRLEN] = {};
++  return inet_ntop(AF_INET, &address, text, sizeof(text)) ? std::string(text) : std::string();
++}
++
++uint32_t ParseAddress(std::string_view text) {
++  in_addr address{};
++  const std::string copy(text);
++  return inet_pton(AF_INET, copy.c_str(), &address) == 1 ? ntohl(address.s_addr) : 0;
++}
++
++bool IsPrivateAddress(uint32_t ip) {
++  return ip == 0 || (ip >> 24) == 10 || (ip >> 20) == 0xAC1 || (ip >> 16) == 0xC0A8 ||
++         (ip >> 22) == 0x286 || (ip >> 24) == 127 || (ip >> 16) == 0xA9FE;
++}
++
++bool Cancelled(uint64_t job) {
++  return link.exiting || link.job.load() != job;
++}
++
++bool Wait(uint64_t job, Clock::time_point deadline, SocketHandle socket = kInvalidSocket,
++          bool write = false) {
++  while (!Cancelled(job)) {
++    const auto now = Clock::now();
++    if (now >= deadline) {
++      return false;
++    }
++    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
++    const int timeout = int(std::clamp<int64_t>(remaining.count(), 1, 100));
++#if REX_PLATFORM_WIN32
++    fd_set read_set;
++    fd_set write_set;
++    FD_ZERO(&read_set);
++    FD_ZERO(&write_set);
++    FD_SET(socket, write ? &write_set : &read_set);
++    timeval tv{0, timeout * 1000};
++    const int result = select(0, write ? nullptr : &read_set, write ? &write_set : nullptr, nullptr,
++                              &tv);
++    if (result > 0) {
++      return true;
++    }
++#else
++    if (socket == kInvalidSocket) {
++      std::this_thread::sleep_for(std::chrono::milliseconds(timeout));
++    } else {
++      pollfd pfd{socket, short(write ? POLLOUT : POLLIN), 0};
++      const int result = poll(&pfd, 1, timeout);
++      if (result > 0) {
++        return true;
++      }
++      if (result < 0 && errno != EINTR) {
++        return false;
++      }
++    }
++#endif
++  }
++  return false;
++}
++
++void Close(SocketHandle socket) {
++  if (socket == kInvalidSocket) {
++    return;
++  }
++#if REX_PLATFORM_WIN32
++  closesocket(socket);
++#else
++  close(socket);
++#endif
++}
++
++bool NonBlocking(SocketHandle socket) {
++#if REX_PLATFORM_WIN32
++  u_long enabled = 1;
++  return ioctlsocket(socket, FIONBIO, &enabled) == 0;
++#else
++  const int flags = fcntl(socket, F_GETFL, 0);
++  return flags >= 0 && fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
++#endif
++}
++
++std::optional<sockaddr_in> Resolve(const std::string& host, uint16_t port) {
++  addrinfo hints{};
++  hints.ai_family = AF_INET;
++  hints.ai_socktype = SOCK_STREAM;
++  addrinfo* addresses = nullptr;
++  if (getaddrinfo(host.c_str(), nullptr, &hints, &addresses) != 0) {
++    return std::nullopt;
++  }
++  sockaddr_in result = *reinterpret_cast<sockaddr_in*>(addresses->ai_addr);
++  result.sin_port = htons(port);
++  freeaddrinfo(addresses);
++  return result;
++}
++
++std::optional<Url> ParseUrl(const std::string& text) {
++  if (!text.starts_with("http://")) {
++    return std::nullopt;
++  }
++  const size_t authority = 7;
++  const size_t slash = text.find('/', authority);
++  const std::string host_port = text.substr(authority, slash - authority);
++  if (host_port.empty()) {
++    return std::nullopt;
++  }
++  Url url;
++  const size_t colon = host_port.rfind(':');
++  if (colon != std::string::npos && host_port.find(']') == std::string::npos) {
++    url.host = host_port.substr(0, colon);
++    const std::string port = host_port.substr(colon + 1);
++    char* end = nullptr;
++    const unsigned long parsed = std::strtoul(port.c_str(), &end, 10);
++    if (!end || *end || parsed == 0 || parsed > 65535) {
++      return std::nullopt;
++    }
++    url.port = uint16_t(parsed);
++  } else {
++    url.host = host_port;
++  }
++  url.path = slash == std::string::npos ? "/" : text.substr(slash);
++  return url;
++}
++
++SocketHandle Connect(const sockaddr_in& address, uint64_t job, Clock::time_point deadline,
++                     uint32_t* local_ip) {
++  SocketHandle socket = ::socket(AF_INET, SOCK_STREAM, 0);
++  if (socket == kInvalidSocket || !NonBlocking(socket)) {
++    Close(socket);
++    return kInvalidSocket;
++  }
++  const int result = connect(socket, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
++  if (result != 0) {
++#if REX_PLATFORM_WIN32
++    if (WSAGetLastError() != WSAEWOULDBLOCK && WSAGetLastError() != WSAEINPROGRESS) {
++#else
++    if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
++#endif
++      Close(socket);
++      return kInvalidSocket;
++    }
++    if (!Wait(job, deadline, socket, true)) {
++      Close(socket);
++      return kInvalidSocket;
++    }
++    int error = 0;
++    socklen_t size = sizeof(error);
++    if (getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &size) != 0 ||
++        error != 0) {
++      Close(socket);
++      return kInvalidSocket;
++    }
++  }
++  if (local_ip) {
++    sockaddr_in local{};
++    socklen_t size = sizeof(local);
++    if (getsockname(socket, reinterpret_cast<sockaddr*>(&local), &size) == 0) {
++      *local_ip = ntohl(local.sin_addr.s_addr);
++    }
++  }
++  return socket;
++}
++
++int Chunked(const std::string& input, std::string* output) {
++  size_t offset = 0;
++  output->clear();
++  while (true) {
++    const size_t line = input.find("\r\n", offset);
++    if (line == std::string::npos) {
++      return 0;
++    }
++    char* end = nullptr;
++    const std::string size_text = input.substr(offset, line - offset);
++    const unsigned long size = std::strtoul(size_text.c_str(), &end, 16);
++    if (end == size_text.c_str()) {
++      return -1;
++    }
++    offset = line + 2;
++    if (size == 0) {
++      return 1;
++    }
++    if (size > 256 * 1024 || offset + size + 2 > input.size()) {
++      return input.size() > 256 * 1024 ? -1 : 0;
++    }
++    output->append(input, offset, size);
++    offset += size;
++    if (input.compare(offset, 2, "\r\n") != 0) {
++      return -1;
++    }
++    offset += 2;
++    if (output->size() > 256 * 1024) {
++      return -1;
++    }
++  }
++}
++
++struct HttpResponse {
++  int status = 0;
++  std::string body;
++  uint32_t peer_ip = 0;
++  uint32_t local_ip = 0;
++};
++
++HttpResponse Http(const std::string& url_text, const std::string& method,
++                  const std::vector<std::pair<std::string, std::string>>& headers,
++                  const std::string& body, uint64_t job, int timeout_ms) {
++  HttpResponse response;
++  const auto url = ParseUrl(url_text);
++  const auto address = url ? Resolve(url->host, url->port) : std::nullopt;
++  if (!address) {
++    return response;
++  }
++  response.peer_ip = ntohl(address->sin_addr.s_addr);
++  const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
++  SocketHandle socket = Connect(*address, job, deadline, &response.local_ip);
++  if (socket == kInvalidSocket) {
++    return response;
++  }
++  std::string request = method + " " + url->path + " HTTP/1.1\r\nHost: " + url->host + ":" +
++                        std::to_string(url->port) + "\r\nConnection: close\r\n";
++  for (const auto& header : headers) {
++    request += header.first + ": " + header.second + "\r\n";
++  }
++  request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
++  size_t sent = 0;
++  while (sent < request.size() && Wait(job, deadline, socket, true)) {
++    const int count = send(socket, request.data() + sent, int(request.size() - sent), 0);
++    if (count > 0) {
++      sent += size_t(count);
++    } else if (count < 0) {
++      break;
++    }
++  }
++  std::string input;
++  bool headers_done = false;
++  size_t body_offset = 0;
++  size_t content_length = std::string::npos;
++  bool chunked = false;
++  while (sent == request.size() && Wait(job, deadline, socket)) {
++    char buffer[8192];
++    const int count = recv(socket, buffer, sizeof(buffer), 0);
++    if (count == 0) {
++      break;
++    }
++    if (count < 0) {
++      continue;
++    }
++    input.append(buffer, count);
++    if (input.size() > 300 * 1024) {
++      break;
++    }
++    if (!headers_done) {
++      body_offset = input.find("\r\n\r\n");
++      if (body_offset == std::string::npos) {
++        continue;
++      }
++      body_offset += 4;
++      const std::string head = input.substr(0, body_offset);
++      const size_t status = head.find(' ');
++      if (status != std::string::npos) {
++        response.status = std::atoi(head.c_str() + status + 1);
++      }
++      for (size_t line = head.find("\r\n") + 2; line + 2 < head.size();) {
++        const size_t end = head.find("\r\n", line);
++        if (end == std::string::npos) {
++          break;
++        }
++        const std::string entry = head.substr(line, end - line);
++        const size_t colon = entry.find(':');
++        if (colon != std::string::npos) {
++          const std::string name = Lower(entry.substr(0, colon));
++          const std::string value = Trim(entry.substr(colon + 1));
++          if (name == "content-length") {
++            content_length = std::strtoull(value.c_str(), nullptr, 10);
++          } else if (name == "transfer-encoding" && Lower(value).find("chunked") != std::string::npos) {
++            chunked = true;
++          }
++        }
++        line = end + 2;
++      }
++      headers_done = true;
++    }
++    if (headers_done) {
++      const std::string received = input.substr(body_offset);
++      if (chunked) {
++        std::string decoded;
++        const int result = Chunked(received, &decoded);
++        if (result == 1) {
++          response.body = std::move(decoded);
++          break;
++        }
++      } else if (content_length != std::string::npos &&
++                 received.size() >= content_length) {
++        response.body = received.substr(0, content_length);
++        break;
++      }
++    }
++  }
++  if (response.body.empty() && headers_done && !chunked) {
++    response.body = input.substr(body_offset, content_length == std::string::npos
++                                                   ? std::string::npos
++                                                   : content_length);
++  }
++  Close(socket);
++  return response;
++}
++
++std::string XmlText(std::string_view xml, std::string_view local_name) {
++  for (size_t offset = 0; offset < xml.size();) {
++    const size_t open = xml.find('<', offset);
++    if (open == std::string_view::npos) {
++      break;
++    }
++    const size_t end = xml.find('>', open + 1);
++    if (end == std::string_view::npos) {
++      break;
++    }
++    std::string_view name = xml.substr(open + 1, end - open - 1);
++    const size_t space = name.find_first_of(" \t\r\n/");
++    name = name.substr(0, space);
++    const size_t colon = name.rfind(':');
++    const std::string_view local = colon == std::string_view::npos ? name : name.substr(colon + 1);
++    if (local == local_name) {
++      const std::string close = "</" + std::string(name) + ">";
++      const size_t close_at = xml.find(close, end + 1);
++      if (close_at != std::string_view::npos) {
++        return std::string(xml.substr(end + 1, close_at - end - 1));
++      }
++    }
++    offset = end + 1;
++  }
++  return {};
++}
++
++std::vector<std::string> XmlElements(std::string_view xml, std::string_view local_name) {
++  std::vector<std::string> elements;
++  for (size_t offset = 0; offset < xml.size();) {
++    const size_t open = xml.find('<', offset);
++    if (open == std::string_view::npos) {
++      break;
++    }
++    const size_t end = xml.find('>', open + 1);
++    if (end == std::string_view::npos) {
++      break;
++    }
++    std::string_view name = xml.substr(open + 1, end - open - 1);
++    const size_t space = name.find_first_of(" \t\r\n/");
++    name = name.substr(0, space);
++    const size_t colon = name.rfind(':');
++    if ((colon == std::string_view::npos ? name : name.substr(colon + 1)) == local_name) {
++      const std::string close = "</" + std::string(name) + ">";
++      const size_t close_at = xml.find(close, end + 1);
++      if (close_at != std::string_view::npos) {
++        elements.emplace_back(xml.substr(end + 1, close_at - end - 1));
++        offset = close_at + close.size();
++        continue;
++      }
++    }
++    offset = end + 1;
++  }
++  return elements;
++}
++
++int XmlError(std::string_view body) {
++  const std::string value = XmlText(body, "errorCode");
++  return value.empty() ? 0 : std::atoi(value.c_str());
++}
++
++std::vector<std::string> Discover(uint64_t job, uint32_t lan_ip, uint32_t mask) {
++  static constexpr const char* targets[] = {
++      "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
++      "urn:schemas-upnp-org:service:WANIPConnection:1",
++      "urn:schemas-upnp-org:service:WANIPConnection:2",
++      "urn:schemas-upnp-org:service:WANPPPConnection:1",
++      "urn:schemas-upnp-org:device:InternetGatewayDevice:2",
++  };
++  std::vector<std::string> locations;
++  SocketHandle socket = ::socket(AF_INET, SOCK_DGRAM, 0);
++  if (socket == kInvalidSocket || !NonBlocking(socket)) {
++    Close(socket);
++    return locations;
++  }
++#if REX_PLATFORM_WIN32
++  char ttl = 2;
++#else
++  unsigned char ttl = 2;
++#endif
++  setsockopt(socket, IPPROTO_IP, IP_MULTICAST_TTL, reinterpret_cast<const char*>(&ttl), sizeof(ttl));
++  for (int round = 0; round < 2 && locations.empty() && !Cancelled(job); ++round) {
++    for (const char* target : targets) {
++      const std::string request = std::string("M-SEARCH * HTTP/1.1\r\n") +
++                                  "HOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\n" +
++                                  "MX: 1\r\nST: " + target + "\r\n\r\n";
++      sockaddr_in multicast{};
++      multicast.sin_family = AF_INET;
++      multicast.sin_port = htons(1900);
++      multicast.sin_addr.s_addr = htonl(0xEFFFFFFA);
++      sendto(socket, request.data(), int(request.size()), 0,
++             reinterpret_cast<const sockaddr*>(&multicast), sizeof(multicast));
++      if (round == 1 && mask) {
++        const uint32_t guess = (lan_ip & mask) | 1;
++        if (guess != lan_ip) {
++          multicast.sin_addr.s_addr = htonl(guess);
++          sendto(socket, request.data(), int(request.size()), 0,
++                 reinterpret_cast<const sockaddr*>(&multicast), sizeof(multicast));
++        }
++      }
++    }
++    const auto deadline = Clock::now() + std::chrono::milliseconds(1500);
++    while (Wait(job, deadline, socket)) {
++      char buffer[8192];
++      const int count = recv(socket, buffer, sizeof(buffer), 0);
++      if (count <= 0) {
++        continue;
++      }
++      const std::string_view reply(buffer, count);
++      for (size_t offset = 0; offset < reply.size();) {
++        const size_t end = reply.find("\r\n", offset);
++        const std::string line(reply.substr(offset, end - offset));
++        const size_t colon = line.find(':');
++        if (colon != std::string::npos && Lower(line.substr(0, colon)) == "location") {
++          const std::string location = Trim(line.substr(colon + 1));
++          if (std::find(locations.begin(), locations.end(), location) == locations.end()) {
++            locations.push_back(location);
++          }
++        }
++        if (end == std::string_view::npos) {
++          break;
++        }
++        offset = end + 2;
++      }
++    }
++  }
++  Close(socket);
++  return locations;
++}
++
++std::vector<Service> Services(const std::vector<std::string>& locations, uint64_t job) {
++  std::vector<Service> services;
++  for (const std::string& location : locations) {
++    if (Cancelled(job)) {
++      break;
++    }
++    const auto location_url = ParseUrl(location);
++    if (!location_url) {
++      continue;
++    }
++    const HttpResponse response = Http(location, "GET", {{"User-Agent", "metal360 UPnP/1.1"}}, "",
++                                       job, 4000);
++    if (!response.status) {
++      continue;
++    }
++    std::string base = XmlText(response.body, "URLBase");
++    if (base.empty()) {
++      base = "http://" + location_url->host + ":" + std::to_string(location_url->port);
++    }
++    while (!base.empty() && base.back() == '/') {
++      base.pop_back();
++    }
++    for (const std::string& element : XmlElements(response.body, "service")) {
++      const std::string type = XmlText(element, "serviceType");
++      std::string control = XmlText(element, "controlURL");
++      int rank = -1;
++      if (type == "urn:schemas-upnp-org:service:WANIPConnection:2") {
++        rank = 0;
++      } else if (type == "urn:schemas-upnp-org:service:WANIPConnection:1") {
++        rank = 1;
++      } else if (type == "urn:schemas-upnp-org:service:WANPPPConnection:1") {
++        rank = 2;
++      }
++      if (rank < 0 || control.empty()) {
++        continue;
++      }
++      if (!control.starts_with("http://")) {
++        control = base + "/" + control.substr(control.starts_with('/') ? 1 : 0);
++      }
++      services.push_back({type, control, rank});
++    }
++  }
++  std::stable_sort(services.begin(), services.end(),
++                   [](const Service& a, const Service& b) { return a.rank < b.rank; });
++  return services;
++}
++
++HttpResponse Soap(const Service& service, const std::string& action,
++                  const std::vector<std::pair<std::string, std::string>>& arguments, uint64_t job,
++                  int timeout_ms) {
++  std::string body = "<?xml version=\"1.0\"?>\r\n"
++                     "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
++                     "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n"
++                     "<s:Body><u:" +
++                     action + " xmlns:u=\"" + service.type + "\">\r\n";
++  for (const auto& argument : arguments) {
++    body += "<" + argument.first + ">" + argument.second + "</" + argument.first + ">\r\n";
++  }
++  body += "</u:" + action + ">\r\n</s:Body>\r\n</s:Envelope>\r\n";
++  return Http(service.url, "POST",
++              {{"Content-Type", "text/xml; charset=\"utf-8\""},
++               {"SOAPAction", "\"" + service.type + "#" + action + "\""}},
++              body, job, timeout_ms);
++}
++
++bool AddMapping(const Service& service, uint16_t port, const std::string& internal, uint32_t* lease,
++                Report* report, uint64_t job, int timeout_ms) {
++  auto arguments = std::vector<std::pair<std::string, std::string>>{
++      {"NewRemoteHost", ""},
++      {"NewExternalPort", std::to_string(port)},
++      {"NewProtocol", "UDP"},
++      {"NewInternalPort", std::to_string(port)},
++      {"NewInternalClient", internal},
++      {"NewEnabled", "1"},
++      {"NewPortMappingDescription", "metal360 " + std::to_string(port)},
++      {"NewLeaseDuration", std::to_string(*lease)},
++  };
++  HttpResponse response = Soap(service, "AddPortMapping", arguments, job, timeout_ms);
++  int error = response.status == 200 ? 0 : response.status ? XmlError(response.body) : -1;
++  if (error == 725 && *lease != 0) {
++    *lease = 0;
++    arguments.back().second = "0";
++    response = Soap(service, "AddPortMapping", arguments, job, timeout_ms);
++    error = response.status == 200 ? 0 : response.status ? XmlError(response.body) : -1;
++  }
++  if (error == 718) {
++    const HttpResponse specific = Soap(service, "GetSpecificPortMappingEntry",
++                                       {{"NewRemoteHost", ""},
++                                        {"NewExternalPort", std::to_string(port)},
++                                        {"NewProtocol", "UDP"}},
++                                       job, timeout_ms);
++    report->conflict_ip = ParseAddress(XmlText(specific.body, "NewInternalClient"));
++    if (report->conflict_ip == ParseAddress(internal)) {
++      return true;
++    }
++  }
++  if (error) {
++    report->upnp_error = error;
++    return false;
++  }
++  return true;
++}
++
++void RemoveMappings(uint64_t job, int timeout_ms) {
++  for (uint16_t port : link.mappings.ports) {
++    Soap(link.mappings.service, "DeletePortMapping",
++         {{"NewRemoteHost", ""},
++          {"NewExternalPort", std::to_string(port)},
++          {"NewProtocol", "UDP"}},
++         job, timeout_ms);
++  }
++  link.mappings = {};
++}
++
++void PrepareUpnp(Report* report, uint64_t job) {
++  link.mappings.lease = uint32_t(std::clamp(REXCVAR_GET(net_online_lease_s), 120, 86400));
++  if (!REXCVAR_GET(net_online_upnp)) {
++    return;
++  }
++  const auto locations = Discover(job, report->lan_ip, [&] {
++    uint32_t mask = 0;
++    system_link::LanAddress(nullptr, &mask);
++    return mask;
++  }());
++  const auto services = Services(locations, job);
++  for (const Service& service : services) {
++    if (Cancelled(job)) {
++      return;
++    }
++    const HttpResponse external = Soap(service, "GetExternalIPAddress", {}, job, 4000);
++    if (!external.status) {
++      continue;
++    }
++    link.mappings.service = service;
++    link.mappings.internal_ip = external.local_ip ? AddressText(external.local_ip)
++                                                  : AddressText(report->lan_ip);
++    report->router_found = true;
++    report->router_ip = external.peer_ip;
++    report->router_external_ip = ParseAddress(XmlText(external.body, "NewExternalIPAddress"));
++    const uint16_t first = FirstPort();
++    for (int i = 0; i < PortCount(); ++i) {
++      const uint16_t port = uint16_t(first + i);
++      if (AddMapping(service, port, link.mappings.internal_ip, &link.mappings.lease, report, job,
++                     4000)) {
++        if (std::find(link.mappings.ports.begin(), link.mappings.ports.end(), port) ==
++            link.mappings.ports.end()) {
++          link.mappings.ports.push_back(port);
++        }
++      }
++    }
++    report->ports_mapped = int(link.mappings.ports.size());
++    if (report->ports_mapped || report->router_external_ip) {
++      return;
++    }
++  }
++}
++
++std::vector<std::pair<std::string, uint16_t>> Servers(std::string_view configured,
++                                                      uint16_t default_port) {
++  std::vector<std::pair<std::string, uint16_t>> servers;
++  for (size_t offset = 0; offset <= configured.size();) {
++    const size_t comma = configured.find(',', offset);
++    std::string entry = Trim(configured.substr(offset, comma - offset));
++    offset = comma == std::string_view::npos ? configured.size() + 1 : comma + 1;
++    if (entry.empty()) {
++      continue;
++    }
++    uint16_t port = default_port;
++    const size_t colon = entry.rfind(':');
++    if (colon != std::string::npos) {
++      const unsigned long parsed = std::strtoul(entry.c_str() + colon + 1, nullptr, 10);
++      if (parsed && parsed <= 65535) {
++        port = uint16_t(parsed);
++        entry.resize(colon);
++      }
++    }
++    servers.emplace_back(entry, port);
++  }
++  return servers;
++}
++
++void PrepareStun(Report* report, uint64_t job, uint32_t* public_ip) {
++  std::mt19937_64 random(std::random_device{}());
++  for (const auto& [host, port] : Servers(REXCVAR_GET(net_online_stun), 3478)) {
++    if (Cancelled(job)) {
++      return;
++    }
++    const auto address = Resolve(host, port);
++    if (!address) {
++      continue;
++    }
++    SocketHandle socket = ::socket(AF_INET, SOCK_DGRAM, 0);
++    if (socket == kInvalidSocket || !NonBlocking(socket)) {
++      Close(socket);
++      continue;
++    }
++    std::array<uint8_t, 12> transaction{};
++    for (uint8_t& byte : transaction) {
++      byte = uint8_t(random());
++    }
++    const auto request = net::StunRequest(transaction);
++    for (int attempt = 0; attempt < 2 && !Cancelled(job); ++attempt) {
++      sendto(socket, reinterpret_cast<const char*>(request.data()), int(request.size()), 0,
++             reinterpret_cast<const sockaddr*>(&*address), sizeof(*address));
++      sockaddr_in local{};
++      socklen_t local_size = sizeof(local);
++      if (getsockname(socket, reinterpret_cast<sockaddr*>(&local), &local_size) == 0) {
++        report->stun_local_port = ntohs(local.sin_port);
++      }
++      const auto deadline = Clock::now() + Seconds(1);
++      while (Wait(job, deadline, socket)) {
++        uint8_t buffer[2048];
++        const int count = recv(socket, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
++        if (count <= 0) {
++          continue;
++        }
++        const auto mapped = net::ParseStunResponse(buffer, size_t(count), transaction);
++        if (mapped) {
++          report->stun_ok = true;
++          report->stun_mapped_port = mapped->port;
++          *public_ip = mapped->ip;
++          Close(socket);
++          return;
++        }
++      }
++    }
++    Close(socket);
++  }
++}
++
++Report Prepare(Role role, uint32_t target, uint64_t job) {
++  Report report;
++  report.state = State::kPreparing;
++  report.role = role;
++  report.target_ip = role == Role::kJoin ? target : 0;
++  report.first_port = FirstPort();
++  if (!system_link::LanAddress(&report.lan_ip, nullptr)) {
++    report.state = State::kFailed;
++    report.failure = Failure::kNoNetwork;
++    return report;
++  }
++  {
++    std::lock_guard lock(link.mutex);
++    report.version = ++link.report_version;
++    link.report = report;
++  }
++  PrepareUpnp(&report, job);
++  uint32_t stun_ip = 0;
++  PrepareStun(&report, job, &stun_ip);
++  const uint32_t public_ip = stun_ip ? stun_ip : !IsPrivateAddress(report.router_external_ip)
++                                                       ? report.router_external_ip
++                                                       : 0;
++  report.double_nat = report.router_external_ip &&
++                      (IsPrivateAddress(report.router_external_ip) ||
++                       (report.stun_ok && report.router_external_ip != stun_ip));
++  if (!public_ip) {
++    report.state = State::kFailed;
++    report.failure = Failure::kNoPublicAddress;
++    RemoveMappings(job, 3000);
++    return report;
++  }
++  report.public_ip = public_ip;
++  if (role == Role::kJoin && target == public_ip) {
++    report.state = State::kFailed;
++    report.failure = Failure::kSameNetwork;
++    RemoveMappings(job, 3000);
++    return report;
++  }
++  report.state = Cancelled(job) ? State::kIdle : State::kReady;
++  return report;
++}
++
++void Publish(const Report& report) {
++  std::lock_guard lock(link.mutex);
++  link.report = report;
++  link.report.version = ++link.report_version;
++  link.public_address = report.state == State::kReady ? report.public_ip : 0;
++  link.target_address = report.state == State::kReady && report.role == Role::kJoin
++                            ? report.target_ip
++                            : 0;
++}
++
++void Worker() {
++  while (true) {
++    std::unique_lock lock(link.mutex);
++    link.wake.wait(lock, [] { return link.shutdown || link.job != link.handled; });
++    if (link.shutdown) {
++      const uint64_t job = link.job;
++      lock.unlock();
++      if (!link.exiting) {
++        RemoveMappings(job, 1500);
++      }
++      return;
++    }
++    const uint64_t job = link.job;
++    const Role role = link.requested_role;
++    const uint32_t target = link.requested_target;
++    link.handled = job;
++    lock.unlock();
++    RemoveMappings(job, 3000);
++    if (role == Role::kNone) {
++      relay::Stop();
++      Publish({});
++      continue;
++    }
++    Report report = Prepare(role, target, job);
++    lock.lock();
++    if (link.job != job || link.shutdown) {
++      lock.unlock();
++      RemoveMappings(job, 3000);
++      continue;
++    }
++    lock.unlock();
++    Publish(report);
++    if (report.state != State::kReady) {
++      continue;
++    }
++    relay::Start(role == Role::kHost, role == Role::kHost ? report.public_ip : report.target_ip,
++                 report.public_ip);
++    auto renewal = Clock::now() + Seconds(std::max<uint32_t>(60, link.mappings.lease / 2));
++    while (true) {
++      lock.lock();
++      link.wake.wait_until(lock, renewal, [&] {
++        return link.shutdown || link.job != link.handled || Clock::now() >= renewal;
++      });
++      if (link.shutdown || link.job != link.handled) {
++        break;
++      }
++      lock.unlock();
++      if (!link.mappings.ports.empty() && link.mappings.lease) {
++        Report current = Current();
++        for (uint16_t port : link.mappings.ports) {
++          AddMapping(link.mappings.service, port, link.mappings.internal_ip, &link.mappings.lease,
++                     &current, job, 4000);
++        }
++      }
++      renewal = Clock::now() + Seconds(std::max<uint32_t>(60, link.mappings.lease / 2));
++    }
++  }
++}
++
++void EnsureWorker() {
++  if (!link.worker.joinable() && !link.shutdown) {
++    link.worker = std::thread(Worker);
++  }
++}
++
++}  // namespace
++
++void Start(Role role, uint32_t target_ip) {
++  if (role == Role::kNone) {
++    Stop();
++    return;
++  }
++  std::lock_guard lock(link.mutex);
++  if (link.shutdown) {
++    return;
++  }
++  EnsureWorker();
++  link.public_address = 0;
++  link.target_address = 0;
++  relay::Stop();
++  ++link.job;
++  link.requested_role = role;
++  link.requested_target = target_ip;
++  Report report;
++  report.state = State::kPreparing;
++  report.role = role;
++  report.target_ip = role == Role::kJoin ? target_ip : 0;
++  report.first_port = FirstPort();
++  report.version = ++link.report_version;
++  link.report = report;
++  link.wake.notify_all();
++}
++
++void Stop() {
++  std::lock_guard lock(link.mutex);
++  if (link.shutdown ||
++      (!link.public_address && link.report.state == State::kIdle && link.report.role == Role::kNone)) {
++    return;
++  }
++  EnsureWorker();
++  link.public_address = 0;
++  link.target_address = 0;
++  relay::Stop();
++  ++link.job;
++  link.requested_role = Role::kNone;
++  link.requested_target = 0;
++  Report report;
++  report.first_port = FirstPort();
++  report.version = ++link.report_version;
++  link.report = report;
++  link.wake.notify_all();
++}
++
++void Shutdown() {
++  {
++    std::lock_guard lock(link.mutex);
++    if (link.shutdown) {
++      return;
++    }
++    link.public_address = 0;
++    link.target_address = 0;
++    relay::Stop();
++    link.shutdown = true;
++    ++link.job;
++    link.wake.notify_all();
++  }
++  if (link.worker.joinable()) {
++    link.worker.join();
++  }
++  relay::Shutdown();
++}
++
++Report Current() {
++  std::lock_guard lock(link.mutex);
++  Report report = link.report;
++  if (report.state == State::kReady) {
++    report.relay = relay::Current();
++  }
++  report.version = link.report_version + relay::Version();
++  return report;
++}
++
++uint64_t Version() {
++  return link.report_version + relay::Version();
++}
++
++uint32_t PublicAddress() {
++  return link.public_address.load(std::memory_order_acquire);
++}
++
++uint32_t Target() {
++  return link.target_address.load(std::memory_order_acquire);
++}
++
++uint16_t FirstPort() {
++  return system_link::HostPort(1000);
++}
++
++int PortCount() {
++  return 3;
++}
++
++}  // namespace rex::system::online
+diff --git a/src/system/online_net.h b/src/system/online_net.h
+index 81a23727..f354299b 100644
+--- a/src/system/online_net.h
++++ b/src/system/online_net.h
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: 0BSD
+ #pragma once
+ 
++#include <algorithm>
+ #include <array>
+ #include <cstddef>
+ #include <cstdint>
+diff --git a/src/system/online_relay.cpp b/src/system/online_relay.cpp
+new file mode 100644
+index 00000000..13f3e678
+--- /dev/null
++++ b/src/system/online_relay.cpp
+@@ -0,0 +1,931 @@
++// SPDX-License-Identifier: 0BSD
++#include <rex/platform.h>
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <cstring>
++#include <mutex>
++#include <optional>
++#include <random>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <vector>
++
++#include <rex/cvar.h>
++#include <rex/logging.h>
++#include <rex/system/join_code.h>
++#include <rex/system/online_relay.h>
++#include <rex/system/relay_wire.h>
++#include <rex/system/system_link.h>
++#include <rex/system/xsocket.h>
++
++#include "online_net.h"
++
++#if REX_PLATFORM_WIN32
++#include <WinSock2.h>
++#include <WS2tcpip.h>
++using SocketHandle = SOCKET;
++constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
++#else
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <poll.h>
++#include <sys/socket.h>
++#include <unistd.h>
++using SocketHandle = int;
++constexpr SocketHandle kInvalidSocket = -1;
++#endif
++
++REXCVAR_DEFINE_STRING(
++    net_online_brokers,
++    "broker.hivemq.com:1883,broker.emqx.io:1883,test.mosquitto.org:1883,broker.mqtt.cool:1883",
++    "Kernel", "Public MQTT brokers used for internet-play endpoint exchange");
++REXCVAR_DEFINE_BOOL(net_online_punch, true, "Kernel", "Enable internet-play relay and UDP punching");
++REXCVAR_DECLARE(std::string, net_online_stun);
++
++namespace rex::system::online {
++namespace {
++
++using Clock = std::chrono::steady_clock;
++using relay_wire::Endpoint;
++using relay_wire::Message;
++
++struct InFlight {
++  std::array<uint8_t, 12> transaction{};
++  int port = 0;
++  int server = 0;
++  Clock::time_point expires{};
++};
++
++struct EndpointState {
++  std::array<std::optional<net::StunMapping>, 2> observed{};
++};
++
++struct Peer {
++  uint64_t session = 0;
++  uint32_t public_ip = 0;
++  uint8_t count = 0;
++  std::array<Endpoint, 4> endpoints{};
++  uint64_t signature = 0;
++  Clock::time_point punch_until{};
++  Clock::time_point next_punch{};
++  bool heard = false;
++};
++
++struct Broker {
++  std::string name;
++  std::string host;
++  uint16_t port = 1883;
++  sockaddr_in address{};
++  SocketHandle socket = kInvalidSocket;
++  bool connecting = false;
++  bool connected = false;
++  bool last_failed = false;
++  int failures = 0;
++  Clock::time_point next_attempt{};
++  Clock::time_point connected_at{};
++  Clock::time_point last_sent{};
++  Clock::time_point last_received{};
++  std::vector<uint8_t> input;
++  std::vector<uint8_t> output;
++  uint16_t packet_id = 0;
++  bool posted = false;
++  int found = 0;
++  uint64_t posted_signature = 0;
++};
++
++struct RelayRuntime {
++  std::mutex mutex;
++  std::condition_variable wake;
++  std::thread worker;
++  std::atomic<bool> shutdown{false};
++  std::atomic<bool> exiting{false};
++  uint64_t generation = 0;
++  uint64_t handled = 0;
++  bool pending = false;
++  bool requested_host = false;
++  uint32_t requested_code = 0;
++  uint32_t requested_public = 0;
++  std::atomic<bool> active{false};
++  bool host = false;
++  uint32_t code_ip = 0;
++  uint32_t public_ip = 0;
++  std::string code;
++  uint64_t session = 0;
++  Clock::time_point started{};
++  int64_t side = -1;
++  std::vector<sockaddr_in> stun_servers;
++  std::vector<Broker> brokers;
++  std::vector<Peer> peers;
++  std::array<EndpointState, 3> endpoints{};
++  std::mutex classify_mutex;
++  std::vector<InFlight> in_flight;
++  std::atomic<size_t> in_flight_count{0};
++  std::atomic<bool> symmetric{false};
++  std::atomic<uint64_t> tag_session{0};
++  int stun_rounds = 0;
++  Clock::time_point next_stun{};
++  Clock::time_point next_join_post{};
++  relay::Status status;
++  std::atomic<uint64_t> status_version{0};
++  std::mt19937_64 random{std::random_device{}()};
++
++  ~RelayRuntime() {
++    exiting = true;
++    shutdown = true;
++    wake.notify_all();
++    if (worker.joinable()) {
++      worker.join();
++    }
++  }
++};
++
++RelayRuntime relay_state;
++
++std::string Trim(std::string_view value) {
++  const size_t first = value.find_first_not_of(" \t\r\n");
++  if (first == std::string_view::npos) {
++    return {};
++  }
++  const size_t last = value.find_last_not_of(" \t\r\n");
++  return std::string(value.substr(first, last - first + 1));
++}
++
++std::vector<std::pair<std::string, uint16_t>> HostList(std::string_view text,
++                                                       uint16_t default_port) {
++  std::vector<std::pair<std::string, uint16_t>> result;
++  for (size_t offset = 0; offset <= text.size();) {
++    const size_t comma = text.find(',', offset);
++    std::string host = Trim(text.substr(offset, comma - offset));
++    offset = comma == std::string_view::npos ? text.size() + 1 : comma + 1;
++    if (host.empty()) {
++      continue;
++    }
++    uint16_t port = default_port;
++    const size_t colon = host.rfind(':');
++    if (colon != std::string::npos) {
++      const unsigned long parsed = std::strtoul(host.c_str() + colon + 1, nullptr, 10);
++      if (parsed && parsed <= 65535) {
++        port = uint16_t(parsed);
++        host.resize(colon);
++      }
++    }
++    result.emplace_back(host, port);
++  }
++  return result;
++}
++
++std::optional<sockaddr_in> Resolve(const std::string& host, uint16_t port, int socket_type) {
++  addrinfo hints{};
++  hints.ai_family = AF_INET;
++  hints.ai_socktype = socket_type;
++  addrinfo* addresses = nullptr;
++  if (getaddrinfo(host.c_str(), nullptr, &hints, &addresses) != 0) {
++    return std::nullopt;
++  }
++  sockaddr_in address = *reinterpret_cast<sockaddr_in*>(addresses->ai_addr);
++  address.sin_port = htons(port);
++  freeaddrinfo(addresses);
++  return address;
++}
++
++void Close(SocketHandle socket) {
++  if (socket == kInvalidSocket) {
++    return;
++  }
++#if REX_PLATFORM_WIN32
++  closesocket(socket);
++#else
++  close(socket);
++#endif
++}
++
++bool NonBlocking(SocketHandle socket) {
++#if REX_PLATFORM_WIN32
++  u_long enabled = 1;
++  return ioctlsocket(socket, FIONBIO, &enabled) == 0;
++#else
++  const int flags = fcntl(socket, F_GETFL, 0);
++  return flags >= 0 && fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
++#endif
++}
++
++uint64_t EndpointSignature(uint32_t public_ip, const Message& message) {
++  std::vector<uint8_t> bytes;
++  relay_wire::Append32(bytes, public_ip);
++  bytes.push_back(message.count);
++  for (size_t i = 0; i < message.count; ++i) {
++    relay_wire::Append16(bytes, message.endpoints[i].local_port);
++    relay_wire::Append32(bytes, message.endpoints[i].ip);
++    relay_wire::Append16(bytes, message.endpoints[i].port);
++    bytes.push_back(message.endpoints[i].flags);
++  }
++  return relay_wire::Hash64(
++      std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
++}
++
++int PortIndex(uint16_t host_port) {
++  for (int i = 0; i < 3; ++i) {
++    if (system_link::HostPort(uint16_t(1000 + i)) == host_port) {
++      return i;
++    }
++  }
++  return -1;
++}
++
++void DropBroker(Broker& broker) {
++  Close(broker.socket);
++  broker.socket = kInvalidSocket;
++  broker.connecting = false;
++  broker.connected = false;
++  broker.last_failed = true;
++  ++broker.failures;
++  broker.next_attempt =
++      Clock::now() + std::chrono::seconds(std::min(60, 2 << std::min(broker.failures, 5)));
++  broker.input.clear();
++  broker.output.clear();
++  broker.posted = false;
++}
++
++void Queue(Broker& broker, const std::vector<uint8_t>& packet) {
++  broker.output.insert(broker.output.end(), packet.begin(), packet.end());
++}
++
++void QueueConnect(Broker& broker) {
++  const std::string client = "bzn" + relay_wire::Hex64(relay_state.random());
++  Queue(broker, net::MqttConnect(client, relay_state.host ? relay_wire::HostTopic(relay_state.code)
++                                                          : std::string()));
++}
++
++void BeginBroker(Broker& broker) {
++  broker.socket = ::socket(AF_INET, SOCK_STREAM, 0);
++  if (broker.socket == kInvalidSocket || !NonBlocking(broker.socket)) {
++    DropBroker(broker);
++    return;
++  }
++  broker.last_failed = false;
++  broker.connecting = true;
++  broker.connected = false;
++  broker.connected_at = Clock::now();
++  broker.last_received = broker.connected_at;
++  broker.last_sent = broker.connected_at;
++  QueueConnect(broker);
++  const int result = connect(broker.socket, reinterpret_cast<const sockaddr*>(&broker.address),
++                             sizeof(broker.address));
++  if (result != 0) {
++#if REX_PLATFORM_WIN32
++    const int error = WSAGetLastError();
++    if (error != WSAEWOULDBLOCK && error != WSAEINPROGRESS) {
++#else
++    if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
++#endif
++      DropBroker(broker);
++    }
++  }
++}
++
++void ReceiveMessage(Broker& broker, const Message& message) {
++  if (message.session == relay_state.session || (relay_state.host ? message.role != 2
++                                                                  : message.role != 1)) {
++    return;
++  }
++  const auto now = Clock::now();
++  const uint64_t signature = EndpointSignature(message.public_ip, message);
++  if (!relay_state.host) {
++    relay_state.peers.clear();
++  }
++  Peer* peer = nullptr;
++  for (Peer& candidate : relay_state.peers) {
++    if (candidate.session == message.session) {
++      peer = &candidate;
++      break;
++    }
++  }
++  const bool changed = !peer || peer->signature != signature;
++  if (!peer) {
++    if (relay_state.peers.size() >= 8) {
++      return;
++    }
++    relay_state.peers.push_back({});
++    peer = &relay_state.peers.back();
++    peer->session = message.session;
++  }
++  peer->public_ip = message.public_ip;
++  peer->count = message.count;
++  peer->endpoints = message.endpoints;
++  peer->signature = signature;
++  if (changed) {
++    ++broker.found;
++    peer->punch_until = now + std::chrono::seconds(10);
++    peer->next_punch = now;
++  }
++  for (size_t i = 0; i < message.count; ++i) {
++    const Endpoint& endpoint = message.endpoints[i];
++    if (!endpoint.local_port && !endpoint.port) {
++      system_link::NameConsoleLan(message.public_ip, message.session, endpoint.ip);
++    } else if (endpoint.ip && endpoint.port) {
++      system_link::SeedInternetPeer(message.public_ip,
++                                    system_link::GuestPort(endpoint.local_port), endpoint.port,
++                                    message.session);
++    }
++  }
++  peer->punch_until = now + std::chrono::seconds(10);
++  if (peer->next_punch > now) {
++    peer->next_punch = now;
++  }
++}
++
++void PublishPacket(Broker& broker, const net::MqttPacketView& packet) {
++  if (packet.body_size < 2) {
++    return;
++  }
++  const uint16_t topic_size = relay_wire::Read16(packet.body);
++  size_t offset = 2 + size_t(topic_size);
++  if (packet.body_size < offset || ((packet.flags >> 1) & 3)) {
++    if (packet.body_size < offset) {
++      return;
++    }
++    offset += 2;
++  }
++  if (packet.body_size < offset) {
++    return;
++  }
++  const std::string topic(reinterpret_cast<const char*>(packet.body + 2), topic_size);
++  const std::string expected = relay_state.host ? relay_wire::JoinTopic(relay_state.code)
++                                                : relay_wire::HostTopic(relay_state.code);
++  if (topic != expected) {
++    return;
++  }
++  const size_t payload_size = packet.body_size - offset;
++  if (!payload_size) {
++    return;
++  }
++  const auto message = relay_wire::Decode(packet.body + offset, payload_size, relay_state.code);
++  if (message) {
++    ReceiveMessage(broker, *message);
++  }
++}
++
++void ReadBroker(Broker& broker) {
++  uint8_t buffer[8192];
++  while (true) {
++    const int count = recv(broker.socket, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
++    if (count <= 0) {
++      if (count == 0) {
++        DropBroker(broker);
++      }
++      break;
++    }
++    broker.last_received = Clock::now();
++    broker.input.insert(broker.input.end(), buffer, buffer + count);
++    if (broker.input.size() > 256 * 1024) {
++      DropBroker(broker);
++      break;
++    }
++    while (!broker.input.empty() && broker.socket != kInvalidSocket) {
++      net::MqttPacketView packet;
++      const int consumed = net::MqttParse(broker.input.data(), broker.input.size(), &packet);
++      if (consumed < 0) {
++        DropBroker(broker);
++        break;
++      }
++      if (!consumed) {
++        break;
++      }
++      if (packet.type == 2 && packet.body_size >= 2) {
++        if (packet.body[1]) {
++          DropBroker(broker);
++          break;
++        }
++        broker.connected = true;
++        broker.connecting = false;
++        broker.failures = 0;
++        relay_state.tag_session = relay_state.session;
++        Queue(broker, net::MqttSubscribe(
++                          ++broker.packet_id, relay_state.host ? relay_wire::JoinTopic(relay_state.code)
++                                                               : relay_wire::HostTopic(relay_state.code)));
++      } else if (packet.type == 3 && broker.connected) {
++        PublishPacket(broker, packet);
++      }
++      broker.input.erase(broker.input.begin(), broker.input.begin() + consumed);
++    }
++    if (count < int(sizeof(buffer))) {
++      break;
++    }
++  }
++}
++
++void FlushBroker(Broker& broker) {
++  while (!broker.output.empty()) {
++    const int count = send(broker.socket, reinterpret_cast<const char*>(broker.output.data()),
++                           int(broker.output.size()), 0);
++    if (count > 0) {
++      broker.last_sent = Clock::now();
++      broker.output.erase(broker.output.begin(), broker.output.begin() + count);
++      continue;
++    }
++    if (count == 0) {
++      break;
++    }
++#if REX_PLATFORM_WIN32
++    if (WSAGetLastError() == WSAEWOULDBLOCK) {
++      break;
++    }
++#else
++    if (errno == EAGAIN || errno == EWOULDBLOCK) {
++      break;
++    }
++#endif
++    DropBroker(broker);
++    break;
++  }
++}
++
++Message OwnEndpoints() {
++  Message message;
++  message.role = relay_state.host ? 1 : 2;
++  message.session = relay_state.session;
++  message.public_ip = relay_state.public_ip;
++  for (int i = 0; i < 3; ++i) {
++    Endpoint& endpoint = message.endpoints[i];
++    endpoint.local_port = system_link::HostPort(uint16_t(1000 + i));
++    endpoint.ip = relay_state.public_ip;
++    endpoint.port = endpoint.local_port;
++    std::lock_guard lock(relay_state.classify_mutex);
++    if (relay_state.endpoints[i].observed[0]) {
++      endpoint.ip = relay_state.endpoints[i].observed[0]->ip;
++      endpoint.port = relay_state.endpoints[i].observed[0]->port;
++      endpoint.flags = 1;
++    } else if (relay_state.endpoints[i].observed[1]) {
++      endpoint.ip = relay_state.endpoints[i].observed[1]->ip;
++      endpoint.port = relay_state.endpoints[i].observed[1]->port;
++      endpoint.flags = 1;
++    }
++  }
++  message.count = 3;
++  uint32_t lan = 0;
++  if (system_link::LanAddress(&lan, nullptr)) {
++    message.endpoints[3] = {0, lan, 0, 0};
++    message.count = 4;
++  }
++  return message;
++}
++
++bool EndpointsReady() {
++  if (relay_state.stun_servers.empty() ||
++      Clock::now() - relay_state.started >= std::chrono::seconds(3)) {
++    return true;
++  }
++  std::lock_guard lock(relay_state.classify_mutex);
++  for (const EndpointState& endpoint : relay_state.endpoints) {
++    if (!endpoint.observed[0] && !endpoint.observed[1]) {
++      return false;
++    }
++  }
++  return true;
++}
++
++void SendStun() {
++  const auto now = Clock::now();
++  if (now < relay_state.next_stun) {
++    return;
++  }
++  for (int port = 0; port < 3; ++port) {
++    for (size_t server = 0; server < relay_state.stun_servers.size(); ++server) {
++      InFlight request;
++      request.port = port;
++      request.server = int(server);
++      request.expires = now + std::chrono::seconds(10);
++      for (uint8_t& byte : request.transaction) {
++        byte = uint8_t(relay_state.random());
++      }
++      const auto packet = net::StunRequest(request.transaction);
++      if (system_link::SendFromPort(system_link::HostPort(uint16_t(1000 + port)),
++                                    ntohl(relay_state.stun_servers[server].sin_addr.s_addr),
++                                    ntohs(relay_state.stun_servers[server].sin_port), packet.data(),
++                                    packet.size()) < 0) {
++        continue;
++      }
++      std::lock_guard lock(relay_state.classify_mutex);
++      relay_state.in_flight.push_back(request);
++      relay_state.in_flight_count = relay_state.in_flight.size();
++    }
++  }
++  ++relay_state.stun_rounds;
++  bool unknown = false;
++  {
++    std::lock_guard lock(relay_state.classify_mutex);
++    for (const EndpointState& endpoint : relay_state.endpoints) {
++      unknown |= !endpoint.observed[0] && !endpoint.observed[1];
++    }
++  }
++  relay_state.next_stun = now + std::chrono::seconds(unknown && relay_state.stun_rounds < 4 ? 1 : 30);
++}
++
++void PunchPeers() {
++  const auto now = Clock::now();
++  for (Peer& peer : relay_state.peers) {
++    if (now > peer.punch_until || now < peer.next_punch) {
++      continue;
++    }
++    peer.next_punch = now + std::chrono::milliseconds(250);
++    for (int i = 0; i < 3; ++i) {
++      const uint16_t local_port = system_link::HostPort(uint16_t(1000 + i));
++      for (size_t j = 0; j < peer.count; ++j) {
++        const Endpoint& endpoint = peer.endpoints[j];
++        if (endpoint.local_port != local_port || !endpoint.ip || !endpoint.port) {
++          continue;
++        }
++        uint8_t punch[18];
++        std::memcpy(punch, "BO2ZMPCH", 8);
++        for (int b = 0; b < 8; ++b) {
++          punch[8 + b] = uint8_t(relay_state.session >> (56 - 8 * b));
++        }
++        punch[16] = uint8_t((1000 + i) >> 8);
++        punch[17] = uint8_t(1000 + i);
++        system_link::SendFromPort(local_port, endpoint.ip, endpoint.port, punch, sizeof(punch));
++        system_link::SeedInternetPeer(peer.public_ip, uint16_t(1000 + i), endpoint.port,
++                                      peer.session);
++      }
++    }
++  }
++}
++
++void UpdatePeers() {
++  for (Peer& peer : relay_state.peers) {
++    if (peer.heard) {
++      continue;
++    }
++    for (size_t i = 0; i < peer.count; ++i) {
++      const Endpoint& endpoint = peer.endpoints[i];
++      if (endpoint.port && system_link::HeardInternetPeer(peer.public_ip, endpoint.port, nullptr)) {
++        peer.heard = true;
++        break;
++      }
++    }
++  }
++}
++
++void PostEndpoints() {
++  if (!EndpointsReady()) {
++    return;
++  }
++  const auto now = Clock::now();
++  const Message message = OwnEndpoints();
++  const uint64_t signature = EndpointSignature(relay_state.public_ip, message);
++  int heard = 0;
++  for (const Peer& peer : relay_state.peers) {
++    heard += peer.heard;
++  }
++  if (!relay_state.host && (heard || now - relay_state.started >= std::chrono::minutes(3))) {
++    return;
++  }
++  if (!relay_state.host && now < relay_state.next_join_post) {
++    return;
++  }
++  for (Broker& broker : relay_state.brokers) {
++    if (!broker.connected || (relay_state.host && broker.posted_signature == signature)) {
++      continue;
++    }
++    const auto packet = relay_wire::Encode(message, relay_state.code, relay_state.random());
++    Queue(broker, net::MqttPublish(relay_state.host ? relay_wire::HostTopic(relay_state.code)
++                                                    : relay_wire::JoinTopic(relay_state.code),
++                                   packet, relay_state.host));
++    broker.posted = true;
++    broker.posted_signature = signature;
++  }
++  if (!relay_state.host) {
++    relay_state.next_join_post = now + std::chrono::seconds(2);
++  }
++}
++
++void UpdateStatus() {
++  std::lock_guard status_lock(relay_state.mutex);
++  relay::Status next;
++  next.active = relay_state.active;
++  next.symmetric = relay_state.symmetric;
++  next.brokers = int(relay_state.brokers.size());
++  for (size_t i = 0; i < relay_state.brokers.size() && i < next.broker_list.size(); ++i) {
++    const Broker& broker = relay_state.brokers[i];
++    next.broker_list[i].name = broker.name;
++    next.broker_list[i].state = broker.connected
++                                    ? relay::BrokerStatus::kWorking
++                                    : broker.last_failed ? relay::BrokerStatus::kDown
++                                                         : relay::BrokerStatus::kChecking;
++    next.broker_list[i].posted = broker.posted;
++    next.broker_list[i].found = broker.found;
++    next.brokers_up += broker.connected;
++    next.brokers_failed += !broker.connected && broker.last_failed;
++  }
++  {
++    std::lock_guard lock(relay_state.classify_mutex);
++    for (const EndpointState& endpoint : relay_state.endpoints) {
++      next.ports += endpoint.observed[0] || endpoint.observed[1];
++    }
++  }
++  for (const Peer& peer : relay_state.peers) {
++    next.peers += peer.session != 0;
++    next.peers_heard += peer.heard;
++  }
++  if (!(next == relay_state.status)) {
++    relay_state.status = std::move(next);
++    ++relay_state.status_version;
++  }
++}
++
++void EndSession() {
++  for (Broker& broker : relay_state.brokers) {
++    if (broker.socket != kInvalidSocket) {
++      if (!relay_state.exiting && relay_state.host && broker.connected) {
++        Queue(broker, net::MqttPublish(relay_wire::HostTopic(relay_state.code), nullptr, 0, true));
++        Queue(broker, net::MqttDisconnect());
++        FlushBroker(broker);
++      }
++      Close(broker.socket);
++      broker.socket = kInvalidSocket;
++    }
++  }
++  if (relay_state.side >= 0) {
++    system_link::CloseSideSocket(relay_state.side);
++    relay_state.side = -1;
++  }
++  {
++    std::lock_guard lock(relay_state.classify_mutex);
++    relay_state.in_flight.clear();
++    relay_state.in_flight_count = 0;
++    relay_state.endpoints = {};
++  }
++  relay_state.peers.clear();
++  relay_state.brokers.clear();
++  relay_state.stun_servers.clear();
++  relay_state.active = false;
++  relay_state.tag_session = 0;
++  UpdateStatus();
++}
++
++void BeginSession(bool host, uint32_t code_ip, uint32_t public_ip) {
++  EndSession();
++  relay_state.active = true;
++  relay_state.host = host;
++  relay_state.code_ip = code_ip;
++  relay_state.public_ip = public_ip;
++  relay_state.code = join_code::Plain(code_ip);
++  do {
++    relay_state.session = relay_state.random();
++  } while (!relay_state.session);
++  relay_state.started = Clock::now();
++  relay_state.next_stun = relay_state.started;
++  relay_state.next_join_post = relay_state.started;
++  relay_state.stun_rounds = 0;
++  relay_state.symmetric = false;
++  relay_state.tag_session = 0;
++  system_link::ForgetInternetPeers();
++  bool bound = false;
++  relay_state.side = system_link::OpenSideSocket(system_link::HostPort(1002), &bound);
++  const auto stun = HostList(REXCVAR_GET(net_online_stun), 3478);
++  for (const auto& [name, port] : stun) {
++    const auto address = Resolve(name, port, SOCK_DGRAM);
++    if (!address) {
++      continue;
++    }
++    bool duplicate = false;
++    for (const sockaddr_in& existing : relay_state.stun_servers) {
++      duplicate |= existing.sin_addr.s_addr == address->sin_addr.s_addr;
++    }
++    if (!duplicate) {
++      relay_state.stun_servers.push_back(*address);
++    }
++    if (relay_state.stun_servers.size() == 2) {
++      break;
++    }
++  }
++  for (const auto& [name, port] : HostList(REXCVAR_GET(net_online_brokers), 1883)) {
++    if (relay_state.brokers.size() == 8) {
++      break;
++    }
++    Broker broker;
++    broker.name = name + ":" + std::to_string(port);
++    broker.host = name;
++    broker.port = port;
++    const auto address = Resolve(name, port, SOCK_STREAM);
++    if (address) {
++      broker.address = *address;
++      relay_state.brokers.push_back(std::move(broker));
++    }
++  }
++  if (!host) {
++    Peer guess;
++    guess.public_ip = code_ip;
++    guess.count = 3;
++    for (int i = 0; i < 3; ++i) {
++      const uint16_t port = system_link::HostPort(uint16_t(1000 + i));
++      guess.endpoints[i] = {port, code_ip, port, 0};
++      system_link::SeedInternetPeer(code_ip, uint16_t(1000 + i), port, 0);
++    }
++    guess.punch_until = relay_state.started + std::chrono::seconds(10);
++    relay_state.peers.push_back(guess);
++  }
++  UpdateStatus();
++}
++
++void Tick() {
++  SendStun();
++  system_link::PumpSideSocket();
++  const auto now = Clock::now();
++  for (Broker& broker : relay_state.brokers) {
++    if (broker.socket == kInvalidSocket) {
++      if (now >= broker.next_attempt) {
++        BeginBroker(broker);
++      }
++      continue;
++    }
++    if (now - broker.connected_at > std::chrono::seconds(6) && !broker.connected) {
++      DropBroker(broker);
++      continue;
++    }
++    ReadBroker(broker);
++    if (broker.socket == kInvalidSocket) {
++      continue;
++    }
++    if (now - broker.last_sent >= std::chrono::seconds(20)) {
++      Queue(broker, net::MqttPing());
++    }
++    if (now - broker.last_received >= std::chrono::seconds(45)) {
++      DropBroker(broker);
++      continue;
++    }
++    FlushBroker(broker);
++  }
++  UpdatePeers();
++  PunchPeers();
++  PostEndpoints();
++  for (Broker& broker : relay_state.brokers) {
++    if (broker.socket != kInvalidSocket) {
++      FlushBroker(broker);
++    }
++  }
++  {
++    std::lock_guard lock(relay_state.classify_mutex);
++    std::erase_if(relay_state.in_flight, [&](const InFlight& request) { return request.expires < now; });
++    relay_state.in_flight_count = relay_state.in_flight.size();
++  }
++  UpdateStatus();
++}
++
++void Worker() {
++  while (true) {
++    std::unique_lock lock(relay_state.mutex);
++    relay_state.wake.wait(lock, [] {
++      return relay_state.shutdown || relay_state.pending || relay_state.active;
++    });
++    if (relay_state.shutdown) {
++      lock.unlock();
++      EndSession();
++      return;
++    }
++    if (relay_state.pending) {
++      relay_state.pending = false;
++      relay_state.handled = relay_state.generation;
++      const bool host = relay_state.requested_host;
++      const uint32_t code = relay_state.requested_code;
++      const uint32_t public_ip = relay_state.requested_public;
++      lock.unlock();
++      BeginSession(host, code, public_ip);
++      continue;
++    }
++    if (!relay_state.active) {
++      continue;
++    }
++    const uint64_t generation = relay_state.generation;
++    lock.unlock();
++    Tick();
++    lock.lock();
++    if (relay_state.generation != generation) {
++      if (!relay_state.pending) {
++        lock.unlock();
++        EndSession();
++      }
++      continue;
++    }
++    relay_state.wake.wait_for(lock, std::chrono::milliseconds(50), [&] {
++      return relay_state.shutdown || relay_state.pending || relay_state.generation != generation;
++    });
++  }
++}
++
++void EnsureWorker() {
++  if (!relay_state.worker.joinable() && !relay_state.shutdown) {
++    relay_state.worker = std::thread(Worker);
++  }
++}
++
++}  // namespace
++
++Datagram Classify(uint16_t local_port, uint32_t ip, uint16_t port, const uint8_t* data, int size) {
++  if (data && size >= 18 && std::memcmp(data, "BO2ZMPCH", 8) == 0) {
++    return Datagram::kPunch;
++  }
++  if (!data || size < 20 || data[0] != 0x01 || (data[1] != 0x01 && data[1] != 0x11) ||
++      data[4] != 0x21 || data[5] != 0x12 || data[6] != 0xA4 || data[7] != 0x42) {
++    return Datagram::kTitle;
++  }
++  if (!relay_state.in_flight_count.load(std::memory_order_acquire)) {
++    return Datagram::kStun;
++  }
++  std::lock_guard lock(relay_state.classify_mutex);
++  const int port_index = PortIndex(local_port);
++  for (auto it = relay_state.in_flight.begin(); it != relay_state.in_flight.end(); ++it) {
++    if (port_index >= 0 && it->port != port_index) {
++      continue;
++    }
++    if (!net::StunTransactionMatches(data, size, it->transaction)) {
++      continue;
++    }
++    if (data[1] == 0x01) {
++      const auto mapped = net::ParseStunResponse(data, size, it->transaction);
++      if (mapped) {
++        auto& observed = relay_state.endpoints[it->port].observed[it->server];
++        observed = *mapped;
++        const auto& other = relay_state.endpoints[it->port].observed[1 - it->server];
++        if (other && (other->ip != mapped->ip || other->port != mapped->port)) {
++          relay_state.symmetric = true;
++        }
++      }
++    }
++    relay_state.in_flight.erase(it);
++    relay_state.in_flight_count = relay_state.in_flight.size();
++    break;
++  }
++  return Datagram::kStun;
++}
++
++namespace relay {
++
++void Start(bool host, uint32_t code_ip, uint32_t public_ip) {
++  if (!REXCVAR_GET(net_online_punch) || HostList(REXCVAR_GET(net_online_brokers), 1883).empty()) {
++    REXSYS_INFO("[online] relay disabled");
++    return;
++  }
++  std::lock_guard lock(relay_state.mutex);
++  if (relay_state.shutdown) {
++    return;
++  }
++  EnsureWorker();
++  relay_state.requested_host = host;
++  relay_state.requested_code = code_ip;
++  relay_state.requested_public = public_ip;
++  relay_state.pending = true;
++  ++relay_state.generation;
++  relay_state.tag_session = 0;
++  relay_state.wake.notify_all();
++}
++
++void Stop() {
++  std::lock_guard lock(relay_state.mutex);
++  if (!relay_state.active && !relay_state.pending) {
++    return;
++  }
++  relay_state.pending = false;
++  ++relay_state.generation;
++  relay_state.tag_session = 0;
++  relay_state.wake.notify_all();
++}
++
++void Shutdown() {
++  {
++    std::lock_guard lock(relay_state.mutex);
++    if (relay_state.shutdown) {
++      return;
++    }
++    relay_state.shutdown = true;
++    relay_state.pending = false;
++    ++relay_state.generation;
++    relay_state.tag_session = 0;
++    relay_state.wake.notify_all();
++  }
++  if (relay_state.worker.joinable()) {
++    relay_state.worker.join();
++  }
++}
++
++Status Current() {
++  std::lock_guard lock(relay_state.mutex);
++  return relay_state.status;
++}
++
++uint64_t Version() {
++  return relay_state.status_version.load(std::memory_order_acquire);
++}
++
++uint64_t TagSession() {
++  return relay_state.tag_session.load(std::memory_order_acquire);
++}
++
++}  // namespace relay
++}  // namespace rex::system::online
+diff --git a/src/system/system_link.cpp b/src/system/system_link.cpp
+index 78c1122a..83c8bfae 100644
+--- a/src/system/system_link.cpp
++++ b/src/system/system_link.cpp
+@@ -1,19 +1,71 @@
+ // SPDX-License-Identifier: 0BSD
++#include <algorithm>
+ #include <atomic>
++#include <chrono>
++#include <mutex>
+ 
++#include <rex/cvar.h>
+ #include <rex/instance_env.h>
+ #include <rex/logging.h>
++#include <rex/system/online_link.h>
+ #include <rex/system/system_link.h>
+ 
++#if REX_PLATFORM_WIN32
++#include <WinSock2.h>
++#include <WS2tcpip.h>
++#else
++#include <arpa/inet.h>
++#include <ifaddrs.h>
++#include <net/if.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#endif
++
++REXCVAR_DEFINE_INT32(net_system_port_offset, 30000, "Kernel",
++                     "Host-port offset for System Link guest ports below 1024");
++
+ namespace rex::system::system_link {
+ 
+ namespace {
+ 
+-// A privileged guest port P uses slot P % 16 of a copy's block. Which P that was cannot be read
+-// back from the host port, so each slot remembers the last guest port this process mapped to it
+-// (the copies run the same title, so they use the same ports).
+ std::atomic<uint16_t> privileged_slot_ports[kPortsPerInstance];
+ 
++struct LanCache {
++  std::mutex mutex;
++  std::chrono::steady_clock::time_point sampled{};
++  bool valid = false;
++  uint32_t ip = 0;
++  uint32_t mask = 0;
++};
++
++LanCache lan_cache;
++
++bool SampleLanAddress(uint32_t* ip, uint32_t* mask) {
++#if REX_PLATFORM_WIN32
++  return false;
++#else
++  ifaddrs* interfaces = nullptr;
++  if (getifaddrs(&interfaces) != 0) {
++    return false;
++  }
++  bool found = false;
++  for (ifaddrs* it = interfaces; it && !found; it = it->ifa_next) {
++    if (!it->ifa_addr || it->ifa_addr->sa_family != AF_INET || !it->ifa_netmask ||
++        !it->ifa_broadaddr || !(it->ifa_flags & IFF_UP) || (it->ifa_flags & IFF_LOOPBACK) ||
++        !(it->ifa_flags & IFF_BROADCAST)) {
++      continue;
++    }
++    const auto* address = reinterpret_cast<const sockaddr_in*>(it->ifa_addr);
++    const auto* netmask = reinterpret_cast<const sockaddr_in*>(it->ifa_netmask);
++    *ip = ntohl(address->sin_addr.s_addr);
++    *mask = ntohl(netmask->sin_addr.s_addr);
++    found = true;
++  }
++  freeifaddrs(interfaces);
++  return found;
++#endif
++}
++
+ }  // namespace
+ 
+ std::optional<uint32_t> ParseInstance(const char* value) {
+@@ -68,6 +120,31 @@ uint16_t HostPort(uint32_t instance, uint16_t guest_port) {
+   return guest_port;
+ }
+ 
++uint16_t HostPort(uint16_t guest_port) {
++  if (auto instance = LocalInstance()) {
++    return HostPort(*instance, guest_port);
++  }
++  if (guest_port > 0 && guest_port < 1024) {
++    const int32_t offset = std::max(0, std::min(64511, REXCVAR_GET(net_system_port_offset)));
++    return uint16_t(guest_port + offset);
++  }
++  return guest_port;
++}
++
++uint16_t GuestPort(uint16_t host_port) {
++  if (LocalInstance()) {
++    if (auto endpoint = GuestEndpointOfHostPort(host_port)) {
++      return endpoint->port;
++    }
++    return host_port;
++  }
++  const int32_t offset = std::max(0, std::min(64511, REXCVAR_GET(net_system_port_offset)));
++  if (host_port > offset && host_port <= offset + 1023) {
++    return uint16_t(host_port - offset);
++  }
++  return host_port;
++}
++
+ std::optional<GuestEndpoint> GuestEndpointOfHostPort(uint16_t host_port) {
+   if (host_port >= kSystemLinkPort &&
+       host_port < kSystemLinkPort + kPortsPerInstance * kMaxInstances &&
+@@ -80,7 +157,6 @@ std::optional<GuestEndpoint> GuestEndpointOfHostPort(uint16_t host_port) {
+     const uint32_t offset = host_port - kPrivilegedPortBase;
+     const uint16_t guest_port =
+         privileged_slot_ports[offset % kPortsPerInstance].load(std::memory_order_relaxed);
+-    // A slot this process never used: the host port itself still reaches that socket.
+     return GuestEndpoint{offset / kPortsPerInstance, guest_port ? guest_port : host_port};
+   }
+   return std::nullopt;
+@@ -90,4 +166,56 @@ bool IsBroadcastAddress(uint32_t address) {
+   return address == 0xFFFFFFFF || (address & 0xFF) == 0xFF;
+ }
+ 
++bool LanAddress(uint32_t* ip, uint32_t* mask) {
++  std::lock_guard lock(lan_cache.mutex);
++  const auto now = std::chrono::steady_clock::now();
++  if (now - lan_cache.sampled >= std::chrono::seconds(5)) {
++    lan_cache.valid = SampleLanAddress(&lan_cache.ip, &lan_cache.mask);
++    lan_cache.sampled = now;
++  }
++  if (ip) {
++    *ip = lan_cache.ip;
++  }
++  if (mask) {
++    *mask = lan_cache.mask;
++  }
++  return lan_cache.valid;
++}
++
++bool TitleAddress(uint32_t* ip) {
++  if (!ip) {
++    return false;
++  }
++  if (auto instance = LocalInstance()) {
++    *ip = InstanceAddress(*instance);
++    return true;
++  }
++  const uint32_t public_ip = online::PublicAddress();
++  if (public_ip) {
++    *ip = public_ip;
++    return true;
++  }
++  if (LanAddress(ip, nullptr)) {
++    return true;
++  }
++  *ip = kLoopbackAddress;
++  return true;
++}
++
++bool IsSelf(uint32_t ip) {
++  uint32_t own = 0;
++  TitleAddress(&own);
++  if (ip == own || ip == kLoopbackAddress) {
++    return true;
++  }
++  uint32_t lan = 0;
++  return LanAddress(&lan, nullptr) && ip == lan;
++}
++
++bool OnLan(uint32_t ip) {
++  uint32_t lan = 0;
++  uint32_t mask = 0;
++  return LanAddress(&lan, &mask) && (ip & mask) == (lan & mask);
++}
++
+ }  // namespace rex::system::system_link
+diff --git a/src/system/system_link_socket.cpp b/src/system/system_link_socket.cpp
+new file mode 100644
+index 00000000..aec92bc6
+--- /dev/null
++++ b/src/system/system_link_socket.cpp
+@@ -0,0 +1,552 @@
++// SPDX-License-Identifier: 0BSD
++#include <rex/platform.h>
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cstring>
++#include <deque>
++#include <map>
++#include <mutex>
++#include <vector>
++
++#include <rex/logging.h>
++#include <rex/system/online_link.h>
++#include <rex/system/online_relay.h>
++#include <rex/system/system_link.h>
++#include <rex/system/xsocket.h>
++
++#include "system_link_socket.h"
++
++#if REX_PLATFORM_WIN32
++#include <WinSock2.h>
++#include <WS2tcpip.h>
++#else
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <unistd.h>
++#endif
++
++namespace rex::system::system_link {
++namespace {
++
++using Clock = std::chrono::steady_clock;
++
++sockaddr_in HostAddress(uint32_t ip, uint16_t port) {
++  sockaddr_in address{};
++#if REX_PLATFORM_MAC
++  address.sin_len = sizeof(address);
++#endif
++  address.sin_family = AF_INET;
++  address.sin_addr.s_addr = htonl(ip);
++  address.sin_port = htons(port);
++  return address;
++}
++
++int SendRaw(int64_t socket, uint32_t ip, uint16_t port, const uint8_t* data, size_t size,
++            int flags) {
++  if (socket < 0) {
++    return -1;
++  }
++  const auto address = HostAddress(ip, port);
++  return int(sendto(socket, reinterpret_cast<const char*>(data), int(size), flags,
++                    reinterpret_cast<const sockaddr*>(&address), sizeof(address)));
++}
++
++struct Console {
++  uint32_t public_ip = 0;
++  uint64_t session = 0;
++  uint32_t lan_ip = 0;
++  uint32_t stand_in = 0;
++  std::array<uint16_t, 3> seeded{};
++  std::array<uint16_t, 3> heard_ports{};
++  std::array<Clock::time_point, 3> heard{};
++};
++
++struct PeerObservation {
++  uint32_t ip = 0;
++  Clock::time_point heard{};
++};
++
++struct SidePacket {
++  std::vector<uint8_t> data;
++  uint32_t ip = 0;
++  uint16_t port = 0;
++};
++
++struct SocketState {
++  std::mutex mutex;
++  std::map<int64_t, uint16_t> title_sockets;
++  std::vector<Console> consoles;
++  std::map<uint16_t, PeerObservation> last_peer;
++  int64_t side = -1;
++  int side_users = 0;
++  uint16_t side_port = 0;
++  bool side_bound = false;
++  std::deque<SidePacket> side_packets;
++};
++
++SocketState state;
++
++int PortIndex(uint16_t guest_port) {
++  if (guest_port >= 1000 && guest_port <= 1002) {
++    return guest_port - 1000;
++  }
++  return -1;
++}
++
++Console& ConsoleFor(uint32_t public_ip, uint64_t session) {
++  for (Console& console : state.consoles) {
++    if (console.public_ip == public_ip && (!session || !console.session || console.session == session)) {
++      if (session) {
++        console.session = session;
++      }
++      return console;
++    }
++  }
++  if (state.consoles.size() >= 32) {
++    state.consoles.erase(state.consoles.begin());
++  }
++  Console console;
++  console.public_ip = public_ip;
++  console.session = session;
++  const uint32_t own = online::PublicAddress();
++  const bool shared = own && own == public_ip;
++  for (const Console& other : state.consoles) {
++    if (other.public_ip == public_ip && other.stand_in) {
++      console.stand_in = 0xF0420000u + uint32_t(state.consoles.size() % 250 + 1);
++      break;
++    }
++  }
++  if (shared && !console.stand_in) {
++    console.stand_in = 0xF0420000u + uint32_t(state.consoles.size() % 250 + 1);
++  }
++  state.consoles.push_back(console);
++  return state.consoles.back();
++}
++
++Console* FindConsole(uint32_t title_ip) {
++  for (Console& console : state.consoles) {
++    if (console.public_ip == title_ip || console.stand_in == title_ip) {
++      return &console;
++    }
++  }
++  return nullptr;
++}
++
++uint32_t TitleViewUnlocked(uint32_t ip) {
++  Console* console = FindConsole(ip);
++  return console && console->stand_in ? console->stand_in : ip;
++}
++
++uint32_t TitleView(uint32_t ip) {
++  std::lock_guard lock(state.mutex);
++  return TitleViewUnlocked(ip);
++}
++
++void NoteHeardLocked(uint32_t ip, uint16_t source_port, uint16_t guest_port, uint64_t session) {
++  const auto now = Clock::now();
++  state.last_peer[guest_port] = {TitleViewUnlocked(ip), now};
++  Console& console = ConsoleFor(ip, session);
++  const int index = PortIndex(guest_port);
++  if (index >= 0) {
++    console.heard_ports[index] = source_port;
++    console.heard[index] = now;
++  }
++}
++
++void NoteHeard(uint32_t ip, uint16_t source_port, uint16_t guest_port, uint64_t session = 0) {
++  std::lock_guard lock(state.mutex);
++  NoteHeardLocked(ip, source_port, guest_port, session);
++}
++
++uint32_t Read32(const uint8_t* bytes) {
++  return (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
++         (uint32_t(bytes[2]) << 8) | bytes[3];
++}
++
++uint64_t Read64(const uint8_t* bytes) {
++  return (uint64_t(Read32(bytes)) << 32) | Read32(bytes + 4);
++}
++
++void Write32(uint8_t* out, uint32_t value) {
++  out[0] = uint8_t(value >> 24);
++  out[1] = uint8_t(value >> 16);
++  out[2] = uint8_t(value >> 8);
++  out[3] = uint8_t(value);
++}
++
++void Write64(uint8_t* out, uint64_t value) {
++  Write32(out, uint32_t(value >> 32));
++  Write32(out + 4, uint32_t(value));
++}
++
++void ConsumeRelayLocked(uint32_t ip, uint16_t port, const uint8_t* data, int size) {
++  if (size >= 18 && std::memcmp(data, "BO2ZMPCH", 8) == 0) {
++    const uint64_t session = Read64(data + 8);
++    const uint16_t guest_port = uint16_t(data[16] << 8 | data[17]);
++    Console& peer = ConsoleFor(ip, session);
++    const int index = PortIndex(guest_port);
++    if (index >= 0) {
++      peer.seeded[index] = port;
++    }
++    NoteHeardLocked(ip, port, guest_port, session);
++  }
++}
++
++void ConsumeRelay(uint32_t ip, uint16_t port, const uint8_t* data, int size) {
++  std::lock_guard lock(state.mutex);
++  ConsumeRelayLocked(ip, port, data, size);
++}
++
++void PumpSideSocketLocked() {
++  if (state.side < 0) {
++    return;
++  }
++  while (true) {
++    uint8_t buffer[65536];
++    sockaddr_in source{};
++    socklen_t source_size = sizeof(source);
++    const int count = recvfrom(state.side, reinterpret_cast<char*>(buffer), sizeof(buffer), 0,
++                               reinterpret_cast<sockaddr*>(&source), &source_size);
++    if (count <= 0) {
++      break;
++    }
++    uint32_t ip = ntohl(source.sin_addr.s_addr);
++    uint16_t port = ntohs(source.sin_port);
++    const online::Datagram kind = online::Classify(state.side_port, ip, port, buffer, count);
++    if (kind != online::Datagram::kTitle) {
++      if (kind == online::Datagram::kPunch) {
++        ConsumeRelayLocked(ip, port, buffer, count);
++      }
++      continue;
++    }
++    if (state.side_packets.size() >= 64) {
++      state.side_packets.pop_front();
++    }
++    state.side_packets.push_back(
++        {std::vector<uint8_t>(buffer, buffer + count), TitleViewUnlocked(ip), port});
++    NoteHeardLocked(ip, port, 1002, 0);
++  }
++}
++
++}  // namespace
++
++void RegisterTitleSocket(int64_t socket, uint16_t guest_port) {
++  if (guest_port > 0 && guest_port < 1024) {
++    std::lock_guard lock(state.mutex);
++    state.title_sockets[socket] = guest_port;
++  }
++}
++
++void UnregisterTitleSocket(int64_t socket) {
++  std::lock_guard lock(state.mutex);
++  state.title_sockets.erase(socket);
++}
++
++bool FilterTitlePacket(uint16_t guest_port, uint32_t* ip, uint16_t* port, const uint8_t* data,
++                       int size) {
++  const online::Datagram kind = online::Classify(HostPort(guest_port), *ip, *port, data, size);
++  if (kind != online::Datagram::kTitle) {
++    if (kind == online::Datagram::kPunch) {
++      ConsumeRelay(*ip, *port, data, size);
++    }
++    return false;
++  }
++  if (!IsSelf(*ip)) {
++    NoteHeard(*ip, *port, guest_port);
++  }
++  if (online::PublicAddress() && !OnLan(*ip) && !IsSelf(*ip)) {
++    *ip = TitleView(*ip);
++    *port = guest_port;
++  }
++  return true;
++}
++
++bool SendOnline(int64_t socket, uint32_t ip, uint16_t guest_port, uint16_t host_port,
++                const uint8_t* data, size_t size, int flags, int* result) {
++  if (!online::PublicAddress()) {
++    return false;
++  }
++  std::lock_guard lock(state.mutex);
++  Console* console = FindConsole(ip);
++  const bool internet = console || (!OnLan(ip) && !IsSelf(ip));
++  if (!internet) {
++    return false;
++  }
++  uint32_t destination = console ? console->public_ip : ip;
++  uint16_t destination_port = host_port;
++  const int index = PortIndex(guest_port);
++  if (console && index >= 0 && host_port == HostPort(guest_port)) {
++    if (console->heard_ports[index]) {
++      destination_port = console->heard_ports[index];
++    } else if (console->seeded[index]) {
++      destination_port = console->seeded[index];
++    }
++  }
++  *result = SendRaw(socket, destination, destination_port, data, size, flags);
++  return true;
++}
++
++void BroadcastOnline(int64_t socket, uint16_t guest_port, const uint8_t* data, size_t size,
++                     int flags) {
++  if (!online::PublicAddress() || guest_port == 0 || guest_port >= 1024) {
++    return;
++  }
++  std::vector<std::pair<uint32_t, uint16_t>> targets;
++  {
++    std::lock_guard lock(state.mutex);
++    const auto now = Clock::now();
++    const int index = PortIndex(guest_port);
++    for (Console& console : state.consoles) {
++      if (index >= 0 && console.heard_ports[index] &&
++          now - console.heard[index] <= std::chrono::seconds(15)) {
++        targets.emplace_back(console.public_ip, console.heard_ports[index]);
++      } else if (index >= 0 && console.seeded[index]) {
++        targets.emplace_back(console.public_ip, console.seeded[index]);
++      }
++    }
++    const uint32_t target = online::Target();
++    if (target) {
++      uint16_t port = HostPort(guest_port);
++      if (Console* console = FindConsole(target)) {
++        if (index >= 0 && console->heard_ports[index]) {
++          port = console->heard_ports[index];
++        } else if (index >= 0 && console->seeded[index]) {
++          port = console->seeded[index];
++        }
++      }
++      targets.emplace_back(target, port);
++    }
++  }
++  std::sort(targets.begin(), targets.end());
++  targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
++  for (const auto& [ip, port] : targets) {
++    SendRaw(socket, ip, port, data, size, flags);
++  }
++}
++
++bool LastPeer(uint16_t guest_port, uint32_t* ip, int64_t* age_ms) {
++  std::lock_guard lock(state.mutex);
++  const auto peer = state.last_peer.find(guest_port);
++  if (peer == state.last_peer.end()) {
++    return false;
++  }
++  if (ip) {
++    *ip = peer->second.ip;
++  }
++  if (age_ms) {
++    *age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
++                                                                   peer->second.heard)
++                  .count();
++  }
++  return true;
++}
++
++int64_t OpenSideSocket(uint16_t port, bool* bound) {
++  std::lock_guard lock(state.mutex);
++  if (state.side >= 0) {
++    ++state.side_users;
++    if (bound) {
++      *bound = state.side_bound;
++    }
++    return state.side;
++  }
++  const int64_t socket = ::socket(AF_INET, SOCK_DGRAM, 0);
++  if (socket < 0) {
++    return -1;
++  }
++#if REX_PLATFORM_WIN32
++  u_long enabled = 1;
++  ioctlsocket(socket, FIONBIO, &enabled);
++#else
++  const int current = fcntl(socket, F_GETFL, 0);
++  fcntl(socket, F_SETFL, current | O_NONBLOCK);
++#endif
++  int enabled = 1;
++  setsockopt(socket, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&enabled),
++             sizeof(enabled));
++  const auto address = HostAddress(0, port);
++  state.side_bound = bind(socket, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0;
++  state.side = socket;
++  state.side_users = 1;
++  state.side_port = port;
++  if (bound) {
++    *bound = state.side_bound;
++  }
++  return socket;
++}
++
++void CloseSideSocket(int64_t socket) {
++  std::lock_guard lock(state.mutex);
++  if (socket != state.side || state.side < 0) {
++    return;
++  }
++  if (--state.side_users > 0) {
++    return;
++  }
++#if REX_PLATFORM_WIN32
++  closesocket(state.side);
++#else
++  close(state.side);
++#endif
++  state.side = -1;
++  state.side_port = 0;
++  state.side_bound = false;
++  state.side_packets.clear();
++}
++
++int SideSend(int64_t socket, uint32_t ip, uint16_t port, const void* data, uint32_t size) {
++  int result = -1;
++  if (SendOnline(socket, ip, 1002, port, static_cast<const uint8_t*>(data), size, 0, &result)) {
++    return result;
++  }
++  return SendRaw(socket, ip, port, static_cast<const uint8_t*>(data), size, 0);
++}
++
++int SideReceive(int64_t socket, void* data, uint32_t capacity, uint32_t* ip, uint16_t* port) {
++  std::lock_guard lock(state.mutex);
++  if (socket != state.side) {
++    return -1;
++  }
++  PumpSideSocketLocked();
++  if (state.side_packets.empty()) {
++    return -1;
++  }
++  SidePacket packet = std::move(state.side_packets.front());
++  state.side_packets.pop_front();
++  const size_t copied = std::min<size_t>(capacity, packet.data.size());
++  std::memcpy(data, packet.data.data(), copied);
++  if (ip) {
++    *ip = packet.ip;
++  }
++  if (port) {
++    *port = packet.port;
++  }
++  return int(copied);
++}
++
++void PumpSideSocket() {
++  std::lock_guard lock(state.mutex);
++  PumpSideSocketLocked();
++}
++
++int SendFromPort(uint16_t host_port, uint32_t ip, uint16_t port, const void* data, size_t size) {
++  int64_t socket = -1;
++  {
++    std::lock_guard lock(state.mutex);
++    if (state.side >= 0 && state.side_port == host_port) {
++      socket = state.side;
++    } else {
++      for (const auto& [handle, guest] : state.title_sockets) {
++        if (HostPort(guest) == host_port) {
++          socket = handle;
++          break;
++        }
++      }
++    }
++  }
++  return SendRaw(socket, ip, port, static_cast<const uint8_t*>(data), size, 0);
++}
++
++void SeedInternetPeer(uint32_t ip, uint16_t guest_port, uint16_t host_port, uint64_t console) {
++  std::lock_guard lock(state.mutex);
++  Console& peer = ConsoleFor(ip, console);
++  const int index = PortIndex(guest_port);
++  if (index >= 0) {
++    peer.seeded[index] = host_port;
++  }
++}
++
++bool HeardInternetPeer(uint32_t ip, uint16_t host_port, uint16_t* guest_port) {
++  std::lock_guard lock(state.mutex);
++  Console* peer = FindConsole(ip);
++  if (!peer) {
++    return false;
++  }
++  for (size_t i = 0; i < 3; ++i) {
++    if (peer->heard_ports[i] == host_port && peer->seeded[i]) {
++      if (guest_port) {
++        *guest_port = uint16_t(1000 + i);
++      }
++      return true;
++    }
++  }
++  return false;
++}
++
++void ForgetInternetPeers() {
++  std::lock_guard lock(state.mutex);
++  state.consoles.clear();
++}
++
++void NameConsoleLan(uint32_t ip, uint64_t console, uint32_t lan_ip) {
++  std::lock_guard lock(state.mutex);
++  ConsoleFor(ip, console).lan_ip = lan_ip;
++}
++
++void MakeXnAddr(uint32_t ip, uint8_t out[36]) {
++  std::memset(out, 0, 36);
++  Write32(out, ip);
++  out[10] = 0x02;
++  out[11] = 0x42;
++  Write32(out + 12, ip);
++}
++
++void MakeOwnXnAddr(uint8_t out[36]) {
++  uint32_t ip = 0;
++  TitleAddress(&ip);
++  MakeXnAddr(ip, out);
++  const uint64_t session = online::relay::TagSession();
++  if (online::PublicAddress() && session) {
++    uint32_t lan = 0;
++    LanAddress(&lan, nullptr);
++    out[16] = 'B';
++    out[17] = 'Z';
++    out[18] = 1;
++    out[19] = 0;
++    Write64(out + 20, session);
++    Write32(out + 28, lan);
++  }
++}
++
++void MakeTitleXnAddr(uint32_t ip, uint8_t out[36]) {
++  std::lock_guard lock(state.mutex);
++  Console* console = FindConsole(ip);
++  if (!console) {
++    MakeXnAddr(ip, out);
++    return;
++  }
++  MakeXnAddr(console->stand_in ? console->stand_in : console->public_ip, out);
++  if (console->session) {
++    out[16] = 'B';
++    out[17] = 'Z';
++    out[18] = 1;
++    Write64(out + 20, console->session);
++    Write32(out + 28, console->lan_ip);
++  }
++}
++
++uint32_t XnAddrToTitleIp(const uint8_t address[36]) {
++  const uint32_t ip = Read32(address);
++  if (address[16] != 'B' || address[17] != 'Z' || address[18] != 1) {
++    return ip;
++  }
++  const uint64_t session = Read64(address + 20);
++  const uint32_t lan = Read32(address + 28);
++  if (session == online::relay::TagSession()) {
++    return ip;
++  }
++  std::lock_guard lock(state.mutex);
++  Console& console = ConsoleFor(ip, session);
++  console.lan_ip = lan;
++  const uint32_t own = online::PublicAddress();
++  if (own && ip == own) {
++    return lan;
++  }
++  return console.stand_in ? console.stand_in : ip;
++}
++
++}  // namespace rex::system::system_link
+diff --git a/src/system/system_link_socket.h b/src/system/system_link_socket.h
+new file mode 100644
+index 00000000..b84a5fa6
+--- /dev/null
++++ b/src/system/system_link_socket.h
+@@ -0,0 +1,18 @@
++// SPDX-License-Identifier: 0BSD
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++
++namespace rex::system::system_link {
++
++void RegisterTitleSocket(int64_t socket, uint16_t guest_port);
++void UnregisterTitleSocket(int64_t socket);
++bool FilterTitlePacket(uint16_t guest_port, uint32_t* ip, uint16_t* port, const uint8_t* data,
++                       int size);
++bool SendOnline(int64_t socket, uint32_t ip, uint16_t guest_port, uint16_t host_port,
++                const uint8_t* data, size_t size, int flags, int* result);
++void BroadcastOnline(int64_t socket, uint16_t guest_port, const uint8_t* data, size_t size,
++                     int flags);
++
++}  // namespace rex::system::system_link
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index 5fbf1abc..84881520 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -1,3 +1,4 @@
++// SPDX-License-Identifier: BSD-3-Clause
+ /**
+  ******************************************************************************
+  * Xenia : Xbox 360 Emulator Research Project                                 *
+@@ -21,6 +22,8 @@
+ 
+ #include <rex/net/socket.h>
+ 
++#include "system_link_socket.h"
++
+ // Standard socket types used by Xbox API emulation
+ #if REX_PLATFORM_WIN32
+ #include <WinSock2.h>
+@@ -80,7 +83,12 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
+ }
+ 
+ X_STATUS XSocket::Close() {
++  if (native_handle_ == uint64_t(-1)) {
++    return X_STATUS_SUCCESS;
++  }
++  system_link::UnregisterTitleSocket(native_handle_);
+   int ret = rex::net::socket_close(native_handle_);
++  native_handle_ = -1;
+   if (ret != 0) {
+     return X_STATUS_UNSUCCESSFUL;
+   }
+@@ -131,14 +139,10 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
+ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
+   uint32_t address = name->sin_addr;
+   uint16_t port = name->sin_port;
+-  if (auto instance = system_link::LocalInstance()) {
+-    // Only 127.0.0.1 exists on the host's loopback interface; the copies tell each other apart by
+-    // port instead.
+-    if (system_link::InstanceOfAddress(address)) {
+-      address = system_link::kLoopbackAddress;
+-    }
+-    port = system_link::HostPort(*instance, port);
++  if (system_link::LocalInstance() && system_link::InstanceOfAddress(address)) {
++    address = system_link::kLoopbackAddress;
+   }
++  port = system_link::HostPort(port);
+   sockaddr_in host = HostAddress(address, port);
+   int ret = bind(native_handle_, (sockaddr*)&host, sizeof(host));
+   if (ret < 0) {
+@@ -147,6 +151,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
+ 
+   bound_ = true;
+   bound_port_ = name->sin_port;
++  system_link::RegisterTitleSocket(native_handle_, bound_port_);
+ 
+   return X_STATUS_SUCCESS;
+ }
+@@ -233,6 +238,15 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
+       port = source->port;
+     }
+   }
++  if (bound_ && bound_port_ > 0 && bound_port_ < 1024 &&
++      !system_link::FilterTitlePacket(bound_port_, &address, &port, buf, ret)) {
++#if REX_PLATFORM_WIN32
++    WSASetLastError(WSAEWOULDBLOCK);
++#else
++    errno = EAGAIN;
++#endif
++    return -1;
++  }
+   if (from) {
+     from->sin_family = X_AF_INET;
+     from->sin_addr = address;
+@@ -278,24 +292,29 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+   uint32_t address = to->sin_addr;
+   uint16_t port = to->sin_port;
+   auto instance = system_link::LocalInstance();
+-  if (!instance) {
+-    return send_to(address, port);
+-  }
+-
+   if (system_link::IsBroadcastAddress(address) && system_link::IsMappedPort(port)) {
+-    // The host does not hand a broadcast to other processes' sockets on loopback, so every other
+-    // copy also gets its own unicast copy.
+-    int ret = send_to(address, port);
+-    for (uint32_t other = 0; other < system_link::kMaxInstances; ++other) {
+-      if (other != *instance &&
+-          send_to(system_link::kLoopbackAddress, system_link::HostPort(other, port)) >= 0) {
+-        ret = int(buf_len);
++    system_link::BroadcastOnline(native_handle_, port, buf, buf_len, flags);
++    int ret = send_to(address, system_link::HostPort(port));
++    if (instance) {
++      for (uint32_t other = 0; other < system_link::kMaxInstances; ++other) {
++        if (other != *instance &&
++            send_to(system_link::kLoopbackAddress, system_link::HostPort(other, port)) >= 0) {
++          ret = int(buf_len);
++        }
+       }
+     }
+     return ret;
+   }
+ 
+-  // 127.0.0.1 is this copy itself.
++  int online_result = -1;
++  if (system_link::SendOnline(native_handle_, address, port, system_link::HostPort(port), buf,
++                              buf_len, flags, &online_result)) {
++    return online_result;
++  }
++  if (!instance) {
++    return send_to(address, system_link::HostPort(port));
++  }
++
+   std::optional<uint32_t> target = system_link::InstanceOfAddress(address);
+   if (!target && address == system_link::kLoopbackAddress) {
+     target = instance;
+@@ -303,7 +322,7 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
+   if (target) {
+     return send_to(system_link::kLoopbackAddress, system_link::HostPort(*target, port));
+   }
+-  return send_to(address, port);
++  return send_to(address, system_link::HostPort(*instance, port));
+ }
+ 
+ uint32_t XSocket::LastWinsockError() {
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index 8413bc54..935d71b2 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -1,3 +1,4 @@
++// SPDX-License-Identifier: BSD-3-Clause
+ /**
+  * @file        ui/rex_app.cpp
+  * @brief       ReXApp implementation - compiled as part of the consumer executable
+@@ -29,6 +30,7 @@
+ #include <rex/audio/sdl/sdl_audio_system.h>
+ #include <rex/input/input_system.h>
+ #include <rex/kernel/init.h>
++#include <rex/kernel/xam/text_input.h>
+ #include <rex/string/numeric.h>
+ #include <rex/system.h>
+ #include <rex/system/achievement_manager.h>
+@@ -261,6 +263,9 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
+     if (input_sys) {
+       input_sys->SetActiveCallback([this]() {
++        if (rex::kernel::xam::TextInputOpen()) {
++          return false;
++        }
+         if (!debug_overlay_ && !console_overlay_ && !settings_overlay_ && !achievements_overlay_)
+           return true;
+         return !imgui_drawer_->GetIO().WantCaptureMouse;
+diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
+index bde087f5..c18603d7 100644
+--- a/tests/unit/CMakeLists.txt
++++ b/tests/unit/CMakeLists.txt
+@@ -1,3 +1,4 @@
++# SPDX-License-Identifier: BSD-3-Clause
+ # Unit Tests for ReXGlue core components
+ 
+ add_executable(unit_tests
+@@ -7,6 +8,7 @@ add_executable(unit_tests
+     core/cvar_test.cpp
+     core/game_defaults_test.cpp
+     kernel/session_info_test.cpp
++    kernel/text_input_test.cpp
+     core/fiber_test.cpp
+     core/filesystem_test.cpp
+     core/hash_test.cpp
+@@ -22,6 +24,9 @@ add_executable(unit_tests
+     system/system_link_test.cpp
+     system/join_code_test.cpp
+     system/relay_wire_test.cpp
++    system/online_net_test.cpp
++    system/online_relay_test.cpp
++    system/online_link_test.cpp
+     system/achievement_manager_test.cpp
+     system/function_dispatcher_test.cpp
+     input/input_assignment_test.cpp
+diff --git a/tests/unit/kernel/session_info_test.cpp b/tests/unit/kernel/session_info_test.cpp
+index 1e03face..112afdea 100644
+--- a/tests/unit/kernel/session_info_test.cpp
++++ b/tests/unit/kernel/session_info_test.cpp
+@@ -5,6 +5,7 @@
+ #include <cstring>
+ 
+ #include <rex/kernel/xam/session_info.h>
++#include <rex/system/system_link.h>
+ 
+ using namespace rex::kernel::xam;
+ 
+@@ -24,12 +25,21 @@ TEST_CASE("Host session info has a system-link id, the host address and a key",
+   }
+ }
+ 
+-TEST_CASE("Title address is loopback with the 0xCC placeholder MAC", "[session_info]") {
++TEST_CASE("Title address carries the System Link identity", "[session_info]") {
+   uint8_t host[kXnAddrSize];
+   GetTitleXnAddrBytes(host);
++  uint32_t lan = 0;
+   const uint8_t loopback[4] = {127, 0, 0, 1};
+-  CHECK(std::memcmp(host, loopback, 4) == 0);
+-  for (int i = 0; i < 6; ++i) CHECK(host[10 + i] == 0xCC);
++  if (rex::system::system_link::LanAddress(&lan, nullptr)) {
++    const uint8_t expected[4] = {uint8_t(lan >> 24), uint8_t(lan >> 16), uint8_t(lan >> 8),
++                                 uint8_t(lan)};
++    CHECK(std::memcmp(host, expected, 4) == 0);
++    CHECK(std::memcmp(host + 12, expected, 4) == 0);
++  } else {
++    CHECK(std::memcmp(host, loopback, 4) == 0);
++  }
++  CHECK(host[10] == 0x02);
++  CHECK(host[11] == 0x42);
+ }
+ 
+ TEST_CASE("Session ids and keys differ between creates", "[session_info]") {
+diff --git a/tests/unit/kernel/text_input_test.cpp b/tests/unit/kernel/text_input_test.cpp
+new file mode 100644
+index 00000000..b25771f1
+--- /dev/null
++++ b/tests/unit/kernel/text_input_test.cpp
+@@ -0,0 +1,36 @@
++// SPDX-License-Identifier: 0BSD
++#include <catch2/catch_test_macros.hpp>
++
++#include <atomic>
++#include <chrono>
++#include <optional>
++#include <string>
++#include <thread>
++
++#include <rex/kernel/xam/text_input.h>
++
++namespace xam = rex::kernel::xam;
++
++TEST_CASE("Unavailable text UI cancels on a worker and quiets input", "[text_input]") {
++  std::atomic<int> callbacks{0};
++  std::atomic<bool> open_during_callback{false};
++  std::atomic<bool> got_cancellation{false};
++  const bool started = xam::ShowTextInput(
++      "Join code (XXXX-XXXX)", "", 12,
++      [&](std::optional<std::string> result) {
++        ++callbacks;
++        got_cancellation = !result.has_value();
++        open_during_callback = xam::TextInputOpen();
++      });
++  CHECK(started);
++  for (int i = 0; i < 100 && callbacks == 0; ++i) {
++    std::this_thread::sleep_for(std::chrono::milliseconds(5));
++  }
++  REQUIRE(callbacks == 1);
++  CHECK(got_cancellation);
++  CHECK(open_during_callback);
++  CHECK(xam::TextInputOpen());
++  std::this_thread::sleep_for(std::chrono::milliseconds(350));
++  CHECK_FALSE(xam::TextInputOpen());
++  CHECK(callbacks == 1);
++}
+diff --git a/tests/unit/system/join_code_test.cpp b/tests/unit/system/join_code_test.cpp
+index e04d7f99..fda3721f 100644
+--- a/tests/unit/system/join_code_test.cpp
++++ b/tests/unit/system/join_code_test.cpp
+@@ -30,7 +30,7 @@ TEST_CASE("Join codes round trip and accept player input", "[join_code]") {
+ }
+ 
+ TEST_CASE("Join code aliases and errors", "[join_code]") {
+-  std::string with_aliases = code::Plain(0x12345678);
++  std::string with_aliases = code::Plain(0x08080808);
+   bool replaced_zero = false;
+   bool replaced_one = false;
+   for (char& c : with_aliases) {
+@@ -46,7 +46,7 @@ TEST_CASE("Join code aliases and errors", "[join_code]") {
+   REQUIRE(replaced_one);
+   uint32_t decoded = 0;
+   CHECK(code::Read(with_aliases, &decoded) == code::Result::kOk);
+-  CHECK(decoded == 0x12345678u);
++  CHECK(decoded == 0x08080808u);
+   CHECK(code::Digit('o') == 0);
+   CHECK(code::Digit('I') == 1);
+   CHECK(code::Digit('l') == 1);
+@@ -88,3 +88,35 @@ TEST_CASE("Join code CRC detects adjacent transpositions", "[join_code]") {
+     }
+   }
+ }
++
++TEST_CASE("Join codes match the original-build golden vectors", "[join_code]") {
++  struct Vector {
++    uint32_t ip;
++    uint8_t check;
++    const char* plain;
++    const char* display;
++  };
++  constexpr Vector vectors[] = {
++      {0x00000000u, 0xFE, "0000007Y", "0000-007Y"},
++      {0xC0000201u, 0xDA, "R00040ET", "R000-40ET"},
++      {0x08080808u, 0xDC, "1040G26W", "1040-G26W"},
++      {0xFFFFFFFFu, 0xD3, "ZZZZZZYK", "ZZZZ-ZZYK"},
++  };
++  for (const auto& vector : vectors) {
++    CHECK(code::Check(vector.ip) == vector.check);
++    CHECK(code::Plain(vector.ip) == vector.plain);
++    CHECK(code::Make(vector.ip) == vector.display);
++    uint32_t decoded = 0;
++    CHECK(code::Read(vector.display, &decoded) == code::Result::kOk);
++    CHECK(decoded == vector.ip);
++  }
++  uint32_t decoded = 0;
++  CHECK(code::Read("\tR000 - 40ET", &decoded) == code::Result::kOk);
++  CHECK(decoded == 0xC0000201u);
++  CHECK(code::Read("O000007Y", &decoded) == code::Result::kOk);
++  CHECK(decoded == 0u);
++  CHECK(code::Read("I040G26W", &decoded) == code::Result::kOk);
++  CHECK(decoded == 0x08080808u);
++  CHECK(code::Read("L040G26W", &decoded) == code::Result::kOk);
++  CHECK(decoded == 0x08080808u);
++}
+diff --git a/tests/unit/system/online_link_test.cpp b/tests/unit/system/online_link_test.cpp
+new file mode 100644
+index 00000000..7d4d57a5
+--- /dev/null
++++ b/tests/unit/system/online_link_test.cpp
+@@ -0,0 +1,44 @@
++// SPDX-License-Identifier: 0BSD
++#include <catch2/catch_test_macros.hpp>
++
++#include <rex/system/online_link.h>
++
++namespace online = rex::system::online;
++
++TEST_CASE("Online link start and stop are nonblocking and visible immediately", "[online_link]") {
++  online::Stop();
++  const online::Report idle = online::Current();
++  CHECK(idle.state == online::State::kIdle);
++  CHECK(idle.role == online::Role::kNone);
++  CHECK(online::PublicAddress() == 0);
++  CHECK(online::Target() == 0);
++  const uint64_t initial_version = online::Version();
++  online::Start(online::Role::kJoin, 0xC0000201u);
++  CHECK(online::PublicAddress() == 0);
++  CHECK(online::Target() == 0);
++  CHECK(online::Version() != initial_version);
++  const online::Report preparing = online::Current();
++  CHECK(preparing.role == online::Role::kJoin);
++  CHECK(preparing.target_ip == 0xC0000201u);
++  CHECK(preparing.port_count == 3);
++  CHECK(preparing.first_port == online::FirstPort());
++  online::Start(online::Role::kHost, 0);
++  CHECK(online::PublicAddress() == 0);
++  CHECK(online::Target() == 0);
++  online::Stop();
++  const online::Report stopped = online::Current();
++  CHECK(stopped.state == online::State::kIdle);
++  CHECK(stopped.role == online::Role::kNone);
++  CHECK(online::PublicAddress() == 0);
++  CHECK(online::Target() == 0);
++}
++
++TEST_CASE("Online link report defaults and port contract", "[online_link]") {
++  const online::Report report;
++  CHECK(report.state == online::State::kIdle);
++  CHECK(report.role == online::Role::kNone);
++  CHECK(report.failure == online::Failure::kNone);
++  CHECK(report.port_count == 3);
++  CHECK(report.first_port == 31000);
++  CHECK(online::PortCount() == 3);
++}
+diff --git a/tests/unit/system/online_net_test.cpp b/tests/unit/system/online_net_test.cpp
+index 84cfc45f..4561084b 100644
+--- a/tests/unit/system/online_net_test.cpp
++++ b/tests/unit/system/online_net_test.cpp
+@@ -28,6 +28,7 @@ void Attribute(std::vector<uint8_t>& packet, uint16_t type, uint32_t ip, uint16_
+ 
+ std::vector<uint8_t> Response() {
+   auto packet = net::StunRequest(kTransaction);
++  packet[0] = 0x01;
+   packet[1] = 0x01;
+   return {packet.begin(), packet.end()};
+ }
+@@ -84,7 +85,7 @@ TEST_CASE("STUN rejects wrong transactions, errors, and non-IPv4 attributes", "[
+ TEST_CASE("MQTT CONNECT includes a retained empty will only for a host", "[online_net]") {
+   const auto plain = net::MqttConnect("bzn0123456789abcdef");
+   const std::vector<uint8_t> expected = {
+-      0x10, 0x21, 0x00, 0x04, 'M', 'Q', 'T', 'T', 4, 0x02, 0x00, 0x1E,
++      0x10, 0x1F, 0x00, 0x04, 'M', 'Q', 'T', 'T', 4, 0x02, 0x00, 0x1E,
+       0x00, 0x13, 'b', 'z', 'n', '0', '1', '2', '3', '4', '5', '6', '7',
+       '8',  '9',  'a',  'b',  'c', 'd', 'e', 'f'};
+   CHECK(plain == expected);
+diff --git a/tests/unit/system/online_relay_test.cpp b/tests/unit/system/online_relay_test.cpp
+new file mode 100644
+index 00000000..627b2061
+--- /dev/null
++++ b/tests/unit/system/online_relay_test.cpp
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: 0BSD
++#include <catch2/catch_test_macros.hpp>
++
++#include <array>
++#include <chrono>
++#include <cstdint>
++#include <cstring>
++#include <thread>
++
++#include <rex/system/online_relay.h>
++#include <rex/system/system_link.h>
++#include <rex/system/xsocket.h>
++
++#if !REX_PLATFORM_WIN32
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <unistd.h>
++#endif
++
++namespace sl = rex::system::system_link;
++namespace online = rex::system::online;
++
++TEST_CASE("Relay datagram classification is conservative", "[online_relay]") {
++  uint8_t punch[18] = {};
++  std::memcpy(punch, "BO2ZMPCH", 8);
++  CHECK(online::Classify(31000, 0, 0, punch, sizeof(punch)) == online::Datagram::kPunch);
++  uint8_t stun[20] = {};
++  stun[0] = 0x01;
++  stun[1] = 0x01;
++  stun[4] = 0x21;
++  stun[5] = 0x12;
++  stun[6] = 0xA4;
++  stun[7] = 0x42;
++  CHECK(online::Classify(31000, 0, 0, stun, sizeof(stun)) == online::Datagram::kStun);
++  stun[1] = 0x11;
++  CHECK(online::Classify(31000, 0, 0, stun, sizeof(stun)) == online::Datagram::kStun);
++  uint8_t title[] = {0xFF, 0xFF, 0xFF, 0xFF};
++  CHECK(online::Classify(31000, 0, 0, title, sizeof(title)) == online::Datagram::kTitle);
++  CHECK(online::Classify(31000, 0, 0, punch, 17) == online::Datagram::kTitle);
++}
++
++TEST_CASE("Default internet System Link ports round trip", "[online_relay]") {
++  if (!sl::LocalInstance()) {
++    CHECK(sl::HostPort(1000) == 31000);
++    CHECK(sl::HostPort(1002) == 31002);
++    CHECK(sl::GuestPort(31002) == 1002);
++  }
++}
++
++TEST_CASE("XNADDR tags match the original-build fixture", "[online_relay]") {
++  sl::ForgetInternetPeers();
++  sl::NameConsoleLan(0xC0000201u, 0x1122334455667788ull, 0xC0A8011Du);
++  std::array<uint8_t, 36> address{};
++  sl::MakeTitleXnAddr(0xC0000201u, address.data());
++  const std::array<uint8_t, 36> expected = {
++      0xC0, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x42,
++      0xC0, 0x00, 0x02, 0x01, 0x42, 0x5A, 0x01, 0x00, 0x11, 0x22, 0x33, 0x44,
++      0x55, 0x66, 0x77, 0x88, 0xC0, 0xA8, 0x01, 0x1D, 0x00, 0x00, 0x00, 0x00};
++  CHECK(address == expected);
++  CHECK(sl::XnAddrToTitleIp(address.data()) == 0xC0000201u);
++  sl::ForgetInternetPeers();
++}
++
++#if !REX_PLATFORM_WIN32
++TEST_CASE("Side socket references share one UDP endpoint", "[online_relay]") {
++  const int receiver = socket(AF_INET, SOCK_DGRAM, 0);
++  REQUIRE(receiver >= 0);
++  sockaddr_in address{};
++  address.sin_family = AF_INET;
++  address.sin_addr.s_addr = htonl(0x7F000001);
++  REQUIRE(bind(receiver, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
++  socklen_t address_size = sizeof(address);
++  REQUIRE(getsockname(receiver, reinterpret_cast<sockaddr*>(&address), &address_size) == 0);
++  bool bound = false;
++  const int64_t first = sl::OpenSideSocket(0, &bound);
++  REQUIRE(first >= 0);
++  CHECK(bound);
++  const int64_t second = sl::OpenSideSocket(0, &bound);
++  CHECK(second == first);
++  sl::CloseSideSocket(first);
++  const char payload[] = "side";
++  CHECK(sl::SideSend(second, 0x7F000001, ntohs(address.sin_port), payload, 4) == 4);
++  char received[8] = {};
++  int count = -1;
++  for (int i = 0; i < 50 && count < 0; ++i) {
++    count = int(recv(receiver, received, sizeof(received), MSG_DONTWAIT));
++    if (count < 0) {
++      std::this_thread::sleep_for(std::chrono::milliseconds(10));
++    }
++  }
++  REQUIRE(count == 4);
++  CHECK(std::memcmp(received, payload, 4) == 0);
++  sl::CloseSideSocket(second);
++  close(receiver);
++}
++#endif
+diff --git a/tests/unit/system/relay_wire_test.cpp b/tests/unit/system/relay_wire_test.cpp
+index 87773ff0..fc74e84a 100644
+--- a/tests/unit/system/relay_wire_test.cpp
++++ b/tests/unit/system/relay_wire_test.cpp
+@@ -40,7 +40,7 @@ TEST_CASE("Relay topics are stable and role-specific", "[relay_wire]") {
+   const std::string base = wire::Topic(code);
+   REQUIRE(base.size() == 26);
+   CHECK(base.starts_with("bo2zmnx/1/"));
+-  CHECK(std::all_of(base.begin() + 9, base.end(),
++  CHECK(std::all_of(base.begin() + 10, base.end(),
+                     [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }));
+   CHECK(wire::HostTopic(code) == base + "/host");
+   CHECK(wire::JoinTopic(code) == base + "/join");
+@@ -102,3 +102,48 @@ TEST_CASE("Relay decoder rejects malformed and altered messages", "[relay_wire]"
+   message = Sample(3, 0);
+   CHECK(wire::Encode(message, code, 1).empty());
+ }
++
++namespace {
++
++std::vector<uint8_t> Hex(std::string_view text) {
++  std::vector<uint8_t> bytes;
++  for (size_t i = 0; i + 1 < text.size(); i += 2) {
++    const auto digit = [](char c) -> uint8_t {
++      if (c >= '0' && c <= '9') return uint8_t(c - '0');
++      if (c >= 'a' && c <= 'f') return uint8_t(c - 'a' + 10);
++      return uint8_t(c - 'A' + 10);
++    };
++    bytes.push_back(uint8_t(digit(text[i]) << 4 | digit(text[i + 1])));
++  }
++  return bytes;
++}
++
++}  // namespace
++
++TEST_CASE("Relay wire matches original-build golden messages", "[relay_wire]") {
++  CHECK(wire::Hex64(wire::Hash64("")) == "c3817c016ba4ff30");
++  CHECK(wire::Topic("R00040ET") == "bo2zmnx/1/504a1db350b19879");
++  wire::Message host;
++  host.role = 1;
++  host.session = 0x1122334455667788ull;
++  host.public_ip = 0xC0000201u;
++  host.count = 4;
++  host.endpoints[0] = {31000, 0xCB007109u, 41000, 1};
++  host.endpoints[1] = {31001, 0xCB007109u, 41001, 0};
++  host.endpoints[2] = {31002, 0xC6336414u, 51002, 1};
++  host.endpoints[3] = {0, 0xC0A80132u, 0, 0};
++  const auto host_wire = Hex(
++      "42010102030405060708712f497d615cb723d26dc668f76bb26e128481220694cb99ac9b4e1dbee01517"
++      "ddcd6dc12ac156b17dd88bfd5c0eb05b916d950f6296");
++  CHECK(wire::Encode(host, "R00040ET", 0x0102030405060708ull) == host_wire);
++  CHECK(wire::Decode(host_wire, "R00040ET") == host);
++
++  wire::Message joiner;
++  joiner.role = 2;
++  joiner.session = 0xFFEEDDCCBBAA0099ull;
++  joiner.public_ip = 0x08080808u;
++  const auto joiner_wire =
++      Hex("4201102030405060708055201bef285d3bbf9dbed6b9bd6ec281376a");
++  CHECK(wire::Encode(joiner, "R00040ET", 0x1020304050607080ull) == joiner_wire);
++  CHECK(wire::Decode(joiner_wire, "R00040ET") == joiner);
++}
+-- 
+2.54.0 (Apple Git-157)
+

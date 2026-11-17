@@ -18,7 +18,7 @@ launch() {  # n pad
   local n="$1" pad="$2" d="$out/inst$1"
   mkdir -p "$d/support" "$d/logs"
   printf 'players = 1\nduration_s = %s\npad1 = %s\n' "$dur" "$pad" > "$d/pad.route"
-  env REX_INSTANCE="$n" REX_INSTANCE_COUNT=2 REX_AUDIO_MUTE=true REX_WINDOW_START_MINIMIZED=true REX_LOG_LEVEL=info \
+  env REX_INSTANCE="$n" REX_INSTANCE_COUNT=2 REX_AUDIO_MUTE=true REX_WINDOW_START_MINIMIZED=true REX_LOG_LEVEL="${LOG_LEVEL:-info}" \
       REX_BO2ZM_TEST_EXIT_ON_ERROR=true REX_BO2ZM_CAPTURE_EVERY_S="${CAPTURE_EVERY_S:-10}" REX_BO2ZM_CAPTURE_MAX=40 \
       REX_BO2ZM_PERF_LOG="$d/perf.tsv" REX_HID_VIRTUAL_PAD_SCRIPT="$d/pad.route" \
       SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1 \

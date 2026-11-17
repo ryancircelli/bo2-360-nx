@@ -1,0 +1,61 @@
+From a69df62a9abc87f4e0069573d8187ea9d3202a43 Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 04:44:20 -0500
+Subject: [PATCH 7/8] app message trace (experiment)
+
+---
+ src/system/xam/app_manager.cpp | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/src/system/xam/app_manager.cpp b/src/system/xam/app_manager.cpp
+index 9b882af0..db5291bd 100644
+--- a/src/system/xam/app_manager.cpp
++++ b/src/system/xam/app_manager.cpp
+@@ -9,6 +9,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <atomic>
++#include <rex/logging.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xam/app_manager.h>
+ 
+@@ -25,6 +27,13 @@ void AppManager::RegisterApp(std::unique_ptr<App> app) {
+   apps_.push_back(std::move(app));
+ }
+ 
++static void Trace(const char* kind, uint32_t app, uint32_t msg, uint32_t a, uint32_t b, uint32_t r) {
++  static std::atomic<int> n{0};
++  if (n.fetch_add(1) < 3000) {
++    REXKRNL_WARN("[app-trace] {} app={:08X} msg={:08X} arg1={:08X} arg2={:08X} -> {:08X}", kind, app, msg, a, b, r);
++  }
++}
++
+ X_HRESULT AppManager::DispatchMessageSync(uint32_t app_id, uint32_t message, uint32_t buffer_ptr,
+                                           uint32_t buffer_length) {
+   App* app;
+@@ -35,7 +44,9 @@ X_HRESULT AppManager::DispatchMessageSync(uint32_t app_id, uint32_t message, uin
+     }
+     app = it->second;
+   }
+-  return app->DispatchMessageSync(message, buffer_ptr, buffer_length);
++  auto r = app->DispatchMessageSync(message, buffer_ptr, buffer_length);
++  Trace("sync", app_id, message, buffer_ptr, buffer_length, r);
++  return r;
+ }
+ 
+ X_HRESULT AppManager::DispatchMessageAsync(uint32_t app_id, uint32_t message, uint32_t buffer_ptr,
+@@ -48,7 +59,9 @@ X_HRESULT AppManager::DispatchMessageAsync(uint32_t app_id, uint32_t message, ui
+     }
+     app = it->second;
+   }
+-  return app->DispatchMessageSync(message, buffer_ptr, buffer_length);
++  auto r = app->DispatchMessageSync(message, buffer_ptr, buffer_length);
++  Trace("async", app_id, message, buffer_ptr, buffer_length, r);
++  return r;
+ }
+ 
+ }  // namespace xam
+-- 
+2.54.0 (Apple Git-157)
+

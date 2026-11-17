@@ -1,0 +1,51 @@
+From b97eb983ee9c2a26cb881750ab531686598723cc Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 00:07:29 -0500
+Subject: [PATCH 2/8] Add tagged XNADDR golden fixture test
+
+---
+ tests/unit/system/system_link_test.cpp | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/tests/unit/system/system_link_test.cpp b/tests/unit/system/system_link_test.cpp
+index e5924989..a51ef19c 100644
+--- a/tests/unit/system/system_link_test.cpp
++++ b/tests/unit/system/system_link_test.cpp
+@@ -3,6 +3,11 @@
+ #include <catch2/catch_test_macros.hpp>
+ 
+ #include <rex/system/system_link.h>
++#include <rex/system/xsocket.h>
++
++#include <cstdio>
++#include <cstring>
++#include <string>
+ 
+ namespace sl = rex::system::system_link;
+ 
+@@ -57,3 +62,22 @@ TEST_CASE("Broadcast addresses", "[system_link]") {
+   CHECK(sl::IsBroadcastAddress(0xC0A801FFu));
+   CHECK_FALSE(sl::IsBroadcastAddress(0x7F000101u));
+ }
++
++TEST_CASE("Tagged XNADDR matches the original-build golden fixture", "[system_link]") {
++  // G5 golden: ina 192.0.2.1, relay session 0x1122334455667788, LAN 192.168.1.29.
++  sl::ForgetInternetPeers();
++  sl::NameConsoleLan(0xC0000201u, 0x1122334455667788ull, 0xC0A8011Du);
++  uint8_t out[36];
++  sl::MakeTitleXnAddr(0xC0000201u, out);
++  std::string hex;
++  for (uint8_t b : out) {
++    char buf[3];
++    std::snprintf(buf, sizeof(buf), "%02x", b);
++    hex += buf;
++  }
++  CHECK(hex == "c00002010000000000000242c0000201425a01001122334455667788c0a8011d00000000");
++  // Reading the tag back: a different console at that public address maps to its LAN address
++  // only when the address is our own; otherwise the public address (or stand-in) is kept.
++  CHECK(sl::XnAddrToTitleIp(out) == 0xC0000201u);
++  sl::ForgetInternetPeers();
++}
+-- 
+2.54.0 (Apple Git-157)
+
