@@ -5,13 +5,18 @@
 
 #include <rex/game_api.h>
 
+#include <rex/cvar.h>
+
 #include "native/bo2zm_native_module.h"
 
 namespace {
 // GameApp plus the native renderer's in-process graphics driver module (selected with gpu.driver = "bo2native").
 class Bo2App final : public ::rex::GameApp {
  public:
-  Bo2App() : ::rex::GameApp("bo2zm", kPPCImageConfig) {}
+  Bo2App() : ::rex::GameApp("bo2zm", kPPCImageConfig) {
+    // v0.10 cvars read REX_<FLAG> env (runq routes: REX_BO2ZM_TEST_START ...); v0.11 does not do this for them.
+    ::rex::cvar::ApplyEnvironment();
+  }
 
  protected:
   void OnRegisterModules(std::vector<::rex::IModule*>& modules) override {
