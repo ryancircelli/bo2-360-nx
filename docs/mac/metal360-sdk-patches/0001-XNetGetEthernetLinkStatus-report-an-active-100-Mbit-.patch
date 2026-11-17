@@ -1,0 +1,29 @@
+From f211a92675560b869ca1a601200e5145b306898c Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 02:00:40 -0500
+Subject: [PATCH 1/2] XNetGetEthernetLinkStatus: report an active 100 Mbit
+ full-duplex link
+
+---
+ src/kernel/xam/xam_net.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
+index 657bfd16..e29b9b28 100644
+--- a/src/kernel/xam/xam_net.cpp
++++ b/src/kernel/xam/xam_net.cpp
+@@ -554,7 +554,10 @@ struct XEthernetStatus {
+ };
+ 
+ u32 NetDll_XNetGetEthernetLinkStatus_entry(u32 caller) {
+-  return 0;
++  // A wired console reports an active full-duplex 100 Mbit link. 0 (no cable) makes BO2's SYSTEM LINK button
++  // answer "You must have an active network connection" before any lobby opens.
++  return XEthernetStatus::XNET_ETHERNET_LINK_ACTIVE | XEthernetStatus::XNET_ETHERNET_LINK_100MBPS |
++         XEthernetStatus::XNET_ETHERNET_LINK_FULL_DUPLEX;
+ }
+ 
+ u32 NetDll_XNetDnsLookup_entry(u32 caller, mapped_string host, u32 event_handle, mapped_u32 pdns) {
+-- 
+2.54.0 (Apple Git-157)
+

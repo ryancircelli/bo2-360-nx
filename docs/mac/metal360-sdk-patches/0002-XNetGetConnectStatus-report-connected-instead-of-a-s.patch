@@ -1,0 +1,46 @@
+From 7409cef69b185bbd27a4b9bea1a825048a9dc256 Mon Sep 17 00:00:00 2001
+From: Ryan Circelli <ryancircelli@gmail.com>
+Date: Tue, 17 Nov 2026 02:56:22 -0500
+Subject: [PATCH 2/2] XNetGetConnectStatus: report connected instead of a stub
+
+---
+ src/kernel/xam/xam_net.cpp | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
+index e29b9b28..1fa89c5c 100644
+--- a/src/kernel/xam/xam_net.cpp
++++ b/src/kernel/xam/xam_net.cpp
+@@ -560,6 +560,12 @@ u32 NetDll_XNetGetEthernetLinkStatus_entry(u32 caller) {
+          XEthernetStatus::XNET_ETHERNET_LINK_FULL_DUPLEX;
+ }
+ 
++// XNET_CONNECT_STATUS_CONNECTED. Datagram System Link has no per-peer secure channel to wait for, and an IDLE (0) answer
++// leaves BO2's server browser polling forever after JOIN GAME.
++u32 NetDll_XNetGetConnectStatus_entry(u32 caller, u32 addr) {
++  return 2;
++}
++
+ u32 NetDll_XNetDnsLookup_entry(u32 caller, mapped_string host, u32 event_handle, mapped_u32 pdns) {
+   // TODO(gibbed): actually implement this
+   if (pdns) {
+@@ -1018,6 +1024,8 @@ REX_EXPORT(__imp__NetDll_XNetXnAddrToInAddr, rex::kernel::xam::NetDll_XNetXnAddr
+ REX_EXPORT(__imp__NetDll_XNetInAddrToXnAddr, rex::kernel::xam::NetDll_XNetInAddrToXnAddr_entry)
+ REX_EXPORT(__imp__NetDll_XNetSetSystemLinkPort,
+            rex::kernel::xam::NetDll_XNetSetSystemLinkPort_entry)
++REX_EXPORT(__imp__NetDll_XNetGetConnectStatus,
++           rex::kernel::xam::NetDll_XNetGetConnectStatus_entry)
+ REX_EXPORT(__imp__NetDll_XNetGetEthernetLinkStatus,
+            rex::kernel::xam::NetDll_XNetGetEthernetLinkStatus_entry)
+ REX_EXPORT(__imp__NetDll_XNetDnsLookup, rex::kernel::xam::NetDll_XNetDnsLookup_entry)
+@@ -1092,7 +1100,6 @@ REX_EXPORT_STUB(__imp__NetDll_XNetCreateKey);
+ REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseLookup);
+ REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseRelease);
+ REX_EXPORT_STUB(__imp__NetDll_XNetGetBroadcastVersionStatus);
+-REX_EXPORT_STUB(__imp__NetDll_XNetGetConnectStatus);
+ REX_EXPORT_STUB(__imp__NetDll_XNetGetSystemLinkPort);
+ REX_EXPORT_STUB(__imp__NetDll_XNetGetXnAddrPlatform);
+ REX_EXPORT_STUB(__imp__NetDll_XNetInAddrToServer);
+-- 
+2.54.0 (Apple Git-157)
+
