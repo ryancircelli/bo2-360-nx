@@ -417,6 +417,21 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+  // No runtime handler resolved this synchronous fault. Restore the disposition
+  // and retry the instruction so the OS delivers it to the previous handler
+  // (normally the default crash reporter), rather than spinning forever here.
+  const struct sigaction* previous = &original_sigsegv_handler_;
+  if (signal_number == SIGILL) previous = &original_sigill_handler_;
+#if REX_PLATFORM_MAC
+  if (signal_number == SIGBUS) previous = &original_sigbus_handler_;
+#endif
+  struct sigaction action = *previous;
+  // Ignoring a synchronous fault cannot make forward progress.
+  if (action.sa_handler == SIG_IGN) {
+    std::memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+  }
+  sigaction(signal_number, &action, nullptr);
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {
