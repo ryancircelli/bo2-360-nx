@@ -189,6 +189,9 @@ SDLAudioDriver::~SDLAudioDriver() {
 }
 
 bool SDLAudioDriver::Initialize() {
+  if (REXCVAR_GET(audio_mute)) {
+    REXAPU_INFO("audio muted: SDL output submits silence");
+  }
   // Set audio category for proper OS audio handling
   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
 
