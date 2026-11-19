@@ -1635,6 +1635,11 @@ bool CommandProcessor::ExecutePacketType3_LOAD_ALU_CONSTANT(memory::RingBuffer* 
   uint32_t size_dwords = reader->ReadAndSwap<uint32_t>();
   size_dwords &= 0xFFF;
   uint32_t type = (offset_type >> 16) & 0xFF;
+  // The packet contains an address, not the constants. Record the source
+  // before loading it so replay can restore the same register values.
+  if (trace_hooks_) [[unlikely]] {
+    trace_hooks_->OnMemoryRead(address & 0x1FFFFFFF, size_dwords * sizeof(uint32_t));
+  }
   uint32_t* xlat_address = memory_->TranslatePhysical<uint32_t*>(address);
   switch (type) {
     case 0:  // ALU
