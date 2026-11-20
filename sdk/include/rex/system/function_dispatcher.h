@@ -86,6 +86,7 @@ class FunctionDispatcher : public IModuleRegistrar {
   ::PPCFunc* GetFunction(uint32_t guest_address);
   bool HasAnyFunctionTable() const { return !module_tables_.empty(); }
   /**
+   * Reuses an existing thunk for the same native implementation in this pool.
    * caller_address must be inside a registered module, or 0 to mean "host-
    * initiated, route to the entrypoint pool".
    */
@@ -106,7 +107,8 @@ class FunctionDispatcher : public IModuleRegistrar {
 
   /**
    * Unregister `module_id`: clears its function-table entries, releases its
-   * thunk pool, and removes its per-module function table. Returns the
+   * thunk pool, and removes its per-module function table. Caller-pool stubs
+   * targeting its unloaded functions are cleared and recycled too. Returns the
    * cleared thunk-pool range `[lo, hi)` for external cache invalidation, or
    * nullopt if the module was not registered.
    */
@@ -122,6 +124,8 @@ class FunctionDispatcher : public IModuleRegistrar {
     uint32_t image_size;
     uint32_t next_thunk_address;
     uint32_t thunk_limit;
+    std::unordered_map<::PPCFunc*, uint32_t> thunks;
+    std::vector<uint32_t> free_thunks;
   };
 
   ModuleTableInfo* FindModuleByAddress(uint32_t guest_address);
