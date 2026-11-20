@@ -757,12 +757,18 @@ object_ref<UserModule> KernelState::LoadUserModule(const std::string_view raw_na
         rex::string::utf8_find_base_guest_path(executable_module_->path()), name);
   }
 
+  // Use VFS identity for both duplicate detection and the in-flight marker.
+  // Device paths and title aliases may name the same loaded image.
+  if (auto entry = file_system_->ResolvePath(path)) {
+    path = entry->absolute_path();
+  }
+
   // loading_paths_ serializes concurrent loaders of the same path; we
   // can't hold the global lock across LoadFromFile or DllMain ATTACH.
   {
     auto global_lock = global_critical_region_.Acquire();
     for (auto& existing_module : user_modules_) {
-      if (existing_module->path() == path) {
+      if (rex::string::utf8_equal_case(existing_module->path(), path)) {
         return existing_module;
       }
     }
@@ -924,11 +930,11 @@ void KernelState::UnloadUserModule(const object_ref<UserModule>& module, bool ca
     }
   }
 
+  // VFS resolution must happen outside the module lock, as in GetModule.
+  auto recomp = FindRecompiledModule(module->path());
   bool found_module = false;
   {
     auto global_lock = global_critical_region_.Acquire();
-
-    auto recomp = FindRecompiledModule(module->path());
     if (recomp) {
       const std::string& key = recomp->guest_path;
       auto cleared_range = function_dispatcher_->UnregisterModule(key);
@@ -988,11 +994,37 @@ void KernelState::RegisterRecompiledModule(const char* pe_name, const char* gues
 
 std::optional<KernelState::RecompiledModuleInfo> KernelState::FindRecompiledModule(
     std::string_view guest_path) {
-  auto global_lock = global_critical_region_.Acquire();
+  std::vector<RecompiledModuleInfo> modules;
+  std::string executable_directory;
+  {
+    auto global_lock = global_critical_region_.Acquire();
+    modules = recompiled_modules_;
+    if (executable_module_) {
+      executable_directory =
+          rex::string::utf8_find_base_guest_path(executable_module_->path());
+    }
+  }
+
   auto normalized = NormalizeGuestPath(guest_path);
-  for (const auto& info : recompiled_modules_) {
-    if (info.guest_path == normalized)
+  for (const auto& info : modules) {
+    if (info.guest_path == normalized) return info;
+  }
+
+  // Manifest keys are title-relative, but UserModule stores a resolved device
+  // path. Match the same VFS file when looking up an already loaded image,
+  // particularly during unload, so its function table and library are removed.
+  auto requested = file_system_->ResolvePath(guest_path);
+  if (!requested) return std::nullopt;
+  for (const auto& info : modules) {
+    auto path = info.guest_path;
+    if (!executable_directory.empty()) {
+      path = rex::string::utf8_join_guest_paths(executable_directory, path);
+    }
+    auto entry = file_system_->ResolvePath(path);
+    if (entry && rex::string::utf8_equal_case(entry->absolute_path(),
+                                             requested->absolute_path())) {
       return info;
+    }
   }
   return std::nullopt;
 }
