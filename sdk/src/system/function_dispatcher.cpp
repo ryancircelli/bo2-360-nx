@@ -13,12 +13,15 @@
  *              role as a function dispatch table rather than a CPU emulator.
  */
 
+#include <unordered_set>
+
 #include <rex/assert.h>
 #include <rex/dbg.h>
 #include <rex/logging.h>
 #include <rex/perf/counter.h>
 #include <rex/memory.h>
 #include <rex/ppc/context.h>
+#include <rex/ppc/function.h>
 #include <rex/runtime.h>
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/thread_state.h>
@@ -303,16 +306,28 @@ uint32_t FunctionDispatcher::AllocateThunk(::PPCFunc* func, uint32_t caller_addr
     }
   }
 
-  if (mod->next_thunk_address >= mod->thunk_limit) {
+  // A procedure lookup may occur every frame. Keep one stub per native
+  // implementation in each caller pool, rather than consuming one per lookup.
+  if (auto it = mod->thunks.find(func); it != mod->thunks.end()) {
+    return it->second;
+  }
+  if (mod->free_thunks.empty() && mod->next_thunk_address >= mod->thunk_limit) {
     REXLOG_ERROR("Thunk address space exhausted for module at {:08X}", mod->code_base);
     return 0;
   }
-  uint32_t addr = mod->next_thunk_address;
-  mod->next_thunk_address += 4;
+  uint32_t addr;
+  if (!mod->free_thunks.empty()) {
+    addr = mod->free_thunks.back();
+    mod->free_thunks.pop_back();
+  } else {
+    addr = mod->next_thunk_address;
+    mod->next_thunk_address += 4;
+  }
   if (!SetFunction(addr, func)) {
-    mod->next_thunk_address -= 4;
+    mod->free_thunks.push_back(addr);
     return 0;
   }
+  mod->thunks.emplace(func, addr);
   return addr;
 }
 
@@ -369,6 +384,42 @@ std::optional<std::pair<uint32_t, uint32_t>> FunctionDispatcher::UnregisterModul
                                [code_base = it->second.code_base](const ModuleTableInfo& mti) {
                                  return mti.code_base == code_base;
                                });
+
+  // Caller-owned stubs can target this module. Remove them before its native
+  // library is released, and recycle their slots without resetting live pools.
+  std::unordered_set<::PPCFunc*> unloaded_functions;
+  for (uint32_t addr : it->second.addresses) {
+    if (auto fn = function_table_.find(addr); fn != function_table_.end()) {
+      unloaded_functions.insert(fn->second);
+    }
+  }
+  // Generated tables also register imported kernel implementations. Those
+  // implementations outlive this DLL, as do functions registered by live modules.
+  for (const auto& [name, func] : rex::ppc::GetPPCFuncRegistry()) {
+    unloaded_functions.erase(func);
+  }
+  for (const auto& [id, registration] : module_addresses_) {
+    if (id == module_id) continue;
+    for (uint32_t addr : registration.addresses) {
+      if (auto fn = function_table_.find(addr); fn != function_table_.end()) {
+        unloaded_functions.erase(fn->second);
+      }
+    }
+  }
+  for (auto& table : module_tables_) {
+    if (table.code_base == it->second.code_base) continue;
+    for (auto thunk = table.thunks.begin(); thunk != table.thunks.end();) {
+      if (unloaded_functions.contains(thunk->first)) {
+        uint32_t addr = thunk->second;
+        function_table_.erase(addr);
+        memory_->SetFunction(addr, nullptr);
+        table.free_thunks.push_back(addr);
+        thunk = table.thunks.erase(thunk);
+      } else {
+        ++thunk;
+      }
+    }
+  }
 
   for (uint32_t addr : it->second.addresses) {
     function_table_.erase(addr);
