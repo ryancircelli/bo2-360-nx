@@ -14,3 +14,7 @@ input_remember_slots = true
 # Draws whose vertex fetch constant has the "invalid" type are drawn anyway instead of dropped: without it Forza
 # Horizon loses about 540 draws (missing geometry) per session.
 gpu_allow_invalid_fetch_constants = true
+
+# Keep small GPU resolve results current in guest RAM for the game's exposure feedback.
+# Without this, the picture is washed out and brightness pulses between frames.
+metal_resolve_readback_max_bytes = 65536
