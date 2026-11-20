@@ -116,6 +116,41 @@ inline uint8_t VectorShiftTableR[] = {
 // SIMD Helper Functions
 //=============================================================================
 
+// Xenon dot products accumulate in double precision in guest lane order,
+// then narrow once. Finite overflow produces QNaN, which matters to callers
+// using a maximum-float sentinel before their first search iteration.
+// Keep this consistent with Interpreter::VmxDot.
+template <int Elements>
+inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
+  static_assert(Elements == 3 || Elements == 4);
+  alignas(16) float av[4], bv[4];
+  simde_mm_store_ps(av, a);
+  simde_mm_store_ps(bv, b);
+  double products[4]{};
+  for (int i = 0; i < Elements; ++i) {
+    uint32_t ab, bb;
+    std::memcpy(&ab, &av[3 - i], sizeof(ab));
+    std::memcpy(&bb, &bv[3 - i], sizeof(bb));
+    if ((ab & 0x7F800000u) == 0) ab &= 0x80000000u;
+    if ((bb & 0x7F800000u) == 0) bb &= 0x80000000u;
+    float af, bf;
+    std::memcpy(&af, &ab, sizeof(af));
+    std::memcpy(&bf, &bb, sizeof(bf));
+    products[i] = double(af) * double(bf);
+  }
+  const double sum = Elements == 3
+                         ? (products[0] + products[2]) + products[1]
+                         : (products[0] + products[2]) + (products[1] + products[3]);
+  const float result = float(sum);
+  uint32_t bits;
+  std::memcpy(&bits, &result, sizeof(bits));
+  if (std::isnan(result) || (std::isinf(result) && !std::isinf(sum)))
+    bits = 0x7FC00000u;
+  else if ((bits & 0x7F800000u) == 0)
+    bits &= 0x80000000u;
+  return simde_mm_castsi128_ps(simde_mm_set1_epi32(int32_t(bits)));
+}
+
 // Unsigned 32-bit saturating add
 inline simde__m128i simde_mm_adds_epu32(simde__m128i a, simde__m128i b) {
   return simde_mm_add_epi32(

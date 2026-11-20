@@ -30,15 +30,8 @@ namespace rex::codegen {
 // This file uses several magic constants from Intel SSE/SSE4 intrinsics.
 // Here are the key constants and their meanings:
 //
-// === Dot Product Masks (simde_mm_dp_ps) ===
-// The mask byte controls which elements participate in the dot product and
-// where the result is broadcast. Format: 0bAAAABBBB
-//   High nibble (AAAA): Which source elements to multiply (bit 7=x, 6=y, 5=z, 4=w)
-//   Low nibble (BBBB):  Which destination elements receive the result
-//
-// 0xEF = 0b11101111: Dot product of elements y,z,w (bits 765 set), result to all (bits 3210 set)
-//        This computes dot(yzw) due to guest->host vector element reversal.
-// 0xFF = 0b11111111: Full 4-element dot product, result broadcast to all elements
+// Dot products use rex::ppc::VmxDot rather than SSE dot-product masks so
+// accumulation, lane order and finite-overflow behavior match Xenon.
 //
 // === Floating-Point Sign Bit ===
 // 0x80000000: IEEE 754 sign bit mask for 32-bit float
@@ -184,22 +177,21 @@ bool build_vlogefp(BuilderContext& ctx) {
 //=============================================================================
 
 bool build_vmsum3fp128(BuilderContext& ctx) {
-  // 3-element dot product accounting for guest->host vector element reversal
-  // 0xEF = dot(yzw) with result broadcast to all elements (see constants doc)
+  // Preserve Xenon accumulation and overflow semantics, including lane reversal.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_dp_ps(simde_mm_load_ps({}.f32), "
-      "simde_mm_load_ps({}.f32), 0xEF));",
+      "\tsimde_mm_store_ps({}.f32, rex::ppc::VmxDot<3>(simde_mm_load_ps({}.f32), "
+      "simde_mm_load_ps({}.f32)));",
       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
 bool build_vmsum4fp128(BuilderContext& ctx) {
-  // 4-element dot product: 0xFF = all 4 elements, result to all (see constants doc)
+  // Preserve Xenon accumulation and overflow semantics, including lane reversal.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_dp_ps(simde_mm_load_ps({}.f32), "
-      "simde_mm_load_ps({}.f32), 0xFF));",
+      "\tsimde_mm_store_ps({}.f32, rex::ppc::VmxDot<4>(simde_mm_load_ps({}.f32), "
+      "simde_mm_load_ps({}.f32)));",
       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
