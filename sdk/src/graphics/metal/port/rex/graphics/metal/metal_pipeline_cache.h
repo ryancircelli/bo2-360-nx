@@ -266,6 +266,8 @@ class MetalPipelineCache {
   // that is ready, and published here. The plain pipeline stays alive (in-flight
   // command buffers may reference it); both are released with the cache.
   struct NsEmuSwap {
+    std::atomic<MTL::RenderPipelineState*> live{nullptr};
+    std::vector<MTL::RenderPipelineState*> live_retired;
     std::atomic<MTL::RenderPipelineState*> optimized{nullptr};
     std::atomic<bool> queued{false};
     // FABLE2_NS_SPECIALIZE: the rebuild with the specialized pixel library
@@ -288,6 +290,7 @@ class MetalPipelineCache {
     // The pipeline to bind: the optimized rebuild once published.
     MTL::RenderPipelineState* current_pipeline() const {
       if (ns_emu) {
+        if (auto* p = ns_emu->live.load(std::memory_order_acquire)) return p;
         if (auto* p = ns_emu->optimized.load(std::memory_order_acquire)) {
           return p;
         }
@@ -303,6 +306,7 @@ class MetalPipelineCache {
     std::shared_ptr<NsEmuSwap> ns_emu;
     MTL::RenderPipelineState* current_pipeline() const {
       if (ns_emu) {
+        if (auto* p = ns_emu->live.load(std::memory_order_acquire)) return p;
         if (auto* p = ns_emu->optimized.load(std::memory_order_acquire)) {
           return p;
         }
@@ -727,11 +731,14 @@ class MetalPipelineCache {
     std::string stem;
     std::string signature;
     MTL::Function* function = nullptr;
+    MTL::Library* library = nullptr;
     std::vector<MTL::Function*> retired;
+    std::vector<MTL::Library*> retired_libraries;
   };
   std::recursive_mutex live_mutex_;
   std::unordered_map<MetalShader::MetalTranslation*, LiveShader> live_shaders_;
   std::vector<PipelineHandle*> live_handles_;
+  std::vector<std::shared_ptr<NsEmuSwap>> live_emu_handles_;
   std::thread live_thread_;
   std::mutex live_wake_mutex_;
   std::condition_variable live_wake_;

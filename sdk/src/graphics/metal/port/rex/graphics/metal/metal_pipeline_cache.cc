@@ -1346,7 +1346,14 @@ MetalPipelineCache::~MetalPipelineCache() {
 
   for (auto& item : live_shaders_) {
     if (item.second.function) item.second.function->release();
+    if (item.second.library) item.second.library->release();
+    for (auto* lib : item.second.retired_libraries) lib->release();
     for (auto* f : item.second.retired) f->release();
+  }
+
+  for (auto& emu : live_emu_handles_) {
+    if (auto* p = emu->live.load()) p->release();
+    for (auto* p : emu->live_retired) p->release();
   }
 
   // Release MSC pipeline caches.
@@ -4013,6 +4020,14 @@ void MetalPipelineCache::NativeShaderSwap(PipelineHandle* handle) {
 MTL::Library* MetalPipelineCache::NsEmuFragmentLibrary(
     MetalShader::MetalTranslation* pixel_translation, bool* out_optimized) {
   *out_optimized = false;
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) {
+    RegisterLiveShader(pixel_translation);
+    auto found = live_shaders_.find(pixel_translation);
+    if (found != live_shaders_.end() && found->second.library) {
+      *out_optimized = true;
+      return found->second.library;
+    }
+  }
   if (NativeShadersEmuPipelines()) {
     if (MTL::Library* optimized = pixel_translation->optimized_library()) {
       *out_optimized = true;
@@ -5447,7 +5462,7 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
 
 // Live edits deliberately never change the persistent translation or stage cache.
 void MetalPipelineCache::RegisterLiveShader(MetalShader::MetalTranslation* t) {
-  if (!t || (REXCVAR_GET(metal_shader_live_dump).empty() &&
+  if (!t || !t->best_function() || (REXCVAR_GET(metal_shader_live_dump).empty() &&
              REXCVAR_GET(metal_shader_live_overrides).empty())) return;
   std::lock_guard<std::recursive_mutex> lock(live_mutex_);
   auto inserted = live_shaders_.try_emplace(t);
@@ -5556,11 +5571,12 @@ void MetalPipelineCache::LiveShaderThread() {
           if (library) library->release();
           continue;
         }
-        library->release();  // Function retains the library.
+        // Keep the library too: emulation builders consume libraries.
         const auto expected = t->shader().type() == xenos::ShaderType::kVertex
             ? MTL::FunctionTypeVertex : MTL::FunctionTypeFragment;
         if (function->functionType() != expected) {
           function->release();
+          library->release();
           REXLOG_ERROR("[shader-live] {}: wrong shader stage; previous shader kept", edit.stem);
           continue;
         }
@@ -5578,6 +5594,20 @@ void MetalPipelineCache::LiveShaderThread() {
         if (!pso) { ok = false; break; }
         ready.emplace_back(h, pso);
       }
+      std::vector<std::pair<std::shared_ptr<NsEmuSwap>, MTL::RenderPipelineState*>> emu_ready;
+      if (ok) {
+        MTL::Library* emu_library = library;
+        if (!exists) {
+          emu_library = t->optimized_library();
+          if (!emu_library) emu_library = t->metal_library();
+        }
+        for (auto& emu : live_emu_handles_) {
+          if (emu->pixel_translation != t) continue;
+          auto* pipeline = emu_library ? emu->build(emu_library) : nullptr;
+          if (!pipeline) { ok = false; break; }
+          emu_ready.emplace_back(emu, pipeline);
+        }
+      }
       // Never publish a generation superseded by another editor save.
       if (exists) {
         const auto stamp = std::filesystem::last_write_time(path, ec);
@@ -5592,17 +5622,25 @@ void MetalPipelineCache::LiveShaderThread() {
       if (!ok) {
         for (auto& p : ready) p.second->release();
         if (function) function->release();
+        if (library) library->release();
+        for (auto& p : emu_ready) p.second->release();
         REXLOG_ERROR("[shader-live] {}: pipeline rebuild failed (last working shader kept)", edit.stem);
         continue;
       }
       if (edit.function) edit.retired.push_back(edit.function);
       edit.function = function;
+      if (edit.library) edit.retired_libraries.push_back(edit.library);
+      edit.library = library;
+      for (auto& p : emu_ready) {
+        auto* old = p.first->live.exchange(p.second, std::memory_order_acq_rel);
+        if (old) p.first->live_retired.push_back(old);
+      }
       for (auto& p : ready) {
         auto* old = p.first->state.exchange(p.second, std::memory_order_acq_rel);
         if (old) p.first->ns_retired_states.push_back(old);
       }
       REXLOG_INFO("[shader-live] {}: {} successful, {} pipelines rebuilt", edit.stem,
-                  exists ? "swap" : "restore", ready.size());
+                  exists ? "swap" : "restore", ready.size() + emu_ready.size());
     }
   }
 }
@@ -5930,6 +5968,8 @@ MetalPipelineCache::GetOrCreateGeometryPipelineState(
     GeometryShaderKey geometry_shader_key,
     const PipelineAttachmentFormats& attachment_formats,
     const PipelineRenderingKey& rendering_key) {
+  std::unique_lock<std::recursive_mutex> live_creation(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_creation.lock();
   if (!vertex_translation) {
     REXLOG_ERROR("No valid vertex shader translation for geometry pipeline");
     return nullptr;
@@ -6154,7 +6194,9 @@ MetalPipelineCache::GetOrCreateGeometryPipelineState(
       !use_fallback_pixel_shader && pixel_translation && NativeShadersMode() &&
       ns_spec::Enabled() &&
       ns_spec::Candidate(pixel_translation->shader().ucode_data_hash());
-  if (ns_emu_swappable || ns_emu_spec) {
+  const bool live_emu = !use_fallback_pixel_shader && pixel_translation &&
+      !REXCVAR_GET(metal_shader_live_overrides).empty();
+  if (ns_emu_swappable || ns_emu_spec || live_emu) {
     auto swap = std::make_shared<NsEmuSwap>();
     swap->pixel_translation = pixel_translation;
     swap->swappable = ns_emu_swappable;
@@ -6164,6 +6206,7 @@ MetalPipelineCache::GetOrCreateGeometryPipelineState(
       return build(library, &build_error);
     };
     state.ns_emu = swap;
+    if (live_emu) live_emu_handles_.push_back(swap);
   }
 
   auto [inserted_it, inserted] =
@@ -6683,6 +6726,8 @@ MetalPipelineCache::GetOrCreateTessellationPipelineState(
     const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
     const PipelineAttachmentFormats& attachment_formats,
     const PipelineRenderingKey& rendering_key) {
+  std::unique_lock<std::recursive_mutex> live_creation(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_creation.lock();
   if (!domain_translation) {
     REXLOG_ERROR("No valid domain shader translation for tessellation pipeline");
     return nullptr;
@@ -6981,7 +7026,9 @@ MetalPipelineCache::GetOrCreateTessellationPipelineState(
       !use_fallback_pixel_shader && pixel_translation && NativeShadersMode() &&
       ns_spec::Enabled() &&
       ns_spec::Candidate(pixel_translation->shader().ucode_data_hash());
-  if (ns_emu_swappable || ns_emu_spec) {
+  const bool live_emu = !use_fallback_pixel_shader && pixel_translation &&
+      !REXCVAR_GET(metal_shader_live_overrides).empty();
+  if (ns_emu_swappable || ns_emu_spec || live_emu) {
     auto swap = std::make_shared<NsEmuSwap>();
     swap->pixel_translation = pixel_translation;
     swap->swappable = ns_emu_swappable;
@@ -6991,6 +7038,7 @@ MetalPipelineCache::GetOrCreateTessellationPipelineState(
       return build(library, &build_error);
     };
     state.ns_emu = swap;
+    if (live_emu) live_emu_handles_.push_back(swap);
   }
 
   auto [inserted_it, inserted] =
