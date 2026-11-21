@@ -106,6 +106,12 @@ void StartPatchWatcher(const std::filesystem::path& path, uint32_t poll_ms = 250
     rex_patch_slot_##subroutine.load(std::memory_order_acquire)(ctx, base);      \
   }
 
+// Patchable recompiled function with no codegen change: the generated code
+// defines `__imp__sub_X` as the always-original body and a weak `sub_X` that
+// hooks override (DEFINE_REX_FUNC), so a strong REX_PATCHABLE(sub_X) in the game
+// sits in front of it for direct calls and function-table entries alike.
+#define REX_PATCHABLE(subroutine) REX_PATCH_STUB(subroutine, __imp__##subroutine)
+
 //=============================================================================
 // Library macros (patch dylib)
 //=============================================================================

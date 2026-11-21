@@ -15,6 +15,8 @@ extern "C" void sub_1000_orig(PPCContext& ctx, uint8_t*) { ctx.r3 = 1; }
 extern "C" void sub_2000_orig(PPCContext& ctx, uint8_t*) { ctx.r3 = 10; }
 REX_PATCH_STUB(sub_1000, sub_1000_orig)
 REX_PATCH_STUB(sub_2000, sub_2000_orig)
+extern "C" void __imp__sub_3000(PPCContext& ctx, uint8_t*) { ctx.r3 = 30; }
+REX_PATCHABLE(sub_3000)
 
 #define CHECK(c)                                          \
   do {                                                    \
@@ -33,6 +35,7 @@ static uint64_t call(void (*f)(PPCContext&, uint8_t*)) {
 int main(int argc, char** argv) {
   CHECK(argc >= 4);
   CHECK(call(sub_1000) == 1);  // original
+  CHECK(call(sub_3000) == 30);  // REX_PATCHABLE falls through to __imp__
   auto r = rex::patch::LoadPatchLibrary(argv[1]);
   CHECK(r.ok && r.applied == 1 && r.unmatched.size() == 1 && r.unmatched[0] == "sub_nomatch");
   CHECK(call(sub_1000) == 2);
