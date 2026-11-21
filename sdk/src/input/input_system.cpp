@@ -32,6 +32,7 @@
 #include <rex/input/state_merge.h>
 #include <rex/input/steam_detect.h>
 #include <rex/input/xinput/xinput_input_driver.h>
+#include <rex/chrono/clock.h>
 #include <rex/logging.h>
 
 #if REX_PLATFORM_SWITCH
@@ -63,6 +64,10 @@ REXCVAR_DEFINE_BOOL(input_remember_slots, true, "Input",
                     "A controller that disconnects gets its player back when it reconnects");
 REXCVAR_DEFINE_BOOL(input_log_state, false, "Input",
                     "Log every controller's player and state every 0.5 s (env REX_INPUT_LOG_STATE=1)");
+
+REXCVAR_DEFINE_BOOL(hid_virtual_pad_guest_time, false, "Input",
+                    "Virtual pad script times (seconds, wait timeouts) follow guest time instead of host time, "
+                    "so a route keeps its pace under guest_time_scale fast-forward");
 
 REXCVAR_DEFINE_INT32(hid_virtual_pads, 0, "Input",
                      "Scripted virtual pads on players 1-N, for testing split screen without "
@@ -642,7 +647,15 @@ std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
     REXLOG_INFO("Virtual pad {} on player {}: {} step(s){}", i + 1, i + 1, scripts.back().size(),
                 scripts.back().empty() ? ", idle" : "");
   }
-  return std::make_unique<script::ScriptInputDriver>(std::move(scripts), look);
+  script::ScriptInputDriver::Clock clock;
+  if (REXCVAR_GET(hid_virtual_pad_guest_time)) {
+    const uint64_t start = chrono::Clock::QueryGuestTickCount();
+    clock = [start]() {
+      return static_cast<double>(chrono::Clock::QueryGuestTickCount() - start) /
+             static_cast<double>(chrono::Clock::guest_tick_frequency());
+    };
+  }
+  return std::make_unique<script::ScriptInputDriver>(std::move(scripts), look, std::move(clock));
 #endif
 }
 
