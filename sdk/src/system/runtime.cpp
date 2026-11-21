@@ -338,6 +338,18 @@ bool Runtime::SetupVfs() {
     }
   }
 
+  // Named cache files must retain their bytes: replay and streaming users
+  // reopen and seek these files. A raw partition sink cannot serve them.
+  const auto file_cache_root = std::filesystem::absolute(user_data_root_) / "cache" / "files";
+  const auto file_cache_mount = "\\Device\\Harddisk0\\PartitionCache";
+  auto file_cache = std::make_unique<rex::filesystem::HostPathDevice>(
+      file_cache_mount, file_cache_root, false);
+  if (!file_cache->Initialize() || !file_system_->RegisterDevice(std::move(file_cache)) ||
+      !file_system_->RegisterSymbolicLink("cache:", file_cache_mount)) {
+    REXSYS_ERROR("Runtime::SetupVfs: Failed to mount writable file cache");
+    return false;
+  }
+
   // Setup NullDevice for raw HDD partition accesses
   // Cache/STFC code baked into games tries reading/writing to these
   // Using a NullDevice returns success to all IO requests, allowing games
@@ -351,10 +363,6 @@ bool Runtime::SetupVfs() {
     file_system_->RegisterDevice(std::move(null_device));
     REXSYS_DEBUG("  Registered NullDevice for \\Device\\Harddisk0\\{{Partition0,Cache0,Cache1}}");
   }
-
-  // NOTE: Do NOT register a device for cache: paths
-  // Games handle "device not found" gracefully but don't handle actual device
-  // errors (like NAME_COLLISION) well. Let cache: fail cleanly.
 
   return true;
 }
