@@ -739,6 +739,19 @@ class MetalPipelineCache {
   std::unordered_map<MetalShader::MetalTranslation*, LiveShader> live_shaders_;
   std::vector<PipelineHandle*> live_handles_;
   std::vector<std::shared_ptr<NsEmuSwap>> live_emu_handles_;
+  struct LiveNativePipeline {
+    MetalShader::MetalTranslation* pixel;
+    std::function<MTL::RenderPipelineState*(MTL::Function*)> build;
+    MTL::RenderPipelineState* active = nullptr;
+    std::vector<MTL::RenderPipelineState*> retired;
+  };
+  std::unordered_map<MTL::RenderPipelineState*, LiveNativePipeline> live_native_pipelines_;
+  MTL::Function* LiveNativeFunction(MetalShader::MetalTranslation* t, MTL::Function* original);
+  MTL::RenderPipelineState* LiveNativeState(MTL::RenderPipelineState* original);
+  void RegisterLiveNativePipeline(MTL::RenderPipelineState* pipeline,
+      MetalShader::MetalTranslation* pixel, MTL::RenderPipelineDescriptor* desc);
+  void RegisterLiveNativePipeline(MTL::RenderPipelineState* pipeline,
+      MetalShader::MetalTranslation* pixel, MTL::MeshRenderPipelineDescriptor* desc);
   std::thread live_thread_;
   std::mutex live_wake_mutex_;
   std::condition_variable live_wake_;

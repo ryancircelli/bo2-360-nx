@@ -1356,6 +1356,12 @@ MetalPipelineCache::~MetalPipelineCache() {
     for (auto* p : emu->live_retired) p->release();
   }
 
+  for (auto& pair : live_native_pipelines_) {
+    if (pair.second.active) pair.second.active->release();
+    for (auto* p : pair.second.retired) p->release();
+  }
+  live_native_pipelines_.clear();  // Retained descriptor closures release here.
+
   // Release MSC pipeline caches.
   for (auto& pair : pipeline_cache_) {
     if (pair.second) {
@@ -5608,6 +5614,16 @@ void MetalPipelineCache::LiveShaderThread() {
           emu_ready.emplace_back(emu, pipeline);
         }
       }
+      std::vector<std::pair<LiveNativePipeline*, MTL::RenderPipelineState*>> native_ready;
+      if (ok) {
+        for (auto& pair : live_native_pipelines_) {
+          auto& native = pair.second;
+          if (native.pixel != t) continue;
+          auto* pso = native.build(exists ? function : t->best_function());
+          if (!pso) { ok = false; break; }
+          native_ready.emplace_back(&native, pso);
+        }
+      }
       // Never publish a generation superseded by another editor save.
       if (exists) {
         const auto stamp = std::filesystem::last_write_time(path, ec);
@@ -5624,6 +5640,7 @@ void MetalPipelineCache::LiveShaderThread() {
         if (function) function->release();
         if (library) library->release();
         for (auto& p : emu_ready) p.second->release();
+        for (auto& p : native_ready) p.second->release();
         REXLOG_ERROR("[shader-live] {}: pipeline rebuild failed (last working shader kept)", edit.stem);
         continue;
       }
@@ -5631,6 +5648,10 @@ void MetalPipelineCache::LiveShaderThread() {
       edit.function = function;
       if (edit.library) edit.retired_libraries.push_back(edit.library);
       edit.library = library;
+      for (auto& p : native_ready) {
+        if (p.first->active) p.first->retired.push_back(p.first->active);
+        p.first->active = p.second;
+      }
       for (auto& p : emu_ready) {
         auto* old = p.first->live.exchange(p.second, std::memory_order_acq_rel);
         if (old) p.first->live_retired.push_back(old);
@@ -5640,9 +5661,61 @@ void MetalPipelineCache::LiveShaderThread() {
         if (old) p.first->ns_retired_states.push_back(old);
       }
       REXLOG_INFO("[shader-live] {}: {} successful, {} pipelines rebuilt", edit.stem,
-                  exists ? "swap" : "restore", ready.size() + emu_ready.size());
+                  exists ? "swap" : "restore", ready.size() + emu_ready.size() + native_ready.size());
     }
   }
+}
+
+
+MTL::Function* MetalPipelineCache::LiveNativeFunction(
+    MetalShader::MetalTranslation* t, MTL::Function* original) {
+  if (REXCVAR_GET(metal_shader_live_overrides).empty()) return original;
+  RegisterLiveShader(t);
+  auto it = live_shaders_.find(t);
+  return it != live_shaders_.end() && it->second.function ? it->second.function : original;
+}
+MTL::RenderPipelineState* MetalPipelineCache::LiveNativeState(MTL::RenderPipelineState* original) {
+  if (REXCVAR_GET(metal_shader_live_overrides).empty()) return original;
+  auto it = live_native_pipelines_.find(original);
+  return it != live_native_pipelines_.end() && it->second.active ? it->second.active : original;
+}
+
+void MetalPipelineCache::RegisterLiveNativePipeline(MTL::RenderPipelineState* pipeline,
+    MetalShader::MetalTranslation* pixel, MTL::RenderPipelineDescriptor* desc) {
+  if (!pipeline || !pixel || REXCVAR_GET(metal_shader_live_overrides).empty()) return;
+  desc->retain();
+  auto owned = std::shared_ptr<MTL::RenderPipelineDescriptor>(desc, [](auto* d) { d->release(); });
+  LiveNativePipeline state;
+  state.pixel = pixel;
+  state.build = [this, owned](MTL::Function* f) {
+    owned->setFragmentFunction(f);
+    owned->setBinaryArchives(nullptr);
+    NS::Error* error = nullptr;
+    auto* pso = device_->newRenderPipelineState(owned.get(), &error);
+    if (!pso) REXLOG_ERROR("[shader-live] native pipeline failed: {}",
+        error ? error->localizedDescription()->utf8String() : "unknown error");
+    return pso;
+  };
+  live_native_pipelines_.try_emplace(pipeline, std::move(state));
+}
+
+void MetalPipelineCache::RegisterLiveNativePipeline(MTL::RenderPipelineState* pipeline,
+    MetalShader::MetalTranslation* pixel, MTL::MeshRenderPipelineDescriptor* desc) {
+  if (!pipeline || !pixel || REXCVAR_GET(metal_shader_live_overrides).empty()) return;
+  desc->retain();
+  auto owned = std::shared_ptr<MTL::MeshRenderPipelineDescriptor>(desc, [](auto* d) { d->release(); });
+  LiveNativePipeline state;
+  state.pixel = pixel;
+  state.build = [this, owned](MTL::Function* f) {
+    owned->setFragmentFunction(f);
+    owned->setBinaryArchives(nullptr);
+    NS::Error* error = nullptr;
+    auto* pso = device_->newRenderPipelineState(owned.get(), MTL::PipelineOptionNone, nullptr, &error);
+    if (!pso) REXLOG_ERROR("[shader-live] native pipeline failed: {}",
+        error ? error->localizedDescription()->utf8String() : "unknown error");
+    return pso;
+  };
+  live_native_pipelines_.try_emplace(pipeline, std::move(state));
 }
 
 void MetalPipelineCache::NoteFrameDraws(uint64_t draws) {
@@ -6238,6 +6311,8 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativePointsPipeline(
     GeometryShaderKey geometry_shader_key,
     const PipelineAttachmentFormats& attachment_formats,
     const PipelineRenderingKey& rendering_key) {
+  std::unique_lock<std::recursive_mutex> live_lock(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_lock.lock();
   const bool points =
       geometry_shader_key.type == PipelineGeometryShader::kPointList;
   const bool rects =
@@ -6301,7 +6376,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativePointsPipeline(
     if (!EnsureMetalTranslationReady(pixel_translation)) {
       return nullptr;
     }
-    fragment_function = pixel_translation->best_function();
+    fragment_function = LiveNativeFunction(pixel_translation, pixel_translation->best_function());
   } else if (NativeFirstMode()) {
     // No pixel shader: the emulation would bind its (empty) depth-only
     // fragment; the native expansion binds the same empty fragment
@@ -6324,7 +6399,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativePointsPipeline(
     uint32_t blendcontrol[4];
   } key_data = {};
   key_data.vs = vs_function;
-  key_data.fragment = fragment_function;
+  key_data.fragment = pixel_translation ? pixel_translation->best_function() : fragment_function;
   key_data.sample_count = attachment_formats.sample_count;
   key_data.depth_format = uint32_t(attachment_formats.depth_format);
   key_data.stencil_format = uint32_t(attachment_formats.stencil_format);
@@ -6340,7 +6415,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativePointsPipeline(
     std::lock_guard<std::mutex> lock(native_geom_mutex_);
     auto it = native_points_pipelines_.find(key);
     if (it != native_points_pipelines_.end()) {
-      return it->second;
+      return LiveNativeState(it->second);
     }
   }
   hitch::Scope hitch_scope(hitch::kPsoEmu);
@@ -6367,6 +6442,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativePointsPipeline(
     MTL::RenderPipelineState* pipeline = device_->newRenderPipelineState(
         mdesc, MTL::PipelineOptionNone, nullptr, &error);
     auto t1 = std::chrono::steady_clock::now();
+    RegisterLiveNativePipeline(pipeline, pixel_translation, mdesc);
     mdesc->release();
     RecordRenderPipelineCreation(pipeline != nullptr, ElapsedMs(t0, t1));
     if (!pipeline) {
@@ -6411,6 +6487,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativePointsPipeline(
   auto t0 = std::chrono::steady_clock::now();
   MTL::RenderPipelineState* pipeline = NewNativeGeomPipelineState(desc, &error);
   auto t1 = std::chrono::steady_clock::now();
+  RegisterLiveNativePipeline(pipeline, pixel_translation, desc);
   desc->release();
   RecordRenderPipelineCreation(pipeline != nullptr, ElapsedMs(t0, t1));
   if (pipeline) {
@@ -6445,6 +6522,8 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
     const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
     const PipelineAttachmentFormats& attachment_formats,
     const PipelineRenderingKey& rendering_key, bool cpu_pattern) {
+  std::unique_lock<std::recursive_mutex> live_lock(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_lock.lock();
   if (!NativeTessMode() || !domain_translation ||
       (primitive_processing_result.tessellation_mode !=
            xenos::TessellationMode::kAdaptive &&
@@ -6501,7 +6580,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
     if (!EnsureMetalTranslationReady(pixel_translation)) {
       return nullptr;
     }
-    fragment_function = pixel_translation->best_function();
+    fragment_function = LiveNativeFunction(pixel_translation, pixel_translation->best_function());
     if (!fragment_function) {
       return nullptr;
     }
@@ -6532,7 +6611,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
     uint32_t blendcontrol[4];
   } key_data = {};
   key_data.ds = ds_function;
-  key_data.fragment = fragment_function;
+  key_data.fragment = pixel_translation ? pixel_translation->best_function() : fragment_function;
   key_data.sample_count = attachment_formats.sample_count;
   key_data.depth_format = uint32_t(attachment_formats.depth_format);
   key_data.stencil_format = uint32_t(attachment_formats.stencil_format);
@@ -6548,7 +6627,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
     std::lock_guard<std::mutex> lock(native_geom_mutex_);
     auto it = native_tess_pipelines_.find(key);
     if (it != native_tess_pipelines_.end()) {
-      return it->second;
+      return LiveNativeState(it->second);
     }
   }
   hitch::Scope hitch_scope(hitch::kPsoEmu);
@@ -6589,6 +6668,7 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
   auto t0 = std::chrono::steady_clock::now();
   MTL::RenderPipelineState* pipeline = NewNativeGeomPipelineState(desc, &error);
   auto t1 = std::chrono::steady_clock::now();
+  RegisterLiveNativePipeline(pipeline, pixel_translation, desc);
   desc->release();
   RecordRenderPipelineCreation(pipeline != nullptr, ElapsedMs(t0, t1));
   if (pipeline) {
@@ -6634,6 +6714,8 @@ void MetalPipelineCache::StoreNativeGeomDescription(
 
 MTL::RenderPipelineState* MetalPipelineCache::NewNativeGeomPipelineState(
     MTL::RenderPipelineDescriptor* desc, NS::Error** error) {
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty())
+    return device_->newRenderPipelineState(desc, error);
   if (!NativeGeomPersistEnabled()) {
     return device_->newRenderPipelineState(desc, error);
   }
