@@ -21,6 +21,11 @@
 REXCVAR_DEFINE_BOOL(clock_no_scaling, false, "Clock",
                     "Disable clock scaling (inverted: false = scaling enabled)");
 
+REXCVAR_DEFINE_DOUBLE(guest_time_scale, 1.0, "Clock",
+                      "Test fast-forward: run guest time this many times faster than real time (1.0 = off, "
+                      "applied at start-up, 0.1 steps, clamped to 0.1..16). Games drive their own physics, audio "
+                      "and AI from guest time, so values above ~2 can change behaviour; for test routes only.");
+
 REXCVAR_DEFINE_BOOL(clock_source_raw, false, "Clock", "Use raw clock source without scaling");
 
 namespace rex::chrono {

@@ -18,6 +18,7 @@
 #include <rex/platform.h>
 
 REXCVAR_DECLARE(bool, clock_no_scaling);
+REXCVAR_DECLARE(double, guest_time_scale);
 REXCVAR_DECLARE(bool, clock_source_raw);
 
 #if REX_ARCH_AMD64

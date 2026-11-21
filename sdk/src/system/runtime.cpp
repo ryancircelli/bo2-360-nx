@@ -109,7 +109,16 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
   // Initialize clock
   chrono::Clock::set_guest_tick_frequency(50000000);
   chrono::Clock::set_guest_system_time_base(chrono::Clock::QueryHostSystemTime());
-  chrono::Clock::set_guest_time_scalar(1.0);
+  {
+    // Test fast-forward setting (guest_time_scale, off = 1.0).
+    double scale = REXCVAR_GET(guest_time_scale);
+    if (!(scale >= 0.1)) scale = 1.0;
+    if (scale > 16.0) scale = 16.0;
+    if (scale != 1.0) {
+      REXSYS_WARN("guest_time_scale {}: guest time runs {}x real time (test fast-forward)", scale, scale);
+    }
+    chrono::Clock::set_guest_time_scalar(scale);
+  }
 
   // Enable threading affinity configuration
   thread::EnableAffinityConfiguration();
