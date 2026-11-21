@@ -78,7 +78,10 @@ SavepointStats SaveGuestMemory(const std::string& path) {
   std::vector<object_ref<XThread>> parked;
   for (auto& t : ks->object_table()->GetObjectsByType<XThread>()) {
     if (t->is_guest_thread() && t->is_running() && !XThread::IsInThread(t.get())) {
-      if (t->Suspend() == X_STATUS_SUCCESS) parked.push_back(t);
+      // Host-level suspend only: XThread::Suspend also bumps the guest-visible suspend_count,
+      // which perturbs guest waits (first run froze the title after resume).
+      uint32_t host_count = 0;
+      if (t->thread()->Suspend(&host_count)) parked.push_back(t);
     }
   }
   auto t1 = Clock::now();
@@ -96,7 +99,10 @@ SavepointStats SaveGuestMemory(const std::string& path) {
   }
   if (fd >= 0) ::close(fd);
   auto t2 = Clock::now();
-  for (auto& t : parked) t->Resume();
+  for (auto& t : parked) {
+    uint32_t host_count = 0;
+    t->thread()->Resume(&host_count);
+  }
   auto t3 = Clock::now();
   st.park_ms = Ms(t0, t1);
   st.write_ms = Ms(t1, t2);

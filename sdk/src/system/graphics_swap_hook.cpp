@@ -5,8 +5,15 @@
 #include <rex/graphics/metal_runtime.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ppc/context.h>
 #include <rex/system/patch.h>
 #include <rex/system/savepoint.h>
+
+// Diagnostic patch slot, called once per swap: proves live patch reload in a running game. The
+// original returns 0; a patch library may replace it (REX_PATCH(rex_diag_swap_probe, ...)) and set
+// ctx.r3 to any value, which is logged when it changes.
+REX_PATCH_STUB(rex_diag_swap_probe, rex_diag_swap_probe_orig)
+extern "C" void rex_diag_swap_probe_orig(PPCContext& ctx, uint8_t*) { ctx.r3.u64 = 0; }
 
 namespace rex::graphics {
 
@@ -36,6 +43,16 @@ void NotifySwap(uint32_t width, uint32_t height) {
     REXSYS_INFO("[patch-reload] version {} ok", rex::patch::CommittedPatchVersion());
   }
   rex::system::ServiceSavepointRequest();
+  {
+    static thread_local PPCContext probe_ctx{};
+    static uint64_t last = 0;
+    probe_ctx.r3.u64 = 0;
+    rex_diag_swap_probe(probe_ctx, nullptr);
+    if (probe_ctx.r3.u64 != last) {
+      last = probe_ctx.r3.u64;
+      REXSYS_INFO("[patch-probe] swap probe now returns {}", last);
+    }
+  }
   if (SwapHook hook = g_hook.load(std::memory_order_acquire)) {
     hook(width, height);
   }
