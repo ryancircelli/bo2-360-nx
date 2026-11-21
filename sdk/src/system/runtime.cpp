@@ -11,6 +11,7 @@
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/system/patch.h>
 #include <rex/filesystem/devices/host_path_device.h>
 #include <rex/filesystem/devices/null_device.h>
 #include <rex/filesystem/vfs.h>
@@ -28,6 +29,8 @@
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 
+REXCVAR_DEFINE_STRING(patch_library, "", "Runtime",
+                      "Hot-reloadable patch library (see rex/system/patch.h); empty = off");
 REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
@@ -118,6 +121,16 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
       REXSYS_WARN("guest_time_scale {}: guest time runs {}x real time (test fast-forward)", scale, scale);
     }
     chrono::Clock::set_guest_time_scalar(scale);
+  }
+
+  if (!REXCVAR_GET(patch_library).empty()) {
+    auto r = patch::LoadPatchLibrary(REXCVAR_GET(patch_library));
+    if (r.ok) {
+      REXSYS_INFO("[patch-reload] version {} ok: {} patched, {} unmatched", r.version, r.applied,
+                  r.unmatched.size());
+    } else {
+      REXSYS_ERROR("[patch-reload] load failed, keeping original code: {}", r.error);
+    }
   }
 
   // Enable threading affinity configuration
