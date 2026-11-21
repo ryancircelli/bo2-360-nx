@@ -11,7 +11,10 @@
 #include <mutex>
 #include <vector>
 
+#include <cstring>
 #include <fcntl.h>
+#include <mach/mach.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #include <rex/cvar.h>
@@ -22,6 +25,10 @@
 
 REXCVAR_DEFINE_INT32(savepoint_at_frame, -1, "Test",
                      "Take a guest-memory savepoint (savepoint_path) at this swap count; -1 = off");
+REXCVAR_DEFINE_INT32(savepoint_mem_at_frame, -1, "Test",
+                     "S3 experiment: capture an in-process savepoint at this swap count; -1 = off");
+REXCVAR_DEFINE_INT32(savepoint_rewind_at_frame, -1, "Test",
+                     "S3 experiment: rewind to the in-process savepoint at this swap count; -1 = off");
 REXCVAR_DEFINE_STRING(savepoint_path, "", "Test", "File the savepoint is written to");
 
 namespace rex::system {
@@ -113,6 +120,138 @@ SavepointStats SaveGuestMemory(const std::string& path) {
 }
 
 namespace {
+struct MemRegion {
+  uint32_t space, base, size;
+  std::vector<uint8_t> data;
+};
+struct ThreadSnap {
+  object_ref<XThread> thread;
+  mach_port_t port = 0;
+  arm_thread_state64_t gp{};
+  arm_neon_state64_t neon{};
+  uint64_t stack_lo = 0, stack_hi = 0;
+  std::vector<uint8_t> stack;
+};
+struct InProcess {
+  bool valid = false;
+  std::vector<MemRegion> regions;
+  std::vector<ThreadSnap> threads;
+} g_snap;
+
+bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* membase,
+                    std::vector<MemRegion>& out) {
+  uint64_t addr = heap->heap_base();
+  uint64_t end = uint64_t(heap->heap_base()) + heap->heap_size();
+  while (addr < end) {
+    memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(uint32_t(addr), &info)) break;
+    uint32_t size = info.region_size ? info.region_size : heap->page_size();
+    if ((info.state & memory::kMemoryAllocationCommit) &&
+        info.protect != memory::kMemoryProtectNoAccess && info.region_size) {
+      out.push_back({space, uint32_t(addr), size, {membase + addr, membase + addr + size}});
+    }
+    addr += size;
+  }
+  return true;
+}
+
+// Parks guest threads (host level) and returns them.
+std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
+  std::vector<object_ref<XThread>> parked;
+  for (auto& t : ks->object_table()->GetObjectsByType<XThread>()) {
+    if (t->is_guest_thread() && t->is_running() && !XThread::IsInThread(t.get())) {
+      uint32_t c = 0;
+      if (t->thread()->Suspend(&c)) parked.push_back(t);
+    }
+  }
+  return parked;
+}
+}  // namespace
+
+SavepointStats CaptureInProcessSavepoint() {
+  SavepointStats st;
+  auto* ks = kernel_state();
+  auto* mem = ks->memory();
+  auto t0 = Clock::now();
+  auto parked = ParkThreads(ks);
+  auto t1 = Clock::now();
+  g_snap = InProcess{};
+  const uint32_t bases[] = {0x00000000, 0x40000000, 0x80000000, 0x90000000};
+  for (uint32_t b : bases) {
+    if (auto* heap = mem->LookupHeap(b)) CollectRegions(heap, 0, mem->virtual_membase(), g_snap.regions);
+  }
+  CollectRegions(mem->GetPhysicalHeap(), 1, mem->physical_membase(), g_snap.regions);
+  for (auto& r : g_snap.regions) st.bytes += r.size;
+  st.regions = uint32_t(g_snap.regions.size());
+  for (auto& t : parked) {
+    ThreadSnap ts;
+    ts.thread = t;
+    pthread_t pt = reinterpret_cast<pthread_t>(t->thread()->native_handle());
+    ts.port = pthread_mach_thread_np(pt);
+    mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+    mach_msg_type_number_t nn = ARM_NEON_STATE64_COUNT;
+    if (thread_get_state(ts.port, ARM_THREAD_STATE64, (thread_state_t)&ts.gp, &n) != KERN_SUCCESS ||
+        thread_get_state(ts.port, ARM_NEON_STATE64, (thread_state_t)&ts.neon, &nn) != KERN_SUCCESS) {
+      continue;
+    }
+    uint64_t sp = arm_thread_state64_get_sp(ts.gp);
+    uint64_t top = reinterpret_cast<uint64_t>(pthread_get_stackaddr_np(pt));
+    if (sp == 0 || sp >= top || top - sp > (64u << 20)) continue;
+    ts.stack_lo = sp - 256;  // include the red zone
+    ts.stack_hi = top;
+    ts.stack.assign(reinterpret_cast<uint8_t*>(ts.stack_lo), reinterpret_cast<uint8_t*>(ts.stack_hi));
+    g_snap.threads.push_back(std::move(ts));
+  }
+  g_snap.valid = true;
+  auto t2 = Clock::now();
+  for (auto& t : parked) {
+    uint32_t c = 0;
+    t->thread()->Resume(&c);
+  }
+  st.threads_parked = uint32_t(g_snap.threads.size());
+  st.park_ms = Ms(t0, t1);
+  st.write_ms = Ms(t1, t2);
+  st.ok = true;
+  return st;
+}
+
+SavepointStats RewindToInProcessSavepoint() {
+  SavepointStats st;
+  if (!g_snap.valid) {
+    st.error = "no in-process savepoint";
+    return st;
+  }
+  auto* ks = kernel_state();
+  auto* mem = ks->memory();
+  auto t0 = Clock::now();
+  auto parked = ParkThreads(ks);
+  auto t1 = Clock::now();
+  for (auto& r : g_snap.regions) {
+    uint8_t* base = r.space == 0 ? mem->virtual_membase() : mem->physical_membase();
+    std::memcpy(base + r.base, r.data.data(), r.size);
+    st.bytes += r.size;
+  }
+  st.regions = uint32_t(g_snap.regions.size());
+  // Threads that exist now but did not at capture time cannot be rewound; counted via parked.
+  for (auto& ts : g_snap.threads) {
+    std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
+    thread_abort_safely(ts.port);  // leave a blocking kernel wait so the restored state is used
+    thread_set_state(ts.port, ARM_THREAD_STATE64, (thread_state_t)&ts.gp, ARM_THREAD_STATE64_COUNT);
+    thread_set_state(ts.port, ARM_NEON_STATE64, (thread_state_t)&ts.neon, ARM_NEON_STATE64_COUNT);
+    ++st.threads_parked;
+  }
+  auto t2 = Clock::now();
+  for (auto& t : parked) {
+    uint32_t c = 0;
+    t->thread()->Resume(&c);
+  }
+  st.park_ms = Ms(t0, t1);
+  st.write_ms = Ms(t1, t2);
+  st.ok = true;
+  return st;
+}
+
+namespace {
 std::atomic<bool> g_requested{false};
 std::mutex g_mutex;
 std::string g_request_path;
@@ -149,6 +288,21 @@ void ServiceSavepointRequest() {
     }
     Run(path);
     return;
+  }
+  {
+    static bool captured = false, rewound = false;
+    int cap = REXCVAR_GET(savepoint_mem_at_frame), rew = REXCVAR_GET(savepoint_rewind_at_frame);
+    if (cap >= 0 && !captured && frame >= cap) {
+      captured = true;
+      auto st = CaptureInProcessSavepoint();
+      REXSYS_INFO("[savepoint-s3] captured at frame {}: {} MB, {} regions, {} threads with host state, park {:.1f} ms, copy {:.1f} ms",
+                  frame, st.bytes >> 20, st.regions, st.threads_parked, st.park_ms, st.write_ms);
+    } else if (rew >= 0 && captured && !rewound && frame >= rew) {
+      rewound = true;
+      auto st = RewindToInProcessSavepoint();
+      REXSYS_INFO("[savepoint-s3] rewound at frame {}: {} MB, {} threads restored, park {:.1f} ms, restore {:.1f} ms (frame counter keeps running; watch the game for continuity)",
+                  frame, st.bytes >> 20, st.threads_parked, st.park_ms, st.write_ms);
+    }
   }
   if (!g_cvar_done) {
     int at = REXCVAR_GET(savepoint_at_frame);

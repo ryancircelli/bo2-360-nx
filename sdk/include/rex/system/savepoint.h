@@ -33,4 +33,10 @@ void RequestSavepoint(const std::string& path);
 // Called at every frame boundary; runs a pending request or the savepoint_at_frame cvar.
 void ServiceSavepointRequest();
 
+// S3 (experimental): same-process rewind. CaptureInProcessSavepoint keeps guest memory,
+// and for every parked guest thread its host register state and host stack, in RAM.
+// RewindToInProcessSavepoint writes them all back while the threads are parked and resumes.
+SavepointStats CaptureInProcessSavepoint();
+SavepointStats RewindToInProcessSavepoint();
+
 }  // namespace rex::system
