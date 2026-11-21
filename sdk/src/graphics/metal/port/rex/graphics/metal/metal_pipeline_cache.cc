@@ -1293,6 +1293,12 @@ MetalPipelineCache::MetalPipelineCache(MTL::Device* device,
     : device_(device), register_file_(register_file) {}
 
 MetalPipelineCache::~MetalPipelineCache() {
+  {
+    std::lock_guard<std::mutex> lock(live_wake_mutex_);
+    live_stop_ = true;
+  }
+  live_wake_.notify_one();
+  if (live_thread_.joinable()) live_thread_.join();
   readiness::ClearBackgroundProbe(this);
   {
     MetalPipelineCache* expected = this;
@@ -1337,6 +1343,11 @@ MetalPipelineCache::~MetalPipelineCache() {
     }
   }
   warmup_helper_threads_.clear();
+
+  for (auto& item : live_shaders_) {
+    if (item.second.function) item.second.function->release();
+    for (auto* f : item.second.retired) f->release();
+  }
 
   // Release MSC pipeline caches.
   for (auto& pair : pipeline_cache_) {
@@ -1567,6 +1578,10 @@ bool MetalPipelineCache::InitializeShaderTranslation(
     }
     REXLOG_INFO("MetalPipelineCache: spawned {} async pipeline creation threads",
            thread_count);
+  }
+
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) {
+    live_thread_ = std::thread(&MetalPipelineCache::LiveShaderThread, this);
   }
 
   // FABLE2_NATIVE_SHADERS: tool lookup in the background (warm-up's cache
@@ -3716,7 +3731,10 @@ bool MetalPipelineCache::CompileNativeXlate(
                 translation->modification(), result.reason, n);
     return false;
   }
-  if (const char* dir = NativeXlateDumpDir()) {
+  const std::string live_dump = REXCVAR_GET(metal_shader_live_dump);
+  if (const char* dir = live_dump.empty() ? NativeXlateDumpDir() : live_dump.c_str()) {
+    std::error_code directory_error;
+    std::filesystem::create_directories(dir, directory_error);
     std::filesystem::path path =
         std::filesystem::path(dir) /
         fmt::format("{}_{:016X}_{:X}{}{}.metal", vertex ? "vs" : "ps", hash,
@@ -3901,6 +3919,9 @@ void MetalPipelineCache::NativeShaderSwap(PipelineHandle* handle) {
   // FABLE2_NATIVE_XLATE a pipeline can be swapped twice (pixel shader ready,
   // then vertex shader ready, or the other way round).
   handle->WaitForCreation();
+  std::unique_lock<std::recursive_mutex> live_lock(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty() ||
+      !REXCVAR_GET(metal_shader_live_dump).empty()) live_lock.lock();
   // exchange, not store: when a ready event found this swap already queued, it published its shader before
   // its own exchange, and this acquire makes that shader visible to the checks below.
   handle->ns_swap_queued.exchange(false, std::memory_order_acq_rel);
@@ -4078,6 +4099,7 @@ MetalDxilBytecodeKey Ns2Key(const ns_spec::PlainKey& plain, uint32_t version,
 
 void MetalPipelineCache::QueueSpecialization(
     MetalShader::MetalTranslation* translation) {
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) return;
   if (!translation || ns_threads_.empty() ||
       !translation->plain_key().valid()) {
     return;
@@ -5014,6 +5036,12 @@ MetalPipelineCache::GetOrCreatePipelineState(
 
   PipelineHandle* raw_handle = handle.get();
   pipeline_cache_.emplace(key, std::move(handle));
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) {
+    std::lock_guard<std::recursive_mutex> lock(live_mutex_);
+    raw_handle->ns_vertex_translation = vertex_translation;
+    raw_handle->ns_pixel_translation = pixel_translation;
+    live_handles_.push_back(raw_handle);
+  }
   if (NativeShadersMode() && pixel_translation) {
     raw_handle->ns_vertex_translation = vertex_translation;
     raw_handle->ns_pixel_translation = pixel_translation;
@@ -5033,6 +5061,9 @@ MetalPipelineCache::GetOrCreatePipelineState(
     return raw_handle;
   }
 
+  // Serialize first publication with live edit transactions.
+  std::unique_lock<std::recursive_mutex> live_creation(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_creation.lock();
   // Synchronous path: create immediately.
   bool optimized = false;
   bool vertex_native = false;
@@ -5077,7 +5108,9 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
     const PipelineHandle* handle,
     MetalShader::MetalTranslation* vertex_translation,
     MetalShader::MetalTranslation* pixel_translation, bool* out_optimized,
-    MTL::Function* fragment_override, bool* out_vertex_native) {
+    MTL::Function* fragment_override, bool* out_vertex_native,
+    MetalShader::MetalTranslation* live_translation,
+    MTL::Function* live_candidate, bool live_restore) {
   ScopedAutoreleasePool autorelease_pool;
   if (out_vertex_native) {
     *out_vertex_native = false;
@@ -5092,13 +5125,34 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
     return nullptr;
   }
 
+  RegisterLiveShader(vertex_translation);
+  RegisterLiveShader(pixel_translation);
+  // Hold the edit generation stable until the PSO is built.
+  std::unique_lock<std::recursive_mutex> live_lock(live_mutex_, std::defer_lock);
+  if (!REXCVAR_GET(metal_shader_live_overrides).empty() ||
+      !REXCVAR_GET(metal_shader_live_dump).empty()) live_lock.lock();
+  bool live_pipeline = false;
+  auto live_function = [&](MetalShader::MetalTranslation* t, MTL::Function* original) {
+    if (!t) return original;
+    if (t == live_translation) {
+      live_pipeline = true;
+      return live_restore ? t->best_function() : live_candidate;
+    }
+    auto it = live_shaders_.find(t);
+    if (it != live_shaders_.end() && it->second.function) {
+      live_pipeline = true;
+      return it->second.function;
+    }
+    return original;
+  };
+
   // Create pipeline descriptor.
   MTL::RenderPipelineDescriptor* desc =
       MTL::RenderPipelineDescriptor::alloc()->init();
 
   // FABLE2_NATIVE_XLATE: the native vertex function once it is ready.
   MTL::Function* vertex_function = vertex_translation->best_function();
-  desc->setVertexFunction(vertex_function);
+  desc->setVertexFunction(live_function(vertex_translation, vertex_function));
   if (out_vertex_native) {
     *out_vertex_native = vertex_translation->is_native_xlate() &&
                          vertex_function == vertex_translation->optimized_function();
@@ -5117,6 +5171,8 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
       fragment_optimized = fragment == pixel_translation->optimized_function();
     }
   }
+
+  desc->setFragmentFunction(live_function(pixel_translation, desc->fragmentFunction()));
 
   // Trace-only (FABLE2_SHADER_LABELS=1): name the pipeline after its guest
   // shaders so GPU captures (gpucapture/gpudebug) can attribute cost to them.
@@ -5265,8 +5321,8 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
       archive_sets_[fragment_override ? 2 : (fragment_optimized ? 1 : 0)];
   {
     std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
-    archives = archive_set.segments;
-    if (archive_set.archive) {
+    if (!live_pipeline) archives = archive_set.segments;
+    if (!live_pipeline && archive_set.archive) {
       archive = archive_set.archive;
       archives.push_back(archive);
     }
@@ -5389,7 +5445,200 @@ MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
 // CreationThread (background pipeline compilation)
 // ---------------------------------------------------------------------------
 
+// Live edits deliberately never change the persistent translation or stage cache.
+void MetalPipelineCache::RegisterLiveShader(MetalShader::MetalTranslation* t) {
+  if (!t || (REXCVAR_GET(metal_shader_live_dump).empty() &&
+             REXCVAR_GET(metal_shader_live_overrides).empty())) return;
+  std::lock_guard<std::recursive_mutex> lock(live_mutex_);
+  auto inserted = live_shaders_.try_emplace(t);
+  if (!inserted.second) return;
+  auto& entry = inserted.first->second;
+  entry.stem = fmt::format("{}_{:016X}_{:X}",
+      t->shader().type() == xenos::ShaderType::kVertex ? "vs" : "ps",
+      t->shader().ucode_data_hash(), t->modification());
+  const auto dir = REXCVAR_GET(metal_shader_live_dump);
+  if (dir.empty()) return;
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  auto dump = [&](const char* extension, const auto& bytes) {
+    if (bytes.empty()) return;
+    const auto path = std::filesystem::path(dir) / (entry.stem + extension);
+    if (FILE* f = std::fopen(path.string().c_str(), "wb")) {
+      std::fwrite(bytes.data(), 1, bytes.size(), f);
+      std::fclose(f);
+    }
+  };
+  dump(".metallib", t->metallib_data());
+  dump(".dxil", t->dxil_data());
+  dump(".dxbc", t->translated_binary());
+  const std::string manifest = fmt::format(
+      "entry={}\nstage={}\nhash={:016X}\nmodification={:X}\n"
+      "abi={}\nlanguage=Metal3.2\nmath=safe\npreserve_invariance={}\n",
+      t->best_function()->name()->utf8String(),
+      t->shader().type() == xenos::ShaderType::kVertex ? "vertex" : "fragment",
+      t->shader().ucode_data_hash(), t->modification(),
+      t->is_native_xlate() ? "native-xenos" : "MSC",
+      t->shader().type() == xenos::ShaderType::kVertex);
+  dump(".manifest", manifest);
+}
+
+void MetalPipelineCache::LiveShaderThread() {
+  pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lock(live_wake_mutex_);
+      live_wake_.wait(lock, [this] { return live_stop_ || live_requested_; });
+      if (live_stop_) return;
+      live_requested_ = false;
+    }
+    ScopedAutoreleasePool pool;
+    // Creation holds the same lock through publication. Uncreated handles
+    // pick up the newly published function when their first build starts;
+    // waiting for the entire warm-up queue here would delay edits for minutes.
+    std::unique_lock<std::recursive_mutex> lock(live_mutex_);
+    const auto handles = live_handles_;
+    const auto dir = std::filesystem::path(REXCVAR_GET(metal_shader_live_overrides));
+    for (auto& item : live_shaders_) {
+      auto* t = item.first;
+      auto& edit = item.second;
+      auto path = dir / (edit.stem + ".metal");
+      std::error_code ec;
+      bool source = std::filesystem::exists(path, ec);
+      if (!source) path = dir / (edit.stem + ".metallib");
+      const bool exists = std::filesystem::exists(path, ec);
+      std::string signature;
+      if (exists) {
+        const auto mtime = std::filesystem::last_write_time(path, ec);
+        if (ec) continue;
+        const auto size = std::filesystem::file_size(path, ec);
+        if (ec) continue;
+        signature = fmt::format("{}:{}:{}", path.string(), mtime.time_since_epoch().count(), size);
+      }
+      if (signature == edit.signature) continue;
+      edit.signature = signature;  // A failed edit is retried only after another save.
+      MTL::Library* library = nullptr;
+      MTL::Function* function = nullptr;
+      NS::Error* error = nullptr;
+      if (exists) {
+        if (source) {
+          // Converter output has no editable MSL. Refuse to mix its ABI with
+          // a native translator entry point.
+          if (!t->is_native_xlate()) {
+            REXLOG_ERROR("[shader-live] {}: .metal requires a native translation; use compatible .metallib", edit.stem);
+            continue;
+          }
+          std::string text;
+          if (FILE* f = std::fopen(path.string().c_str(), "rb")) {
+            char buf[8192]; size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), f))) {
+              text.append(buf, n);
+              if (text.size() > 32 * 1024 * 1024) break;
+            }
+            std::fclose(f);
+          }
+          if (text.empty() || text.size() > 32 * 1024 * 1024) {
+            REXLOG_ERROR("[shader-live] {}: empty or oversized source", edit.stem);
+            continue;
+          }
+          auto* options = MTL::CompileOptions::alloc()->init();
+          options->setLanguageVersion(MTL::LanguageVersion3_2);
+          options->setMathMode(MTL::MathModeSafe);
+          options->setPreserveInvariance(t->shader().type() == xenos::ShaderType::kVertex);
+          library = device_->newLibrary(NS::String::string(text.c_str(), NS::UTF8StringEncoding), options, &error);
+          options->release();
+        } else {
+          library = device_->newLibrary(NS::String::string(path.string().c_str(), NS::UTF8StringEncoding), &error);
+        }
+        if (library) function = library->newFunction(t->best_function()->name());
+        if (!function) {
+          REXLOG_ERROR("[shader-live] {}: compile/load failed: {} (last working shader kept)", edit.stem,
+              error ? error->localizedDescription()->utf8String() : "entry point missing");
+          if (library) library->release();
+          continue;
+        }
+        library->release();  // Function retains the library.
+        const auto expected = t->shader().type() == xenos::ShaderType::kVertex
+            ? MTL::FunctionTypeVertex : MTL::FunctionTypeFragment;
+        if (function->functionType() != expected) {
+          function->release();
+          REXLOG_ERROR("[shader-live] {}: wrong shader stage; previous shader kept", edit.stem);
+          continue;
+        }
+      }
+      // Build all affected PSOs before publishing any. An incompatible edit
+      // leaves the previous generation intact, including its active function.
+      std::vector<std::pair<PipelineHandle*, MTL::RenderPipelineState*>> ready;
+      bool ok = true;
+      for (auto* h : handles) {
+        if (h->ns_vertex_translation != t && h->ns_pixel_translation != t) continue;
+        if (!h->creation_complete.load(std::memory_order_acquire) ||
+            !h->state.load(std::memory_order_acquire)) continue;
+        auto* pso = CreatePipelineFromHandle(h, h->ns_vertex_translation,
+            h->ns_pixel_translation, nullptr, nullptr, nullptr, t, function, !exists);
+        if (!pso) { ok = false; break; }
+        ready.emplace_back(h, pso);
+      }
+      // Never publish a generation superseded by another editor save.
+      if (exists) {
+        const auto stamp = std::filesystem::last_write_time(path, ec);
+        const auto size = std::filesystem::file_size(path, ec);
+        const auto current = ec ? std::string() : fmt::format("{}:{}:{}", path.string(), stamp.time_since_epoch().count(), size);
+        if (current != signature) {
+          ok = false;
+          edit.signature = "retry";
+          REXLOG_INFO("[shader-live] {}: edit changed during build; retry next poll", edit.stem);
+        }
+      }
+      if (!ok) {
+        for (auto& p : ready) p.second->release();
+        if (function) function->release();
+        REXLOG_ERROR("[shader-live] {}: pipeline rebuild failed (last working shader kept)", edit.stem);
+        continue;
+      }
+      if (edit.function) edit.retired.push_back(edit.function);
+      edit.function = function;
+      for (auto& p : ready) {
+        auto* old = p.first->state.exchange(p.second, std::memory_order_acq_rel);
+        if (old) p.first->ns_retired_states.push_back(old);
+      }
+      REXLOG_INFO("[shader-live] {}: {} successful, {} pipelines rebuilt", edit.stem,
+                  exists ? "swap" : "restore", ready.size());
+    }
+  }
+}
+
 void MetalPipelineCache::NoteFrameDraws(uint64_t draws) {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - constant_last_poll_ >= std::chrono::seconds(1)) {
+    constant_last_poll_ = now;
+    const auto path = REXCVAR_GET(metal_shader_constant_overrides);
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(path, ec);
+    const std::string signature = ec ? path + ":missing" : path + ":" + std::to_string(int64_t(stamp.time_since_epoch().count()));
+    if (signature != constant_override_signature_) {
+      constant_override_signature_ = signature;
+      if (ec) constant_overrides.clear();
+      else if (FILE* f = std::fopen(path.c_str(), "rb")) {
+        std::string text; char buf[4096]; size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), f))) {
+          text.append(buf, n);
+          if (text.size() > 1024 * 1024) break;
+        }
+        std::fclose(f);
+        if (text.size() <= 1024 * 1024 && ParseMetalConstantOverrides(text, constant_overrides))
+          REXLOG_INFO("[shader-live] constants reloaded: {} entries", constant_overrides.size());
+        else REXLOG_ERROR("[shader-live] invalid constants file; previous values kept");
+      }
+    }
+  }
+  if (live_thread_.joinable() && now - live_last_poll_ >= std::chrono::seconds(1)) {
+    live_last_poll_ = now;
+    {
+      std::lock_guard<std::mutex> lock(live_wake_mutex_);
+      live_requested_ = true;
+    }
+    live_wake_.notify_one();
+  }
   if (seed_live_.load(std::memory_order_relaxed)) return;
   const int threshold = REXCVAR_GET(metal_shader_seed_live_draws);
   // A few consecutive gameplay-sized frames, so one busy menu frame doesn't
@@ -5492,6 +5741,9 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     pool->drain();
     pool = NS::AutoreleasePool::alloc()->init();
 
+    // Serialize first publication with live edit transactions.
+    std::unique_lock<std::recursive_mutex> live_creation(live_mutex_, std::defer_lock);
+    if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_creation.lock();
     // Create the pipeline.
     PipelineHandle* handle = request.handle;
     bool optimized = false;

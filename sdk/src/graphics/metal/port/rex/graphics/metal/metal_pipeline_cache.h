@@ -1,3 +1,4 @@
+#include "rex/graphics/metal/metal_constant_overrides.h"
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -99,6 +100,9 @@ PipelineRenderingKey ResolvePipelineRenderingKey(
 
 class MetalPipelineCache {
  public:
+  std::vector<MetalConstantOverride> constant_overrides;
+  std::string constant_override_signature_;
+  std::chrono::steady_clock::time_point constant_last_poll_{};
   static constexpr size_t kLayoutUIDEmpty = 0;
 
   MetalPipelineCache(MTL::Device* device, const RegisterFile& register_file);
@@ -717,6 +721,26 @@ class MetalPipelineCache {
   uint32_t ns_items_since_idle_log_ = 0;
   std::chrono::steady_clock::time_point ns_start_{};
 
+  // Live edits are isolated from stage caches and binary archives. Functions
+  // and retired PSOs stay alive until cache destruction, just like native swaps.
+  struct LiveShader {
+    std::string stem;
+    std::string signature;
+    MTL::Function* function = nullptr;
+    std::vector<MTL::Function*> retired;
+  };
+  std::recursive_mutex live_mutex_;
+  std::unordered_map<MetalShader::MetalTranslation*, LiveShader> live_shaders_;
+  std::vector<PipelineHandle*> live_handles_;
+  std::thread live_thread_;
+  std::mutex live_wake_mutex_;
+  std::condition_variable live_wake_;
+  bool live_stop_ = false;
+  bool live_requested_ = false;
+  std::chrono::steady_clock::time_point live_last_poll_{};
+  void LiveShaderThread();
+  void RegisterLiveShader(MetalShader::MetalTranslation* translation);
+
   // Async pipeline compilation thread pool.
   void CreationThread(size_t thread_index);
   // Builds the pipeline with the translations' best functions (optimized
@@ -727,7 +751,9 @@ class MetalPipelineCache {
       MetalShader::MetalTranslation* pixel_translation,
       bool* out_optimized,
       MTL::Function* fragment_override = nullptr,
-      bool* out_vertex_native = nullptr);
+      bool* out_vertex_native = nullptr,
+      MetalShader::MetalTranslation* live_translation = nullptr,
+      MTL::Function* live_candidate = nullptr, bool live_restore = false);
   // FABLE2_NS_SPECIALIZE background work.
   void QueueSpecialization(MetalShader::MetalTranslation* translation);
   void NsSpecialize(MetalShader::MetalTranslation* translation);

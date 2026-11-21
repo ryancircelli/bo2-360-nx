@@ -320,3 +320,9 @@ void ApplyLegacyMetalEnv() {
     }
   }
 }
+
+DEFINE_string(metal_shader_live_dump, "", "Dump translated shaders by stage/hash/modification (restart required).", "Metal");
+DEFINE_string(metal_shader_live_overrides, "", "Watch compatible .metal/.metallib overrides once per second (restart required).", "Metal");
+
+DEFINE_string(metal_shader_constant_overrides, "", "Live scalar overrides: ps|vs hash register component value per line.", "Metal");
+DEFINE_bool(metal_fh1_blur_threshold, false, "Use 0.5 for FH1 velocity shader PS c253.w only.", "Metal");

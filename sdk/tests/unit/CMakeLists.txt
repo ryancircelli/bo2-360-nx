@@ -30,3 +30,8 @@ target_link_libraries(chrono_steady_cast_tests PRIVATE
 )
 
 add_test(NAME chrono_steady_cast_tests COMMAND chrono_steady_cast_tests)
+
+add_executable(metal_constant_overrides_tests graphics/metal_constant_overrides_test.cpp)
+target_include_directories(metal_constant_overrides_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
+add_test(NAME metal_constant_overrides_tests COMMAND metal_constant_overrides_tests)

@@ -101,3 +101,9 @@ inline bool MetalFable2Quirks() {
 // Maps legacy FABLE2_<NAME> variables onto the user-facing cvars above when the
 // cvar was not set by a config file, REX_METAL_<NAME> or the command line.
 void ApplyLegacyMetalEnv();
+
+DECLARE_string(metal_shader_live_dump);
+DECLARE_string(metal_shader_live_overrides);
+
+DECLARE_string(metal_shader_constant_overrides);
+DECLARE_bool(metal_fh1_blur_threshold);

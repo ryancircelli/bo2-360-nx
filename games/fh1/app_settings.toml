@@ -18,3 +18,11 @@ gpu_allow_invalid_fetch_constants = true
 # Keep small GPU resolve results current in guest RAM for the game's exposure feedback.
 # Without this, the picture is washed out and brightness pulses between frames.
 metal_resolve_readback_max_bytes = 65536
+
+# Separate stencil classes 127 and 128 in the speed-blur velocity shader.
+metal_fh1_blur_threshold = true
+
+# Optional live shader editing (restart after enabling; use absolute folders).
+# metal_shader_live_dump = "/tmp/fh1-shaders/dump"
+# metal_shader_live_overrides = "/tmp/fh1-shaders/overrides"
+# metal_shader_constant_overrides = "/tmp/fh1-shaders/constants.txt"

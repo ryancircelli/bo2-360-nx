@@ -7563,6 +7563,27 @@ bool MetalCommandProcessor::PrepareDrawConstants(
         }
       };
 
+  // Override uploads are rebuilt per draw, including on removal, without
+  // mutating guest registers. Existing payload deduplication still applies.
+  if (!REXCVAR_GET(metal_shader_constant_overrides).empty() ||
+      REXCVAR_GET(metal_fh1_blur_threshold)) {
+    cbuffer_binding_float_vertex_.up_to_date = false;
+    cbuffer_binding_float_pixel_.up_to_date = false;
+  }
+  auto apply_overrides = [&](uint8_t* data, size_t size,
+                             const Shader::ConstantRegisterMap* map, bool pixel) {
+    if (!map) return;
+    const auto* shader = pixel ? pixel_shader : vertex_shader;
+    if (!shader) return;
+    if (pixel && REXCVAR_GET(metal_fh1_blur_threshold)) {
+      static const std::vector<MetalConstantOverride> blur = {
+          {true, UINT64_C(0xE68FE55ECD482EC5), 253, 3, 0.5f}};
+      ApplyMetalConstantOverrides(blur, true, shader->ucode_data_hash(),
+          map->float_bitmap, data, size);
+    }
+    ApplyMetalConstantOverrides(pipeline_cache_->constant_overrides, pixel,
+        shader->ucode_data_hash(), map->float_bitmap, data, size);
+  };
   const Shader::ConstantRegisterMap& float_map_vertex =
       vertex_shader->constant_register_map();
   if (!cbuffer_binding_float_vertex_.up_to_date) {
@@ -7574,6 +7595,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
             float_size, "vertex float", [&](uint8_t* data, size_t size) {
               write_packed_float_constants(data, size, &float_map_vertex,
                                            XE_GPU_REG_SHADER_CONSTANT_000_X);
+              apply_overrides(data, size, &float_map_vertex, false);
             })) {
       return false;
     }
@@ -7594,6 +7616,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
             float_size, "pixel float", [&](uint8_t* data, size_t size) {
               write_packed_float_constants(data, size, float_map_pixel,
                                            XE_GPU_REG_SHADER_CONSTANT_256_X);
+              apply_overrides(data, size, float_map_pixel, true);
             })) {
       return false;
     }
