@@ -6,6 +6,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/patch.h>
+#include <rex/system/savepoint.h>
 
 namespace rex::graphics {
 
@@ -34,6 +35,7 @@ void NotifySwap(uint32_t width, uint32_t height) {
   if (rex::patch::CommitPendingPatch()) {
     REXSYS_INFO("[patch-reload] version {} ok", rex::patch::CommittedPatchVersion());
   }
+  rex::system::ServiceSavepointRequest();
   if (SwapHook hook = g_hook.load(std::memory_order_acquire)) {
     hook(width, height);
   }

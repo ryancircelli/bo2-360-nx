@@ -1,0 +1,36 @@
+/**
+ * @file        system/savepoint.h
+ * @brief       Save points step S1/S2: quiesce guest threads and dump guest memory
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+namespace rex::system {
+
+struct SavepointStats {
+  bool ok = false;
+  uint32_t threads_parked = 0;
+  uint32_t regions = 0;
+  uint64_t bytes = 0;
+  double park_ms = 0;
+  double write_ms = 0;
+  double resume_ms = 0;
+  std::string error;
+};
+
+// S2: suspends every running guest thread except the caller's, S1: writes all
+// committed guest memory (virtual heaps + physical heap) to `path`, then
+// resumes. Call from a host thread at the frame boundary (graphics swap).
+// File: "REXSP1\0\0", then repeated {u32 space (0 virtual,1 physical), u32 guest_base,
+// u32 size} + size bytes, ended by space = 0xFFFFFFFF.
+SavepointStats SaveGuestMemory(const std::string& path);
+
+// Asks the frame boundary to take a savepoint (used by tests and control hooks).
+void RequestSavepoint(const std::string& path);
+// Called at every frame boundary; runs a pending request or the savepoint_at_frame cvar.
+void ServiceSavepointRequest();
+
+}  // namespace rex::system
