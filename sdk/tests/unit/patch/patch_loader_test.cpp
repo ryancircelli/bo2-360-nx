@@ -1,6 +1,9 @@
 // Plain-main test: slot stub, original fallback, load/reload, fail-closed, unmatched entries.
 // argv[1] = patch lib v2, argv[2] = patch lib v3 (same source, different return), argv[3] = not-a-patch file
+#include <chrono>
 #include <cstdio>
+#include <thread>
+#include <filesystem>
 #include <cstdlib>
 #include <rex/system/patch.h>
 
@@ -42,6 +45,26 @@ int main(int argc, char** argv) {
   CHECK(call(sub_1000) == 3);  // fail closed: old code kept
   auto miss = rex::patch::LoadPatchLibrary("/nonexistent/lib.dylib");
   CHECK(!miss.ok);
+  // Two-phase: prepare does not change behaviour until the frame-boundary commit.
+  auto pr = rex::patch::PreparePatchLibrary(argv[1]);
+  CHECK(pr.ok);
+  CHECK(call(sub_1000) == 3);
+  CHECK(rex::patch::CommitPendingPatch());
+  CHECK(call(sub_1000) == 2);
+  CHECK(!rex::patch::CommitPendingPatch());  // nothing pending
+  // Watcher: replace a watched file; new code appears after the next commit, no restart.
+  std::filesystem::path watched = std::filesystem::temp_directory_path() / "rex_patch_watched.dylib";
+  std::filesystem::copy_file(argv[1], watched, std::filesystem::copy_options::overwrite_existing);
+  rex::patch::StartPatchWatcher(watched, 50);
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  std::filesystem::copy_file(argv[2], watched, std::filesystem::copy_options::overwrite_existing);
+  bool committed = false;
+  for (int i = 0; i < 40 && !committed; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    committed = rex::patch::CommitPendingPatch();
+  }
+  CHECK(committed);
+  CHECK(call(sub_1000) == 3);
   std::printf("patch_loader_test OK (v%u -> v%u)\n", r.version, r2.version);
   return 0;
 }

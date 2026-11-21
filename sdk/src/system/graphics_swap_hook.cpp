@@ -4,6 +4,8 @@
 #include <rex/graphics/swap_hook.h>
 #include <rex/graphics/metal_runtime.h>
 #include <rex/cvar.h>
+#include <rex/logging.h>
+#include <rex/system/patch.h>
 
 namespace rex::graphics {
 
@@ -28,6 +30,10 @@ void NotifyGpuJob(uint64_t order, uint64_t ns, bool measured) {
 }
 
 void NotifySwap(uint32_t width, uint32_t height) {
+  // Frame boundary: bind a freshly prepared patch library (no-op unless one is pending).
+  if (rex::patch::CommitPendingPatch()) {
+    REXSYS_INFO("[patch-reload] version {} ok", rex::patch::CommittedPatchVersion());
+  }
   if (SwapHook hook = g_hook.load(std::memory_order_acquire)) {
     hook(width, height);
   }

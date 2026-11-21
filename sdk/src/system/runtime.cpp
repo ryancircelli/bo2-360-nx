@@ -31,6 +31,8 @@
 
 REXCVAR_DEFINE_STRING(patch_library, "", "Runtime",
                       "Hot-reloadable patch library (see rex/system/patch.h); empty = off");
+REXCVAR_DEFINE_BOOL(patch_reload, false, "Runtime",
+                    "Watch patch_library and swap in a rebuilt one at the next frame boundary");
 REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
@@ -130,6 +132,9 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
                   r.unmatched.size());
     } else {
       REXSYS_ERROR("[patch-reload] load failed, keeping original code: {}", r.error);
+    }
+    if (REXCVAR_GET(patch_reload)) {
+      patch::StartPatchWatcher(REXCVAR_GET(patch_library));
     }
   }
 

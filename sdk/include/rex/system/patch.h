@@ -74,6 +74,22 @@ struct LoadResult {
 // because guest threads may still return into older versions.
 LoadResult LoadPatchLibrary(const std::filesystem::path& path);
 
+// Two-phase variant for live reload. PreparePatchLibrary does the dlopen and
+// slot resolution on any thread and parks the result as "pending";
+// CommitPendingPatch (cheap atomic check when nothing is pending) binds the
+// slots and is called at the frame boundary (graphics swap). A newer prepare
+// replaces an uncommitted older one. Slots are single atomic pointers and old
+// libraries stay mapped, so threads inside old code finish it safely and every
+// later call takes the new code; no thread is parked. (A multi-function
+// change can be seen half-applied by two threads for the span of one commit.)
+LoadResult PreparePatchLibrary(const std::filesystem::path& path);
+bool CommitPendingPatch();
+uint32_t CommittedPatchVersion();
+
+// Polls `path` every `poll_ms` and prepares the library when its mtime/size
+// changes. Idempotent; thread runs for process lifetime.
+void StartPatchWatcher(const std::filesystem::path& path, uint32_t poll_ms = 250);
+
 }  // namespace rex::patch
 
 //=============================================================================
