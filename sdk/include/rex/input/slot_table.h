@@ -54,8 +54,9 @@ bool PinMatches(std::string_view match, const DeviceInfo& info);
 ///  0. its fixed_user, if it has one and that player is free (script pads);
 ///  1. the player the config pins it to, if free;
 ///  2. the player it had before it disconnected, if free (matched by serial,
-///     then port, then path; a serial-less pad that comes back in another
-///     port falls back to the oldest player an identical pad left);
+///     then port, then path; a pad that comes back with another identity falls
+///     back to the oldest player an identical pad left, except that a serial
+///     reservation is only ever matched by that serial);
 ///  3. the lowest free player nobody is pinned to or waiting to reconnect to;
 ///  4. the lowest free player nobody is pinned to (the waiting pad loses it);
 ///  5. the lowest free player;
@@ -88,7 +89,7 @@ class SlotTable {
  private:
   struct Reservation {
     std::string key;    // ResolveDeviceIdentity(pad).key
-    std::string model;  // DeviceModelKey(pad)
+    std::string model;  // VID:PID when known, otherwise DeviceModelKey(pad)
     bool serial;        // key is a serial; never handed to another pad
     uint32_t ordinal;
   };

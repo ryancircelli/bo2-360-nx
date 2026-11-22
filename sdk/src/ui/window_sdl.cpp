@@ -36,6 +36,7 @@
 #elif REX_PLATFORM_MAC
 #include <CoreFoundation/CoreFoundation.h>
 #include <SDL3/SDL_metal.h>
+#include <objc/message.h>
 
 #include <rex/ui/surface_mac.h>
 #else
@@ -46,6 +47,20 @@
 namespace rex::ui {
 
 namespace {
+
+#if REX_PLATFORM_MAC
+void EnableCocoaFullscreenControls(SDL_Window* window) {
+  id ns_window = static_cast<id>(SDL_GetPointerProperty(
+      SDL_GetWindowProperties(window), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr));
+  if (!ns_window) {
+    return;
+  }
+  constexpr unsigned long kFullScreenPrimary = 1 << 7;
+  using SetCollectionBehaviorFn = void (*)(id, SEL, unsigned long);
+  reinterpret_cast<SetCollectionBehaviorFn>(objc_msgSend)(
+      ns_window, sel_registerName("setCollectionBehavior:"), kFullScreenPrimary);
+}
+#endif
 
 uint32_t ResolveWindowWidth(uint32_t requested_width) {
   if (REXCVAR_GET(window_width) > 0) {
@@ -203,6 +218,11 @@ bool WindowSDL::OpenImpl() {
     REXLOG_ERROR("SDL_CreateWindow failed: {}", SDL_GetError());
     return false;
   }
+#if REX_PLATFORM_MAC
+  // SDL's non-Space mode disables the native controls at creation. Opt this
+  // resizable window back in; SDL_SetWindowFullscreen still takes the instant path.
+  EnableCocoaFullscreenControls(sdl_window_);
+#endif
   sdl_window_id_ = SDL_GetWindowID(sdl_window_);
   sdl_app_context().RegisterWindow(sdl_window_id_, this);
 

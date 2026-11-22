@@ -50,7 +50,8 @@ bool SDLWindowedAppContext::Initialize() {
   // windowed size, and the swapchain recreated during it intermittently leaves the CAMetalLayer
   // stretching a single texel over the screen (solid color, the game itself rendering fine).
   // Non-Space fullscreen switches instantly. Default priority: SDL_VIDEO_MAC_FULLSCREEN_SPACES=1
-  // in the environment still restores the Space behavior.
+  // in the environment still restores the Space behavior. WindowSDL enables the native controls
+  // separately, without changing this setting-driven path.
   SDL_SetHintWithPriority(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0", SDL_HINT_DEFAULT);
 #endif
   if (!requested_driver.empty()) {

@@ -60,6 +60,17 @@ std::string DeviceModelKey(const DeviceInfo& info) {
   return "name:" + Lower(info.name);
 }
 
+namespace {
+
+std::string ReservationModelKey(const DeviceInfo& info) {
+  if (info.vendor_id || info.product_id) {
+    return fmt::format("{:04x}:{:04x}", info.vendor_id, info.product_id);
+  }
+  return DeviceModelKey(info);
+}
+
+}  // namespace
+
 DeviceIdentity ResolveDeviceIdentity(const DeviceInfo& info) {
   DeviceIdentity id;
   if (!info.serial.empty()) {
@@ -309,7 +320,7 @@ uint32_t SlotTable::AssignOrdinal(const DeviceInfo& fresh, const std::vector<Dev
   };
   const DeviceIdentity identity = ResolveDeviceIdentity(fresh);
   const std::string& key = identity.key;
-  const std::string model = DeviceModelKey(fresh);
+  const std::string model = ReservationModelKey(fresh);
   auto take = [&](uint32_t ordinal) {
     // Anyone waiting for this player has lost it. A serial or a port names one
     // pad, so its other reservation is spent too; a GUID may stand for an
@@ -343,15 +354,13 @@ uint32_t SlotTable::AssignOrdinal(const DeviceInfo& fresh, const std::vector<Dev
       return take(r.ordinal);
     }
   }
-  // 2b. A pad without a serial that came back in another port (or whose port
-  // could not be read this time) falls back to its model, as before ports were
-  // known: the oldest player an identical serial-less pad left behind.
-  if (identity.source != IdentitySource::kSerial) {
-    for (const auto& r : reserved_) {
-      if (!r.serial && r.model == model && r.ordinal >= first && r.ordinal < kMaxGuestUsers &&
-          !taken(r.ordinal)) {
-        return take(r.ordinal);
-      }
+  // 2b. Another port, a newly reported serial or another transport can change
+  // the identity. Fall back to the oldest player an identical pad left behind,
+  // but never hand a serial reservation to a different identity.
+  for (const auto& r : reserved_) {
+    if (!r.serial && r.model == model && r.ordinal >= first && r.ordinal < kMaxGuestUsers &&
+        !taken(r.ordinal)) {
+      return take(r.ordinal);
     }
   }
 
@@ -391,7 +400,7 @@ void SlotTable::OnDisconnected(const DeviceInfo& gone) {
       })) {
     return;
   }
-  reserved_.push_back({identity.key, DeviceModelKey(gone),
+  reserved_.push_back({identity.key, ReservationModelKey(gone),
                        identity.source == IdentitySource::kSerial, gone.ordinal});
 }
 
