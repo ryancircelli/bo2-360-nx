@@ -293,6 +293,11 @@ int main(int argc, char **argv) {
 
     // Apps started from Finder get a 256 open-file limit; the shader prebuild alone keeps ~3,700 files open, and
     // running out breaks file opens all over the game (missing default_mp.cfg, failed saves, audio start).
+    // SDL 3.5 on macOS leaves the Xbox 360 wireless receiver (045e:0291, read through libusb) out unless told to.
+    setenv("SDL_HIDAPI_LIBUSB", "1", 0);
+    setenv("SDL_HIDAPI_LIBUSB_WHITELIST", "0", 0);
+    setenv("SDL_JOYSTICK_HIDAPI_XBOX_360", "1", 0);
+    setenv("SDL_JOYSTICK_HIDAPI_XBOX_360_WIRELESS", "1", 0);
     struct rlimit rl;
     if (!getrlimit(RLIMIT_NOFILE, &rl)) {
         rlim_t want = 65536;
