@@ -13,7 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(REXSDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../sdk" CACHE PATH "Path to the rexglue-sdk source tree")
 include(generated/rexglue.cmake)
 
-add_executable(fh1 src/main.cpp hook_stubs.cpp)
+add_executable(fh1 src/main.cpp hook_stubs.cpp patch_hooks.cpp)
 rexglue_setup_target(fh1 GPU_PLUGINS xenos metal)
 rexglue_game_manifest(fh1 "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 

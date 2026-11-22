@@ -127,6 +127,12 @@ void StartPatchWatcher(const std::filesystem::path& path, uint32_t poll_ms = 250
   } rex_patch_reg_##subroutine;                                                         \
   }
 
+// Library side: lets a patch body call the unpatched recompiled function.
+// Declare once per patched function; call with REX_PATCH_CALL_ORIGINAL.
+#define REX_PATCH_ORIGINAL(subroutine) \
+  extern "C" __attribute__((visibility("default"))) PPCFunc* rex_patch_original_##subroutine = nullptr;
+#define REX_PATCH_CALL_ORIGINAL(subroutine, ctx, base) rex_patch_original_##subroutine(ctx, base)
+
 namespace rex::patch::detail {
 inline std::vector<PatchEntry>& Entries() {
   static std::vector<PatchEntry> entries;

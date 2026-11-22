@@ -98,6 +98,12 @@ LoadResult PreparePatchLibrary(const std::filesystem::path& path) {
       result.unmatched.push_back(entries[i].name);
     } else {
       pending->bind.emplace_back(slot, entries[i].fn);
+      // Optional: a library that wants to call the unpatched body defines
+      // `PPCFunc* rex_patch_original_<name>` (REX_PATCH_ORIGINAL); fill it in.
+      if (auto* orig = lib->GetSymbol<PPCFunc**>(
+              (std::string("rex_patch_original_") + entries[i].name).c_str())) {
+        *orig = slot->original;
+      }
     }
   }
   result.ok = true;
@@ -138,9 +144,10 @@ void StartPatchWatcher(const std::filesystem::path& path, uint32_t poll_ms) {
       std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
       std::error_code ec;
       auto t = std::filesystem::last_write_time(path, ec);
-      if (ec) continue;
+      // A file that does not exist yet is not a baseline: when it appears it is loaded.
+      if (ec) { first = false; continue; }
       auto sz = std::filesystem::file_size(path, ec);
-      if (ec) continue;
+      if (ec) { first = false; continue; }
       if (first) {
         first = false;
         last = t;
