@@ -462,4 +462,8 @@ class Thread : public WaitHandle {
   std::string name_;
 };
 
+// While the thread is parked by Suspend() from the signal handler: the interrupted ucontext_t*, else null.
+// (POSIX threads only.)
+void* GetSuspendedContext(Thread* thread);
+
 }  // namespace rex::thread

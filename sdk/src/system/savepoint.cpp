@@ -5,22 +5,28 @@
 
 #include <rex/system/savepoint.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <typeinfo>
 #include <vector>
 
 #include <cstring>
 #include <fcntl.h>
 #include <mach/mach.h>
+#include <sys/ucontext.h>
+#include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
 
 #include <rex/cvar.h>
+#include <rex/thread.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
+#include <rex/system/thread_state.h>
 #include <rex/system/xthread.h>
 
 REXCVAR_DEFINE_INT32(savepoint_at_frame, -1, "Test",
@@ -121,21 +127,24 @@ SavepointStats SaveGuestMemory(const std::string& path) {
 
 namespace {
 struct MemRegion {
-  uint32_t space, base, size;
+  uint32_t space, base, size, protect;
   std::vector<uint8_t> data;
 };
 struct ThreadSnap {
   object_ref<XThread> thread;
-  mach_port_t port = 0;
-  arm_thread_state64_t gp{};
-  arm_neon_state64_t neon{};
+  // Interrupted register state saved by the suspend signal handler (parked on its alternate stack).
+  std::vector<uint8_t> mctx;
   uint64_t stack_lo = 0, stack_hi = 0;
   std::vector<uint8_t> stack;
+  // PPCContext (guest registers) lives in the heap-allocated ThreadState, not on the host stack.
+  void* ctx = nullptr;
+  std::vector<uint8_t> ctx_data;
 };
 struct InProcess {
   bool valid = false;
   std::vector<MemRegion> regions;
   std::vector<ThreadSnap> threads;
+  std::vector<XThread*> all_parked;  // every thread parked at capture, snapshotted or not
 } g_snap;
 
 bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* membase,
@@ -148,11 +157,20 @@ bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* memba
     uint32_t size = info.region_size ? info.region_size : heap->page_size();
     if ((info.state & memory::kMemoryAllocationCommit) &&
         info.protect != memory::kMemoryProtectNoAccess && info.region_size) {
-      out.push_back({space, uint32_t(addr), size, {membase + addr, membase + addr + size}});
+      out.push_back({space, uint32_t(addr), size, info.protect, {membase + addr, membase + addr + size}});
     }
     addr += size;
   }
   return true;
+}
+
+// Waits (up to 2 s) until the thread is parked in the suspend signal handler; returns its saved ucontext.
+ucontext_t* WaitParkedContext(XThread* t) {
+  for (int i = 0; i < 40; ++i) {
+    if (void* uc = thread::GetSuspendedContext(t->thread())) return static_cast<ucontext_t*>(uc);
+    usleep(1000);
+  }
+  return nullptr;
 }
 
 // Parks guest threads (host level) and returns them.
@@ -183,23 +201,26 @@ SavepointStats CaptureInProcessSavepoint() {
   CollectRegions(mem->GetPhysicalHeap(), 1, mem->physical_membase(), g_snap.regions);
   for (auto& r : g_snap.regions) st.bytes += r.size;
   st.regions = uint32_t(g_snap.regions.size());
+  for (auto& t : parked) g_snap.all_parked.push_back(t.get());
   for (auto& t : parked) {
     ThreadSnap ts;
     ts.thread = t;
+    ucontext_t* uc = WaitParkedContext(t.get());
+    if (!uc) continue;
     pthread_t pt = reinterpret_cast<pthread_t>(t->thread()->native_handle());
-    ts.port = pthread_mach_thread_np(pt);
-    mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
-    mach_msg_type_number_t nn = ARM_NEON_STATE64_COUNT;
-    if (thread_get_state(ts.port, ARM_THREAD_STATE64, (thread_state_t)&ts.gp, &n) != KERN_SUCCESS ||
-        thread_get_state(ts.port, ARM_NEON_STATE64, (thread_state_t)&ts.neon, &nn) != KERN_SUCCESS) {
-      continue;
-    }
-    uint64_t sp = arm_thread_state64_get_sp(ts.gp);
+    ts.mctx.assign(reinterpret_cast<uint8_t*>(uc->uc_mcontext),
+                   reinterpret_cast<uint8_t*>(uc->uc_mcontext) + sizeof(*uc->uc_mcontext));
+    uint64_t sp = arm_thread_state64_get_sp(uc->uc_mcontext->__ss);
     uint64_t top = reinterpret_cast<uint64_t>(pthread_get_stackaddr_np(pt));
     if (sp == 0 || sp >= top || top - sp > (64u << 20)) continue;
     ts.stack_lo = sp - 256;  // include the red zone
     ts.stack_hi = top;
     ts.stack.assign(reinterpret_cast<uint8_t*>(ts.stack_lo), reinterpret_cast<uint8_t*>(ts.stack_hi));
+    if (auto* tstate = t->thread_state()) {
+      ts.ctx = tstate->context();
+      ts.ctx_data.assign(reinterpret_cast<uint8_t*>(ts.ctx),
+                         reinterpret_cast<uint8_t*>(ts.ctx) + sizeof(PPCContext));
+    }
     g_snap.threads.push_back(std::move(ts));
   }
   g_snap.valid = true;
@@ -225,26 +246,80 @@ SavepointStats RewindToInProcessSavepoint() {
   auto* mem = ks->memory();
   auto t0 = Clock::now();
   auto parked = ParkThreads(ks);
+  std::fprintf(stderr, "[savepoint-s3] rewind start, %zu parked\n", parked.size());
   auto t1 = Clock::now();
+  uint32_t recommitted = 0, recommit_failed = 0;
   for (auto& r : g_snap.regions) {
     uint8_t* base = r.space == 0 ? mem->virtual_membase() : mem->physical_membase();
+    // Pages committed at capture may have been decommitted since, or are read-only now (XEX image
+    // pages, write-watched pages). Walk the range run by run and make every run committed + writable,
+    // memcpy, then put the captured protection back.
+    memory::BaseHeap* heap = r.space == 0 ? mem->LookupHeap(r.base) : mem->GetPhysicalHeap();
+    std::vector<std::pair<uint32_t, uint32_t>> touched;
+    if (heap) {
+      uint64_t a = r.base, end = uint64_t(r.base) + r.size;
+      bool failed = false;
+      while (a < end) {
+        memory::HeapAllocationInfo cur{};
+        if (!heap->QueryRegionInfo(uint32_t(a), &cur)) { failed = true; break; }
+        uint32_t run = cur.region_size ? cur.region_size : heap->page_size();
+        uint32_t len = uint32_t(std::min<uint64_t>(run, end - a));
+        const uint32_t rw = memory::kMemoryProtectRead | memory::kMemoryProtectWrite;
+        if (!(cur.state & memory::kMemoryAllocationCommit)) {
+          if (!heap->AllocFixed(uint32_t(a), len, heap->page_size(),
+                                memory::kMemoryAllocationReserve | memory::kMemoryAllocationCommit, rw)) {
+            failed = true; break;
+          }
+          ++recommitted; touched.push_back({uint32_t(a), len});
+          std::fprintf(stderr, "[savepoint-s3] recommit %08X +%X (captured prot %u)\n", uint32_t(a), len, r.protect);
+        } else if ((cur.protect & rw) != rw) {
+          if (!heap->Protect(uint32_t(a), len, rw)) { failed = true; break; }
+          touched.push_back({uint32_t(a), len});
+          std::fprintf(stderr, "[savepoint-s3] reprotect %08X +%X (cur prot %u, captured %u)\n", uint32_t(a), len, cur.protect, r.protect);
+        }
+        a += len;
+      }
+      if (failed) { ++recommit_failed; continue; }
+    }
     std::memcpy(base + r.base, r.data.data(), r.size);
+    for (auto& t : touched) heap->Protect(t.first, t.second, r.protect);
     st.bytes += r.size;
   }
   st.regions = uint32_t(g_snap.regions.size());
+  REXSYS_INFO("[savepoint-s3] rewind: recommitted {} regions, {} failed", recommitted, recommit_failed);
   // Threads that exist now but did not at capture time cannot be rewound; counted via parked.
+  uint32_t restored = 0, not_parked = 0;
   for (auto& ts : g_snap.threads) {
+    ucontext_t* uc = WaitParkedContext(ts.thread.get());
+    if (!uc) {
+      ++not_parked;
+      continue;
+    }
+    // The thread's own stack is untouched while it sits in the handler on its alternate stack, so the
+    // whole saved stack, the saved interrupted registers and the PPCContext can be put back.
     std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
-    thread_abort_safely(ts.port);  // leave a blocking kernel wait so the restored state is used
-    thread_set_state(ts.port, ARM_THREAD_STATE64, (thread_state_t)&ts.gp, ARM_THREAD_STATE64_COUNT);
-    thread_set_state(ts.port, ARM_NEON_STATE64, (thread_state_t)&ts.neon, ARM_NEON_STATE64_COUNT);
-    ++st.threads_parked;
+    std::memcpy(uc->uc_mcontext, ts.mctx.data(), ts.mctx.size());
+    if (ts.ctx) std::memcpy(ts.ctx, ts.ctx_data.data(), ts.ctx_data.size());
+    ++restored;
   }
+  st.threads_parked = restored;
+  std::fprintf(stderr, "[savepoint-s3] restored %u threads, %u not parked\n", restored, not_parked);
   auto t2 = Clock::now();
+  uint32_t left_parked = 0;
   for (auto& t : parked) {
+    // Threads created after the capture have no saved state and their guest memory is gone: keep them
+    // suspended for good rather than let them run against rewound memory.
+    bool known = std::find(g_snap.all_parked.begin(), g_snap.all_parked.end(), t.get()) !=
+                 g_snap.all_parked.end();
+    if (!known) {
+      ++left_parked;
+      continue;
+    }
     uint32_t c = 0;
     t->thread()->Resume(&c);
   }
+  std::fprintf(stderr, "[savepoint-s3] rewind done, %u threads left parked\n", left_parked);
+  REXSYS_INFO("[savepoint-s3] rewind: {} threads created after the capture left suspended", left_parked);
   st.park_ms = Ms(t0, t1);
   st.write_ms = Ms(t1, t2);
   st.ok = true;

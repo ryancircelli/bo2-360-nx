@@ -30,6 +30,7 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #endif
 
 #include <signal.h>
+#include <sys/mman.h>
 
 #include <atomic>
 #include <array>
@@ -261,7 +262,7 @@ void install_signal_handler(SignalType type) {
     return;
   }
   struct sigaction action{};
-  action.sa_flags = SA_SIGINFO | SA_RESTART;
+  action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
   action.sa_sigaction = signal_handler;
   sigemptyset(&action.sa_mask);
   if (sigaction(GetSystemSignal(type), &action, nullptr) != 0) {
@@ -1961,6 +1962,10 @@ class PosixCondition<Thread> : public PosixConditionBase {
     state_signal_.wait(lock, [this] { return state_ != State::kUninitialized; });
   }
 
+  // ucontext_t* of the interrupted state while this thread is parked in the suspend signal handler;
+  // null otherwise. Used by the in-process savepoint (GetSuspendedContext).
+  std::atomic<void*> suspend_uc_{nullptr};
+
   /// Uses sem_wait because it may be called from signal handler context.
   void WaitSuspended() {
     int ret;
@@ -2476,6 +2481,7 @@ class PosixThread : public PosixConditionHandle<Thread> {
   void Terminate(int exit_code) override { handle_.Terminate(exit_code); }
 
   void WaitSuspended() { handle_.WaitSuspended(); }
+  std::atomic<void*>& handle_suspend_uc() { return handle_.suspend_uc_; }
 };
 
 thread_local PosixThread* current_thread_ = nullptr;
@@ -2487,6 +2493,21 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   }
 #endif
   set_current_thread_name("");
+#if defined(__APPLE__)
+  {
+    // The suspend signal handler runs on an alternate stack so the interrupted thread's own stack stays
+    // untouched while parked (the in-process savepoint rewrites it).
+    constexpr size_t kAltStack = 128 * 1024;
+    void* mem = mmap(nullptr, kAltStack, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (mem != MAP_FAILED) {
+      stack_t ss{};
+      ss.ss_sp = mem;
+      ss.ss_size = kAltStack;
+      ss.ss_flags = 0;
+      sigaltstack(&ss, nullptr);
+    }
+  }
+#endif
 
   auto start_data = static_cast<ThreadStartData*>(parameter);
   assert_not_null(start_data);
@@ -2599,6 +2620,11 @@ Thread* Thread::GetCurrentThread() {
   return current_thread_;
 }
 
+void* GetSuspendedContext(Thread* thread) {
+  auto* pt = dynamic_cast<PosixThread*>(thread);
+  return pt ? pt->handle_suspend_uc().load(std::memory_order_acquire) : nullptr;
+}
+
 void Thread::Exit(int exit_code) {
   if (current_thread_) {
     current_thread_->Terminate(exit_code);
@@ -2627,17 +2653,19 @@ void set_current_thread_name(const std::string_view name) {
 // Kept out of line so the compiler cannot hoist the thread_local access above the signal type check
 // in signal_handler: it did, so every user-callback wakeup touched the TLV (see
 // block_thread_signals_for_exit for why that can abort).
-[[gnu::noinline]] static void suspend_current_thread_from_signal() {
+[[gnu::noinline]] static void suspend_current_thread_from_signal(void* context) {
   PosixThread* thread = current_thread_;
   if (thread) {
+    thread->handle_suspend_uc().store(context, std::memory_order_release);
     thread->WaitSuspended();
+    thread->handle_suspend_uc().store(nullptr, std::memory_order_release);
   }
 }
 
-static void signal_handler(int signal, siginfo_t* /*info*/, void* /*context*/) {
+static void signal_handler(int signal, siginfo_t* /*info*/, void* context) {
   switch (GetSystemSignalType(signal)) {
     case SignalType::kThreadSuspend: {
-      suspend_current_thread_from_signal();
+      suspend_current_thread_from_signal(context);
     } break;
     case SignalType::kThreadUserCallback: {
       // Callbacks are drained from alertable waits in normal thread context.
