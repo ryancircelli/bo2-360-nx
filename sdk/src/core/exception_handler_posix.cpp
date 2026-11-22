@@ -174,7 +174,10 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
 #if !REX_PLATFORM_MAC
       // On non-Mac POSIX, SIGBUS is a bus error (misaligned access), not a
       // protection fault — don't handle it here.
-      assert_unhandled_case(signal_number);
+      // Restore the default action and return so the re-executed instruction
+      // crashes normally; returning with the handler still installed would
+      // re-run the faulting instruction forever.
+      signal(signal_number, SIG_DFL);
       return;
 #endif
       [[fallthrough]];
@@ -206,7 +209,17 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                            : Exception::AccessViolationOperation::kRead;
         } else {
           bool instruction_is_store;
-          if (IsArm64LoadPrefetchStore(*reinterpret_cast<const uint32_t*>(thread_context.pc),
+          // Only decode the faulting instruction for data aborts at a sane PC.
+          // macOS frameworks (AudioToolbox CSCheckFix, LaunchServices) take
+          // deliberate faults, including instruction aborts at PC ~0; reading
+          // *pc there re-faults inside this handler forever.
+          const uint32_t mac_ec = (mac_esr >> 26) & 0b111111;
+          const bool pc_readable = (thread_context.pc & 3) == 0 &&
+                                   thread_context.pc >= 0x1000 &&
+                                   thread_context.pc < (UINT64_C(1) << 47) &&
+                                   mac_ec != 0b100000 && mac_ec != 0b100001;
+          if (pc_readable &&
+              IsArm64LoadPrefetchStore(*reinterpret_cast<const uint32_t*>(thread_context.pc),
                                        instruction_is_store)) {
             access_violation_operation = instruction_is_store
                                              ? Exception::AccessViolationOperation::kWrite
