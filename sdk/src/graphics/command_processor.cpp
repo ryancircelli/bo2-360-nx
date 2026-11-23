@@ -727,7 +727,10 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
   do {
     if (!ExecutePacket(&reader)) {
       // Return up a level if we encounter a bad packet.
-      REXGPU_ERROR("**** INDIRECT RINGBUFFER: Failed to execute packet.");
+      REXGPU_ERROR(
+          "**** INDIRECT RINGBUFFER: Failed to execute packet (base {:08X}, count {:08X}, "
+          "read offset {:08X}, write offset {:08X}, capacity {:08X}).",
+          ptr, count, reader.read_offset(), reader.write_offset(), reader.capacity());
       assert_always();
       break;
     }
@@ -812,8 +815,11 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
 
   uint32_t count = ((packet >> 16) & 0x3FFF) + 1;
   if (reader->read_count() < count * sizeof(uint32_t)) {
-    REXGPU_ERROR("ExecutePacketType0 overflow (read count {:08X}, packet count {:08X})",
-                 reader->read_count(), count * sizeof(uint32_t));
+    REXGPU_ERROR(
+        "ExecutePacketType0 overflow (read count {:08X}, packet count {:08X}, header {:08X}, "
+        "read offset {:08X}, write offset {:08X}, capacity {:08X})",
+        reader->read_count(), count * sizeof(uint32_t), packet, reader->read_offset(),
+        reader->write_offset(), reader->capacity());
     return false;
   }
 
@@ -853,8 +859,11 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
   auto data_start_offset = reader->read_offset();
 
   if (reader->read_count() < count * sizeof(uint32_t)) {
-    REXGPU_ERROR("ExecutePacketType3 overflow (read count {:08X}, packet count {:08X})",
-                 reader->read_count(), count * sizeof(uint32_t));
+    REXGPU_ERROR(
+        "ExecutePacketType3 overflow (read count {:08X}, packet count {:08X}, header {:08X}, "
+        "opcode {:02X}, read offset {:08X}, write offset {:08X}, capacity {:08X})",
+        reader->read_count(), count * sizeof(uint32_t), packet, opcode, reader->read_offset(),
+        reader->write_offset(), reader->capacity());
     return false;
   }
 
