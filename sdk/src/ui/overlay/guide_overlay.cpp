@@ -203,7 +203,7 @@ void LoadGuideFonts(ImFontAtlas* atlas) {
       "C:\\Windows\\Fonts\\segoeuib.ttf",
       "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
   };
-  static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2190, 0x2193, 0x2022, 0x2022, 0};
+  static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2190, 0x2193, 0x2022, 0x2022, 0x2039, 0x203A, 0};
   auto load = [&](const char* const* paths, size_t n, float size) -> ImFont* {
     for (size_t i = 0; i < n; ++i) {
       std::error_code ec;
