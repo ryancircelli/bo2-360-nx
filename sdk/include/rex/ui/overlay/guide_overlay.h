@@ -37,7 +37,12 @@ class GuideInputGate {
   void Filter(uint32_t user, rex::input::X_INPUT_STATE& state);
   bool BlocksKeys(uint32_t user) const;
 
-  /// The Guide opened for this player (0-3), or closed (-1).
+  /// Opened from the keyboard or mouse: every pad is held from the game, and any pad drives the Guide.
+  static constexpr int kAllPads = 4;
+
+  /// The Guide opened for this player (0-3), for every pad (kAllPads), or
+  /// closed (-1). Another player while open: that player takes it over (the
+  /// holder's pad disconnected).
   /// After a close the player's pad stays hidden until every button is up,
   /// so the B or Guide press that closed it never reaches the game.
   /// Opening also holds the keyboard and mouse (rex/input/mnk), closing
@@ -51,7 +56,8 @@ class GuideInputGate {
  private:
   std::function<void(int)> on_open_;
   std::atomic<int> holder_{-1};
-  std::atomic<int> draining_{-1};
+  // Pads (bit per player) kept from the game after a close until every button is up.
+  std::atomic<uint32_t> draining_{0};
   std::array<bool, 4> was_down_{};
   std::array<bool, 4> fired_{};
   std::array<int64_t, 4> down_since_ms_{};
@@ -75,9 +81,14 @@ class GuideDialog : public ImGuiDialog {
     std::function<std::vector<rex::input::InputSystem::DeviceSnapshot>()> snapshot;
     /// Asked to close the Guide; must defer the destruction (not inside Draw).
     std::function<void()> request_close;
+    /// Which pad the game must not see now (UI thread): a player who took the
+    /// Guide over, kAllPads while the holder's pad is gone, or the holder again.
+    std::function<void(int user)> take_over;
   };
 
-  /// owner: the player whose pad drives the Guide (-1: any pad).
+  /// owner: the player whose pad drives the Guide (-1: opened from the
+  /// keyboard or mouse, any pad drives it). Only that pad drives it, until it
+  /// disconnects: then any pad can take the Guide over or close it.
   GuideDialog(ImGuiDrawer* imgui_drawer, int owner, Hooks hooks);
   ~GuideDialog() override;
 
@@ -129,6 +140,10 @@ class GuideDialog : public ImGuiDialog {
   void DrawContent(ImDrawList* dl, float x0, float y0, float x1, float y1,
                    std::vector<guide::Item>& items);
   void PublishTargets(float display_w, float display_h);
+  // The Xbox button's ring of light with the owner's quadrant lit, and "Player N".
+  void DrawPlayerRing(ImDrawList* dl, ImVec2 center, float r, float text_size);
+  // Whether the owner's pad is connected, from this frame's snapshot.
+  bool OwnerConnected(const std::vector<rex::input::InputSystem::DeviceSnapshot>& snaps) const;
 
   // The Blades bow: nominal x is pushed out from the centre line, most at
   // mid height, so straight edges draw as ( and ) curves.
@@ -137,6 +152,10 @@ class GuideDialog : public ImGuiDialog {
   void WarpVertices(ImDrawList* dl, int first_vertex) const;
 
   int owner_;
+  // The owner's pad is gone: any pad may take over (first button) or close.
+  bool orphaned_ = false;
+  // Each player's Guide buttons on the last poll (take-over edges).
+  std::array<uint32_t, 4> pad_prev_{};
   Hooks hooks_;
   std::vector<guide::Page> pages_;
   std::vector<Blade> blades_;
