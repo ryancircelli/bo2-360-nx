@@ -299,6 +299,8 @@ class KernelState {
   FiberInfo* LookupFiber(uint32_t guest_addr);
   void RegisterFiber(uint32_t guest_addr, const FiberInfo& info);
   void UnregisterFiber(uint32_t guest_addr);
+  std::unordered_map<uint32_t, FiberInfo> CaptureFibers();
+  void RewindFibers(const std::unordered_map<uint32_t, FiberInfo>& fibers);
 
   /// Returns a fiber name for profiling
   const char* GetOrCreateFiberName(uint32_t guest_addr, const char* thread_name);

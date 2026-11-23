@@ -69,6 +69,10 @@ void Fiber::SwitchTo(Fiber* target) {
 }
 
 void Fiber::Destroy() {
+  if (hold_destroyed) {
+    if (this == tls_current_) tls_current_ = nullptr;
+    return;  // shortcut: leaks every fiber deleted while a savepoint is held
+  }
   // Thread fibers are destroyed from the owning thread itself.
   if (is_thread_fiber_) {
     tls_current_ = nullptr;

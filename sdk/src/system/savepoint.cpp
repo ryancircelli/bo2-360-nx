@@ -37,6 +37,7 @@
 #include <rex/cvar.h>
 #include <rex/runtime.h>
 #include <rex/thread.h>
+#include <rex/thread/fiber.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
@@ -181,6 +182,10 @@ struct InProcess {
   bool valid = false;
   std::vector<MemRegion> regions;
   std::vector<ThreadSnap> threads;
+  // Host fibers: guest fiber map, and each fiber's object (saved context) and host stack bytes.
+  std::unordered_map<uint32_t, FiberInfo> fiber_map;
+  struct FiberSnap { rex::thread::Fiber* fiber; std::vector<uint8_t> object, stack; };
+  std::vector<FiberSnap> fibers;
   std::vector<XThread*> all_parked;  // every thread parked at capture, snapshotted or not
   std::shared_ptr<util::ObjectTable::RewindState> object_table;
   std::list<std::function<void()>> dispatch_queue;
@@ -495,6 +500,18 @@ SavepointStats CaptureInProcessSavepoint() {
       if (auto* heap = mem->LookupHeap(b)) g_snap.heaps.push_back({heap, heap->CaptureRewindState()});
     }
   }
+  g_snap.fiber_map = ks->CaptureFibers();
+  rex::thread::Fiber::hold_destroyed = true;
+  for (auto& [addr, info] : g_snap.fiber_map) {
+    auto* f = info.host_fiber;
+    if (!f) continue;
+    InProcess::FiberSnap fs{f};
+    fs.object.assign(reinterpret_cast<uint8_t*>(f), reinterpret_cast<uint8_t*>(f) + sizeof(*f));
+    // Thread fibers run on the pthread stack, which the thread capture below covers.
+    if (!info.is_thread_fiber) fs.stack.assign(f->stack_data(), f->stack_data() + f->stack_size());
+    g_snap.fibers.push_back(std::move(fs));
+  }
+  std::fprintf(stderr, "[savepoint-fiber] captured %zu fibers\n", g_snap.fibers.size());
   auto* physical = mem->GetPhysicalHeap();
   g_snap.heaps.push_back({physical, physical->CaptureRewindState()});
   CollectRegions(physical, 1, mem->physical_membase(), g_snap.regions);
@@ -725,6 +742,14 @@ SavepointStats RewindToInProcessSavepoint() {
     for (const auto& [heap, heap_state] : g_snap.heaps) {
       // Views (A0/C0/E0) alias the physical heap's memory, which the parent's pass already zeroes.
       heap->Rewind(heap_state, reconcile && heap->heap_base() < 0xA0000000u);
+    }
+    if (!std::getenv("REX_SAVEPOINT_NO_FIBERS")) {
+      ks->RewindFibers(g_snap.fiber_map);
+      for (auto& fs : g_snap.fibers) {
+        std::memcpy(reinterpret_cast<void*>(fs.fiber), fs.object.data(), fs.object.size());
+        if (!fs.stack.empty()) std::memcpy(fs.fiber->stack_data(), fs.stack.data(), fs.stack.size());
+      }
+      std::fprintf(stderr, "[savepoint-fiber] rewound %zu fibers\n", g_snap.fibers.size());
     }
     g_rewind_phase = 5;
     if (g_snap.graphics) g_snap.graphics->RewindSavepoint();

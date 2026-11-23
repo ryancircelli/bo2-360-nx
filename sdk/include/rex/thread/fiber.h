@@ -60,6 +60,15 @@ struct Fiber {
 
   /// Returns the fiber currently executing on this thread, or nullptr.
   static Fiber* Current() { return tls_current_; }
+  /// Names the fiber running on this thread; SwitchTo saves into it. Savepoint rewinds can leave the
+  /// thread-local out of step with the guest's notion of the running fiber.
+  static void SetCurrent(Fiber* f) { tls_current_ = f; }
+  /// While set, Destroy leaks instead of freeing, so a savepoint can still bring the fiber back.
+  static inline bool hold_destroyed = false;
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+  uint8_t* stack_data() { return stack_.data(); }
+  size_t stack_size() const { return stack_.size(); }
+#endif
 
  private:
   static thread_local Fiber* tls_current_;

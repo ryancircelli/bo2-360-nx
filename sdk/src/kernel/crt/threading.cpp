@@ -325,6 +325,11 @@ void SwitchToFiber_entry(mapped_void lpFiber) {
   }
 
   // Host fiber switch -- suspends here, resumes when switched back
+  // Save into the fiber the guest says is running: after a savepoint rewind the thread-local can
+  // name a different one.
+  if (auto* from = current_addr ? ks->LookupFiber(current_addr) : nullptr; from && from->host_fiber) {
+    rex::thread::Fiber::SetCurrent(from->host_fiber);
+  }
   rex::thread::Fiber::SwitchTo(target_info->host_fiber);
   // Resumed: non-volatile regs and stack state already restored by the fiber that switched back.
 }

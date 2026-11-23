@@ -1493,6 +1493,16 @@ void KernelState::UnregisterFiber(uint32_t guest_addr) {
   fiber_map_.erase(guest_addr);
 }
 
+std::unordered_map<uint32_t, FiberInfo> KernelState::CaptureFibers() {
+  auto lock = global_critical_region_.Acquire();
+  return fiber_map_;
+}
+
+void KernelState::RewindFibers(const std::unordered_map<uint32_t, FiberInfo>& fibers) {
+  auto lock = global_critical_region_.Acquire();
+  fiber_map_ = fibers;
+}
+
 const char* KernelState::GetOrCreateFiberName(uint32_t guest_addr, const char* thread_name) {
   std::lock_guard lock(fiber_name_pool_mutex_);
   auto it = fiber_name_pool_.find(guest_addr);
