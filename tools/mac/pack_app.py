@@ -328,6 +328,12 @@ def pack(a):
     for lib in sorted((build / 'sdk-out').glob('*.dylib')) if (build / 'sdk-out').is_dir() else []:
         if not (mac / lib.name).exists():
             shutil.copy2(lib, mac / lib.name)
+    step('libusb')
+    libusb = Path('/opt/homebrew/lib/libusb-1.0.0.dylib')
+    if not libusb.is_file():
+        raise SystemExit(f'no libusb at {libusb}; install it with brew install libusb')
+    shutil.copy2(libusb.resolve(), mac / 'libusb-1.0.dylib')
+    (mac / 'libusb-1.0.dylib').chmod(0o755)
     for extra in a.extra_file or []:
         shutil.copy2(extra, mac / Path(extra).name)
 

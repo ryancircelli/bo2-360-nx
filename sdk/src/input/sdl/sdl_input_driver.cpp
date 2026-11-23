@@ -63,6 +63,13 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
 }
 
 void SDLInputDriver::InitSubsystems() {
+#if REX_PLATFORM_MAC
+  SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB, "1");
+  SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB_WHITELIST, "0");
+  SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360, "1");
+  SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360_WIRELESS, "1");
+#endif
+
   // Initialize SDL events subsystem
   if (!SDL_InitSubSystem(SDL_INIT_EVENTS)) {
     REXLOG_ERROR("SDL: Failed to init events subsystem: {}", SDL_GetError());

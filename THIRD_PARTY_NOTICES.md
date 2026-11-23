@@ -28,6 +28,7 @@ Libraries used by the SDK, the NRO and the code generator, fetched from the subm
 | Library | License |
 |---|---|
 | [FFmpeg](https://ffmpeg.org) (libavcodec, libavutil: the WMV3 decoder for movies, the VP8 decoder for the loading videos), from `wmarti/FFmpeg` at `0604b464c7cb` | LGPL-2.1-or-later (configured without GPL parts) |
+| [libusb](https://libusb.info) (USB access for SDL's Xbox 360 wireless receiver driver; the unmodified Homebrew dynamic library is bundled with each macOS app) | LGPL-2.1-or-later |
 | [libmspack](https://www.cabextract.org.uk/libmspack/) by Stuart Caie (LZX decompression) | LGPL-2.1 |
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD-3-Clause and others (see its LICENSE.txt) |
 | [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | Apache-2.0 |
