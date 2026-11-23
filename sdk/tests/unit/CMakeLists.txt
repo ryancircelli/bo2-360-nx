@@ -50,3 +50,8 @@ add_library(patch_test_lib_v3 SHARED patch/patch_lib_v.cpp)
 target_include_directories(patch_test_lib_v3 PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_compile_definitions(patch_test_lib_v3 PRIVATE PATCH_RET=3)
 add_test(NAME patch_loader_tests COMMAND patch_loader_tests $<TARGET_FILE:patch_test_lib_v2> $<TARGET_FILE:patch_test_lib_v3> ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt)
+
+add_executable(log_sink_tests logging/log_sink_test.cpp)
+target_include_directories(log_sink_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(log_sink_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME log_sink_tests COMMAND log_sink_tests)

@@ -18,7 +18,6 @@
 #include <vector>
 
 #include <spdlog/async.h>
-#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <toml++/toml.hpp>
@@ -59,11 +58,13 @@ REXCVAR_DEFINE_INT32(log_flush_interval, 1, "Log", "Periodic flush interval in s
     .range(0, 60)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_INT32(log_max_file_size_mb, 5, "Log", "Max log file size in MB before rotation")
-    .range(1, 100)
+REXCVAR_DEFINE_INT32(log_max_file_size_mb, 32, "Log",
+                     "Size cap of one session's log file in MB. Past it the middle is cut out and a marker line says "
+                     "how much, so the start and the end of the session stay (core/capped_file_sink.h)")
+    .range(1, 4096)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_INT32(log_max_files, 20, "Log", "Max number of rotated log files to keep")
+REXCVAR_DEFINE_INT32(log_max_files, 20, "Log", "Unused: a session is one capped file now (log_max_file_size_mb)")
     .range(1, 100)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
@@ -291,7 +292,7 @@ void InitLogging(const LogConfig& config) {
     g_console_sink = sink;
   }
 
-  // File sink (rotating) with sequential naming fallback
+  // File sink (one capped file per session) with sequential naming fallback
   std::string resolved_path;
   if (config.log_file) {
     resolved_path = config.log_file;
@@ -301,10 +302,10 @@ void InitLogging(const LogConfig& config) {
     resolved_path = NextSequentialLogPath(log_dir, config.app_name).string();
   }
   if (!resolved_path.empty()) {
-    // spdlog's rotating file sink, which CopyLogFile can close for a moment (core/copyable_file_sink.h).
+    // A capped file sink, which CopyLogFile can close for a moment (core/copyable_file_sink.h).
     auto sink = std::make_shared<CopyableFileSink>(
         resolved_path, static_cast<size_t>(REXCVAR_GET(log_max_file_size_mb)) * 1024 * 1024,
-        static_cast<size_t>(REXCVAR_GET(log_max_files)), REXCVAR_GET(log_file_writer));
+        REXCVAR_GET(log_file_writer));
     sink->set_level(spdlog::level::trace);
     sink->set_pattern(config.file_pattern);
     g_file_sink = sink;

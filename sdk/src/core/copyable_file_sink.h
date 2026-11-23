@@ -4,7 +4,8 @@
  *
  * Horizon's file system lets no one open a file that another handle has open for writing: on the Switch the
  * running game's log cannot be read, not even stat()ed, while its sink holds it. A copy therefore needs the file
- * closed. This is spdlog's rotating file sink (same file names, sizes and rotation), wrapped so that CopyTo() can
+ * closed. This is a capped file sink (capped_file_sink.h: one file per session, the middle cut out past the size cap,
+ * so the start and the end survive), wrapped so that CopyTo() can
  * flush and close it, copy it, and reopen it for appending. Used through rex::CopyLogFile (logging.cpp), for a copy of
  * the game log while the game runs. Header-only, so it can be tested on the PC.
  *
@@ -34,15 +35,18 @@
 
 #include <spdlog/details/log_msg_buffer.h>
 #include <spdlog/sinks/base_sink.h>
-#include <spdlog/sinks/rotating_file_sink.h>
+#include "capped_file_sink.h"       // same folder
+#include "log_repeat_collapser.h"  // same folder
 
 namespace rex {
 
 class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
  public:
   // Throws spdlog::spdlog_ex when the file cannot be opened, as spdlog's own sink does. deferred: see the file header.
-  CopyableFileSink(std::string path, size_t max_size, size_t max_files, bool deferred = false)
-      : path_(std::move(path)), max_size_(max_size), max_files_(max_files), deferred_(deferred) {
+  // max_size: the session's cap, in bytes (see capped_file_sink.h). Runs of identical lines are collapsed
+  // (log_repeat_collapser.h).
+  CopyableFileSink(std::string path, size_t max_size, bool deferred = false)
+      : path_(std::move(path)), max_size_(max_size), deferred_(deferred) {
     Open();
     if (deferred_) {
       writer_ = std::thread([this] { WriterMain(); });
@@ -50,6 +54,10 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
   }
 
   ~CopyableFileSink() override {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      EmitRepeatsLocked(true);
+    }
     if (writer_.joinable()) {
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -65,17 +73,26 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
   // Copies the file as it is now (everything logged so far) to `to`. False if the copy failed.
   bool CopyTo(const std::filesystem::path& to) {
     if (deferred_) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        EmitRepeatsLocked(true);
+      }
       WriteQueued(false);
       std::lock_guard<std::mutex> io(io_mutex_);
       return CopyLocked(to);
     }
     std::lock_guard<std::mutex> lock(mutex_);
+    EmitRepeatsLocked(true);
     return CopyLocked(to);
   }
 
   // Everything logged so far in the file (rex::FlushLogging). In deferred mode it waits for the SD card: not for
   // the game's threads.
   void Drain() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      EmitRepeatsLocked(true);
+    }
     if (!deferred_) {
       flush();
       return;
@@ -85,13 +102,27 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
 
  protected:
   void sink_it_(const spdlog::details::log_msg& msg) override {
+    // Runs of identical lines: the first is written, the rest are counted (LogRepeatCollapser).
+    const auto verdict = collapser_.OnLine(std::string_view(msg.logger_name.data(), msg.logger_name.size()),
+                                           int(msg.level), std::string_view(msg.payload.data(), msg.payload.size()),
+                                           LogRepeatCollapser::Clock::now());
+    if (verdict.summary > 0) {
+      EmitSummary(verdict.summary, !verdict.write);
+    }
+    if (verdict.write) {
+      Emit(msg);
+    }
+  }
+
+  // Writes a line, or queues it in deferred mode. With the sink's mutex held.
+  void Emit(const spdlog::details::log_msg& msg) {
     if (!deferred_) {
       if (inner_) {
         inner_->log(msg);
       }
       return;
     }
-    // Under the sink's mutex, as spdlog calls it: only a copy into the queue.
+    // Only a copy into the queue.
     const size_t bytes = msg.payload.size() + msg.logger_name.size() + kOverheadBytes;
     if (queued_bytes_ + bytes > kMaxQueuedBytes) {
       ++dropped_;
@@ -113,6 +144,23 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
     flush_requested_ = true;  // the writer flushes; nothing here touches the file
     wake_.notify_one();
   }
+  // Writes "last message repeated N times" for the line the collapser last described. `current`: it is about the line
+  // being logged now (a timed summary), not the one before it.
+  void EmitSummary(uint64_t n, bool current) {
+    const std::string text = LogRepeatCollapser::SummaryText(n);
+    const std::string& name = collapser_.SummaryName(!current);
+    Emit(spdlog::details::log_msg(spdlog::source_loc{}, name, spdlog::level::level_enum(collapser_.SummaryLevel(!current)),
+                                  text));
+  }
+
+  // The count so far of a run still going on (`force`, or a summary is due). With the sink's mutex held.
+  void EmitRepeatsLocked(bool force) {
+    const uint64_t n = collapser_.TakePending(LogRepeatCollapser::Clock::now(), force);
+    if (n > 0) {
+      EmitSummary(n, true);
+    }
+  }
+
   void set_pattern_(const std::string& pattern) override {
     pattern_ = pattern;
     std::lock_guard<std::mutex> io(io_mutex_);
@@ -135,7 +183,7 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
   static constexpr size_t kWakeAt = 256;                      // messages that wake the writer before its 250 ms
 
   void Open() {
-    inner_ = std::make_unique<spdlog::sinks::rotating_file_sink_st>(path_, max_size_, max_files_, false);
+    inner_ = std::make_unique<CappedFileSink>(path_, max_size_);
     if (!pattern_.empty()) {
       inner_->set_pattern(pattern_);
     } else if (formatter_) {
@@ -206,6 +254,7 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
         std::unique_lock<std::mutex> lock(mutex_);
         wake_.wait_for(lock, std::chrono::milliseconds(250),
                        [this] { return stop_ || flush_requested_ || queue_.size() >= kWakeAt; });
+        EmitRepeatsLocked(false);  // a long run of one line still shows up
         batch.swap(queue_);
         queued_bytes_ = 0;
         dropped = std::exchange(dropped_, 0);
@@ -240,11 +289,11 @@ class CopyableFileSink final : public spdlog::sinks::base_sink<std::mutex> {
 
   std::string path_;
   size_t max_size_;
-  size_t max_files_;
+  LogRepeatCollapser collapser_;  // under the sink's mutex
   // Deferred mode. The queue, its size, the dropped count and the flags are under the sink's mutex (mutex_).
   bool deferred_;
   std::string pattern_;
-  std::unique_ptr<spdlog::sinks::rotating_file_sink_st> inner_;  // deferred: under io_mutex_
+  std::unique_ptr<CappedFileSink> inner_;  // deferred: under io_mutex_
   std::mutex io_mutex_;
   std::condition_variable wake_;
   std::vector<spdlog::details::log_msg_buffer> queue_;
