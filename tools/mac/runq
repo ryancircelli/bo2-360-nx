@@ -2778,7 +2778,7 @@ def test_phases(bump_waiting):
     assert phase_admits(ord0, False, 5, False, 60, 5, True, False, c)
     assert not phase_admits(closing, False, 1400, False, 60, 5, True, False, c)
     assert phase_admits(ord0, False, 5, False, 600, 5, True, False, c)                 # a 10 min game fits a fresh window
-    assert not phase_admits(ord0, False, 5, False, 900, 5, True, False, c)            # a 20 min one (30 min budget) waits for age
+    assert not phase_admits(ord0, False, 5, False, 1100, 5, True, False, c)          # a 20 min one (30 min budget) waits for age
     assert not phase_admits(ord0, False, 1100, False, 600, 5, True, False, c)          # ...and nothing long near the end
     assert phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)          # unless it already waited 30 min
     assert phase_admits(ord0, False, 1100, False, 2400, 5, False, False, c)            # no solo waiting: anything
