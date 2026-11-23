@@ -30,6 +30,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `c901aa7` (Tom Clay) | `vmaxuw` code generator builder | `sdk/src/codegen/` |
 | ReXGlue SDK `d631595` (Tom Clay, Tiago Lima) | log an exception that `RtlRaiseException` does not handle | `sdk/src/kernel/xboxkrnl/xboxkrnl_debug.cpp` |
 | ReXGlue SDK `f05a125` (Tom Clay) | SPIR-V fetch lerp starts from the first sample | `sdk/src/graphics/pipeline/shader/spirv_translator_fetch.cpp` |
+| ReXGlue SDK `bc84579` (Tom Clay, WizardOfWor1969) | publish the GPU read pointer when write back is enabled | `sdk/src/graphics/command_processor.cpp` |
 
 ## Libraries
 
