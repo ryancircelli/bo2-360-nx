@@ -1271,6 +1271,16 @@ bool Replayer::ReadbackTarget(int source, uint32_t width, uint32_t height, Targe
   memory_->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(),
                                           0xA0000000u | image_address, image_bytes, true, false);
   std::memset(memory_->TranslatePhysical(image_address), 0xFF, image_bytes);
+  // REX_GPU_TRACE_POISON_GPU=1: also fill the GPU copy with 0xEE, so a
+  // readback page left 0xEE was skipped by the resolve and one left 0xFF came
+  // from an upload of the guest RAM poison.
+  static const bool poison_gpu = [] {
+    const char* v = std::getenv("REX_GPU_TRACE_POISON_GPU");  // getenv-ok: once
+    return v && v[0] == '1';
+  }();
+  if (poison_gpu) {
+    cp_.TraceFillGpuMemory(image_address, image_bytes, 0xEE);
+  }
 
   auto write = [&](uint32_t index, uint32_t value) {
     TraceAccess::WriteRegister(cp_, index, value);
