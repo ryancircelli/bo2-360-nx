@@ -451,6 +451,47 @@ SavepointStats CaptureInProcessSavepoint() {
   return st;
 }
 
+// If the rewind stalls, print the rewinding thread's host frames (no malloc on this path).
+std::atomic<int> g_rewind_phase{0};
+void StartRewindWatchdog(std::atomic<bool>* done) {
+  mach_port_t target = mach_thread_self();
+  pthread_t watcher;
+  struct Args { mach_port_t target; std::atomic<bool>* done; };
+  static Args args;
+  args = {target, done};
+  pthread_create(&watcher, nullptr, [](void* a) -> void* {
+    auto* args = static_cast<Args*>(a);
+    for (int i = 0; i < 150 && !args->done->load(); ++i) usleep(100000);
+    if (args->done->load()) return nullptr;
+    thread_suspend(args->target);
+    arm_thread_state64_t gp{};
+    mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+    thread_get_state(args->target, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&gp), &n);
+    char line[256];
+    int len = snprintf(line, sizeof line, "[savepoint-s3] REWIND STUCK in phase %d, frames:\n", g_rewind_phase.load());
+    write(2, line, len);
+    uint64_t pcs[32]; int k = 0;
+    pcs[k++] = arm_thread_state64_get_pc(gp);
+    pcs[k++] = arm_thread_state64_get_lr(gp);
+    uint64_t fp = arm_thread_state64_get_fp(gp);
+    while (k < 32 && fp && (fp & 7) == 0) {
+      uint64_t next = reinterpret_cast<uint64_t*>(fp)[0], ret = reinterpret_cast<uint64_t*>(fp)[1];
+      pcs[k++] = ret;
+      if (next <= fp) break;
+      fp = next;
+    }
+    for (int i = 0; i < k; ++i) {
+      Dl_info di{};
+      const char* name = (dladdr(reinterpret_cast<void*>(pcs[i] & 0x0000FFFFFFFFFFFFull), &di) && di.dli_sname) ? di.dli_sname : "?";
+      len = snprintf(line, sizeof line, "  %d %.200s\n", i, name);
+      write(2, line, len);
+    }
+    thread_resume(args->target);
+    return nullptr;
+  }, &args);
+  pthread_detach(watcher);
+}
+
 SavepointStats RewindToInProcessSavepoint() {
   SavepointStats st;
   if (!g_snap.valid) {
@@ -460,13 +501,19 @@ SavepointStats RewindToInProcessSavepoint() {
   auto* ks = kernel_state();
   auto* mem = ks->memory();
   auto t0 = Clock::now();
+  static std::atomic<bool> rewind_done{false};
+  g_rewind_phase = 1;
+  StartRewindWatchdog(&rewind_done);
   auto parked = ParkThreads(ks);
+  g_rewind_phase = 2;
   std::fprintf(stderr, "[savepoint-s3] rewind start, %zu parked\n", parked.size());
   auto t1 = Clock::now();
   const bool restore_objects = std::getenv("REX_SAVEPOINT_SKIP_OBJECTS") == nullptr;
   if (restore_objects) {
     g_snap.objects_at_rewind = ks->object_table()->GetAllObjects();
+    g_rewind_phase = 3;
     ks->object_table()->Rewind(g_snap.object_table);
+    g_rewind_phase = 4;
   } else {
     std::fprintf(stderr, "[savepoint-s3] skipping kernel object restore\n");
   }
@@ -527,7 +574,9 @@ SavepointStats RewindToInProcessSavepoint() {
     for (const auto& [heap, heap_state] : g_snap.heaps) {
       heap->Rewind(heap_state);
     }
+    g_rewind_phase = 5;
     if (g_snap.graphics) g_snap.graphics->RewindSavepoint();
+    g_rewind_phase = 6;
   }
   st.regions = uint32_t(g_snap.regions.size());
   REXSYS_INFO("[savepoint-s3] rewind: recommitted {} regions, {} failed", recommitted, recommit_failed);
@@ -591,6 +640,7 @@ SavepointStats RewindToInProcessSavepoint() {
     }
     thread_resume(MachPort(t.get()));
   }
+  rewind_done = true;
   std::fprintf(stderr, "[savepoint-s3] rewind done, %u threads left parked\n", left_parked);
   std::fprintf(stderr, "[savepoint-s3] frees deferred since capture: %llu (%llu KB)\n",
                (unsigned long long)defer_free::g_deferred.load(),
