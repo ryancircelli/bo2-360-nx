@@ -214,7 +214,7 @@ REX_EXPORT_STUB(__imp__XamInputNonControllerGetRaw);
 REX_EXPORT_STUB(__imp__XamInputNonControllerGetRawEx);
 REX_EXPORT_STUB(__imp__XamInputNonControllerSetRaw);
 REX_EXPORT_STUB(__imp__XamInputNonControllerSetRawEx);
-REX_EXPORT_STUB(__imp__XamInputRawState);
+REX_EXPORT_STUB_RETURN(__imp__XamInputRawState, 0x48F);
 REX_EXPORT_STUB(__imp__XamInputResetLayoutKeyboard);
 REX_EXPORT_STUB(__imp__XamInputSendStayAliveRequest);
 REX_EXPORT_STUB(__imp__XamInputSendXenonButtonPress);
