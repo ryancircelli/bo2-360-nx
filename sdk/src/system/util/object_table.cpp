@@ -11,6 +11,8 @@
 
 #include <cstdio>
 #include <rex/system/xfile.h>
+#include <rex/system/xiocompletion.h>
+#include <rex/system/xnotifylistener.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -106,6 +108,8 @@ struct ObjectTable::RewindState {
   // Host-side file positions: reads after the capture advance them, and NtReadFile without an
   // explicit offset reads from there.
   std::vector<std::pair<XFile*, uint64_t>> file_positions;
+  std::vector<std::pair<XIOCompletion*, XIOCompletion::QueueRewindState>> completions;
+  std::vector<std::pair<XNotifyListener*, std::vector<std::pair<XNotificationID, uint32_t>>>> listeners;
 };
 
 std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
@@ -123,6 +127,14 @@ std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
       if (entry.object->type() == XObject::Type::File) {
         auto* file = static_cast<XFile*>(entry.object);
         state->file_positions.push_back({file, file->position()});
+      } else if (entry.object->type() == XObject::Type::IOCompletion) {
+        auto* port = static_cast<XIOCompletion*>(entry.object);
+        XIOCompletion::QueueRewindState q;
+        port->CaptureQueueRewindState(&q);
+        state->completions.push_back({port, std::move(q)});
+      } else if (entry.object->type() == XObject::Type::NotifyListener) {
+        auto* listener = static_cast<XNotifyListener*>(entry.object);
+        state->listeners.push_back({listener, listener->CaptureQueueRewindState()});
       }
       state->objects.push_back({retain_object(entry.object), std::move(object_state)});
     }
@@ -158,6 +170,14 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
   }
   std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound\n",
                state->file_positions.size(), moved);
+  for (const auto& [port, q] : state->completions) {
+    size_t before = port->RewindQueue(q);
+    std::fprintf(stderr, "[savepoint-s3] io completion queue: %zu -> %zu\n", before, q.notifications.size());
+  }
+  for (const auto& [listener, q] : state->listeners) {
+    size_t before = listener->RewindQueue(q);
+    std::fprintf(stderr, "[savepoint-s3] notify listener queue: %zu -> %zu\n", before, q.size());
+  }
 }
 
 void ObjectTable::Reset() {
