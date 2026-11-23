@@ -123,6 +123,36 @@ inline uint8_t VectorShiftTableR[] = {
 template <int Elements>
 inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
   static_assert(Elements == 3 || Elements == 4);
+#if defined(__aarch64__) || defined(_M_ARM64)
+  // Same arithmetic as the portable path below, two lanes per instruction.
+  // Products of two floats are exact in double; the additions keep the same order.
+  // A denormal input becomes a signed zero: keep the bits where the exponent is nonzero, else only the sign.
+  const uint32x4_t exponent = vdupq_n_u32(0x7F800000u), sign = vdupq_n_u32(0x80000000u);
+  uint32x4_t ab = vreinterpretq_u32_f32(simde__m128_to_neon_f32(a));
+  uint32x4_t bb = vreinterpretq_u32_f32(simde__m128_to_neon_f32(b));
+  ab = vandq_u32(ab, vorrq_u32(vtstq_u32(ab, exponent), sign));
+  bb = vandq_u32(bb, vorrq_u32(vtstq_u32(bb, exponent), sign));
+  const float32x4_t af = vreinterpretq_f32_u32(ab), bf = vreinterpretq_f32_u32(bb);
+  // Host lane 3 - i is guest element i: lo = {p3, p2}, hi = {p1, p0}.
+  const float64x2_t lo = vmulq_f64(vcvt_f64_f32(vget_low_f32(af)), vcvt_f64_f32(vget_low_f32(bf)));
+  const float64x2_t hi = vmulq_f64(vcvt_high_f64_f32(af), vcvt_high_f64_f32(bf));
+  float64x2_t sum;  // lane 0
+  if constexpr (Elements == 3) {
+    sum = vaddq_f64(vdupq_laneq_f64(vaddq_f64(hi, lo), 1), hi);  // (p0 + p2) + p1
+  } else {
+    const float64x2_t pairs = vaddq_f64(hi, lo);  // {p1 + p3, p0 + p2}
+    sum = vpaddq_f64(pairs, pairs);
+  }
+  // The portable tail, branch-free: keep a finite result (denormal flushed to a signed zero) or an infinite
+  // sum's infinity; anything else (NaN, finite overflow) is QNaN.
+  const float32x2_t result = vcvt_f32_f64(sum);
+  uint32x2_t bits = vreinterpret_u32_f32(result);
+  bits = vand_u32(bits, vorr_u32(vtst_u32(bits, vget_low_u32(exponent)), vget_low_u32(sign)));
+  const uint32x2_t keep = vorr_u32(vcagt_f32(vdup_n_f32(INFINITY), result),
+                                   vmovn_u64(vcageq_f64(sum, vdupq_n_f64(INFINITY))));
+  bits = vbsl_u32(keep, bits, vdup_n_u32(0x7FC00000u));
+  return simde__m128_from_neon_f32(vreinterpretq_f32_u32(vdupq_lane_u32(bits, 0)));
+#else
   alignas(16) float av[4], bv[4];
   simde_mm_store_ps(av, a);
   simde_mm_store_ps(bv, b);
@@ -149,6 +179,7 @@ inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
   else if ((bits & 0x7F800000u) == 0)
     bits &= 0x80000000u;
   return simde_mm_castsi128_ps(simde_mm_set1_epi32(int32_t(bits)));
+#endif
 }
 
 // Unsigned 32-bit saturating add
