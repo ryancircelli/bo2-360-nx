@@ -10,6 +10,8 @@
 #include <chrono>
 #include <execinfo.h>
 #include <dlfcn.h>
+#include <malloc/malloc.h>
+#include <sys/mman.h>
 #include <exception>
 #include <csignal>
 #include <cstdio>
@@ -265,6 +267,88 @@ std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
 }
 }  // namespace
 
+// Host frees are deferred from the capture to the rewind. The rewind revives captured host stack
+// frames, and those frames point at host heap blocks (wait-object vectors, lock guards, strings) that
+// the code freed after the capture; with frees deferred those blocks still hold their capture-time
+// contents and are not reused, so the revived frames free them exactly once. Blocks freed after the
+// capture that no revived frame references stay allocated (bounded by one capture-to-rewind window).
+// Hooks every malloc zone's free entry points; REX_SAVEPOINT_NO_DEFER_FREE=1 turns this off.
+namespace defer_free {
+std::atomic<bool> g_active{false};
+std::atomic<uint64_t> g_deferred{0}, g_deferred_bytes{0};
+struct ZoneHooks {
+  malloc_zone_t* zone = nullptr;
+  void (*free_)(malloc_zone_t*, void*) = nullptr;
+  void (*free_definite_size)(malloc_zone_t*, void*, size_t) = nullptr;
+  void* (*realloc_)(malloc_zone_t*, void*, size_t) = nullptr;
+  void (*batch_free)(malloc_zone_t*, void**, unsigned) = nullptr;
+  void (*try_free_default)(malloc_zone_t*, void*) = nullptr;
+};
+ZoneHooks g_zones[16];
+unsigned g_zone_count = 0;
+ZoneHooks* Find(malloc_zone_t* z) {
+  for (unsigned i = 0; i < g_zone_count; ++i)
+    if (g_zones[i].zone == z) return &g_zones[i];
+  return nullptr;
+}
+inline bool Defer(void* p) {
+  if (!p || !g_active.load(std::memory_order_relaxed)) return false;
+  g_deferred.fetch_add(1, std::memory_order_relaxed);
+  g_deferred_bytes.fetch_add(malloc_size(p), std::memory_order_relaxed);
+  return true;
+}
+void HookFree(malloc_zone_t* z, void* p) {
+  if (!Defer(p)) Find(z)->free_(z, p);
+}
+void HookFreeDefiniteSize(malloc_zone_t* z, void* p, size_t size) {
+  if (!Defer(p)) Find(z)->free_definite_size(z, p, size);
+}
+void HookTryFreeDefault(malloc_zone_t* z, void* p) {
+  if (!Defer(p)) Find(z)->try_free_default(z, p);
+}
+void HookBatchFree(malloc_zone_t* z, void** ptrs, unsigned n) {
+  if (!g_active.load(std::memory_order_relaxed)) return Find(z)->batch_free(z, ptrs, n);
+  for (unsigned i = 0; i < n; ++i) Defer(ptrs[i]);
+}
+void* HookRealloc(malloc_zone_t* z, void* p, size_t size) {
+  if (!p || !g_active.load(std::memory_order_relaxed)) return Find(z)->realloc_(z, p, size);
+  size_t old = malloc_size(p);
+  void* n = malloc_zone_malloc(z, size ? size : 1);
+  if (n) {
+    std::memcpy(n, p, old < size ? old : size);
+    Defer(p);
+  }
+  return n;
+}
+void Install() {
+  static bool installed = false;
+  if (installed) return;
+  installed = true;
+  vm_address_t* zones = nullptr;
+  unsigned count = 0;
+  if (malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count) != KERN_SUCCESS) return;
+  const uintptr_t page = uintptr_t(getpagesize());
+  for (unsigned i = 0; i < count && g_zone_count < 16; ++i) {
+    auto* z = reinterpret_cast<malloc_zone_t*>(zones[i]);
+    uintptr_t lo = uintptr_t(z) & ~(page - 1), hi = (uintptr_t(z + 1) + page - 1) & ~(page - 1);
+    if (mprotect(reinterpret_cast<void*>(lo), hi - lo, PROT_READ | PROT_WRITE) != 0) continue;
+    ZoneHooks& h = g_zones[g_zone_count++];
+    h.zone = z;
+    h.free_ = z->free;
+    h.realloc_ = z->realloc;
+    h.free_definite_size = z->free_definite_size;
+    h.batch_free = z->batch_free;
+    h.try_free_default = z->version >= 13 ? z->try_free_default : nullptr;
+    z->free = HookFree;
+    z->realloc = HookRealloc;
+    if (h.free_definite_size) z->free_definite_size = HookFreeDefiniteSize;
+    if (h.batch_free) z->batch_free = HookBatchFree;
+    if (h.try_free_default) z->try_free_default = HookTryFreeDefault;
+  }
+  std::fprintf(stderr, "[savepoint-s3] free deferral hooked %u malloc zones\n", g_zone_count);
+}
+}  // namespace defer_free
+
 SavepointStats CaptureInProcessSavepoint() {
   std::set_terminate(SavepointTerminate);
   ::signal(SIGABRT, SavepointAbortSignal);
@@ -350,6 +434,12 @@ SavepointStats CaptureInProcessSavepoint() {
     g_snap.threads.push_back(std::move(ts));
   }
   g_snap.valid = true;
+  if (!std::getenv("REX_SAVEPOINT_NO_DEFER_FREE")) {
+    defer_free::Install();
+    defer_free::g_deferred = 0;
+    defer_free::g_deferred_bytes = 0;
+    defer_free::g_active.store(true);
+  }
   auto t2 = Clock::now();
   for (auto& t : parked) {
     thread_resume(MachPort(t.get()));
@@ -486,6 +576,8 @@ SavepointStats RewindToInProcessSavepoint() {
                "failures (%s)\n",
                restored, not_parked, in_syscall, syscall_eintr ? "eintr" : "restart", detach_failed,
                two_phase ? "two-phase" : "one-phase");
+  // Revived frames free their blocks for real from here; the deferred ones they don't own stay leaked.
+  defer_free::g_active.store(false);
   auto t2 = Clock::now();
   uint32_t left_parked = 0;
   for (auto& t : parked) {
@@ -500,6 +592,9 @@ SavepointStats RewindToInProcessSavepoint() {
     thread_resume(MachPort(t.get()));
   }
   std::fprintf(stderr, "[savepoint-s3] rewind done, %u threads left parked\n", left_parked);
+  std::fprintf(stderr, "[savepoint-s3] frees deferred since capture: %llu (%llu KB)\n",
+               (unsigned long long)defer_free::g_deferred.load(),
+               (unsigned long long)(defer_free::g_deferred_bytes.load() >> 10));
   REXSYS_INFO("[savepoint-s3] rewind: {} threads created after the capture left suspended", left_parked);
   st.park_ms = Ms(t0, t1);
   st.write_ms = Ms(t1, t2);
