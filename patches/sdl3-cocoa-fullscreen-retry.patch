@@ -1,0 +1,52 @@
+--- a/src/video/cocoa/SDL_cocoawindow.m
++++ b/src/video/cocoa/SDL_cocoawindow.m
+@@ -2975,7 +2975,31 @@
+             } else {
+                 [nswindow setLevel:kCGNormalWindowLevel];
+             }
++        }
++    }
++}
++
++// rexglue: AppKit raises an exception if the style mask changes while it is still resizing the window, which
++// happens when the display under a fullscreen window changes (virtual monitor removed, refresh rate change).
++// Uncaught, that ends the game. Retry the change on the next runloop turns instead.
++static bool Cocoa_TrySetStyleMask(NSWindow *nswindow, NSWindowStyleMask style, NSRect rect, int attempt)
++{
++    @try {
++        [nswindow setStyleMask:style];
++        return true;
++    } @catch (NSException *e) {
++        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "setStyleMask refused (%s), retry %d", [[e reason] UTF8String], attempt + 1);
++        if (attempt < 20) {
++            __weak NSWindow *weak = nswindow;
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
++                NSWindow *w = weak;
++                if (w && Cocoa_TrySetStyleMask(w, style, rect, attempt + 1)) {
++                    [w setContentSize:rect.size];
++                    [w setFrameOrigin:rect.origin];
++                }
++            });
+         }
++        return false;
+     }
+ }
+ 
+@@ -3019,7 +3043,7 @@
+                 }
+             }
+ 
+-            [nswindow setStyleMask:NSWindowStyleMaskBorderless];
++            Cocoa_TrySetStyleMask(nswindow, NSWindowStyleMaskBorderless, rect, 0);
+         } else {
+             NSRect frameRect;
+ 
+@@ -3038,7 +3062,7 @@
+              * macOS 10.15 where the window doesn't properly restore the windowed
+              * mode decorations after exiting fullscreen-desktop, when the window
+              * was created as fullscreen-desktop. */
+-            [nswindow setStyleMask:GetWindowWindowedStyle(window)];
++            Cocoa_TrySetStyleMask(nswindow, GetWindowWindowedStyle(window), rect, 0);
+ 
+             // Hack to restore window decorations on macOS 10.10
+             frameRect = [nswindow frame];
