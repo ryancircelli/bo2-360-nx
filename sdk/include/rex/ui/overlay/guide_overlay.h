@@ -124,7 +124,7 @@ class GuideDialog : public ImGuiDialog {
   std::vector<Span> Layout(size_t open, float x, float w) const;
   void DrawGuide(ImDrawList* dl, float x, float y, float w, float h,
                  std::vector<guide::Item>& items);
-  void DrawClosedBlade(ImDrawList* dl, size_t i, Span span, bool left, float y, float h);
+  void DrawClosedBlade(ImDrawList* dl, size_t i, Span span, bool left, float y, float h, bool own = false);
   void DrawOpenBlade(ImDrawList* dl, Span span, float y, float h, std::vector<guide::Item>& items);
   void DrawContent(ImDrawList* dl, float x0, float y0, float x1, float y1,
                    std::vector<guide::Item>& items);
