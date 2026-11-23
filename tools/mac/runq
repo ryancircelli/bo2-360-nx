@@ -1585,8 +1585,15 @@ class Daemon:
                                      (outside_compile_procs() if self.perf_batch else compile_procs()) != 0)
                     builds_busy = active_builds() > 0
                     jobs_per_owner = []
+                    if time.time() - getattr(self, 'hist_t', 0) > 60:
+                        self.hist, self.hist_t = history_wall(), time.time()
+                    solo_waiting = any(is_solo(j) and not adapter_hold_reason(j, self.power_status) for _, j in qjobs)
                     for qf in q:
                         job = rjson(os.path.join(D['queue'], qf)) or {}
+                        if not is_solo(job) and long_job_held(estimate_s(job, self.hist),
+                                                              time.time() - job.get('submitted_t', time.time()),
+                                                              solo_waiting):
+                            continue
                         if adapter_hold_reason(job, self.power_status):
                             continue
                         if not mac_may_run(job):
@@ -1672,7 +1679,15 @@ def job_owner(j):
 
 
 PERF_HOLD_MAX_S = 900   # a speed job held by outside builds this long runs anyway, outside builds frozen
+SOLO_SHORT_S = 300       # while a solo job waits, only jobs expected to finish within this start...
+SOLO_LONG_MAX_AGE_S = 1800   # ...except a long job that has itself waited this long (no starving the soaks)
 SOLO_MAX_WAIT_S = 600   # a queued solo job lets other games keep flowing this long, then the machine drains for it
+
+
+def long_job_held(est_s, age_s, solo_waiting):
+    """A solo job is waiting: a long game (history median over SOLO_SHORT_S) would lengthen the drain, so it waits,
+    unless it has already waited SOLO_LONG_MAX_AGE_S."""
+    return bool(solo_waiting) and est_s > SOLO_SHORT_S and age_s < SOLO_LONG_MAX_AGE_S
 
 
 def solo_gate(entries, machine_empty, now, max_wait):
@@ -2791,6 +2806,8 @@ def main():
         assert defer_perf_for_activity(perf, False, True, False, False)
         assert not defer_perf_for_activity(perf, False, True, False, True)
         assert defer_perf_for_activity(perf, False, True, True, True)
+        assert long_job_held(900, 100, True) and not long_job_held(120, 100, True)
+        assert not long_job_held(900, 100, False) and not long_job_held(900, 2000, True)
         sg = lambda *a: solo_gate(*a)
         ents = [('s', {'id': 's', 'class': CLASSES['proof'], 'solo': True, 'submitted_t': 900}),
                 ('a', {'id': 'a', 'class': CLASSES['sweep'], 'submitted_t': 950}),
