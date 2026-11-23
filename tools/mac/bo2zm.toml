@@ -34,6 +34,11 @@ bo2zm_show_fps = false
 bo2zm_boot_zombies = true
 bo2zm_zombies_only = true
 
+# Guest timed sleeps wake on a latency-critical timer. macOS coalesces ordinary timers, so BO2's Server thread's 1 ms
+# sleeps woke ~5 ms late and the frame waited for it. Low Power 4p Town in-run A/B: frames over 33 ms 4.64% -> 1.42%,
+# 45.3 -> 47.1 fps. Set to false to go back to ordinary sleeps.
+mac_precise_sleep = true
+
 # ---- Controllers -------------------------------------------------------------------------------------------------
 
 # A controller that drops out (battery, sleep, out of range) gets its player back when it comes back on.

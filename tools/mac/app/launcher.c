@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -336,6 +337,19 @@ int main(int argc, char **argv) {
     chdir(support);
     if (env_of("PRINT_COMMAND")) { for (int i = 0; i < g_argc; i++) printf("%s\n", g_argv[i]); return 0; }
 
+    // Apps started from Finder get a 256 open-file limit; the shader prebuild alone keeps ~3,700 files open, and
+    // running out breaks file opens all over the game (missing default_mp.cfg, failed saves, audio start).
+    // SDL 3.5 on macOS leaves the Xbox 360 wireless receiver (045e:0291, read through libusb) out unless told to.
+    setenv("SDL_HIDAPI_LIBUSB", "1", 0);
+    setenv("SDL_HIDAPI_LIBUSB_WHITELIST", "0", 0);
+    setenv("SDL_JOYSTICK_HIDAPI_XBOX_360", "1", 0);
+    setenv("SDL_JOYSTICK_HIDAPI_XBOX_360_WIRELESS", "1", 0);
+    struct rlimit rl;
+    if (!getrlimit(RLIMIT_NOFILE, &rl)) {
+        rlim_t want = 65536;
+        if (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < want) want = rl.rlim_max;
+        if (rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur < want) { rl.rlim_cur = want; if (setrlimit(RLIMIT_NOFILE, &rl)) { rl.rlim_cur = 10240; setrlimit(RLIMIT_NOFILE, &rl); } }
+    }
     signal(SIGTERM, forward); signal(SIGINT, forward); signal(SIGHUP, forward);
     int err = posix_spawn(&g_child, ex, NULL, NULL, g_argv, environ);
     if (err) { char m[PATH_MAX]; snprintf(m, sizeof m, "cannot start %s: %s", ex, strerror(err)); alert(g_title, m); return 1; }

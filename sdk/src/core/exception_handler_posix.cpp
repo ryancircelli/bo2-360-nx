@@ -206,7 +206,17 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                            : Exception::AccessViolationOperation::kRead;
         } else {
           bool instruction_is_store;
-          if (IsArm64LoadPrefetchStore(*reinterpret_cast<const uint32_t*>(thread_context.pc),
+          // Only decode the faulting instruction for data aborts at a sane PC.
+          // macOS frameworks (AudioToolbox CSCheckFix, LaunchServices) take
+          // deliberate faults, including instruction aborts at PC ~0; reading
+          // *pc there re-faults inside this handler forever.
+          const uint32_t mac_ec = (mac_esr >> 26) & 0b111111;
+          const bool pc_readable = (thread_context.pc & 3) == 0 &&
+                                   thread_context.pc >= 0x1000 &&
+                                   thread_context.pc < (UINT64_C(1) << 47) &&
+                                   mac_ec != 0b100000 && mac_ec != 0b100001;
+          if (pc_readable &&
+              IsArm64LoadPrefetchStore(*reinterpret_cast<const uint32_t*>(thread_context.pc),
                                        instruction_is_store)) {
             access_violation_operation = instruction_is_store
                                              ? Exception::AccessViolationOperation::kWrite
@@ -417,21 +427,42 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
-  // No runtime handler resolved this synchronous fault. Restore the disposition
-  // and retry the instruction so the OS delivers it to the previous handler
-  // (normally the default crash reporter), rather than spinning forever here.
-  const struct sigaction* previous = &original_sigsegv_handler_;
-  if (signal_number == SIGILL) previous = &original_sigill_handler_;
+
+  // Nobody claimed it: pass it to whoever owned the signal before us (macOS
+  // frameworks rely on their own fault probes). Returning here would just
+  // re-run the faulting instruction forever.
+  struct sigaction* original = nullptr;
+  switch (signal_number) {
+    case SIGILL:
+      original = &original_sigill_handler_;
+      break;
+    case SIGSEGV:
+      original = &original_sigsegv_handler_;
+      break;
 #if REX_PLATFORM_MAC
-  if (signal_number == SIGBUS) previous = &original_sigbus_handler_;
+    case SIGBUS:
+      original = &original_sigbus_handler_;
+      break;
 #endif
-  struct sigaction action = *previous;
-  // Ignoring a synchronous fault cannot make forward progress.
-  if (action.sa_handler == SIG_IGN) {
-    std::memset(&action, 0, sizeof(action));
-    action.sa_handler = SIG_DFL;
+    default:
+      break;
   }
-  sigaction(signal_number, &action, nullptr);
+  if (original) {
+    if ((original->sa_flags & SA_SIGINFO) && original->sa_sigaction) {
+      original->sa_sigaction(signal_number, signal_info, signal_context);
+      return;
+    }
+    if (original->sa_handler == SIG_IGN) {
+      return;
+    }
+    if (original->sa_handler != SIG_DFL && original->sa_handler) {
+      original->sa_handler(signal_number);
+      return;
+    }
+  }
+  // Default action: restore it so the re-executed instruction crashes
+  // normally (crash report) instead of hanging.
+  signal(signal_number, SIG_DFL);
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {
