@@ -74,7 +74,7 @@ for fn_name in fn_names:
     for line in body.split("\n"):
         localized = REG.sub(lambda m: "c_" + m.group(1), line)
         # Anything else that touches ctx must be one of the forms known to be safe.
-        rest = re.sub(r"\bctx\.(fpscr|lr|msr|vscr_sat)\b", "", localized)
+        rest = re.sub(r"\bctx\.(fpscr|lr|msr|vscr_sat|vscr)\b", "", localized)
         if CALL.match(line):
             callees.add(CALLEE.match(line).group(1))
             out_lines.append(f"\t{{ {write_back} }}")
