@@ -142,7 +142,44 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
 
 std::atomic<bool> mouse_look_active{true};
 
+// An overlay (the Guide) holds the keyboard and mouse: the guest sees nothing.
+std::atomic<bool> overlay_hold{false};
+// After the hold ends, the guest still sees nothing until every key is up, so
+// the key that closed the overlay never reaches the game.
+std::atomic<bool> overlay_drain{false};
+// Raw key/mouse events that arrived during the hold, and guest polls that
+// still returned input during it (should stay 0). Logged when the hold ends.
+std::atomic<uint64_t> overlay_held_events{0};
+std::atomic<uint64_t> overlay_leaked_polls{0};
+std::atomic<uint64_t> overlay_polls{0};
+// Scripted tests drive a minimized, unfocused window.
+std::atomic<bool> test_focus{false};
+
 }  // namespace
+
+void SetOverlayHold(bool hold) {
+  const bool was = overlay_hold.exchange(hold, std::memory_order_acq_rel);
+  if (hold && !was) {
+    overlay_held_events.store(0);
+    overlay_leaked_polls.store(0);
+    overlay_polls.store(0);
+    overlay_drain.store(false);
+    REXLOG_INFO("[mnk] keyboard and mouse held by an overlay");
+  } else if (!hold && was) {
+    overlay_drain.store(true);
+    REXLOG_INFO("[mnk] keyboard and mouse released by the overlay: {} key/mouse events held back, "
+                "{} guest polls while held, {} of them with input",
+                overlay_held_events.load(), overlay_polls.load(), overlay_leaked_polls.load());
+  }
+}
+
+bool IsOverlayHeld() {
+  return overlay_hold.load(std::memory_order_acquire);
+}
+
+void SetTestFocus(bool on) {
+  test_focus.store(on, std::memory_order_relaxed);
+}
 
 void SetMouseLookActive(bool active) {
   mouse_look_active.store(active, std::memory_order_relaxed);
@@ -203,6 +240,14 @@ void MnkInputDriver::DetachFromWindow() {
 
 bool MnkInputDriver::IsEnabled() const {
   return REXCVAR_GET(mnk_mode);
+}
+
+bool MnkInputDriver::Focused() const {
+  return has_focus_ || test_focus.load(std::memory_order_relaxed);
+}
+
+void MnkInputDriver::CountHeld() {
+  if (IsOverlayHeld()) overlay_held_events.fetch_add(1, std::memory_order_relaxed);
 }
 
 static bool IsBindPressed(const bool (&key_down)[256], const std::string& cvar_val) {
@@ -267,10 +312,27 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
 
   // Mouse look is opt in. Without this gate, keyboard input alone would hide
   // and lock the cursor, breaking the ImGui overlays.
+  const bool held = IsOverlayHeld();
   QueueMouseCaptureUpdate(IsEnabled() && REXCVAR_GET(mnk_mouse) && IsMouseLookActive() &&
-                          has_focus_ && is_active());
+                          Focused() && is_active() && !held);
 
-  if (!is_active() || !has_focus_) {
+  bool draining = overlay_drain.load(std::memory_order_acquire);
+  if (draining && !held) {
+    std::lock_guard lock(state_mutex_);
+    bool any = false;
+    for (bool k : key_down_) any = any || k;
+    if (!any) {
+      overlay_drain.store(false, std::memory_order_release);
+      draining = false;
+    }
+  }
+  if (!is_active() || !Focused() || held || draining) {
+    if (held || draining) {
+      std::lock_guard lock(state_mutex_);
+      mouse_dx_ = 0.0f;
+      mouse_dy_ = 0.0f;
+      if (held) overlay_polls.fetch_add(1, std::memory_order_relaxed);
+    }
     if (out_state) {
       std::memset(out_state, 0, sizeof(*out_state));
       out_state->packet_number = packet_number_;
@@ -354,6 +416,14 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   };
 
   packet_number_++;
+
+  if (IsOverlayHeld() && (buttons || lt || rt || lx || ly || rx || ry)) {
+    // Raced a hold that began during this poll: still nothing for the guest.
+    overlay_leaked_polls.fetch_add(1, std::memory_order_relaxed);
+    buttons = 0;
+    lt = rt = 0;
+    lx = ly = rx = ry = 0;
+  }
 
   if (out_state) {
     out_state->packet_number = packet_number_;
@@ -487,8 +557,9 @@ void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
 }
 
 void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!IsEnabled() || !Focused())
     return;
+  CountHeld();
   std::lock_guard lock(state_mutex_);
   uint16_t vk = static_cast<uint16_t>(e.virtual_key());
   SetKeyState(vk, true);
@@ -503,8 +574,9 @@ void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
 }
 
 void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!IsEnabled() || !Focused())
     return;
+  CountHeld();
   std::lock_guard lock(state_mutex_);
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
@@ -541,8 +613,9 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
 }
 
 void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!IsEnabled() || !Focused())
     return;
+  CountHeld();
   int32_t x = e.x();
   int32_t y = e.y();
   {

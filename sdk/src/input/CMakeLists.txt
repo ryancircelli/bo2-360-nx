@@ -44,7 +44,7 @@ else()
 endif()
 # Scripted virtual pads and Steam Input detection (mac-input): desktop only.
 if(NOT REXGLUE_PLATFORM_SWITCH)
-    target_sources(rexinput PRIVATE script/script_events.cpp script/script_input_driver.cpp
+    target_sources(rexinput PRIVATE script/script_events.cpp script/script_input_driver.cpp script/kbm_script.cpp
         steam_detect.cpp)
 endif()
 # USB port lookup for pads without a serial, used by the SDL driver.
