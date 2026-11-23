@@ -10,6 +10,7 @@
 #include <chrono>
 #include <execinfo.h>
 #include <exception>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -64,6 +65,18 @@ bool WriteAll(int fd, const void* data, size_t size) {
   int count = backtrace(frames, 24);
   backtrace_symbols_fd(frames, count, STDERR_FILENO);
   std::abort();
+}
+
+void SavepointAbortSignal(int sig) {
+  char buf[96];
+  int n = std::snprintf(buf, sizeof buf, "[savepoint-s3] signal %d on host thread 0x%X\n", sig,
+                        thread::current_thread_id());
+  ::write(STDERR_FILENO, buf, n);
+  void* frames[32];
+  int count = backtrace(frames, 32);
+  backtrace_symbols_fd(frames, count, STDERR_FILENO);
+  ::signal(sig, SIG_DFL);
+  ::raise(sig);
 }
 
 // Walks `heap` and writes every committed, accessible region read from `membase`.
@@ -253,6 +266,7 @@ std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
 
 SavepointStats CaptureInProcessSavepoint() {
   std::set_terminate(SavepointTerminate);
+  ::signal(SIGABRT, SavepointAbortSignal);
   SavepointStats st;
   auto* ks = kernel_state();
   auto* mem = ks->memory();
