@@ -16,6 +16,22 @@ target_link_libraries(codegen_branch_tests PRIVATE
 
 add_test(NAME codegen_branch_tests COMMAND codegen_branch_tests)
 
+add_executable(codegen_jump_table_tests
+    codegen/jump_table_test.cpp
+)
+
+target_include_directories(codegen_jump_table_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(codegen_jump_table_tests PRIVATE
+    rexcodegen
+    Catch2::Catch2WithMain
+)
+
+add_test(NAME codegen_jump_table_tests COMMAND codegen_jump_table_tests)
+
 add_executable(chrono_steady_cast_tests
     chrono/chrono_steady_cast_test.cpp
 )
