@@ -28,6 +28,7 @@
 #include <rex/ui/overlay/guide_overlay.h>
 #include <rex/ui/overlay/settings_overlay.h>
 #include <rex/audio/audio_system.h>
+#include <rex/audio/downmix.h>
 #if REX_PLATFORM_SWITCH
 #include <rex/audio/switch/switch_audio_system.h>
 #else
@@ -63,6 +64,7 @@ NX_NORETURN void __libnx_exit(int rc);
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string_view>
 
@@ -538,16 +540,20 @@ void ReXApp::SetupGuide() {
   audio.order = 10;
   audio.description = "Volume and mute.";
   audio.items = {
-      guide::CvarSlider("volume", 0, 100, 5, "Volume", "Game volume.", "%.0f%%"),
+      // No "volume" setting exists; the slider drives the output gain every audio backend applies.
+      guide::Slider(
+          "Volume", 0, 100, 5, [] { return std::round(rex::audio::GetOutputGain() * 100.0f); },
+          [](double v) { rex::audio::SetOutputGain(static_cast<float>(std::clamp(v, 0.0, 100.0) / 100.0)); },
+          "Game volume.", "%.0f%%"),
       guide::CvarToggle("audio_mute", "Mute", "Silence all game audio."),
   };
   guide::RegisterPage(std::move(audio));
 
   guide::Page input;
   input.id = "rex.system.input";
-  input.title = "Controllers & Players";
-  input.blade = std::string(guide::kBladeSystem);
-  input.order = 20;
+  input.title = "Controller Settings";
+  input.blade = std::string(guide::kBladeControllers);
+  input.order = 10;
   input.description = "Vibration, the Guide button and which pad plays as which player.";
   input.items = {
       guide::CvarToggle("input_vibration", "Vibration", "Let the game rumble the controllers."),

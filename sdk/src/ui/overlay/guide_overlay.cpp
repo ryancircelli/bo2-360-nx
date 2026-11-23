@@ -1006,6 +1006,7 @@ std::vector<GuideDialog::Span> GuideDialog::Layout(size_t open, float x, float w
   const float tab = 54.0f * s_;
   const float under = 40.0f * s_;  // how far a closed blade runs under its neighbour
   const float open_l = x + static_cast<float>(open) * tab;
+  // The open blade's span includes its own tab.
   const float open_r = x + w - static_cast<float>(n - 1 - open) * tab;
   for (size_t i = 0; i < n; ++i) {
     if (i < open) {
@@ -1027,7 +1028,7 @@ void GuideDialog::DrawGuide(ImDrawList* dl, float x, float y, float w, float h,
   s_ = s;
   // The bow: the Guide's outer edges sit `bow` further out at mid height than
   // at the ends. Build everything inside the box less that bow.
-  const float bow = 46.0f * s;
+  const float bow = 58.0f * s;
   const float nx = x + bow, nw = w - 2.0f * bow;
   warp_cx_ = x + w * 0.5f;
   warp_y0_ = y;
@@ -1071,11 +1072,16 @@ void GuideDialog::DrawGuide(ImDrawList* dl, float x, float y, float w, float h,
   }
   // The blade that was open slides shut under the one opening.
   if (sliding) DrawClosedBlade(dl, anim_from_, cur[anim_from_], anim_from_ < blade_, closed_top, closed_h);
-  DrawOpenBlade(dl, cur[blade_], y, h, items);
+  // The open blade keeps its own tab at its left edge, in its full colour, and
+  // the body opens out of it.
+  const float tab = 54.0f * s, under = 40.0f * s;
+  const Span body{cur[blade_].l + tab, cur[blade_].r};
+  DrawClosedBlade(dl, blade_, Span{cur[blade_].l, cur[blade_].l + tab + under}, true, closed_top, closed_h, true);
+  DrawOpenBlade(dl, body, y, h, items);
   WarpVertices(dl, first_vertex);
 }
 
-void GuideDialog::DrawClosedBlade(ImDrawList* dl, size_t i, Span span, bool left, float y, float h) {
+void GuideDialog::DrawClosedBlade(ImDrawList* dl, size_t i, Span span, bool left, float y, float h, bool own) {
   const float s = s_;
   const Rgb section = SectionColour(blades_[i].name, i);
   const ImVec2 a(span.l, y), b(span.r, y + h);
@@ -1085,7 +1091,7 @@ void GuideDialog::DrawClosedBlade(ImDrawList* dl, size_t i, Span span, bool left
   Mesh(dl, ImVec2(a.x + sh, a.y + 4 * s), ImVec2(b.x + sh, b.y + 4 * s), r, 1, 12.0f,
        [](float, float, int) { return IM_COL32(0, 0, 0, 70); });
   // Silver fin, lit from the upper left, a faint wash of its section colour.
-  const Rgb base = Mix(kSilver, section, 0.10f);
+  const Rgb base = own ? Mix(section, kWhiteRgb, 0.30f) : Mix(kSilver, section, 0.10f);
   Mesh(dl, a, b, r, 12, 6.0f, [&](float u, float v, int) {
     const float gu = left ? u : 1.0f - u;
     const float shine = std::exp(-std::pow((gu - 0.22f) / 0.16f, 2.0f));

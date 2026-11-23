@@ -7,7 +7,9 @@
  */
 #include <rex/input/script/kbm_script.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -111,8 +113,18 @@ class Runner {
       return true;
     }
     if (s.op == "key" && !a.empty()) {
-      const int hold = a.size() > 1 ? std::stoi(a[1]) : 60;
-      return Chord(a[0], hold);
+      // Key names may contain spaces ("Left Shift+Tab"); a trailing number is the hold time in ms.
+      std::vector<std::string> words = a;
+      int hold = 60;
+      if (words.size() > 1 && !words.back().empty() &&
+          std::all_of(words.back().begin(), words.back().end(),
+                      [](char c) { return c >= '0' && c <= '9'; })) {
+        hold = std::atoi(words.back().c_str());
+        words.pop_back();
+      }
+      std::string chord;
+      for (const auto& w : words) chord += (chord.empty() ? "" : " ") + w;
+      return Chord(chord, hold);
     }
     if (s.op == "type" && !a.empty()) {
       for (char c : a[0]) {
