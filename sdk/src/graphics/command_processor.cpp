@@ -912,6 +912,9 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
       result = ExecutePacketType3_EVENT_WRITE(reader, packet, count);
       break;
     case PM4_EVENT_WRITE_SHD:
+    // Cache flush done event: same initiator/address/value layout as SHD
+    // (xenia-canary 28c265ed7).
+    case PM4_EVENT_WRITE_CFL:
       result = ExecutePacketType3_EVENT_WRITE_SHD(reader, packet, count);
       break;
     case PM4_EVENT_WRITE_EXT:
