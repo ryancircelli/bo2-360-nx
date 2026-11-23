@@ -313,6 +313,9 @@ class XmaContext {
   // Loop subframe precision state
   uint8_t loop_frame_output_limit_ = 0;
   bool loop_start_skip_pending_ = false;
+  // Read offset this decoder last stored, to tell when the game set a decode position (it writes a
+  // frame bit offset plus a start subframe in output_buffer_padding).
+  uint32_t last_stored_read_offset_ = UINT32_MAX;
 
   // The decoded frame cache (apu_xma_cache; see DecodeCached in xma_context.cpp).
   bool DecodeCached(const XMA_CONTEXT_DATA* data);
