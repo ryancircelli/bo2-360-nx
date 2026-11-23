@@ -34,6 +34,7 @@
 #include <rex/audio/sdl/sdl_audio_system.h>
 #endif
 #include <rex/input/input_system.h>
+#include <rex/input/script/kbm_script.h>
 #include <rex/kernel/init.h>
 #include <rex/kernel/xam/text_input.h>
 #include <rex/string/numeric.h>
@@ -481,6 +482,9 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
   });
 
   SetupGuide();
+  // Tests: scripted keyboard and mouse, aimed at the Guide's own targets.
+  rex::input::script::StartKbmScriptIfSet(
+      [](std::string_view name, float rect[4]) { return ui::GuideTarget(name, rect); });
 
   OnCreateDialogs(imgui_drawer_.get());
 }
@@ -621,6 +625,12 @@ void ReXApp::ToggleGuide(int user, std::string_view blade) {
   // Opened from the keyboard: it holds player 1's pad, any pad drives it.
   guide_gate_->SetHolder(user >= 0 ? user : 0);
   guide_overlay_ = std::make_unique<ui::GuideDialog>(imgui_drawer_.get(), user, std::move(hooks));
+  // The Guide is used with the mouse too: show the cursor (the keyboard and
+  // mouse hold above has already asked the game's mouse capture to let go).
+  if (window_) {
+    guide_saved_cursor_ = static_cast<int>(window_->GetCursorVisibility());
+    window_->SetCursorVisibility(ui::Window::CursorVisibility::kVisible);
+  }
   if (!blade.empty()) {
     guide_overlay_->SelectBlade(blade);
   }
@@ -631,6 +641,10 @@ void ReXApp::CloseGuide() {
     return;
   }
   guide_overlay_.reset();
+  if (window_ && guide_saved_cursor_ >= 0) {
+    window_->SetCursorVisibility(static_cast<ui::Window::CursorVisibility>(guide_saved_cursor_));
+    guide_saved_cursor_ = -1;
+  }
   if (guide_gate_) {
     guide_gate_->SetHolder(-1);
   }
@@ -729,6 +743,14 @@ std::function<void(PathConfig)> ReXApp::MakeResumeCallback() {
 
 void ReXApp::OnKeyDown(ui::KeyEvent& e) {
   rex::ui::ProcessKeyEvent(e);
+}
+
+void ReXApp::OnMouseDown(ui::MouseEvent& e) {
+  // The mouse's thumb (back) button opens and closes the Guide, so the mouse
+  // alone can reach it. Games never see that button.
+  if (e.button() == ui::MouseEvent::Button::kX1) {
+    ToggleGuide();
+  }
 }
 
 void ReXApp::OnClosing(ui::UIEvent& e) {

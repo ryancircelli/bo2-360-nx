@@ -22,6 +22,7 @@
 struct ImFont;
 struct ImFontAtlas;
 struct ImDrawList;
+struct ImVec2;
 
 namespace rex::ui {
 
@@ -39,10 +40,9 @@ class GuideInputGate {
   /// The Guide opened for this player (0-3), or closed (-1).
   /// After a close the player's pad stays hidden until every button is up,
   /// so the B or Guide press that closed it never reaches the game.
-  void SetHolder(int user) {
-    const int prev = holder_.exchange(user, std::memory_order_acq_rel);
-    if (user < 0 && prev >= 0) draining_.store(prev, std::memory_order_release);
-  }
+  /// Opening also holds the keyboard and mouse (rex/input/mnk), closing
+  /// releases them and logs what was held back.
+  void SetHolder(int user);
   int holder() const { return holder_.load(std::memory_order_acquire); }
 
   /// The installable gate.
@@ -55,7 +55,15 @@ class GuideInputGate {
   std::array<bool, 4> was_down_{};
   std::array<bool, 4> fired_{};
   std::array<int64_t, 4> down_since_ms_{};
+  // While open: guest polls of the holder's pad, and how many had input.
+  std::atomic<uint64_t> held_polls_{0};
+  std::atomic<uint64_t> held_input_polls_{0};
 };
+
+/// The Guide's clickable controls, by name ("blade:System", "row:Volume",
+/// "back", "close", ...): x0, y0, x1, y1 in fractions of the window. Only
+/// while the Guide is open. For scripted tests (kbm_test_script).
+bool GuideTarget(std::string_view name, float rect[4]);
 
 /// Loads the Guide's fonts into the ImGui atlas (call from the font setup).
 void LoadGuideFonts(ImFontAtlas* atlas);
@@ -98,17 +106,35 @@ class GuideDialog : public ImGuiDialog {
 
   void Rebuild();
   std::vector<guide::Item> ItemsFor(const Entry& entry);
+  std::vector<guide::Item> CurrentItems();
   uint32_t PollPads();
   uint32_t PollKeyboard();
+  bool HandleNumberEntry(std::vector<guide::Item>& items);
   void HandleButtons(uint32_t pressed, std::vector<guide::Item>& items);
   void Activate(guide::Item& item, int direction);
+  void SetSlider(guide::Item& item, double value);
   void SwitchBlade(int delta);
   void Back();
   void RequestClose();
 
-  // Drawing.
-  void DrawPanel(ImDrawList* dl, float x, float y, float w, float h,
+  // Drawing (design units: a 700 px tall Guide).
+  struct Span {
+    float l, r;
+  };
+  std::vector<Span> Layout(size_t open, float x, float w) const;
+  void DrawGuide(ImDrawList* dl, float x, float y, float w, float h,
                  std::vector<guide::Item>& items);
+  void DrawClosedBlade(ImDrawList* dl, size_t i, Span span, bool left, float y, float h);
+  void DrawOpenBlade(ImDrawList* dl, Span span, float y, float h, std::vector<guide::Item>& items);
+  void DrawContent(ImDrawList* dl, float x0, float y0, float x1, float y1,
+                   std::vector<guide::Item>& items);
+  void PublishTargets(float display_w, float display_h);
+
+  // The Blades bow: nominal x is pushed out from the centre line, most at
+  // mid height, so straight edges draw as ( and ) curves.
+  ImVec2 Warp(float x, float y) const;
+  float UnwarpX(float x, float y) const;
+  void WarpVertices(ImDrawList* dl, int first_vertex) const;
 
   int owner_;
   Hooks hooks_;
@@ -119,17 +145,43 @@ class GuideDialog : public ImGuiDialog {
   std::vector<int> entry_sel_;
   int item_sel_ = 0;
   float scroll_ = 0.0f;
+  bool ensure_visible_ = true;
   uint32_t prev_buttons_ = 0;
   bool first_poll_ = true;
   int64_t repeat_at_ms_ = 0;
   uint32_t repeat_button_ = 0;
   bool close_requested_ = false;
   std::string pending_blade_;
-  // Mouse targets from the last frame.
+  // Blade slide.
+  size_t anim_from_ = 0;
+  int64_t anim_start_ms_ = 0;
+  // Typed number for a slider.
+  bool editing_ = false;
+  int edit_row_ = -1;
+  std::string edit_text_;
+  // Slider drag.
+  int drag_row_ = -1;
+  double drag_value_ = 0.0;
+  float drag_x0_ = 0.0f, drag_x1_ = 0.0f;
+  // Mouse.
+  int hover_row_ = -1;
+  bool hover_back_ = false;
+  bool hover_close_ = false;
+  // Last frame's list metrics (mouse wheel).
+  float s_ = 1.0f;
+  float row_h_ = 0.0f;
+  bool overflow_ = false;
+  // Warp.
+  float warp_cx_ = 0.0f, warp_y0_ = 0.0f, warp_h_ = 1.0f, warp_k_ = 0.0f;
+  // Mouse targets from the last frame, in nominal (unwarped) coordinates.
+  enum HitKind : int {
+    kHitBlade, kHitRow, kHitLegend, kHitPanel, kHitBack, kHitClose, kHitSlider, kHitPrev, kHitNext,
+  };
   struct HitRect {
     float x0, y0, x1, y1;
-    int kind;   // 0 blade, 1 row, 2 legend button
+    int kind;
     int index;
+    std::string name;
   };
   std::vector<HitRect> hits_;
 };

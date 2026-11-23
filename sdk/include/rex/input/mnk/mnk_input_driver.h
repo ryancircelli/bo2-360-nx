@@ -25,6 +25,15 @@ namespace rex::input::mnk {
 void SetMouseLookActive(bool active);
 bool IsMouseLookActive();
 
+/// An overlay (the Guide) takes the keyboard and mouse: while held the guest
+/// gets no keys, buttons or mouse motion and the mouse capture is released.
+/// After release the guest sees nothing until every key is up.
+void SetOverlayHold(bool hold);
+bool IsOverlayHeld();
+
+/// Scripted tests: treat the window as focused (it runs minimized).
+void SetTestFocus(bool on);
+
 class MnkInputDriver final : public InputDriver,
                              public rex::ui::WindowInputListener,
                              public rex::ui::WindowListener {
@@ -58,6 +67,8 @@ class MnkInputDriver final : public InputDriver,
 
  private:
   bool IsEnabled() const;
+  bool Focused() const;
+  void CountHeld();
   void SetKeyState(uint16_t vk, bool down);
   void EnqueueKeystroke(uint16_t vk_pad, bool down);
 

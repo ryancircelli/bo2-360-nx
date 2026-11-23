@@ -305,6 +305,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
 
   // WindowInputListener overrides
   void OnKeyDown(ui::KeyEvent& e) override;
+  void OnMouseDown(ui::MouseEvent& e) override;
 
   PPCImageInfo ppc_info_;
   PathConfig resolved_defaults_;
@@ -328,6 +329,8 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::unique_ptr<ui::SettingsDialog> settings_overlay_;
   std::unique_ptr<ui::ImGuiDialog> achievements_overlay_;
   std::unique_ptr<ui::GuideDialog> guide_overlay_;
+  // The cursor's state before the Guide showed it.
+  int guide_saved_cursor_ = -1;
   std::unique_ptr<ui::GuideInputGate> guide_gate_;
   void SetupGuide();
   void CloseGuide();
