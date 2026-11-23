@@ -35,6 +35,7 @@
 #include <rex/memory/ring_buffer.h>
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/savepoint.h>
 #include <rex/system/user_module.h>
 
 #if REX_GPU_TRACE
@@ -96,6 +97,17 @@ REXCVAR_DEFINE_BOOL(shader_precompile_background, true, "GPU",
 namespace rex::graphics {
 
 using namespace rex::graphics::xenos;
+
+static std::unordered_map<CommandProcessor*, std::unique_ptr<CommandProcessor::RewindState>>
+    rewind_states;
+static std::unordered_map<CommandProcessor*, bool> rewound_during_primary;
+
+bool ConsumeRewoundDuringPrimary(CommandProcessor* processor) {
+  auto it = rewound_during_primary.find(processor);
+  if (it == rewound_during_primary.end()) return false;
+  rewound_during_primary.erase(it);
+  return true;
+}
 
 namespace {
 
@@ -228,6 +240,7 @@ void CommandProcessor::WorkerThreadMain() {
   }
 
   while (worker_running_) {
+    system::ServiceSavepointRequest();
     while (!pending_fns_.empty()) {
       auto fn = std::move(pending_fns_.front());
       pending_fns_.pop();
@@ -271,7 +284,10 @@ void CommandProcessor::WorkerThreadMain() {
     assert_true(read_ptr_index_ != write_ptr_index);
 
     // Execute. Note that we handle wraparound transparently.
-    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    uint32_t executed_read_index = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    if (!ConsumeRewoundDuringPrimary(this)) {
+      read_ptr_index_ = executed_read_index;
+    }
 
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.
@@ -335,6 +351,59 @@ bool CommandProcessor::Restore(::rex::stream::ByteStream* stream) {
   write_ptr_index_.store(stream->Read<uint32_t>());
 
   return true;
+}
+
+CommandProcessor::RewindState CommandProcessor::CaptureRewindState() const {
+  RewindState state;
+  state.counter = counter_;
+  state.swap_count = swap_count_.load();
+  state.primary_buffer_ptr = primary_buffer_ptr_;
+  state.primary_buffer_size = primary_buffer_size_;
+  state.read_ptr_index = read_ptr_index_;
+  state.read_ptr_update_freq = read_ptr_update_freq_;
+  state.read_ptr_writeback_ptr = read_ptr_writeback_ptr_;
+  state.write_ptr_index = write_ptr_index_.load();
+  state.bin_select = bin_select_;
+  state.bin_mask = bin_mask_;
+  state.active_vertex_shader = active_vertex_shader_;
+  state.active_pixel_shader = active_pixel_shader_;
+  state.extended_register_values = extended_register_values_;
+  state.registers.assign(register_file_->values,
+                         register_file_->values + RegisterFile::kRegisterCount);
+  return state;
+}
+
+void CommandProcessor::Rewind(const RewindState& state) {
+  counter_ = state.counter;
+  swap_count_.store(state.swap_count);
+  primary_buffer_ptr_ = state.primary_buffer_ptr;
+  primary_buffer_size_ = state.primary_buffer_size;
+  read_ptr_index_ = state.read_ptr_index;
+  read_ptr_update_freq_ = state.read_ptr_update_freq;
+  read_ptr_writeback_ptr_ = state.read_ptr_writeback_ptr;
+  write_ptr_index_.store(state.write_ptr_index);
+  write_ptr_index_event_->Reset();
+  rewound_during_primary[this] = true;
+  bin_select_ = state.bin_select;
+  bin_mask_ = state.bin_mask;
+  active_vertex_shader_ = state.active_vertex_shader;
+  active_pixel_shader_ = state.active_pixel_shader;
+  extended_register_values_ = state.extended_register_values;
+  std::copy(state.registers.begin(), state.registers.end(), register_file_->values);
+  ClearCaches();
+  InvalidateGpuMemory();
+}
+
+void CommandProcessor::StoreRewindState() {
+  rewind_states[this] = std::make_unique<RewindState>(CaptureRewindState());
+}
+
+void CommandProcessor::RewindStoredState() {
+  auto it = rewind_states.find(this);
+  if (it != rewind_states.end()) {
+    Rewind(*it->second);
+    rewind_states.erase(it);
+  }
 }
 
 bool CommandProcessor::SetupContext() {

@@ -181,6 +181,25 @@ class XObject {
     (void)stream;
     return false;
   }
+
+  struct RewindState {
+    std::vector<X_HANDLE> handles;
+    rex::thread::WaitHandleRewindState wait;
+    bool has_wait = false;
+  };
+  void CaptureRewindState(RewindState* state) {
+    state->handles = handles_;
+    if (auto* wait = GetWaitHandle()) {
+      state->has_wait = rex::thread::CaptureWaitHandleRewindState(wait, &state->wait);
+    }
+  }
+  void Rewind(const RewindState& state) {
+    handles_ = state.handles;
+    if (state.has_wait) {
+      rex::thread::RewindWaitHandle(GetWaitHandle(), state.wait);
+    }
+  }
+
   static object_ref<XObject> Restore(KernelState* kernel_state, Type type,
                                      stream::ByteStream* stream);
 

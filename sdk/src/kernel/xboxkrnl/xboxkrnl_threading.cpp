@@ -873,7 +873,14 @@ u32 KeWaitForMultipleObjects_entry(u32 count, mapped_u32 objects_ptr, u32 wait_t
                                    mapped_u64 timeout_ptr, mapped_void wait_block_array_ptr) {
   assert_true(wait_type <= 1);
 
-  std::vector<object_ref<XObject>> objects;
+  constexpr size_t kInlineObjects = 64;
+  object_ref<XObject> inline_objects[kInlineObjects];
+  std::unique_ptr<object_ref<XObject>[]> heap_objects;
+  auto* objects = inline_objects;
+  if (count > kInlineObjects) {
+    heap_objects = std::make_unique<object_ref<XObject>[]>(count);
+    objects = heap_objects.get();
+  }
   for (uint32_t n = 0; n < count; n++) {
     auto object_ptr = REX_KERNEL_MEMORY()->TranslateVirtual(objects_ptr[n]);
     auto object_ref = XObject::GetNativeObject<XObject>(REX_KERNEL_STATE(), object_ptr);
@@ -881,12 +888,12 @@ u32 KeWaitForMultipleObjects_entry(u32 count, mapped_u32 objects_ptr, u32 wait_t
       return X_STATUS_INVALID_PARAMETER;
     }
 
-    objects.push_back(std::move(object_ref));
+    objects[n] = std::move(object_ref);
   }
 
   uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
   X_STATUS result = XObject::WaitMultiple(
-      uint32_t(objects.size()), reinterpret_cast<XObject**>(objects.data()), wait_type, wait_reason,
+      count, reinterpret_cast<XObject**>(objects), wait_type, wait_reason,
       processor_mode, alertable, timeout_ptr ? &timeout : nullptr);
   if (alertable && result == X_STATUS_USER_APC) {
     XThread::GetCurrentThread()->DeliverAPCs();
@@ -899,17 +906,24 @@ uint32_t xeNtWaitForMultipleObjectsEx(uint32_t count, rex::be<uint32_t>* handles
                                       uint64_t* timeout_ptr) {
   assert_true(wait_type <= 1);
 
-  std::vector<object_ref<XObject>> objects;
+  constexpr size_t kInlineObjects = 64;
+  object_ref<XObject> inline_objects[kInlineObjects];
+  std::unique_ptr<object_ref<XObject>[]> heap_objects;
+  auto* objects = inline_objects;
+  if (count > kInlineObjects) {
+    heap_objects = std::make_unique<object_ref<XObject>[]>(count);
+    objects = heap_objects.get();
+  }
   for (uint32_t n = 0; n < count; n++) {
     uint32_t object_handle = handles[n];
     auto object = REX_KERNEL_OBJECTS()->LookupObject<XObject>(object_handle);
     if (!object) {
       return X_STATUS_INVALID_PARAMETER;
     }
-    objects.push_back(std::move(object));
+    objects[n] = std::move(object);
   }
 
-  auto result = XObject::WaitMultiple(count, reinterpret_cast<XObject**>(objects.data()), wait_type,
+  auto result = XObject::WaitMultiple(count, reinterpret_cast<XObject**>(objects), wait_type,
                                       6, wait_mode, alertable, timeout_ptr);
   if (alertable && result == X_STATUS_USER_APC) {
     XThread::GetCurrentThread()->DeliverAPCs();

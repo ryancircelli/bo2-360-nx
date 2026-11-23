@@ -96,6 +96,52 @@ ObjectTable::~ObjectTable() {
   Reset();
 }
 
+struct ObjectTable::RewindState {
+  uint32_t last_free_entry = 0;
+  std::vector<ObjectTableEntry> entries;
+  std::unordered_map<string::string_key_case, X_HANDLE> names;
+  std::vector<std::pair<object_ref<XObject>, XObject::RewindState>> objects;
+};
+
+std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
+  auto global_lock = global_critical_region_.Acquire();
+  auto state = std::make_shared<RewindState>();
+  state->last_free_entry = last_free_entry_;
+  state->entries.assign(table_, table_ + table_capacity_);
+  state->names = name_table_;
+  for (const auto& entry : state->entries) {
+    auto it = std::find_if(state->objects.begin(), state->objects.end(),
+                           [&](const auto& item) { return item.first == entry.object; });
+    if (entry.object && it == state->objects.end()) {
+      XObject::RewindState object_state;
+      entry.object->CaptureRewindState(&object_state);
+      state->objects.push_back({retain_object(entry.object), std::move(object_state)});
+    }
+  }
+  return state;
+}
+
+void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (table_capacity_ < state->entries.size() && !Resize(state->entries.size())) {
+    return;
+  }
+  for (uint32_t slot = 0; slot < table_capacity_; ++slot) {
+    if (slot < state->entries.size()) {
+      table_[slot].handle_ref_count = state->entries[slot].handle_ref_count;
+      AtomicStore(table_[slot].object, state->entries[slot].object);
+    } else {
+      table_[slot].handle_ref_count = 0;
+      AtomicStore(table_[slot].object, static_cast<XObject*>(nullptr));
+    }
+  }
+  last_free_entry_ = state->last_free_entry;
+  name_table_ = state->names;
+  for (const auto& [object, object_state] : state->objects) {
+    object->Rewind(object_state);
+  }
+}
+
 void ObjectTable::Reset() {
   auto global_lock = global_critical_region_.Acquire();
 

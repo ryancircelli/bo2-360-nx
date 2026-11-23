@@ -8,7 +8,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <execinfo.h>
+#include <exception>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <typeinfo>
 #include <vector>
@@ -16,12 +19,11 @@
 #include <cstring>
 #include <fcntl.h>
 #include <mach/mach.h>
-#include <sys/ucontext.h>
-#include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
 
 #include <rex/cvar.h>
+#include <rex/runtime.h>
 #include <rex/thread.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
@@ -54,6 +56,14 @@ bool WriteAll(int fd, const void* data, size_t size) {
     size -= static_cast<size_t>(n);
   }
   return true;
+}
+
+[[noreturn]] void SavepointTerminate() {
+  std::fprintf(stderr, "[savepoint-s3] terminate on host thread 0x%X\n", thread::current_thread_id());
+  void* frames[24];
+  int count = backtrace(frames, 24);
+  backtrace_symbols_fd(frames, count, STDERR_FILENO);
+  std::abort();
 }
 
 // Walks `heap` and writes every committed, accessible region read from `membase`.
@@ -132,8 +142,9 @@ struct MemRegion {
 };
 struct ThreadSnap {
   object_ref<XThread> thread;
-  // Interrupted register state saved by the suspend signal handler (parked on its alternate stack).
-  std::vector<uint8_t> mctx;
+  mach_port_t port = 0;
+  arm_thread_state64_t gp{};
+  arm_neon_state64_t neon{};
   uint64_t stack_lo = 0, stack_hi = 0;
   std::vector<uint8_t> stack;
   // PPCContext (guest registers) lives in the heap-allocated ThreadState, not on the host stack.
@@ -145,6 +156,10 @@ struct InProcess {
   std::vector<MemRegion> regions;
   std::vector<ThreadSnap> threads;
   std::vector<XThread*> all_parked;  // every thread parked at capture, snapshotted or not
+  std::shared_ptr<util::ObjectTable::RewindState> object_table;
+  std::vector<std::pair<memory::BaseHeap*, memory::BaseHeap::RewindState>> heaps;
+  std::vector<object_ref<XObject>> objects_at_rewind;
+  IGraphicsSystem* graphics = nullptr;
 } g_snap;
 
 bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* membase,
@@ -164,22 +179,17 @@ bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* memba
   return true;
 }
 
-// Waits (up to 2 s) until the thread is parked in the suspend signal handler; returns its saved ucontext.
-ucontext_t* WaitParkedContext(XThread* t) {
-  for (int i = 0; i < 40; ++i) {
-    if (void* uc = thread::GetSuspendedContext(t->thread())) return static_cast<ucontext_t*>(uc);
-    usleep(1000);
-  }
-  return nullptr;
+mach_port_t MachPort(XThread* thread) {
+  return pthread_mach_thread_np(reinterpret_cast<pthread_t>(thread->thread()->native_handle()));
 }
 
-// Parks guest threads (host level) and returns them.
+// Mach suspension is synchronous and does not change the guest-visible suspend count.
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
   std::vector<object_ref<XThread>> parked;
   for (auto& t : ks->object_table()->GetObjectsByType<XThread>()) {
-    if (t->is_guest_thread() && t->is_running() && !XThread::IsInThread(t.get())) {
-      uint32_t c = 0;
-      if (t->thread()->Suspend(&c)) parked.push_back(t);
+    if (t->is_running() && !XThread::IsInThread(t.get()) &&
+        thread_suspend(MachPort(t.get())) == KERN_SUCCESS) {
+      parked.push_back(t);
     }
   }
   return parked;
@@ -187,6 +197,7 @@ std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
 }  // namespace
 
 SavepointStats CaptureInProcessSavepoint() {
+  std::set_terminate(SavepointTerminate);
   SavepointStats st;
   auto* ks = kernel_state();
   auto* mem = ks->memory();
@@ -194,24 +205,39 @@ SavepointStats CaptureInProcessSavepoint() {
   auto parked = ParkThreads(ks);
   auto t1 = Clock::now();
   g_snap = InProcess{};
+  g_snap.object_table = ks->object_table()->CaptureRewindState();
+  if (auto* runtime = rex::Runtime::instance()) {
+    g_snap.graphics = runtime->graphics_system();
+    if (g_snap.graphics) g_snap.graphics->CaptureSavepoint();
+  }
   const uint32_t bases[] = {0x00000000, 0x40000000, 0x80000000, 0x90000000};
   for (uint32_t b : bases) {
-    if (auto* heap = mem->LookupHeap(b)) CollectRegions(heap, 0, mem->virtual_membase(), g_snap.regions);
+    if (auto* heap = mem->LookupHeap(b)) {
+      g_snap.heaps.push_back({heap, heap->CaptureRewindState()});
+      CollectRegions(heap, 0, mem->virtual_membase(), g_snap.regions);
+    }
   }
-  CollectRegions(mem->GetPhysicalHeap(), 1, mem->physical_membase(), g_snap.regions);
+  auto* physical = mem->GetPhysicalHeap();
+  g_snap.heaps.push_back({physical, physical->CaptureRewindState()});
+  CollectRegions(physical, 1, mem->physical_membase(), g_snap.regions);
   for (auto& r : g_snap.regions) st.bytes += r.size;
   st.regions = uint32_t(g_snap.regions.size());
   for (auto& t : parked) g_snap.all_parked.push_back(t.get());
   for (auto& t : parked) {
     ThreadSnap ts;
     ts.thread = t;
-    ucontext_t* uc = WaitParkedContext(t.get());
-    if (!uc) continue;
-    pthread_t pt = reinterpret_cast<pthread_t>(t->thread()->native_handle());
-    ts.mctx.assign(reinterpret_cast<uint8_t*>(uc->uc_mcontext),
-                   reinterpret_cast<uint8_t*>(uc->uc_mcontext) + sizeof(*uc->uc_mcontext));
-    uint64_t sp = arm_thread_state64_get_sp(uc->uc_mcontext->__ss);
-    uint64_t top = reinterpret_cast<uint64_t>(pthread_get_stackaddr_np(pt));
+    ts.port = MachPort(t.get());
+    mach_msg_type_number_t gp_count = ARM_THREAD_STATE64_COUNT;
+    mach_msg_type_number_t neon_count = ARM_NEON_STATE64_COUNT;
+    if (thread_get_state(ts.port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&ts.gp),
+                         &gp_count) != KERN_SUCCESS ||
+        thread_get_state(ts.port, ARM_NEON_STATE64, reinterpret_cast<thread_state_t>(&ts.neon),
+                         &neon_count) != KERN_SUCCESS) {
+      continue;
+    }
+    uint64_t sp = arm_thread_state64_get_sp(ts.gp);
+    uint64_t top = reinterpret_cast<uint64_t>(
+        pthread_get_stackaddr_np(reinterpret_cast<pthread_t>(t->thread()->native_handle())));
     if (sp == 0 || sp >= top || top - sp > (64u << 20)) continue;
     ts.stack_lo = sp - 256;  // include the red zone
     ts.stack_hi = top;
@@ -226,8 +252,7 @@ SavepointStats CaptureInProcessSavepoint() {
   g_snap.valid = true;
   auto t2 = Clock::now();
   for (auto& t : parked) {
-    uint32_t c = 0;
-    t->thread()->Resume(&c);
+    thread_resume(MachPort(t.get()));
   }
   st.threads_parked = uint32_t(g_snap.threads.size());
   st.park_ms = Ms(t0, t1);
@@ -248,8 +273,18 @@ SavepointStats RewindToInProcessSavepoint() {
   auto parked = ParkThreads(ks);
   std::fprintf(stderr, "[savepoint-s3] rewind start, %zu parked\n", parked.size());
   auto t1 = Clock::now();
+  const bool restore_objects = std::getenv("REX_SAVEPOINT_SKIP_OBJECTS") == nullptr;
+  if (restore_objects) {
+    g_snap.objects_at_rewind = ks->object_table()->GetAllObjects();
+    ks->object_table()->Rewind(g_snap.object_table);
+  } else {
+    std::fprintf(stderr, "[savepoint-s3] skipping kernel object restore\n");
+  }
+  const bool restore_memory = std::getenv("REX_SAVEPOINT_SKIP_MEMORY") == nullptr;
+  if (!restore_memory) std::fprintf(stderr, "[savepoint-s3] skipping guest memory restore\n");
   uint32_t recommitted = 0, recommit_failed = 0;
   for (auto& r : g_snap.regions) {
+    if (!restore_memory) break;
     uint8_t* base = r.space == 0 ? mem->virtual_membase() : mem->physical_membase();
     // Pages committed at capture may have been decommitted since, or are read-only now (XEX image
     // pages, write-watched pages). Walk the range run by run and make every run committed + writable,
@@ -285,21 +320,30 @@ SavepointStats RewindToInProcessSavepoint() {
     for (auto& t : touched) heap->Protect(t.first, t.second, r.protect);
     st.bytes += r.size;
   }
+  if (restore_memory) {
+    for (const auto& [heap, heap_state] : g_snap.heaps) {
+      heap->Rewind(heap_state);
+    }
+    if (g_snap.graphics) g_snap.graphics->RewindSavepoint();
+  }
   st.regions = uint32_t(g_snap.regions.size());
   REXSYS_INFO("[savepoint-s3] rewind: recommitted {} regions, {} failed", recommitted, recommit_failed);
   // Threads that exist now but did not at capture time cannot be rewound; counted via parked.
   uint32_t restored = 0, not_parked = 0;
   for (auto& ts : g_snap.threads) {
-    ucontext_t* uc = WaitParkedContext(ts.thread.get());
-    if (!uc) {
+    if (std::find(parked.begin(), parked.end(), ts.thread.get()) == parked.end()) {
       ++not_parked;
       continue;
     }
-    // The thread's own stack is untouched while it sits in the handler on its alternate stack, so the
-    // whole saved stack, the saved interrupted registers and the PPCContext can be put back.
     std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
-    std::memcpy(uc->uc_mcontext, ts.mctx.data(), ts.mctx.size());
     if (ts.ctx) std::memcpy(ts.ctx, ts.ctx_data.data(), ts.ctx_data.size());
+    if (thread_set_state(ts.port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&ts.gp),
+                         ARM_THREAD_STATE64_COUNT) != KERN_SUCCESS ||
+        thread_set_state(ts.port, ARM_NEON_STATE64, reinterpret_cast<thread_state_t>(&ts.neon),
+                         ARM_NEON_STATE64_COUNT) != KERN_SUCCESS) {
+      ++not_parked;
+      continue;
+    }
     ++restored;
   }
   st.threads_parked = restored;
@@ -315,8 +359,7 @@ SavepointStats RewindToInProcessSavepoint() {
       ++left_parked;
       continue;
     }
-    uint32_t c = 0;
-    t->thread()->Resume(&c);
+    thread_resume(MachPort(t.get()));
   }
   std::fprintf(stderr, "[savepoint-s3] rewind done, %u threads left parked\n", left_parked);
   REXSYS_INFO("[savepoint-s3] rewind: {} threads created after the capture left suspended", left_parked);
@@ -332,6 +375,9 @@ std::mutex g_mutex;
 std::string g_request_path;
 std::atomic<int> g_frame{0};
 bool g_cvar_done = false;
+std::atomic<IGraphicsSystem*> g_graphics_hook{nullptr};
+std::atomic<void (*)(IGraphicsSystem*)> g_graphics_capture{nullptr};
+std::atomic<void (*)(IGraphicsSystem*)> g_graphics_rewind{nullptr};
 
 void Run(const std::string& path) {
   SavepointStats st = SaveGuestMemory(path);
@@ -346,14 +392,43 @@ void Run(const std::string& path) {
 }
 }  // namespace
 
+void SetGraphicsSavepointHooks(IGraphicsSystem* graphics,
+                               void (*capture)(IGraphicsSystem*),
+                               void (*rewind)(IGraphicsSystem*)) {
+  g_graphics_capture.store(capture, std::memory_order_release);
+  g_graphics_rewind.store(rewind, std::memory_order_release);
+  g_graphics_hook.store(graphics, std::memory_order_release);
+}
+
+void ClearGraphicsSavepointHooks(IGraphicsSystem* graphics) {
+  IGraphicsSystem* expected = graphics;
+  g_graphics_hook.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+}
+
+void IGraphicsSystem::CaptureSavepoint() {
+  if (g_graphics_hook.load(std::memory_order_acquire) == this) {
+    if (auto* capture = g_graphics_capture.load(std::memory_order_acquire)) capture(this);
+  }
+}
+
+void IGraphicsSystem::RewindSavepoint() {
+  if (g_graphics_hook.load(std::memory_order_acquire) == this) {
+    if (auto* rewind = g_graphics_rewind.load(std::memory_order_acquire)) rewind(this);
+  }
+}
+
 void RequestSavepoint(const std::string& path) {
   std::lock_guard<std::mutex> l(g_mutex);
   g_request_path = path;
   g_requested.store(true, std::memory_order_release);
 }
 
+void NoteSavepointSwap() {
+  g_frame.fetch_add(1, std::memory_order_relaxed);
+}
+
 void ServiceSavepointRequest() {
-  int frame = g_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+  int frame = g_frame.load(std::memory_order_relaxed);
   if (g_requested.load(std::memory_order_acquire)) {
     std::string path;
     {
