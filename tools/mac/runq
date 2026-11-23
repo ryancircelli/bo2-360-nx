@@ -903,6 +903,7 @@ class Daemon:
         self.perf_batch = set(st.get('perf_batch') or [])
         self.stop_requested = False
         self.handoff = False
+        self.freeze_outside = False
 
     def log(self, msg):
         print(f'[{now_s()}] {msg}', flush=True)
@@ -1063,6 +1064,13 @@ class Daemon:
                 except (ProcessLookupError, PermissionError):
                     pass
 
+            if getattr(self, 'freeze_outside', False) and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
+                compiler_processes()   # refreshes PROCESS_SNAPSHOT
+                held = [p['pid'] for p in PROCESS_SNAPSHOT if is_build_activity_process(p)
+                        and p['pid'] not in self.protected_pids]
+                for pid in held:
+                    stop_build_pid(pid)
+                self.log(f'froze {len(held)} outside build process(es) for {job["id"]}')
             builds = registered_buildq_builds()
             roots = {int(pid) for build in builds for pid in (build.get('pid'), build.get('child_pid')) if pid}
             # Stop every token owner before inspecting children so none can spawn another compiler.
@@ -1503,6 +1511,21 @@ class Daemon:
                                                            self.last_external_build_activity, now)
                                   if any(j.get('quiet_machine') or job_class(j) == CLASSES['perf']
                                          for _, j in qjobs) else None)
+                # Bounded wait: outside builds (cmake/ninja started without buildq) never go quiet on a busy day, so a
+                # speed job held by one for perf_hold_max_s (default 900) runs anyway; launch() freezes those builds
+                # for the run and resumes them after.
+                self.freeze_outside = False
+                if self.perf_hold == 'held: outside build':
+                    oldest = max((now - j.get('submitted_t', now) for _, j in qjobs
+                                  if j.get('quiet_machine') or job_class(j) == CLASSES['perf']), default=0)
+                    if oldest >= float(self.c.get('perf_hold_max_s', PERF_HOLD_MAX_S)):
+                        self.perf_hold, self.freeze_outside = None, True
+                        if not getattr(self, 'freeze_logged', False):
+                            self.log(f'speed job waited {int(oldest)}s behind outside builds: it runs now and the '
+                                     'outside builds are frozen for the run')
+                        self.freeze_logged = True
+                    else:
+                        self.freeze_logged = False
                 qids = {j.get('id') for _, j in qjobs}
                 power_eligible = {j.get('id') for _, j in qjobs
                                   if not adapter_hold_reason(j, self.power_status)}
@@ -1554,7 +1577,8 @@ class Daemon:
                 self.starve_logged = starved
                 while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
                     interleave_active = self.build_interleave_active()
-                    compiler_busy = (outside_compile_procs() if self.perf_batch else compile_procs()) != 0
+                    compiler_busy = (not self.freeze_outside and
+                                     (outside_compile_procs() if self.perf_batch else compile_procs()) != 0)
                     builds_busy = active_builds() > 0
                     jobs_per_owner = []
                     for qf in q:
@@ -1643,6 +1667,7 @@ def job_owner(j):
     return j.get('owner') or (j.get('name') or 'anon').split('-')[0]
 
 
+PERF_HOLD_MAX_S = 900   # a speed job held by outside builds this long runs anyway, outside builds frozen
 SOLO_MAX_WAIT_S = 600   # a queued solo job lets other games keep flowing this long, then the machine drains for it
 
 
