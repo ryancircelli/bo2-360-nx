@@ -145,12 +145,21 @@ constexpr uint32_t kRoundDown = 0x03;
 constexpr uint32_t kRoundMask = 0x03;
 
 struct FPSCRRegister {
-  uint32_t csr;
+  // A new register starts with every host FP exception masked (rexglue-sdk d8a93be).
+  uint32_t csr = platform::FPSCRPlatform::kExceptionsMasked;
 
   using Platform = platform::FPSCRPlatform;
   static constexpr size_t RoundShift = Platform::RoundShift;
   static constexpr size_t RoundMaskVal = Platform::RoundMaskVal;
   static constexpr size_t FlushMask = Platform::FlushMask;
+
+  static_assert(
+      [] {
+        uint32_t word = 0;
+        Platform::InitHostExceptions(word);
+        return word == Platform::kExceptionsMasked;
+      }(),
+      "A new register must hold the word InitHostExceptions makes from 0");
 
   // Host rounding field -> guest RN. Per arch: the ARM FPCR RMode order (N, +Inf, -Inf, Z)
   // is not the x86 MXCSR order (N, -Inf, +Inf, Z). A shared x86-ordered table made mffs
