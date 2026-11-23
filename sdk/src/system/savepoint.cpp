@@ -16,6 +16,8 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
+#include <condition_variable>
 #include <list>
 #include <functional>
 #include <mutex>
@@ -329,8 +331,18 @@ ZoneHooks* Find(malloc_zone_t* z) {
     if (g_zones[i].zone == z) return &g_zones[i];
   return nullptr;
 }
+// Mode "stack" (default): defer only blocks reachable from the captured host stacks (two levels),
+// so the deferral is bounded and can stay on across any number of loads. Mode "all": every free
+// between capture and rewind (unbounded; old behaviour). REX_SAVEPOINT_DEFER=all|stack|none.
+bool g_all = false;
+std::vector<uintptr_t> g_keep;  // sorted; immutable while g_active
+inline bool Wanted(void* p) {
+  if (g_all) return true;
+  return std::binary_search(g_keep.begin(), g_keep.end(), reinterpret_cast<uintptr_t>(p));
+}
 inline bool Defer(void* p) {
   if (!p || !g_active.load(std::memory_order_relaxed)) return false;
+  if (!Wanted(p)) return false;
   g_deferred.fetch_add(1, std::memory_order_relaxed);
   g_deferred_bytes.fetch_add(malloc_size(p), std::memory_order_relaxed);
   return true;
@@ -346,10 +358,11 @@ void HookTryFreeDefault(malloc_zone_t* z, void* p) {
 }
 void HookBatchFree(malloc_zone_t* z, void** ptrs, unsigned n) {
   if (!g_active.load(std::memory_order_relaxed)) return Find(z)->batch_free(z, ptrs, n);
-  for (unsigned i = 0; i < n; ++i) Defer(ptrs[i]);
+  for (unsigned i = 0; i < n; ++i)
+    if (!Defer(ptrs[i]) && ptrs[i]) Find(z)->free_(z, ptrs[i]);
 }
 void* HookRealloc(malloc_zone_t* z, void* p, size_t size) {
-  if (!p || !g_active.load(std::memory_order_relaxed)) return Find(z)->realloc_(z, p, size);
+  if (!p || !g_active.load(std::memory_order_relaxed) || !Wanted(p)) return Find(z)->realloc_(z, p, size);
   size_t old = malloc_size(p);
   void* n = malloc_zone_malloc(z, size ? size : 1);
   if (n) {
@@ -357,6 +370,40 @@ void* HookRealloc(malloc_zone_t* z, void* p, size_t size) {
     Defer(p);
   }
   return n;
+}
+// Collect heap block starts referenced from [lo, hi) (8-byte aligned words) into out.
+void ScanForBlocks(const uint8_t* lo, const uint8_t* hi, std::vector<uintptr_t>& out) {
+  for (auto* w = reinterpret_cast<const uintptr_t*>((uintptr_t(lo) + 7) & ~uintptr_t(7));
+       reinterpret_cast<const uint8_t*>(w + 1) <= hi; ++w) {
+    uintptr_t v = *w;
+    if (v < 0x100000000ull || v >= 0x0000800000000000ull || (v & 15)) continue;
+    if (malloc_size(reinterpret_cast<void*>(v)) == 0) continue;
+    out.push_back(v);
+  }
+}
+void BuildKeepSet(const std::vector<std::pair<const uint8_t*, const uint8_t*>>& stacks) {
+  std::vector<uintptr_t> level;
+  for (auto& [lo, hi] : stacks) ScanForBlocks(lo, hi, level);
+  std::sort(level.begin(), level.end());
+  level.erase(std::unique(level.begin(), level.end()), level.end());
+  std::vector<uintptr_t> all = level;
+  for (int depth = 1; depth < 3 && !level.empty(); ++depth) {
+    std::vector<uintptr_t> next;
+    for (uintptr_t b : level) {
+      size_t n = malloc_size(reinterpret_cast<void*>(b));
+      if (n > (1u << 20)) n = 1u << 20;
+      ScanForBlocks(reinterpret_cast<const uint8_t*>(b), reinterpret_cast<const uint8_t*>(b) + n, next);
+    }
+    std::sort(next.begin(), next.end());
+    next.erase(std::unique(next.begin(), next.end()), next.end());
+    std::vector<uintptr_t> fresh;
+    std::set_difference(next.begin(), next.end(), all.begin(), all.end(), std::back_inserter(fresh));
+    std::vector<uintptr_t> merged;
+    std::merge(all.begin(), all.end(), fresh.begin(), fresh.end(), std::back_inserter(merged));
+    all.swap(merged);
+    level.swap(fresh);
+  }
+  g_keep.swap(all);
 }
 void Install() {
   static bool installed = false;
@@ -477,11 +524,26 @@ SavepointStats CaptureInProcessSavepoint() {
     g_snap.threads.push_back(std::move(ts));
   }
   g_snap.valid = true;
-  if (!std::getenv("REX_SAVEPOINT_NO_DEFER_FREE")) {
-    defer_free::Install();
-    defer_free::g_deferred = 0;
-    defer_free::g_deferred_bytes = 0;
-    defer_free::g_active.store(true);
+  {
+    const char* mode = std::getenv("REX_SAVEPOINT_DEFER");
+    if (std::getenv("REX_SAVEPOINT_NO_DEFER_FREE")) mode = "none";
+    if (!mode) mode = "stack";
+    defer_free::g_active.store(false);
+    if (std::strcmp(mode, "none") != 0) {
+      defer_free::Install();
+      defer_free::g_deferred = 0;
+      defer_free::g_deferred_bytes = 0;
+      defer_free::g_all = std::strcmp(mode, "all") == 0;
+      if (!defer_free::g_all) {
+        std::vector<std::pair<const uint8_t*, const uint8_t*>> stacks;
+        for (auto& ts : g_snap.threads)
+          stacks.push_back({ts.stack.data(), ts.stack.data() + ts.stack.size()});
+        defer_free::BuildKeepSet(stacks);
+        std::fprintf(stderr, "[savepoint-s3] free deferral (stack mode): %zu blocks reachable from captured stacks\n",
+                     defer_free::g_keep.size());
+      }
+      defer_free::g_active.store(true);
+    }
   }
   auto t2 = Clock::now();
   // Bisect switch REX_SAVEPOINT_HOLD=guest|host: keep guest threads (or host XHostThreads) suspended
@@ -702,8 +764,9 @@ SavepointStats RewindToInProcessSavepoint() {
                "failures (%s)\n",
                restored, not_parked, in_syscall, syscall_eintr ? "eintr" : "restart", detach_failed,
                two_phase ? "two-phase" : "one-phase");
-  // Revived frames free their blocks for real from here; the deferred ones they don't own stay leaked.
-  defer_free::g_active.store(false);
+  // Mode "all": revived frames free their blocks for real from here; the deferred ones stay leaked.
+  // Mode "stack": stays on, so a second load of the same savepoint still finds those blocks intact.
+  if (defer_free::g_all) defer_free::g_active.store(false);
   auto t2 = Clock::now();
   uint32_t left_parked = 0;
   for (auto& t : parked) {
@@ -787,8 +850,63 @@ void NoteSavepointSwap() {
   g_frame.fetch_add(1, std::memory_order_relaxed);
 }
 
+namespace control {
+std::mutex g_m;
+std::condition_variable g_cv;
+int g_op = 0;  // 1 save, 2 load
+uint64_t g_seq = 0, g_done = 0;
+std::string g_result;
+int g_loads = 0;
+}  // namespace control
+
+std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms) {
+  int code = op == "save" ? 1 : op == "load" ? 2 : 0;
+  if (!code) return "error usage: savepoint save|load";
+  std::unique_lock<std::mutex> l(control::g_m);
+  if (control::g_op) return "error busy";
+  control::g_op = code;
+  uint64_t seq = ++control::g_seq;
+  if (!control::g_cv.wait_for(l, std::chrono::milliseconds(timeout_ms), [&] { return control::g_done >= seq; })) {
+    control::g_op = 0;
+    return "error timeout (no command-processor safe point; is the game rendering?)";
+  }
+  return control::g_result;
+}
+
+void ServiceControlRequest(int frame) {
+  int op;
+  uint64_t seq;
+  {
+    std::lock_guard<std::mutex> l(control::g_m);
+    op = control::g_op;
+    seq = control::g_seq;
+  }
+  if (!op) return;
+  char buf[200];
+  if (op == 1) {
+    auto st = CaptureInProcessSavepoint();
+    control::g_loads = 0;
+    std::snprintf(buf, sizeof buf, "ok save frame=%d mb=%llu ms=%.1f threads=%u", frame,
+                  (unsigned long long)(st.bytes >> 20), st.park_ms + st.write_ms, st.threads_parked);
+  } else if (!g_snap.valid) {
+    std::snprintf(buf, sizeof buf, "error no savepoint (send savepoint save first)");
+  } else {
+    auto st = RewindToInProcessSavepoint();
+    ++control::g_loads;
+    std::snprintf(buf, sizeof buf, "ok load frame=%d ms=%.1f threads=%u loads=%d", frame,
+                  st.park_ms + st.write_ms, st.threads_parked, control::g_loads);
+  }
+  REXSYS_INFO("[savepoint-s3] control: {}", buf);
+  std::lock_guard<std::mutex> l(control::g_m);
+  control::g_result = buf;
+  control::g_done = seq;
+  control::g_op = 0;
+  control::g_cv.notify_all();
+}
+
 void ServiceSavepointRequest() {
   int frame = g_frame.load(std::memory_order_relaxed);
+  ServiceControlRequest(frame);
   if (g_requested.load(std::memory_order_acquire)) {
     std::string path;
     {

@@ -41,4 +41,10 @@ void ServiceSavepointRequest();
 SavepointStats CaptureInProcessSavepoint();
 SavepointStats RewindToInProcessSavepoint();
 
+// On-demand same-process save/load for tests ("savepoint save" / "savepoint load" in the test
+// control folder). Queues the op for the next command-processor safe point and waits for it.
+// Returns "ok save frame=<f> mb=<n> ms=<t>", "ok load frame=<f> ms=<t> loads=<n>" or "error ...".
+// A load can be repeated any number of times; a new save replaces the old one.
+std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms);
+
 }  // namespace rex::system
