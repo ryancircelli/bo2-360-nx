@@ -24,6 +24,8 @@
 #include <rex/ui/overlay/achievements_overlay.h>
 #include <rex/ui/overlay/console_overlay.h>
 #include <rex/ui/overlay/debug_overlay.h>
+#include <rex/ui/guide.h>
+#include <rex/ui/overlay/guide_overlay.h>
 #include <rex/ui/overlay/settings_overlay.h>
 #include <rex/audio/audio_system.h>
 #if REX_PLATFORM_SWITCH
@@ -428,7 +430,11 @@ bool ReXApp::SetupPresentation() {
 
 void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDrawer* drawer) {
   imgui_drawer_ = std::make_unique<rex::ui::ImGuiDrawer>(
-      window_.get(), 64, [this](ImFontAtlas* atlas) { OnConfigureFonts(atlas); },
+      window_.get(), 64,
+      [this](ImFontAtlas* atlas) {
+        OnConfigureFonts(atlas);
+        rex::ui::LoadGuideFonts(atlas);
+      },
       [this](ImGuiStyle& imgui_style, rex::ui::Style& ui_style) {
         OnConfigureStyle(imgui_style, ui_style);
       });
@@ -470,7 +476,155 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
     }
   });
 
+  SetupGuide();
+
   OnCreateDialogs(imgui_drawer_.get());
+}
+
+void ReXApp::SetupGuide() {
+  namespace guide = rex::ui::guide;
+  auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
+  guide_gate_ = std::make_unique<ui::GuideInputGate>([this](int user) {
+    // Guest thread: only post the open to the UI thread.
+    app_context().CallInUIThreadDeferred([this, user]() {
+      if (!guide_overlay_ && !shutting_down_) {
+        ToggleGuide(user);
+      }
+    });
+  });
+  if (input_sys) {
+    input_sys->SetGuestGate(guide_gate_->MakeGate());
+  }
+  // F1 or Home opens and closes it for player 1.
+  rex::ui::RegisterBind("bind_guide", "F1", "Open or close the Guide", [this] { ToggleGuide(); });
+  rex::ui::RegisterBind("bind_guide_alt", "Home", "Open or close the Guide", [this] { ToggleGuide(); });
+
+  // ---- System ----
+  guide::Page display;
+  display.id = "rex.system.display";
+  display.title = "Display";
+  display.blade = std::string(guide::kBladeSystem);
+  display.order = 0;
+  display.description = "Full screen, vertical sync, render scale and the frame counter.";
+  display.items = {
+      guide::CvarToggle("fullscreen", "Full Screen", "Fill the screen, or play in a window."),
+      guide::CvarToggle("vsync", "Vertical Sync", "Wait for the display before showing each frame."),
+      guide::Cvar("resolution_scale", "Render Scale"),
+      guide::Cvar("resolution", "Window Resolution"),
+      guide::Cvar("internal_resolution", "Internal Resolution"),
+      guide::Cvar("fps_limit", "Frame Limit"),
+      guide::Cvar("bo2zm_show_fps", "Frame Counter"),
+      guide::Cvar("show_fps", "Frame Counter"),
+  };
+  guide::RegisterPage(std::move(display));
+
+  guide::Page audio;
+  audio.id = "rex.system.audio";
+  audio.title = "Audio";
+  audio.blade = std::string(guide::kBladeSystem);
+  audio.order = 10;
+  audio.description = "Volume and mute.";
+  audio.items = {
+      guide::CvarSlider("volume", 0, 100, 5, "Volume", "Game volume.", "%.0f%%"),
+      guide::CvarToggle("audio_mute", "Mute", "Silence all game audio."),
+  };
+  guide::RegisterPage(std::move(audio));
+
+  guide::Page input;
+  input.id = "rex.system.input";
+  input.title = "Controllers & Players";
+  input.blade = std::string(guide::kBladeSystem);
+  input.order = 20;
+  input.description = "Vibration, the Guide button and which pad plays as which player.";
+  input.items = {
+      guide::CvarToggle("input_vibration", "Vibration", "Let the game rumble the controllers."),
+      guide::CvarChoice("guide_button", {"on", "hold", "off"}, {"Opens Guide", "Hold to Open", "Off"},
+                        "Guide Button"),
+      guide::Cvar("input_player_slots", "Player Slots"),
+  };
+  guide::RegisterPage(std::move(input));
+
+  // ---- Controllers ----
+  guide::Page pads;
+  pads.id = "rex.controllers";
+  pads.title = "Connected Controllers";
+  pads.blade = std::string(guide::kBladeControllers);
+  pads.description = "Every connected controller and the player it plays as.";
+  pads.build = [this]() {
+    std::vector<guide::Item> items;
+    auto* sys = static_cast<rex::input::InputSystem*>(runtime_ ? runtime_->input_system() : nullptr);
+    if (!sys) return items;
+    for (const auto& snap : sys->SnapshotDevices()) {
+      if (snap.info.name == "None") continue;
+      std::string name = snap.info.name.empty() ? std::string("Controller") : snap.info.name;
+      if (snap.info.transport.size()) name += " (" + snap.info.transport + ")";
+      const std::string player =
+          snap.user >= 0 ? fmt::format("Player {}", snap.user + 1) : std::string("Not playing");
+      std::string desc = fmt::format("{}\n{}", name, player);
+      if (!snap.info.location.empty()) desc += "\nPort: " + snap.info.location;
+      items.push_back(guide::Info(name, [player] { return player; }, desc));
+    }
+    if (items.empty()) {
+      items.push_back(guide::Info("No controllers connected", [] { return std::string(); }));
+    }
+    return items;
+  };
+  guide::RegisterPage(std::move(pads));
+
+  // ---- Leave Game ----
+  guide::Page leave;
+  leave.id = "rex.leave";
+  leave.title = "Leave Game";
+  leave.blade = std::string(guide::kBladeLeave);
+  leave.description = "Quit the game and close the window.";
+  leave.items = {
+      guide::Action("Resume Game", [this] { CloseGuide(); }, "Close the Guide and go back to the game."),
+      guide::Action(
+          "Quit to Desktop",
+          [this] {
+            REXLOG_INFO("[guide] quit requested");
+            app_context().CallInUIThreadDeferred([this] {
+              CloseGuide();
+              if (window_) window_->RequestClose();
+            });
+          },
+          "Close the game. Unsaved progress is lost."),
+  };
+  guide::RegisterPage(std::move(leave));
+}
+
+void ReXApp::ToggleGuide(int user, std::string_view blade) {
+  if (guide_overlay_) {
+    CloseGuide();
+    return;
+  }
+  if (!imgui_drawer_ || !guide_gate_) {
+    return;
+  }
+  auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
+  ui::GuideDialog::Hooks hooks;
+  if (input_sys) {
+    hooks.snapshot = [input_sys] { return input_sys->SnapshotDevices(); };
+  }
+  hooks.request_close = [this] {
+    app_context().CallInUIThreadDeferred([this] { CloseGuide(); });
+  };
+  // Opened from the keyboard: it holds player 1's pad, any pad drives it.
+  guide_gate_->SetHolder(user >= 0 ? user : 0);
+  guide_overlay_ = std::make_unique<ui::GuideDialog>(imgui_drawer_.get(), user, std::move(hooks));
+  if (!blade.empty()) {
+    guide_overlay_->SelectBlade(blade);
+  }
+}
+
+void ReXApp::CloseGuide() {
+  if (!guide_overlay_) {
+    return;
+  }
+  guide_overlay_.reset();
+  if (guide_gate_) {
+    guide_gate_->SetHolder(-1);
+  }
 }
 
 void ReXApp::LaunchModule() {
@@ -652,6 +806,8 @@ void ReXApp::OnDestroy() {
   rex::ui::UnregisterBind("bind_console");
   rex::ui::UnregisterBind("bind_settings");
   rex::ui::UnregisterBind("bind_achievements");
+  rex::ui::UnregisterBind("bind_guide");
+  rex::ui::UnregisterBind("bind_guide_alt");
 
   // ImGui cleanup (reverse of setup)
   if (achievement_notification_listener_ != 0) {
@@ -662,6 +818,11 @@ void ReXApp::OnDestroy() {
   }
   achievement_notification_.reset();
   achievements_overlay_.reset();
+  guide_overlay_.reset();
+  if (runtime_ && runtime_->input_system()) {
+    static_cast<rex::input::InputSystem*>(runtime_->input_system())->SetGuestGate({});
+  }
+  guide_gate_.reset();
   settings_overlay_.reset();
   console_overlay_.reset();
   debug_overlay_.reset();

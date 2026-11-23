@@ -10,7 +10,9 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -56,6 +58,18 @@ class InputSystem : public system::IInputSystem {
   X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+
+  /// A gate between the pads and the guest, used by overlays such as the Guide.
+  /// filter_state sees each user's merged state on every guest GetState, before
+  /// the guest does, and may change it (strip a button, zero it). block_keys
+  /// returning true drops that user's keystrokes (the guest sees none). Both run
+  /// on the guest thread with the input lock held: they must not call back into
+  /// InputSystem. Either may be empty.
+  struct GuestGate {
+    std::function<void(uint32_t user_index, X_INPUT_STATE& state)> filter_state;
+    std::function<bool(uint32_t user_index)> block_keys;
+  };
+  void SetGuestGate(GuestGate gate);
 
   /// One device as the guest sees it, for diagnostics (rex-padtest, the state
   /// log).
@@ -130,6 +144,11 @@ class InputSystem : public system::IInputSystem {
   std::set<DeviceId> ignored_virtual_;
   bool steam_virtual_warned_ = false;
   std::atomic<int64_t> last_state_log_ms_{0};
+
+  GuestGate gate_;
+  // What the guest last got per user, after the gate (input_log_state).
+  std::array<X_INPUT_GAMEPAD, 4> guest_seen_{};
+  std::array<bool, 4> guest_seen_valid_{};
 };
 
 /// The scripted virtual pads the hid_virtual_pad* cvars ask for, or null.

@@ -58,6 +58,7 @@ constexpr Control kControls[] = {
     {"look_down", kControlLookDown, 0x5831},
     {"look_right", kControlLookRight, 0x5832},
     {"look_left", kControlLookLeft, 0x5833},
+    {"guide", X_INPUT_GAMEPAD_GUIDE, 0},  // no keystroke: the Guide overlay takes it
 };
 
 constexpr double kTapSeconds = 0.25;
@@ -515,7 +516,7 @@ bool ScriptInputDriver::Update(size_t index) {
     for (const auto& control : kControls) {
       const bool was = pad.controls & control.bits;
       const bool is = frame.controls & control.bits;
-      if (was == is) {
+      if (was == is || control.key == 0) {
         continue;
       }
       X_INPUT_KEYSTROKE key = {};
