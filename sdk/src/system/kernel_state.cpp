@@ -703,12 +703,13 @@ void KernelState::SetExecutableModule(object_ref<UserModule> module) {
       auto global_lock = global_critical_region_.AcquireDeferred();
       while (dispatch_thread_running_) {
         global_lock.lock();
-        if (dispatch_queue_.empty()) {
+        // Condition variables wake spuriously; popping an empty queue is a double free.
+        while (dispatch_thread_running_ && dispatch_queue_.empty()) {
           dispatch_cond_.wait(global_lock);
-          if (!dispatch_thread_running_) {
-            global_lock.unlock();
-            break;
-          }
+        }
+        if (!dispatch_thread_running_) {
+          global_lock.unlock();
+          break;
         }
         auto fn = std::move(dispatch_queue_.front());
         dispatch_queue_.pop_front();
