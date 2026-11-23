@@ -500,7 +500,15 @@ void ReXApp::SetupGuide() {
   display.order = 0;
   display.description = "Full screen, vertical sync, render scale and the frame counter.";
   display.items = {
-      guide::CvarToggle("fullscreen", "Full Screen", "Fill the screen, or play in a window."),
+      // The window's real state, not the cvar: the cvar is the start-up choice, and a window that starts minimized
+      // (test runs) or tiled starts windowed while the cvar still says full screen.
+      guide::Toggle(
+          "Full Screen", [this] { return window_ ? window_->IsFullscreen() : REXCVAR_GET(fullscreen); },
+          [this](bool on) {
+            rex::cvar::SetFlagByName("fullscreen", on ? "true" : "false");
+            if (window_) window_->SetFullscreen(on);  // the cvar may already hold this value (no callback)
+          },
+          "Fill the screen, or play in a window."),
       guide::CvarToggle("vsync", "Vertical Sync", "Wait for the display before showing each frame."),
       guide::Cvar("resolution_scale", "Render Scale"),
       guide::Cvar("resolution", "Window Resolution"),

@@ -537,6 +537,12 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
       // The platform cannot retain the previous image; force the paint.
       OnPaint(true);
       break;
+    case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+    case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+      // Full screen can also change outside SetFullscreen (the macOS green button, Ctrl+Cmd+F); keep the
+      // window's state, which the Guide reads, matching what is on screen.
+      OnDesiredFullscreenUpdate(event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN);
+      break;
     case SDL_EVENT_WINDOW_MINIMIZED:
       OnMinimized(destruction_receiver);
       break;
