@@ -77,23 +77,25 @@ def extract_icon(game, out, rexglue):
     return width, height
 
 
-def make_icns(png, out):
-    """Lanczos-resample the picture into a centred, rounded Mac icon, then make every required size."""
+def make_icns(png, out, rounded=True):
+    """Make AppIcon.icns from a picture. rounded=True (the game's small title picture): enlarge it smoothly and clip it
+    to a centred macOS rounded square. rounded=False (a supplied, already designed icon): just resize it."""
     png = Path(png).resolve()
     out = Path(out)
-    with tempfile.TemporaryDirectory(prefix='.iconbig-', dir=out.parent) as t:
-        big = Path(t) / 'big.png'   # smooth (not blocky) enlargement of the small title picture
-        run(['sips', '-s', 'format', 'png', '-z', 824, 824, png, '--out', big])
-        encoded = base64.b64encode(big.read_bytes()).decode('ascii')
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
-           f'width="1024" height="1024" viewBox="0 0 1024 1024">'
-           f'<defs><clipPath id="icon"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath></defs>'
-           f'<g clip-path="url(#icon)"><image x="100" y="100" width="824" height="824" '
-           f'preserveAspectRatio="xMidYMid meet" xlink:href="data:image/png;base64,{encoded}"/></g></svg>')
     with tempfile.TemporaryDirectory(prefix='.iconset-', dir=out.parent) as t:
         tmp = Path(t)
-        source = tmp / 'icon.svg'
-        source.write_text(svg)
+        source = png
+        if rounded:
+            big = tmp / 'big.png'   # smooth (not blocky) enlargement; the picture is only 64x64
+            run(['sips', '-s', 'format', 'png', '-z', 824, 824, png, '--out', big])
+            encoded = base64.b64encode(big.read_bytes()).decode('ascii')
+            source = tmp / 'icon.svg'
+            source.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+                'width="1024" height="1024" viewBox="0 0 1024 1024">'
+                '<defs><clipPath id="icon"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath></defs>'
+                '<g clip-path="url(#icon)"><image x="100" y="100" width="824" height="824" '
+                f'xlink:href="data:image/png;base64,{encoded}"/></g></svg>')
         iconset = tmp / 'AppIcon.iconset'
         iconset.mkdir()
         for n in ICON_SIZES:
