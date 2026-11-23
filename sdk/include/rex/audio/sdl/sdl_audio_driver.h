@@ -56,7 +56,7 @@ class SDLAudioDriver : public AudioDriver {
   // delivered to SDL. Only SDL's audio thread uses them.
   std::vector<float> burst_ = {};
   size_t burst_read_ = 0;
-  // Diagnostic audio_sdl_pump: a thread that requests a frame every 5.333 ms while the queue holds at
+  // audio_sdl_pump: a thread that requests a frame every 5.333 ms while the queue holds at
   // most 6, like the Switch driver's pump; with it, SDL does not release the semaphore when consuming.
   void Pump();
   std::thread pump_ = {};

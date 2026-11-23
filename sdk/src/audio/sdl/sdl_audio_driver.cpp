@@ -27,6 +27,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/perf/counter.h>
+#include <rex/thread_audio.h>
 #include <SDL3/SDL.h>
 
 #if defined(__APPLE__)
@@ -34,14 +35,20 @@
 #include <pthread/qos.h>
 #endif
 
+#if defined(__APPLE__)
+constexpr bool kAudioSdlPumpDefault = true;
+#else
+constexpr bool kAudioSdlPumpDefault = false;
+#endif
+
 REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
 REXCVAR_DEFINE_INT32(audio_sdl_burst_frames, 0, "Audio",
                      "Diagnostic: the SDL driver takes the game's frames N at a time, with N "
                      "releases in a row, like the Switch driver with 4-frame buffers; "
                      "0 or 1 = one at a time, as always");
-REXCVAR_DEFINE_BOOL(audio_sdl_pump, false, "Audio",
-                    "Diagnostic: a thread asks the game for a frame every 5.333 ms (like the Switch "
-                    "driver's pump) and SDL stops releasing the semaphore when it consumes");
+REXCVAR_DEFINE_BOOL(audio_sdl_pump, kAudioSdlPumpDefault, "Audio",
+                    "Ask the game for one frame every 5.333 ms instead of releasing requests in "
+                    "device-buffer-sized bursts; read when the audio opens");
 REXCVAR_DEFINE_INT32(audio_dump_output_s, 0, "Audio",
                      "Diagnostic: seconds of what the SDL driver hands to the device (with the "
                      "silences from missing frames) saved to audio_output.wav; 0 = none");
@@ -268,13 +275,14 @@ bool SDLAudioDriver::Initialize() {
   if (REXCVAR_GET(audio_sdl_pump)) {
     pump_active_ = true;
     pump_ = std::thread([this]() { Pump(); });
-    REXAPU_INFO("audio: diagnostic pump at 187.5 Hz on");
+    REXAPU_INFO("audio: independent frame pump at 187.5 Hz on");
   }
 
   return true;
 }
 
 void SDLAudioDriver::Pump() {
+  REXAPU_INFO("[audio] SDL frame pump: {}", rex::thread::SetThreadAudioPriority());
   using Clock = std::chrono::steady_clock;
   const auto interval =
       std::chrono::nanoseconds(1'000'000'000ll * channel_samples_ / frame_frequency_);
@@ -282,7 +290,11 @@ void SDLAudioDriver::Pump() {
   while (pump_active_.load(std::memory_order_relaxed)) {
     const auto now = Clock::now();
     if (now < deadline) {
+#if defined(__APPLE__)
+      std::this_thread::sleep_until(deadline);
+#else
       std::this_thread::yield();  // no sleep: on Windows it can overshoot by several ms
+#endif
       continue;
     }
     size_t in_queue;
