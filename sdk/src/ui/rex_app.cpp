@@ -269,6 +269,10 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     ppc_info_.register_modules(runtime_->kernel_state());
   }
 
+  if (guide_gate_ && runtime_->input_system()) {
+    static_cast<rex::input::InputSystem*>(runtime_->input_system())->SetGuestGate(guide_gate_->MakeGate());
+  }
+
   if (imgui_drawer_) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     if (input_sys) {
@@ -475,7 +479,6 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
 
 void ReXApp::SetupGuide() {
   namespace guide = rex::ui::guide;
-  auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
   guide_gate_ = std::make_unique<ui::GuideInputGate>([this](int user) {
     // Guest thread: only post the open to the UI thread.
     app_context().CallInUIThreadDeferred([this, user]() {
@@ -484,9 +487,7 @@ void ReXApp::SetupGuide() {
       }
     });
   });
-  if (input_sys) {
-    input_sys->SetGuestGate(guide_gate_->MakeGate());
-  }
+  // The gate goes on the input system once the runtime exists (OnInitialize, after runtime setup).
   // F1 or Home opens and closes it for player 1.
   rex::ui::RegisterBind("bind_guide", "F1", "Open or close the Guide", [this] { ToggleGuide(); });
   rex::ui::RegisterBind("bind_guide_alt", "Home", "Open or close the Guide", [this] { ToggleGuide(); });
@@ -593,7 +594,7 @@ void ReXApp::ToggleGuide(int user, std::string_view blade) {
   if (!imgui_drawer_ || !guide_gate_) {
     return;
   }
-  auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
+  auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_ ? runtime_->input_system() : nullptr);
   ui::GuideDialog::Hooks hooks;
   if (input_sys) {
     hooks.snapshot = [input_sys] { return input_sys->SnapshotDevices(); };
