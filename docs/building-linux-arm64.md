@@ -11,7 +11,7 @@ native build on the ARM machine uses the same script.
 
 - **Generated C++** in `games/bo2/generated/`, from `tools/codegen.sh` (it runs on Windows; the output is the same for every
   platform).
-- **The SDK's third-party sources**: `python3 tools/fetch_thirdparty.py`.
+- **The SDK's third-party sources**: `python3 tools/fetch_thirdparty.py && tools/apply_thirdparty_patches.sh`.
 - Your game files and shader library are not needed to build; they go next to the program afterwards.
 
 ## Cross-compiling on x86_64 (Ubuntu 24.04 or WSL2)

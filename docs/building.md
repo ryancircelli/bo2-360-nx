@@ -89,11 +89,13 @@ The repository also uses three git-ignored folders of its own: `work/` (the load
 
 ```bash
 python tools/fetch_thirdparty.py
+tools/apply_thirdparty_patches.sh
 tools/build_host.sh
 ```
 
 `fetch_thirdparty.py` clones the ReXGlue SDK v0.10.0 release with its submodules and copies the third-party sources
-into `sdk/thirdparty/`, keeping the few files this project changed. `build_host.sh` then builds two Windows tools:
+into `sdk/thirdparty/`, keeping the few files this project changed. `apply_thirdparty_patches.sh` applies the patches
+in `patches/` idempotently. `build_host.sh` then builds two Windows tools:
 `rexglue.exe`, the code generator (`sdk/out/win-amd64/`), and `xexdump.exe` (`out/host/switch_bo2/`). Both need
 `sdk/out/win-amd64` on `PATH` for their DLLs.
 
