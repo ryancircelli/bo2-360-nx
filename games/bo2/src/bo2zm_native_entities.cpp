@@ -277,7 +277,7 @@ bool PlaneTest(PPCContext& ctx, uint8_t* base) {
     const VI above = simde_mm_castps_si128(simde_mm_cmpgt_ps(simde_mm_castsi128_ps(plane), zero));
     const VI corner =
         simde_mm_or_si128(simde_mm_andnot_si128(above, corner_r5), simde_mm_and_si128(above, corner_r6));
-    const V dot = simde_mm_dp_ps(simde_mm_castsi128_ps(plane), simde_mm_castsi128_ps(corner), 0xFF);
+    const V dot = rex::ppc::VmxDot<4>(simde_mm_castsi128_ps(plane), simde_mm_castsi128_ps(corner));
     word = Element0(dot);
     float d;
     std::memcpy(&d, &word, 4);
