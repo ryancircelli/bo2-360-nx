@@ -19,6 +19,8 @@
 #include <list>
 #include <functional>
 #include <mutex>
+#include <rex/thread/mutex.h>
+#include <thread>
 #include <typeinfo>
 #include <vector>
 
@@ -256,7 +258,39 @@ bool DetachFromKernelWait(mach_port_t port, const arm_thread_state64_t& base) {
 }
 
 // Mach suspension is synchronous and does not change the guest-visible suspend count.
+std::vector<object_ref<XThread>> ParkThreadsOnce(KernelState* ks);
+
+// A thread suspended while it holds the global critical region (object table, kernel lists) or a
+// malloc zone lock deadlocks the capture/rewind that follows (seen in NFSMW: rewind stuck in
+// ObjectTable::GetAllObjects). Park, check those locks are free, otherwise resume and retry.
+bool ParkedLocksFree() {
+  auto& m = rex::thread::global_critical_region::mutex();
+  if (!m.try_lock()) return false;
+  m.unlock();
+  vm_address_t* zones = nullptr; unsigned count = 0;
+  if (malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count) == KERN_SUCCESS) {
+    for (unsigned i = 0; i < count; ++i) {
+      auto* z = reinterpret_cast<malloc_zone_t*>(zones[i]);
+      if (z && z->introspect && z->version >= 5 && z->introspect->zone_locked && z->introspect->zone_locked(z))
+        return false;
+    }
+  }
+  return true;
+}
+
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
+  for (int attempt = 0;; ++attempt) {
+    auto parked = ParkThreadsOnce(ks);
+    if (ParkedLocksFree() || attempt >= 2000) {
+      if (attempt) std::fprintf(stderr, "[savepoint-s3] park: locks free after %d retries\n", attempt);
+      return parked;
+    }
+    for (auto& t : parked) thread_resume(MachPort(t.get()));
+    std::this_thread::sleep_for(std::chrono::microseconds(200));
+  }
+}
+
+std::vector<object_ref<XThread>> ParkThreadsOnce(KernelState* ks) {
   std::vector<object_ref<XThread>> parked;
   for (auto& t : ks->object_table()->GetObjectsByType<XThread>()) {
     // A thread with several handles is listed once per handle; suspend it only once.
