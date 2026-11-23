@@ -1388,7 +1388,7 @@ class Daemon:
             if is_solo(j['job']) or j['job'].get('quiet_machine'):
                 builds_waiting = active_builds()
                 wait_s = oldest_build_wait_s()
-                if should_open_build_window(builds_waiting, wait_s):
+                if should_open_build_window(builds_waiting, wait_s) and self.phase['phase'] != 'solo':
                     self.build_interleave_until = max(self.build_interleave_until,
                                                       time.time() + BUILD_INTERLEAVE_WINDOW_S)
                     self.log(f'build window opened after {jid}: {builds_waiting} buildq job(s), '
@@ -1587,6 +1587,8 @@ class Daemon:
                     self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
                 self.starve_logged = starved
                 while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
+                    if self.phase['phase'] == 'solo':
+                        self.build_interleave_until = 0.0   # builds wait for the ordinary window; the batch is short
                     interleave_active = self.build_interleave_active()
                     compiler_busy = (not self.freeze_outside and
                                      (outside_compile_procs() if self.perf_batch else compile_procs()) != 0)
@@ -1683,7 +1685,7 @@ PERF_HOLD_MAX_S = 900   # a speed job held by outside builds this long runs anyw
 SOLO_SHORT_S = 300       # while a solo job waits, only jobs expected to finish within this start...
 SOLO_LONG_MAX_AGE_S = 1800   # ...except a long job that has itself waited this long (no starving the soaks)
 SOLO_BATCH_N = 3        # solo jobs run back to back per solo window
-ORD_WINDOW_S = 1200     # an ordinary window lasts this long while solo jobs wait
+ORD_WINDOW_S = 900      # an ordinary window lasts this long while solo jobs wait
 ORD_GRACE_S = 300       # a game may outlast the window by this much when it starts
 SOLO_PHASE_MAX_S = 1800 # a solo window ends after this long if ordinary jobs wait
 
@@ -1727,7 +1729,7 @@ def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, inter
         n = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
         if solo:
             return machine_empty and ph.get('solo_started', 0) < n
-        return bool(interleave_active)   # build windows between solo runs still let short checks through
+        return False   # no ordinary job of any length starts until the solo batch has run (build windows are off in it)
     if solo or ph.get('closing'):
         return False
     if not solo_waiting:
@@ -2743,7 +2745,7 @@ def test_laptop():
 
 def test_phases(bump_waiting):
     """Alternating windows: phase_step / phase_admits / plan on synthetic queues."""
-    c = {'solo_batch_n': 3, 'ord_window_s': 1200}
+    c = {'solo_batch_n': 3, 'ord_window_s': 1200}   # (tests pin 1200; the default is ORD_WINDOW_S)
     S = lambda i, o='o1', **k: {'id': f's{i}', 'class': CLASSES['perf'], 'solo': True, 'owner': o, 'submitted_t': 0 + i, **k}
     O = lambda i, o='o2', **k: {'id': f'g{i}', 'class': CLASSES['proof'], 'owner': o, 'submitted_t': 0 + i, **k}
     ord0 = new_phase('ord', 0)
@@ -2771,13 +2773,13 @@ def test_phases(bump_waiting):
     assert not phase_admits(sol, True, 5, False, 360, 5, True, False, c)               # needs an empty machine
     assert not phase_admits(dict(sol, solo_started=3), True, 5, True, 360, 5, True, False, c)
     assert not phase_admits(sol, False, 5, True, 60, 5, True, False, c)                # ordinary waits in solo window...
-    assert phase_admits(sol, False, 5, True, 60, 5, True, True, c)                     # ...except in a build window
+    assert not phase_admits(sol, False, 5, True, 60, 5, True, True, c)                 # ...even in a build window
     assert not phase_admits(ord0, True, 5, True, 360, 5, True, False, c)
     assert phase_admits(ord0, False, 5, False, 60, 5, True, False, c)
     assert not phase_admits(closing, False, 1400, False, 60, 5, True, False, c)
-    assert phase_admits(ord0, False, 5, False, 900, 5, True, False, c)                 # a 15 min game fits a fresh window
-    assert not phase_admits(ord0, False, 5, False, 1200, 5, True, False, c)            # a 20 min one (30 min budget) waits for age
-    assert not phase_admits(ord0, False, 1100, False, 900, 5, True, False, c)          # ...and nothing long near the end
+    assert phase_admits(ord0, False, 5, False, 600, 5, True, False, c)                 # a 10 min game fits a fresh window
+    assert not phase_admits(ord0, False, 5, False, 900, 5, True, False, c)            # a 20 min one (30 min budget) waits for age
+    assert not phase_admits(ord0, False, 1100, False, 600, 5, True, False, c)          # ...and nothing long near the end
     assert phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)          # unless it already waited 30 min
     assert phase_admits(ord0, False, 1100, False, 2400, 5, False, False, c)            # no solo waiting: anything
     # plan(): 9 solo (3 owners x 3) + 6 ordinary, 3 slots: solo batch of 3 then ordinary window, owners rotate
