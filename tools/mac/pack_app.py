@@ -38,7 +38,8 @@ needs no entitlement), inner files first.
 import argparse, ctypes, os, plistlib, re, shutil, subprocess, sys, tempfile, tomllib
 from pathlib import Path
 
-from game_icon import extract_icon, make_icns
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script folder from sys.path
+from game_icon import extract_icon, make_icns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 EXE_NAME = 'Black Ops II'   # the launcher; --game sets both from games/<game>/app.toml
