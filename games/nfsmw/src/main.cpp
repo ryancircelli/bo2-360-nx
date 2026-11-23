@@ -2,7 +2,7 @@
 //
 // Need for Speed: Most Wanted (Xbox 360, USA), recompiled. The title's facts (name, title id, executable, disc
 // folder, setting defaults) are in games/nfsmw/game.toml; the shared GameApp
-// runs whatever RegisterGame() adds (no hooks yet).
+// runs whatever RegisterGame() adds: the PAS-18 stream hooks and a Guide page.
 
 #include "generated/default/nfsmw_init.h"
 
@@ -15,6 +15,7 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/function_dispatcher.h>
+#include <rex/ui/guide.h>
 
 #include <rex/game_api.h>
 
@@ -115,11 +116,32 @@ void StreamPassHook(PPCContext& ctx, uint8_t* base) {
   }
   sub_825E4140(ctx, base);
 }
+
+// The Guide's Game blade: the settings this port already has. Every item is a cvar, so the change goes through the
+// cvar path (no guest state is touched from the UI thread).
+void RegisterGuidePage() {
+  namespace guide = rex::ui::guide;
+  guide::Page page;
+  page.id = "nfsmw.settings";
+  page.title = "Most Wanted";
+  page.description = "Settings for Need for Speed: Most Wanted.";
+  page.items = {
+      guide::CvarToggle("nfsmw_stream_end_fix", "Race Load Fix",
+                        "Keeps a race from hanging on its loading screen when the audio stream runs late. If it was "
+                        "off when the game started, turning it on takes effect after a restart."),
+      guide::CvarChoice("metal_resolve_readback_max_bytes", {"16384", "0"}, {"On", "Off"}, "Auto Exposure",
+                        "Lets the game measure scene brightness. Off makes the picture blow out white."),
+      guide::CvarToggle("input_remember_slots", "Remember Controllers",
+                        "A controller that drops out gets its player back when it comes back on."),
+  };
+  guide::RegisterPage(std::move(page));
+}
 }  // namespace
 
 void rex::RegisterGame(rex::GameApi& api) {
   rex::UseGameManifest(api, rex::kGameManifest, "games/nfsmw/game.toml");
   api.OnPostSetup([](rex::GameApp& app) {
+    RegisterGuidePage();
     if (!REXCVAR_GET(nfsmw_stream_end_probe) && !REXCVAR_GET(nfsmw_stream_end_fix)) return;
     auto* rt = app.runtime();
     auto* fd = rt ? rt->function_dispatcher() : nullptr;
