@@ -1734,7 +1734,8 @@ def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, inter
         return True
     # a solo job waits: a game that would outlast the window by more than the grace would stretch the drain
     left = ph['t0'] + float(c.get('ord_window_s', ORD_WINDOW_S)) - now
-    return est_s <= max(SOLO_SHORT_S, left + ORD_GRACE_S) or age_s >= SOLO_LONG_MAX_AGE_S
+    # (estimates are medians; tonight a 23 min estimate ran 45 min, so budget 1.5x)
+    return est_s * 1.5 <= max(SOLO_SHORT_S, left + ORD_GRACE_S) or age_s >= SOLO_LONG_MAX_AGE_S
 
 
 def sched_key(j, running_by_owner, last_start):
@@ -2774,8 +2775,9 @@ def test_phases(bump_waiting):
     assert not phase_admits(ord0, True, 5, True, 360, 5, True, False, c)
     assert phase_admits(ord0, False, 5, False, 60, 5, True, False, c)
     assert not phase_admits(closing, False, 1400, False, 60, 5, True, False, c)
-    assert phase_admits(ord0, False, 5, False, 1200, 5, True, False, c)                # a 20 min soak fits a fresh window
-    assert not phase_admits(ord0, False, 1100, False, 1200, 5, True, False, c)         # ...not near the end
+    assert phase_admits(ord0, False, 5, False, 900, 5, True, False, c)                 # a 15 min game fits a fresh window
+    assert not phase_admits(ord0, False, 5, False, 1200, 5, True, False, c)            # a 20 min one (30 min budget) waits for age
+    assert not phase_admits(ord0, False, 1100, False, 900, 5, True, False, c)          # ...and nothing long near the end
     assert phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)          # unless it already waited 30 min
     assert phase_admits(ord0, False, 1100, False, 2400, 5, False, False, c)            # no solo waiting: anything
     # plan(): 9 solo (3 owners x 3) + 6 ordinary, 3 slots: solo batch of 3 then ordinary window, owners rotate
