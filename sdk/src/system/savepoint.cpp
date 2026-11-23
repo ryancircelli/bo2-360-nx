@@ -605,6 +605,21 @@ SavepointStats RewindToInProcessSavepoint() {
     g_rewind_phase = 5;
     if (g_snap.graphics) g_snap.graphics->RewindSavepoint();
     g_rewind_phase = 6;
+    // Check that every captured byte really is back after the heap and graphics rewinds ran.
+    uint64_t bad_pages = 0; uint32_t bad_regions = 0;
+    for (auto& r : g_snap.regions) {
+      uint8_t* base = r.space ? mem->physical_membase() : mem->virtual_membase();
+      uint32_t bad = 0, first = 0;
+      for (uint32_t off = 0; off < r.size; off += 4096) {
+        uint32_t len = std::min<uint32_t>(4096, r.size - off);
+        if (std::memcmp(base + r.base + off, r.data.data() + off, len) != 0) { if (!bad) first = r.base + off; ++bad; }
+      }
+      if (bad) {
+        ++bad_regions; bad_pages += bad;
+        if (bad_regions <= 20) std::fprintf(stderr, "[savepoint-verify] region %u:%08X +%X: %u pages differ after restore, first %08X\n", r.space, r.base, r.size, bad, first);
+      }
+    }
+    std::fprintf(stderr, "[savepoint-verify] memory after restore: %u regions / %llu pages differ\n", bad_regions, (unsigned long long)bad_pages);
   }
   st.regions = uint32_t(g_snap.regions.size());
   REXSYS_INFO("[savepoint-s3] rewind: recommitted {} regions, {} failed", recommitted, recommit_failed);
@@ -621,8 +636,8 @@ SavepointStats RewindToInProcessSavepoint() {
     auto td = Clock::now();
     bool detached = !two_phase || DetachFromKernelWait(ts.port, ts.gp);
     if (!detached) ++detach_failed;
-    std::fprintf(stderr, "[savepoint-s3] thread %u port %u syscall %d x16 %lld detach %s %.2f ms\n",
-                 restored + not_parked, ts.port, int(ts.in_syscall), (long long)ts.gp.__x[16],
+    std::fprintf(stderr, "[savepoint-s3] thread %u id %08X guest %d port %u syscall %d x16 %lld detach %s %.2f ms\n",
+                 restored + not_parked, ts.thread->thread_id(), int(ts.thread->is_guest_thread()), ts.port, int(ts.in_syscall), (long long)ts.gp.__x[16],
                  detached ? "ok" : "FAILED", Ms(td, Clock::now()));
     std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
     if (ts.ctx) std::memcpy(ts.ctx, ts.ctx_data.data(), ts.ctx_data.size());
