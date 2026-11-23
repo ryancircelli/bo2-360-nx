@@ -6,11 +6,13 @@
 
 #include "generated/default/fh1_init.h"
 
+#include <format>
 #include <memory>
 #include <string>
 
 #include <rex/cvar.h>
 #include <rex/game_api.h>
+#include <rex/ui/flags.h>  // video_mode_refresh_rate
 #include <rex/ui/guide.h>
 
 #include "rex_game_manifest.h"  // rex::kGameManifest, from games/fh1/game.toml
@@ -35,7 +37,7 @@ void RegisterGuidePage() {
                         "A controller that drops out gets its player back when it comes back on."),
       guide::Info(
           "Refresh Rate",
-          [] { return rex::cvar::GetFlagByName("video_mode_refresh_rate") + " Hz"; },
+          [] { return std::format("{:g} Hz", REXCVAR_GET(video_mode_refresh_rate)); },
           "The game draws every second refresh: 120 Hz gives about 60 fps at the right speed. Set it in fh1.toml "
           "(video_mode_refresh_rate); it takes effect after a restart."),
   };
