@@ -145,6 +145,8 @@ struct ThreadSnap {
   mach_port_t port = 0;
   arm_thread_state64_t gp{};
   arm_neon_state64_t neon{};
+  // Blocked inside a BSD syscall / Mach trap at capture (pc just after `svc #0x80`, thread waiting).
+  bool in_syscall = false;
   uint64_t stack_lo = 0, stack_hi = 0;
   std::vector<uint8_t> stack;
   // PPCContext (guest registers) lives in the heap-allocated ThreadState, not on the host stack.
@@ -181,6 +183,56 @@ bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* memba
 
 mach_port_t MachPort(XThread* thread) {
   return pthread_mach_thread_np(reinterpret_cast<pthread_t>(thread->thread()->native_handle()));
+}
+
+// A thread suspended while blocked in the kernel still owns that kernel wait: thread_set_state alone
+// is overwritten when the wait finishes (x0/x1/cpsr, pc-4 on ERESTART), and the wait may never finish.
+// Restore is two-phase: thread_abort the wait, point the thread at a user-space spin stub, let it run
+// there, re-suspend it (now with no kernel wait in flight) and only then install the captured state.
+// The leading nop absorbs a pc-4 restart adjustment applied to the stub.
+extern "C" void rex_savepoint_spin_stub();
+__asm__(
+    ".text\n"
+    ".p2align 2\n"
+    "  nop\n"
+    ".globl _rex_savepoint_spin_stub\n"
+    "_rex_savepoint_spin_stub:\n"
+    "  mov w9, #1\n"
+    "  stlr w9, [x19]\n"
+    "1: yield\n"
+    "  b 1b\n");
+
+bool AtSyscall(mach_port_t port, const arm_thread_state64_t& gp) {
+  uint64_t pc = arm_thread_state64_get_pc(gp);
+  if (pc < 4) return false;
+  uint32_t insn = 0;
+  std::memcpy(&insn, reinterpret_cast<const void*>(pc - 4), 4);
+  if (insn != 0xD4001001u) return false;  // svc #0x80
+  thread_basic_info_data_t info{};
+  mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT;
+  if (thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &n) != KERN_SUCCESS)
+    return false;
+  return info.run_state == TH_STATE_WAITING;
+}
+
+// Thread is Mach-suspended on entry and on success. Returns false if it never reached the stub.
+bool DetachFromKernelWait(mach_port_t port, const arm_thread_state64_t& base) {
+  alignas(8) static std::atomic<uint32_t> flags[512];
+  static std::atomic<uint32_t> next{0};
+  auto& flag = flags[next.fetch_add(1) % 512];
+  flag.store(0);
+  arm_thread_state64_t st = base;
+  arm_thread_state64_set_pc_fptr(st, reinterpret_cast<void*>(&rex_savepoint_spin_stub));
+  st.__x[19] = reinterpret_cast<uint64_t>(&flag);
+  thread_abort(port);
+  if (thread_set_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&st),
+                       ARM_THREAD_STATE64_COUNT) != KERN_SUCCESS)
+    return false;
+  thread_resume(port);
+  bool ok = false;
+  for (int i = 0; i < 20000 && !(ok = flag.load(std::memory_order_acquire)); ++i) usleep(50);
+  thread_suspend(port);
+  return ok;
 }
 
 // Mach suspension is synchronous and does not change the guest-visible suspend count.
@@ -235,6 +287,7 @@ SavepointStats CaptureInProcessSavepoint() {
                          &neon_count) != KERN_SUCCESS) {
       continue;
     }
+    ts.in_syscall = AtSyscall(ts.port, ts.gp);
     uint64_t sp = arm_thread_state64_get_sp(ts.gp);
     uint64_t top = reinterpret_cast<uint64_t>(
         pthread_get_stackaddr_np(reinterpret_cast<pthread_t>(t->thread()->native_handle())));
@@ -329,15 +382,34 @@ SavepointStats RewindToInProcessSavepoint() {
   st.regions = uint32_t(g_snap.regions.size());
   REXSYS_INFO("[savepoint-s3] rewind: recommitted {} regions, {} failed", recommitted, recommit_failed);
   // Threads that exist now but did not at capture time cannot be rewound; counted via parked.
-  uint32_t restored = 0, not_parked = 0;
+  uint32_t restored = 0, not_parked = 0, detach_failed = 0, in_syscall = 0;
+  const bool two_phase = std::getenv("REX_SAVEPOINT_ONE_PHASE") == nullptr;
+  const char* sysmode = std::getenv("REX_SAVEPOINT_SYSCALL");
+  const bool syscall_eintr = sysmode && std::strcmp(sysmode, "eintr") == 0;
   for (auto& ts : g_snap.threads) {
     if (std::find(parked.begin(), parked.end(), ts.thread.get()) == parked.end()) {
       ++not_parked;
       continue;
     }
+    if (two_phase && !DetachFromKernelWait(ts.port, ts.gp)) {
+      ++detach_failed;
+      std::fprintf(stderr, "[savepoint-s3] thread port %u never reached the spin stub\n", ts.port);
+    }
     std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
     if (ts.ctx) std::memcpy(ts.ctx, ts.ctx_data.data(), ts.ctx_data.size());
-    if (thread_set_state(ts.port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&ts.gp),
+    arm_thread_state64_t gp = ts.gp;
+    if (ts.in_syscall) {
+      ++in_syscall;
+      if (syscall_eintr) {
+        // Report the captured wait as interrupted: BSD -> -1/EINTR via carry, Mach trap -> KERN_ABORTED.
+        if (int64_t(gp.__x[16]) > 0) { gp.__x[0] = 4; gp.__cpsr |= (1u << 29); }
+        else gp.__x[0] = 14;
+      } else {
+        // Re-execute the captured `svc` with its captured arguments, as the kernel does for ERESTART.
+        arm_thread_state64_set_pc_fptr(gp, reinterpret_cast<void*>(arm_thread_state64_get_pc(gp) - 4));
+      }
+    }
+    if (thread_set_state(ts.port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&gp),
                          ARM_THREAD_STATE64_COUNT) != KERN_SUCCESS ||
         thread_set_state(ts.port, ARM_NEON_STATE64, reinterpret_cast<thread_state_t>(&ts.neon),
                          ARM_NEON_STATE64_COUNT) != KERN_SUCCESS) {
@@ -347,7 +419,11 @@ SavepointStats RewindToInProcessSavepoint() {
     ++restored;
   }
   st.threads_parked = restored;
-  std::fprintf(stderr, "[savepoint-s3] restored %u threads, %u not parked\n", restored, not_parked);
+  std::fprintf(stderr,
+               "[savepoint-s3] restored %u threads, %u not parked, %u captured in a syscall (%s), %u detach "
+               "failures (%s)\n",
+               restored, not_parked, in_syscall, syscall_eintr ? "eintr" : "restart", detach_failed,
+               two_phase ? "two-phase" : "one-phase");
   auto t2 = Clock::now();
   uint32_t left_parked = 0;
   for (auto& t : parked) {
