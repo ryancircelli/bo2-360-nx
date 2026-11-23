@@ -256,10 +256,10 @@ REX_EXPORT(__imp__NtDuplicateObject, rex::kernel::xboxkrnl::NtDuplicateObject_en
 REX_EXPORT(__imp__NtClose, rex::kernel::xboxkrnl::NtClose_entry)
 REX_EXPORT(__imp__NtQueryEvent, rex::kernel::xboxkrnl::NtQueryEvent_entry)
 
-REX_EXPORT_STUB(__imp__ObCreateObject);
+REX_EXPORT_STUB_RETURN(__imp__ObCreateObject, 0xC0000001);
 REX_EXPORT_STUB(__imp__ObGetWaitableObject);
 REX_EXPORT_STUB(__imp__ObInsertObject);
-REX_EXPORT_STUB(__imp__ObIsTitleObject);
+REX_EXPORT_STUB_RETURN(__imp__ObIsTitleObject, 0);
 REX_EXPORT_STUB(__imp__ObLookupAnyThreadByThreadId);
 REX_EXPORT_STUB(__imp__ObMakeTemporaryObject);
 REX_EXPORT_STUB(__imp__ObReferenceObject);
