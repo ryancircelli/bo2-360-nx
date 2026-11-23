@@ -31,4 +31,9 @@ bool RunCommand(std::string_view name, std::string_view argument);
 // options and queued actions use that local actor; world actions require primary.
 bool RunPlayerCommand(int local, std::string_view name, std::string_view argument);
 
+// Registers the BO2 pages of the SDK's Guide overlay (rex/ui/guide.h): every Extras setting, the cheats in a "Cheats"
+// group. The Guide runs on the UI thread, so its changes queue a command that EveryFrame runs on the game's thread
+// through RunCommand, the same path the Extras menu takes. From OnPostSetup.
+void RegisterGuidePages();
+
 }  // namespace bo2zm::extras

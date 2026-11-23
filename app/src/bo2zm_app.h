@@ -21,6 +21,7 @@
 #include "bo2zm_benchmark.h"
 #include "bo2zm_controllers.h"
 #include "bo2zm_debug_options.h"
+#include "bo2zm_extras.h"
 #include "bo2zm_gsc_mods.h"
 #include "bo2zm_lifecycle.h"
 #include "bo2zm_script_manager.h"
@@ -169,6 +170,7 @@ class Bo2zmApp : public rex::ReXApp {
     bo2zm::ApplyPendingRelaunch(user_data_root());
     bo2zm::scripts::Boot();
     bo2zm::gsc::Configure();
+    bo2zm::extras::RegisterGuidePages();  // the BO2 page of the SDK's Guide overlay
     // PNG captures of the game image (bo2zm_capture_every_s, off by default), to
     // compare the native renderer with Xenos emulation without watching the screen.
     auto get_presenter = [this]() -> rex::ui::Presenter* {
