@@ -2217,7 +2217,9 @@ void SpirvShaderTranslator::SampleTexture(spv::Builder::TextureParameters& textu
               builder_->createNoContractionBinOp(spv::OpFSub, type_float4_, sign_result,
                                                  lerp_first),
               lerp_factor);
-          sign_result = builder_->createNoContractionBinOp(spv::OpFAdd, type_float4_, sign_result,
+          // The lerp starts from the first sample: first + (second - first) * factor.
+          // Adding the second sample here (as before) overshoots. rexglue-sdk f05a125.
+          sign_result = builder_->createNoContractionBinOp(spv::OpFAdd, type_float4_, lerp_first,
                                                            lerp_difference);
         }
       }
