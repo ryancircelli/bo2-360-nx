@@ -32,6 +32,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `f05a125` (Tom Clay) | SPIR-V fetch lerp starts from the first sample | `sdk/src/graphics/pipeline/shader/spirv_translator_fetch.cpp` |
 | ReXGlue SDK `bc84579` (Tom Clay, WizardOfWor1969) | publish the GPU read pointer when write back is enabled | `sdk/src/graphics/command_processor.cpp` |
 | ReXGlue SDK `6937495` (Tom Clay) | `Fiber::Destroy` only clears the current fiber if it is itself | `sdk/src/core/fiber_posix.cpp` |
+| ReXGlue SDK `d8a93be` (Tom Clay) | a new FPSCR register starts with host FP exceptions masked | `sdk/include/rex/ppc/context.h`, `sdk/include/rex/platform/fpscr.h` |
 
 ## Libraries
 
