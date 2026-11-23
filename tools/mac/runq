@@ -589,6 +589,45 @@ def quiet_missing_summary_invalid(job, status):
     return status == 'done' and quiet_fps_required(job)
 
 
+VSYNC_CAP_FPS = 59.5      # a run at the vsync cap carries no speed signal
+COLLAPSE_RATIO = 0.6      # a 60 s bin below 60% of the run median = machine hiccup, rerun (4 of 100 long runs 11-12..11-15)
+
+
+def perf_tsv_health(run_dir, skip_s=60.0, bin_s=60.0):
+    """Return (min_bin_fps, median_bin_fps) over the measured window of run/perf.tsv, or None."""
+    p = os.path.join(run_dir, 'perf.tsv')
+    try:
+        t = []
+        with open(p) as f:
+            for line in f:
+                if line[:1] in ('#', 'f'):
+                    continue
+                a = line.split('\t')
+                try:
+                    if int(a[7]) > 0:
+                        t.append(float(a[1]))
+                except (IndexError, ValueError):
+                    pass
+    except OSError:
+        return None
+    if len(t) < 200:
+        return None
+    t0 = t[0] + skip_s * 1e3
+    t = [x for x in t if x >= t0]
+    bins, i, j = [], 0, 0
+    while t and t[0] + (i + 1) * bin_s * 1e3 <= t[-1]:
+        lo, hi = t[0] + i * bin_s * 1e3, t[0] + (i + 1) * bin_s * 1e3
+        n = 0
+        while j < len(t) and t[j] < hi:
+            n += t[j] >= lo
+            j += 1
+        bins.append(n / bin_s)
+        i += 1
+    if len(bins) < 2:
+        return None
+    return min(bins), sorted(bins)[len(bins) // 2]
+
+
 def perf_guard_required(job):
     return job_class(job) == CLASSES['perf'] or \
         (job.get('quiet_machine') and (job.get('env') or {}).get('RUNQ_PERF_GUARD') == 'true')
@@ -863,6 +902,7 @@ class Daemon:
             self.build_interleave_until = time.time() + BUILD_INTERLEAVE_WINDOW_S
         self.perf_batch = set(st.get('perf_batch') or [])
         self.stop_requested = False
+        self.handoff = False
 
     def log(self, msg):
         print(f'[{now_s()}] {msg}', flush=True)
@@ -1041,6 +1081,9 @@ class Daemon:
                 cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_quiet-wait', '--'] + cmd
         env = dict(os.environ)
         env['REX_AUDIO_MUTE'] = 'true'  # owner rule: test games never make sound
+        # owner 11-22: test games grabbed his real keyboards/receivers; tests never open real USB input devices
+        env['SDL_HIDAPI_LIBUSB'] = '0'
+        env['SDL_JOYSTICK_HIDAPI'] = '0'
         env.update(job.get('env') or {})
         env.update(RUNQ_HOST='mac', RUNQ_JOB=job['id'], RUNQ_SLOT=str(slot), RUNQ_OUT=out, BO2_NET_PORT_OFFSET=port)
         if job_class(job) == CLASSES['perf']:
@@ -1142,6 +1185,8 @@ class Daemon:
         cap = self.cap_now()[0]
         games = len(self.jobs) + len(self.outside)
         j['samples'].append((la[0], ab, cp, games, cap, hot))
+        # A job may rename or delete its own output folder; that must not take the daemon down.
+        os.makedirs(j['job']['out'], exist_ok=True)
         with open(os.path.join(j['job']['out'], 'conditions.tsv'), 'a') as f:
             details = json.dumps(hot, separators=(',', ':')).replace('\t', ' ').replace('\n', ' ')
             f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\t{games}\t{details}\n')
@@ -1226,6 +1271,19 @@ class Daemon:
                 if not res['fps']['valid'] and status == 'done':
                     status, code, note = 'invalid', 2, 'quiet-machine average FPS below 30'
                     res.update(status=status, exit=code, note=note)
+                if res['fps']['valid'] and status == 'done':
+                    h = perf_tsv_health(run)
+                    if h:
+                        res['fps']['bin_min'], res['fps']['bin_median'] = round(h[0], 2), round(h[1], 2)
+                    if h and h[0] < COLLAPSE_RATIO * h[1]:
+                        res['fps']['valid'] = False
+                        status, code, note = 'invalid', 2, \
+                            f'collapsed run: a 60 s bin fell to {h[0]:.1f} fps vs median {h[1]:.1f}; rerun'
+                        res.update(status=status, exit=code, note=note)
+                    elif (res['fps'].get('fps_avg') or 0) >= VSYNC_CAP_FPS:
+                        res['fps']['capped'] = True    # flag, not invalid: some jobs want to show 60 is held
+                        note = (note + '; ' if note else '') + 'fps at vsync cap: no speed signal'
+                        res.update(note=note)
         elif job.get('quiet_machine'):
             res['fps'] = {'fps_avg': None, 'fps_min': None,
                           'valid': False if quiet_fps_required(job) else None}
@@ -1371,7 +1429,11 @@ class Daemon:
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return  # another daemon has it
-        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'stop_requested', True))
+        # TERM / `runq restart`: hand over now. Running games and builds are not touched (each game has its own session
+        # and exit-code wrapper); the next daemon adopts them. USR1 keeps the old behaviour: stop launching, wait for
+        # every job and build to drain, then exit (needs a quiet machine, which a busy queue never gets).
+        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'handoff', True))
+        signal.signal(signal.SIGUSR1, lambda *_: setattr(self, 'stop_requested', True))
         if os.getpriority(os.PRIO_PROCESS, 0) > 0:
             self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
         # jobs left in running/ by an earlier daemon: adopt the ones still alive (same pid, same process group; the
@@ -1515,16 +1577,20 @@ class Daemon:
                         jobs_per_owner.append((qf, job))
                     non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
                     non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
-                    candidates = [qf for qf, job in jobs_per_owner
-                                  if self.perf_batch or non_speed_running < non_speed_cap]
+                    gated, drain = solo_gate(jobs_per_owner, not (self.jobs or self.outside), time.time(),
+                                             float(self.c.get('solo_max_wait_s', SOLO_MAX_WAIT_S)))
+                    if drain and drain.get('id') != getattr(self, 'drain_logged', None):
+                        self.drain_logged = drain.get('id')
+                        self.log(f'solo drain: {drain.get("id")} waited {int(time.time() - drain.get("submitted_t", 0))}s; '
+                                 'no new games start until the running ones end')
+                    allowed = set(gated)
+                    candidates = [qf for qf, job in jobs_per_owner if qf in allowed and
+                                  (self.perf_batch or non_speed_running < non_speed_cap)]
                     if not candidates:
                         break
                     qf = self.pick(candidates)
                     if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
-                        # a solo job holds the machine alone: start nothing else until the running games end
-                        if self.jobs or self.outside:
-                            break
-                        solo_running = True
+                        solo_running = True   # (the gate only lets a solo job through on an empty machine)
                     q.remove(qf)
                     self.launch(qf)
                 if time.time() - getattr(self, 'remote_checked', 0) >= 5:
@@ -1535,6 +1601,10 @@ class Daemon:
                         self.log(f'reap_remote failed: {e!r}')
                 self.throttle()
                 self.write_state()
+                if self.handoff:
+                    self.log(f'handoff: daemon exits now; {len(self.jobs)} running job(s) and all builds keep going '
+                             'and are adopted by the next daemon')
+                    break
                 if self.stop_requested and can_finish_daemon_shutdown(
                         len(self.jobs), active_builds(), compile_procs()):
                     self.log('graceful daemon stop: runq jobs and buildq/compiler activity drained')
@@ -1542,7 +1612,8 @@ class Daemon:
                 time.sleep(1)
         finally:
             for j in self.jobs.values():
-                self.resume_builds(j.get('quiet_pids', []))
+                if not self.handoff:   # on a handoff a running solo job still needs its builds frozen
+                    self.resume_builds(j.get('quiet_pids', []))
             if self.held:
                 os.write(self.fifo, b'+' * self.held)
 
@@ -1570,6 +1641,25 @@ def job_class(j):
 
 def job_owner(j):
     return j.get('owner') or (j.get('name') or 'anon').split('-')[0]
+
+
+SOLO_MAX_WAIT_S = 600   # a queued solo job lets other games keep flowing this long, then the machine drains for it
+
+
+def solo_gate(entries, machine_empty, now, max_wait):
+    """Which queued jobs may start now. entries: [(qfile, job)] already passed the hold filters. A solo job needs the
+    machine alone, but while games run it must not block the others (2026-11-22: a solo proof at the head held four
+    non-solo jobs for ~10 min with free slots). So: a quiet machine may start anything, but once the oldest solo job
+    has waited max_wait it goes first and nothing else starts (drain). A busy machine runs non-solo jobs until then.
+    -> (eligible qfiles, drain solo job or None)"""
+    solos = [(qf, j) for qf, j in entries if is_solo(j)]
+    others = [qf for qf, j in entries if not is_solo(j)]
+    aged = [(qf, j) for qf, j in solos if now - j.get('submitted_t', now) >= max_wait]
+    if aged:
+        return ([qf for qf, _ in solos] if machine_empty else []), min(aged, key=lambda x: x[1].get('submitted_t', now))[1]
+    if machine_empty:
+        return [qf for qf, _ in entries], None
+    return others, None
 
 
 def sched_key(j, running_by_owner, last_start):
@@ -1673,7 +1763,12 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
         for _, o in busy:
             rbo[o] = rbo.get(o, 0) + 1
         pending.sort(key=lambda qj: sched_key(qj[1], rbo, ls))
-        qf, j = pending.pop(0)
+        # a solo job waits behind non-solo work until it has waited solo_max_wait_s (see solo_gate)
+        aged = [x for x in pending if is_solo(x[1]) and t - x[1].get('submitted_t', t) >= SOLO_MAX_WAIT_S]
+        plain = [x for x in pending if not is_solo(x[1])]
+        pick_ = aged[0] if aged else (plain[0] if plain else pending[0])
+        pending.remove(pick_)
+        qf, j = pick_
         est = estimate_s(j, hist)
         if is_solo(j):   # waits for every slot, then holds them all
             t = max(free_at)
@@ -1714,9 +1809,46 @@ def is_measured(j):
     return False
 
 
+def solo_has_speed_signal(j):
+    """Solo exists to keep a speed number clean. A job may hold the machine alone only if it yields one: a route run
+    (boot_test records FPS), a timed benchmark scene, a --quiet-machine bench, or a job submitted with --timing (it
+    measures its own speed/frame timing, or proves a frame-rate-dependent bug). Builds, trace captures, harvests and
+    picture-only checks never need the machine alone."""
+    if j.get('timing') or j.get('quiet_machine'):
+        return True
+    if j.get('scene'):
+        r = (rjson(j['scene']) or {}).get('route', {})
+        return str(r.get('BO2ZM_BENCHMARK', r.get('REX_BO2ZM_BENCHMARK', ''))).lower() in ('true', '1')
+    return job_uses_boot_test(j)
+
+
+NO_SIGNAL_SOLO_MSG = ('solo is only for jobs that produce a speed number, and this one gets no FPS from runq. '
+                      'If it measures its own speed/frame timing or proves a frame-rate-dependent bug, add --timing; '
+                      'otherwise drop --solo (class perf: add --no-solo or pick another class).')
+
+
 def is_solo(j):
     """Solo jobs run with no other game on the machine; class perf is solo unless submitted with --no-solo."""
     return bool(j.get('solo', job_class(j) == CLASSES['perf']))
+
+
+def cmd_restart(argv):
+    """runq restart: load new runq code without touching running jobs or builds. The old daemon hands over (TERM) and a
+    new one adopts every running job. Takes a few seconds; queued jobs just wait."""
+    mkdirs()
+    st = rjson(STATE) or {}
+    pid = st.get('pid')
+    if pid and alive(pid) and daemon_running():
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(150):   # the daemon checks every second
+            if not daemon_running():
+                break
+            time.sleep(0.2)
+        else:
+            sys.exit(f'runq restart: daemon {pid} did not exit within 30 s (kill -9 it; jobs are adopted either way)')
+    ensure_daemon()
+    st = rjson(STATE) or {}
+    print(f'runq: daemon restarted, pid {st.get("pid")}; adopted jobs are in {DLOG}')
 
 
 def cmd_solo(argv):
@@ -1724,6 +1856,9 @@ def cmd_solo(argv):
         sys.exit('runq: solo ID on|off')
     for f, j in load_queue():
         if f.endswith(argv[0] + '.json'):
+            if argv[1] == 'on' and not solo_has_speed_signal(j):
+                print(f'{argv[0]}: refused: {NO_SIGNAL_SOLO_MSG}')
+                return 1
             j['solo'] = argv[1] == 'on'
             wjson(os.path.join(D['queue'], f), j)
             print(f'{argv[0]}: solo {argv[1]}')
@@ -1790,6 +1925,9 @@ def cmd_submit(argv):
                          f'{QUIET_WAIT_CAP_S} s, record actual load and avg/min FPS')
     ap.add_argument('--no-fps', action='store_true',
                     help='with --quiet-machine, skip FPS summary validity for offline/non-game jobs')
+    ap.add_argument('--timing', action='store_true',
+                    help='the job measures its own speed/frame timing or proves a frame-rate-dependent bug; required '
+                         'for --solo (and class perf) on --scene/-- CMD jobs that get no FPS from runq')
     ap.add_argument('--urgent', action='store_true', help='class-perf only: request an immediate one-job speed batch')
     ap.add_argument('--timeout', type=int)
     ap.add_argument('--where', choices=('mac', 'any', 'laptop'), default='mac')
@@ -1834,6 +1972,8 @@ def cmd_submit(argv):
         job.update(quiet_machine=True, measured=True)
     if a.no_fps:
         job['no_fps'] = True
+    if a.timing:
+        job['timing'] = True
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
         scene = rjson(sp)
@@ -1871,6 +2011,8 @@ def cmd_submit(argv):
         job.update(name=name, out=out, cmd=cmd, cwd=os.getcwd(), timeout_s=a.timeout or 1800)
     else:
         sys.exit('runq submit: give --scene, --route or -- CMD')
+    if solo and not solo_has_speed_signal(job):
+        sys.exit(f'runq submit: {NO_SIGNAL_SOLO_MSG}')
     os.makedirs(job['out'], exist_ok=True)
     if a.where != 'mac':
         job['where'] = a.where
@@ -2139,7 +2281,7 @@ def cmd_cancel(ids):
 
 def cmd_install(_argv):
     mkdirs()
-    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py',
+    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py', 'abverdict.py',
               'scenes_gate.sh'):
         s = os.path.join(HERE, f)
         if os.path.exists(s):
@@ -2620,6 +2762,17 @@ def main():
         assert defer_perf_for_activity(perf, False, True, False, False)
         assert not defer_perf_for_activity(perf, False, True, False, True)
         assert defer_perf_for_activity(perf, False, True, True, True)
+        sg = lambda *a: solo_gate(*a)
+        ents = [('s', {'id': 's', 'class': CLASSES['proof'], 'solo': True, 'submitted_t': 900}),
+                ('a', {'id': 'a', 'class': CLASSES['sweep'], 'submitted_t': 950}),
+                ('b', {'id': 'b', 'class': CLASSES['proof'], 'submitted_t': 960})]
+        assert sg(ents, False, 1000, 600) == (['a', 'b'], None)        # busy machine: non-solo flows past a young solo
+        assert sg(ents, True, 1000, 600) == (['s', 'a', 'b'], None)    # quiet machine: anything may start
+        eligible, drain = sg(ents, False, 1600, 600)                    # solo waited 700 s: drain, start nothing
+        assert eligible == [] and drain['id'] == 's'
+        eligible, drain = sg(ents, True, 1600, 600)                     # drained: only the solo job starts
+        assert eligible == ['s'] and drain['id'] == 's'
+        assert sg(ents[1:], False, 1000, 600) == (['a', 'b'], None)
         assert should_open_build_window(11, 300)
         assert not should_open_build_window(11, 299)
         assert not should_open_build_window(0, 600)
@@ -2633,6 +2786,17 @@ def main():
         assert not quiet_fps_required(custom_quiet)
         assert not quiet_missing_summary_invalid(custom_quiet, 'done')
         assert quiet_missing_summary_invalid({'quiet_machine': True, 'cmd': ['/runq/bin/boot_test.sh']}, 'done')
+        with tempfile.TemporaryDirectory() as htmp:
+            with open(os.path.join(htmp, 'perf.tsv'), 'w') as f:   # 6 min at 50 fps, minute 4 drops to 10 fps
+                f.write('# route\tx\nframe\tt_ms\ta\tb\tc\td\te\tdelta\n')
+                t = 0.0
+                for minute in range(6):
+                    for _ in range(600 if minute == 4 else 3000):
+                        t += 100.0 if minute == 4 else 20.0
+                        f.write(f'0\t{t}\t0\t0\t0\t0\t0\t1\n')
+            h = perf_tsv_health(htmp)
+            assert h and h[0] < COLLAPSE_RATIO * h[1], h
+        assert perf_tsv_health('/nonexistent') is None
         assert restorable_external_activity(1000, 'outside') == 1000
         assert restorable_external_activity(1000, None) is None
         buildq_tree = [{'pid': 100, 'ppid': 1}, {'pid': 101, 'ppid': 100},
@@ -2774,6 +2938,8 @@ def main():
         sys.exit(cmd_priority(argv))
     elif sub == 'bump':
         sys.exit(cmd_priority(argv, bump=True))
+    elif sub == 'restart':
+        cmd_restart(argv)
     elif sub == 'solo':
         sys.exit(cmd_solo(argv))
     elif sub == 'result':
