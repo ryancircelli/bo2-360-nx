@@ -83,6 +83,34 @@ std::string FormatNumber(double value, bool integral) {
 
 }  // namespace
 
+namespace {
+std::mutex g_window_mutex;
+std::function<bool()> g_window_is_fullscreen;
+std::function<void(bool)> g_window_set_fullscreen;
+}  // namespace
+
+void SetWindowHooks(std::function<bool()> is_fullscreen, std::function<void(bool)> set_fullscreen) {
+  std::lock_guard lock(g_window_mutex);
+  g_window_is_fullscreen = std::move(is_fullscreen);
+  g_window_set_fullscreen = std::move(set_fullscreen);
+}
+
+bool WindowFullscreen(bool fallback) {
+  std::lock_guard lock(g_window_mutex);
+  return g_window_is_fullscreen ? g_window_is_fullscreen() : fallback;
+}
+
+bool SetWindowFullscreen(bool on) {
+  std::function<void(bool)> set;
+  {
+    std::lock_guard lock(g_window_mutex);
+    set = g_window_set_fullscreen;
+  }
+  if (!set) return false;
+  set(on);
+  return true;
+}
+
 void LogChange(std::string_view label, std::string_view value) {
   REXLOG_INFO("[guide] {} = {}", label, value);
 }

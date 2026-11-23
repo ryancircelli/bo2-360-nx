@@ -23,6 +23,12 @@ namespace xam {
 
 bool xeXamIsUIActive();
 
+/// The system Guide opened or closed (the app's own Guide overlay): counts as
+/// a shown system UI for XamIsUIActive and broadcasts XN_SYS_UI (true on open,
+/// false on close) to the game's notification listeners, as the console does,
+/// so games pause themselves where the original would. Repeats are ignored.
+void xeXamSetGuideOpen(system::KernelState* kernel_state, bool open);
+
 class XamModule : public system::KernelModule {
  public:
   XamModule(Runtime* emulator, system::KernelState* kernel_state);

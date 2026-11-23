@@ -363,6 +363,12 @@ void LoadGuideFonts(ImFontAtlas* atlas) {
 
 GuideInputGate::GuideInputGate(std::function<void(int user)> on_open) : on_open_(std::move(on_open)) {}
 
+namespace {
+std::string HolderName(int holder) {
+  return holder == GuideInputGate::kAllPads ? std::string("every") : "player " + std::to_string(holder + 1);
+}
+}  // namespace
+
 void GuideInputGate::SetHolder(int user) {
   const int prev = holder_.exchange(user, std::memory_order_acq_rel);
   if (user >= 0 && prev < 0) {
@@ -370,11 +376,14 @@ void GuideInputGate::SetHolder(int user) {
     held_input_polls_.store(0, std::memory_order_relaxed);
     in::mnk::SetOverlayHold(true);
   }
+  if (user >= 0 && prev >= 0 && user != prev) {
+    REXLOG_INFO("[guide] game input now held from {} pad (was {})", HolderName(user), HolderName(prev));
+  }
   if (user < 0 && prev >= 0) {
-    draining_.store(prev, std::memory_order_release);
+    draining_.store(prev == kAllPads ? 0xFu : (1u << prev), std::memory_order_release);
     in::mnk::SetOverlayHold(false);
-    REXLOG_INFO("[guide] player {} pad held while open: {} game polls, {} with input held back, 0 passed",
-                prev + 1, held_polls_.load(), held_input_polls_.load());
+    REXLOG_INFO("[guide] {} pad held while open: {} game polls, {} with input held back, 0 passed",
+                HolderName(prev), held_polls_.load(), held_input_polls_.load());
   }
 }
 
@@ -390,7 +399,7 @@ void GuideInputGate::Filter(uint32_t user, in::X_INPUT_STATE& state) {
   }
 
   const int holder = holder_.load(std::memory_order_acquire);
-  if (holder == static_cast<int>(user)) {
+  if (holder == static_cast<int>(user) || holder == kAllPads) {
     // The Guide holds this player's pad: the game sees nothing.
     const auto& g = state.gamepad;
     held_polls_.fetch_add(1, std::memory_order_relaxed);
@@ -402,13 +411,16 @@ void GuideInputGate::Filter(uint32_t user, in::X_INPUT_STATE& state) {
     return;
   }
 
-  if (draining_.load(std::memory_order_acquire) == static_cast<int>(user)) {
+  if (draining_.load(std::memory_order_acquire) & (1u << user)) {
     if (buttons != 0 || state.gamepad.left_trigger > 30 || state.gamepad.right_trigger > 30) {
       state.gamepad = {};
       return;
     }
-    draining_.store(-1, std::memory_order_release);
+    draining_.fetch_and(~(1u << user), std::memory_order_acq_rel);
   }
+
+  // The usual case on every poll while the Guide is closed: no Guide button, nothing to strip or open.
+  if (!down) return;
 
   if (in::GuideButtonToGame()) return;
   if (in::GuideButtonHold()) {
@@ -429,7 +441,8 @@ void GuideInputGate::Filter(uint32_t user, in::X_INPUT_STATE& state) {
 }
 
 bool GuideInputGate::BlocksKeys(uint32_t user) const {
-  return holder_.load(std::memory_order_acquire) == static_cast<int>(user);
+  const int holder = holder_.load(std::memory_order_acquire);
+  return holder == static_cast<int>(user) || holder == kAllPads;
 }
 
 in::InputSystem::GuestGate GuideInputGate::MakeGate() {
@@ -447,7 +460,12 @@ GuideDialog::GuideDialog(ImGuiDrawer* imgui_drawer, int owner, Hooks hooks)
   // Open on the game's page when it has one, like the 360 Guide opens on Games.
   blade_ = 0;
   anim_from_ = 0;
-  REXLOG_INFO("[guide] opened for player {}", owner_ + 1);
+  if (owner_ >= 0) {
+    REXLOG_INFO("[guide] opened by player {}; indicator: Player {}, ring quadrant {} lit", owner_ + 1, owner_ + 1,
+                owner_ + 1);
+  } else {
+    REXLOG_INFO("[guide] opened from the keyboard or mouse; indicator: no quadrant lit");
+  }
 }
 
 GuideDialog::~GuideDialog() {
@@ -521,29 +539,70 @@ std::vector<guide::Item> GuideDialog::ItemsFor(const Entry& entry) {
   return out;
 }
 
+bool GuideDialog::OwnerConnected(const std::vector<in::InputSystem::DeviceSnapshot>& snaps) const {
+  for (const auto& snap : snaps) {
+    if (snap.user == owner_ && snap.has_state && snap.info.name != "Keyboard and Mouse" && snap.info.name != "None") {
+      return true;
+    }
+  }
+  return false;
+}
+
 uint32_t GuideDialog::PollPads() {
   uint32_t bits = 0;
   if (!hooks_.snapshot) return bits;
-  for (const auto& snap : hooks_.snapshot()) {
+  const auto snaps = hooks_.snapshot();
+  // The pad that opened the Guide went away: any pad may take it over or close it, as on the console.
+  if (owner_ >= 0) {
+    const bool connected = OwnerConnected(snaps);
+    if (!orphaned_ && !connected) {
+      orphaned_ = true;
+      REXLOG_INFO("[guide] player {}'s controller disconnected; any controller can take over or close the Guide",
+                  owner_ + 1);
+      // Until someone takes over, every pad drives the Guide, so every pad is held from the game.
+      if (hooks_.take_over) hooks_.take_over(GuideInputGate::kAllPads);
+    } else if (orphaned_ && connected) {
+      orphaned_ = false;
+      REXLOG_INFO("[guide] player {}'s controller is back; it drives the Guide again", owner_ + 1);
+      if (hooks_.take_over) hooks_.take_over(owner_);
+    }
+  }
+  int take_over = -1;
+  for (const auto& snap : snaps) {
     // Keyboard-and-mouse pads would double the keyboard keys the Guide reads
     // itself; scripted and test pads (also synthetic) do drive it.
     if (!snap.has_state || snap.info.name == "Keyboard and Mouse" || snap.info.name == "None") continue;
-    if (owner_ >= 0 && snap.user != owner_) continue;
     const auto& gp = snap.state.gamepad;
     const uint16_t b = gp.buttons;
     const int16_t lx = gp.thumb_lx, ly = gp.thumb_ly;
     constexpr int16_t kDead = 16000;
-    if ((b & in::X_INPUT_GAMEPAD_DPAD_UP) || ly > kDead) bits |= kUp;
-    if ((b & in::X_INPUT_GAMEPAD_DPAD_DOWN) || ly < -kDead) bits |= kDown;
-    if ((b & in::X_INPUT_GAMEPAD_DPAD_LEFT) || lx < -kDead) bits |= kLeft;
-    if ((b & in::X_INPUT_GAMEPAD_DPAD_RIGHT) || lx > kDead) bits |= kRight;
-    if (b & in::X_INPUT_GAMEPAD_A) bits |= kA;
-    if (b & in::X_INPUT_GAMEPAD_B) bits |= kB;
-    if (b & in::X_INPUT_GAMEPAD_X) bits |= kX;
-    if (b & in::X_INPUT_GAMEPAD_Y) bits |= kY;
-    if (b & in::X_INPUT_GAMEPAD_LEFT_SHOULDER) bits |= kLB;
-    if (b & in::X_INPUT_GAMEPAD_RIGHT_SHOULDER) bits |= kRB;
-    if (b & in::X_INPUT_GAMEPAD_GUIDE) bits |= kGuide;
+    uint32_t pb = 0;
+    if ((b & in::X_INPUT_GAMEPAD_DPAD_UP) || ly > kDead) pb |= kUp;
+    if ((b & in::X_INPUT_GAMEPAD_DPAD_DOWN) || ly < -kDead) pb |= kDown;
+    if ((b & in::X_INPUT_GAMEPAD_DPAD_LEFT) || lx < -kDead) pb |= kLeft;
+    if ((b & in::X_INPUT_GAMEPAD_DPAD_RIGHT) || lx > kDead) pb |= kRight;
+    if (b & in::X_INPUT_GAMEPAD_A) pb |= kA;
+    if (b & in::X_INPUT_GAMEPAD_B) pb |= kB;
+    if (b & in::X_INPUT_GAMEPAD_X) pb |= kX;
+    if (b & in::X_INPUT_GAMEPAD_Y) pb |= kY;
+    if (b & in::X_INPUT_GAMEPAD_LEFT_SHOULDER) pb |= kLB;
+    if (b & in::X_INPUT_GAMEPAD_RIGHT_SHOULDER) pb |= kRB;
+    if (b & in::X_INPUT_GAMEPAD_GUIDE) pb |= kGuide;
+    if (owner_ < 0 || orphaned_ || snap.user == owner_) bits |= pb;
+    if (snap.user >= 0 && snap.user < 4) {
+      // Take-over: the first new press (other than close) from any player's pad while the owner's is gone.
+      if (orphaned_ && (pb & ~pad_prev_[snap.user] & ~(kGuide | kY)) && take_over < 0) take_over = snap.user;
+      pad_prev_[snap.user] = pb;
+    }
+  }
+  if (take_over >= 0) {
+    REXLOG_INFO("[guide] player {} took over the Guide from player {}; indicator: Player {}", take_over + 1,
+                owner_ + 1, take_over + 1);
+    owner_ = take_over;
+    orphaned_ = false;
+    if (hooks_.take_over) hooks_.take_over(take_over);
+    // Its press only takes over: no action this frame.
+    first_poll_ = true;
   }
   return bits;
 }
@@ -1205,8 +1264,13 @@ void GuideDialog::DrawOpenBlade(ImDrawList* dl, Span span, float y, float h, std
     hits_.push_back({p0.x, p0.y, p1.x, p1.y, kHitClose, 0, "close"});
     const std::string clock = ClockText();
     const ImVec2 ts = TextSize(Body(), fs_body, clock);
-    TextShadow(dl, Body(), fs_body, ImVec2(p0.x - 18.0f * s - ts.x, y + (title_h - ts.y) * 0.5f), kWhite, clock,
-               1.2f * s);
+    const float clock_x = p0.x - 18.0f * s - ts.x;
+    TextShadow(dl, Body(), fs_body, ImVec2(clock_x, y + (title_h - ts.y) * 0.5f), kWhite, clock, 1.2f * s);
+    // Whose Guide it is: the Xbox button's ring with the opener's quadrant lit, and "Player N".
+    const float ring_r = 19.0f * s;
+    const float player_w =
+        owner_ >= 0 ? TextSize(Body(), fs_body, "Player " + std::to_string(owner_ + 1)).x + 10.0f * s : 0.0f;
+    DrawPlayerRing(dl, ImVec2(clock_x - 26.0f * s - player_w - ring_r, y + title_h * 0.5f), ring_r, fs_body);
     (void)c1;
   }
 
@@ -1334,14 +1398,16 @@ void GuideDialog::DrawContent(ImDrawList* dl, float x0, float y0, float x1, floa
     const bool selected = i == sel;
     const ImVec2 p0(lx0, ry0 + 3 * s), p1(lx1, ry1 - 3 * s);
     if (selected) {
-      GlossPill(dl, p0, p1, section, (p1.y - p0.y) * 0.5f);
+      // An unavailable row keeps white text on a greyed highlight.
+      GlossPill(dl, p0, p1, rows[i].enabled ? section : Mix(section, Rgb{112, 117, 124}, 0.80f),
+                (p1.y - p0.y) * 0.5f);
     } else if (i == hover_row_) {
       dl->AddRectFilled(p0, p1, Col(section, 0.15f), (p1.y - p0.y) * 0.5f);
     }
     if (!selected && i + 1 < n && i + 1 != sel) {
       dl->AddLine(ImVec2(lx0 + 18 * s, ry1), ImVec2(lx1 - 18 * s, ry1), IM_COL32(150, 156, 164, 90), 1.0f);
     }
-    const ImU32 tc = !rows[i].enabled ? kTextDisabled : selected ? kWhite : kText;
+    const ImU32 tc = selected ? kWhite : !rows[i].enabled ? kTextDisabled : kText;
     const float ty = (ry0 + ry1) * 0.5f - fs_body * 0.55f;
     const float label_x = lx0 + 20.0f * s;
     if (selected) {
@@ -1496,6 +1562,42 @@ void GuideDialog::DrawContent(ImDrawList* dl, float x0, float y0, float x1, floa
   if (!foot.empty()) {
     const ImVec2 fs = TextSize(Body(), fs_small * 0.9f, foot, wrap);
     Text(dl, Body(), fs_small * 0.9f, ImVec2(dx0, std::max(ty, y1 - fs.y)), kTextDisabled, foot, wrap);
+  }
+}
+
+void GuideDialog::DrawPlayerRing(ImDrawList* dl, ImVec2 c, float r, float text_size) {
+  const float s = s_;
+  // Bezel.
+  dl->AddCircleFilled(ImVec2(c.x, c.y + 1.5f * s), r + 3.0f * s, IM_COL32(0, 0, 0, 90), 40);
+  dl->AddCircleFilled(c, r + 2.0f * s, IM_COL32(38, 42, 48, 255), 40);
+  // The four lights, as the console numbers them: 1 top left, 2 top right, 3 bottom left, 4 bottom right.
+  const float starts[4] = {kPi, kPi * 1.5f, kPi * 0.5f, 0.0f};
+  const float gap = 0.17f;
+  const float th = 4.6f * s;
+  const float rr = r - th * 0.5f;
+  for (int q = 0; q < 4; ++q) {
+    const bool lit = owner_ == q;
+    const float a0 = starts[q] + gap, a1 = starts[q] + kPi * 0.5f - gap;
+    if (lit) {
+      dl->PathArcTo(c, rr, a0, a1, 14);
+      dl->PathStroke(IM_COL32(130, 255, 70, 90), 0, th * 2.4f);
+    }
+    dl->PathArcTo(c, rr, a0, a1, 14);
+    dl->PathStroke(lit ? IM_COL32(170, 255, 100, 255) : IM_COL32(86, 92, 100, 255), 0, th);
+  }
+  // The button: a silver orb with a green X.
+  const float inner = r - th - 1.6f * s;
+  dl->AddCircleFilled(c, inner, IM_COL32(200, 205, 212, 255), 32);
+  dl->AddCircleFilled(ImVec2(c.x, c.y - inner * 0.30f), inner * 0.62f, IM_COL32(255, 255, 255, 120), 32);
+  dl->AddCircle(c, inner, IM_COL32(84, 90, 98, 255), 32, 1.0f);
+  const float k = inner * 0.46f;
+  const ImU32 xg = IM_COL32(72, 150, 28, 255);
+  dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), xg, 2.8f * s);
+  dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), xg, 2.8f * s);
+  if (owner_ >= 0) {
+    const std::string label = "Player " + std::to_string(owner_ + 1);
+    const ImVec2 ts = TextSize(Body(), text_size, label);
+    TextShadow(dl, Body(), text_size, ImVec2(c.x + r + 10.0f * s, c.y - ts.y * 0.5f), kWhite, label, 1.2f * s);
   }
 }
 
