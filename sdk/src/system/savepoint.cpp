@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <execinfo.h>
+#include <dlfcn.h>
 #include <exception>
 #include <csignal>
 #include <cstdio>
@@ -317,6 +318,27 @@ SavepointStats CaptureInProcessSavepoint() {
       ts.ctx_data.assign(reinterpret_cast<uint8_t*>(ts.ctx),
                          reinterpret_cast<uint8_t*>(ts.ctx) + sizeof(PPCContext));
     }
+    if (std::getenv("REX_SAVEPOINT_DIAG")) {
+      // Walk the captured frame-pointer chain: every host frame listed here is revived by the rewind,
+      // together with any host heap object it points to.
+      std::fprintf(stderr, "[savepoint-diag] thread %zu frames:", g_snap.threads.size());
+      uint64_t pcs[24]; int n = 0;
+      pcs[n++] = arm_thread_state64_get_pc(ts.gp);
+      pcs[n++] = arm_thread_state64_get_lr(ts.gp);
+      uint64_t fp = arm_thread_state64_get_fp(ts.gp);
+      while (n < 24 && fp >= ts.stack_lo && fp + 16 <= ts.stack_hi) {
+        uint64_t next = *reinterpret_cast<uint64_t*>(fp), ret = *reinterpret_cast<uint64_t*>(fp + 8);
+        pcs[n++] = ret;
+        if (next <= fp) break;
+        fp = next;
+      }
+      for (int i = 0; i < n; ++i) {
+        Dl_info di{};
+        const char* name = (dladdr(reinterpret_cast<void*>(pcs[i] & 0x0000FFFFFFFFFFFFull), &di) && di.dli_sname) ? di.dli_sname : "?";
+        std::fprintf(stderr, " | %.90s", name);
+      }
+      std::fprintf(stderr, "\n");
+    }
     g_snap.threads.push_back(std::move(ts));
   }
   g_snap.valid = true;
@@ -385,6 +407,19 @@ SavepointStats RewindToInProcessSavepoint() {
         a += len;
       }
       if (failed) { ++recommit_failed; continue; }
+    }
+    if (std::getenv("REX_SAVEPOINT_DIAG")) {
+      uint32_t changed = 0, first = 0;
+      for (uint32_t off = 0; off < r.size; off += 4096) {
+        uint32_t len = std::min<uint32_t>(4096, r.size - off);
+        if (std::memcmp(base + r.base + off, r.data.data() + off, len) != 0) {
+          if (!changed) first = r.base + off;
+          ++changed;
+        }
+      }
+      if (changed)
+        std::fprintf(stderr, "[savepoint-diag] region %u:%08X +%X prot %u: %u pages changed, first %08X\n",
+                     r.space, r.base, r.size, r.protect, changed, first);
     }
     std::memcpy(base + r.base, r.data.data(), r.size);
     for (auto& t : touched) heap->Protect(t.first, t.second, r.protect);
