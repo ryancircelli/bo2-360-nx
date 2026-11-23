@@ -230,7 +230,10 @@ class BaseHeap {
     uint32_t unreserved_page_count = 0;
   };
   RewindState CaptureRewindState();
-  void Rewind(const RewindState& state);
+  // reconcile_host: zero pages first committed after the capture (they held zeroes then) and
+  // put host page access back in line with the rewound table. Off for the physical views, which
+  // alias the parent physical heap's memory and carry GPU write watches.
+  void Rewind(const RewindState& state, bool reconcile_host = false);
 
   void Reset();
 

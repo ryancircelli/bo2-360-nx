@@ -721,8 +721,10 @@ SavepointStats RewindToInProcessSavepoint() {
     st.bytes += r.size;
   }
   if (restore_memory) {
+    const bool reconcile = std::getenv("REX_SAVEPOINT_NO_ZERO") == nullptr;
     for (const auto& [heap, heap_state] : g_snap.heaps) {
-      heap->Rewind(heap_state);
+      // Views (A0/C0/E0) alias the physical heap's memory, which the parent's pass already zeroes.
+      heap->Rewind(heap_state, reconcile && heap->heap_base() < 0xA0000000u);
     }
     g_rewind_phase = 5;
     if (g_snap.graphics) g_snap.graphics->RewindSavepoint();

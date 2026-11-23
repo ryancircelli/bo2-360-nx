@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -1219,13 +1220,40 @@ BaseHeap::RewindState BaseHeap::CaptureRewindState() {
   return state;
 }
 
-void BaseHeap::Rewind(const RewindState& state) {
+void BaseHeap::Rewind(const RewindState& state, bool reconcile_host) {
+  auto global_lock = AcquireHostPageReconcileLock();
   std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
   assert_true(state.pages.size() == page_table_.size());
+  const uint32_t host_page_size = memory_->system_page_size_;
+  uint32_t zeroed = 0, uncommitted = 0;
   for (size_t i = 0; i < page_table_.size(); ++i) {
+    PageEntry then;
+    then.qword = state.pages[i];
+    const bool was = then.state & memory::kMemoryAllocationCommit;
+    const bool is = page_table_[i].state & memory::kMemoryAllocationCommit;
+    if (reconcile_host && is && !was) {
+      // Committed after the capture: commits never zero host memory, so a recommit after the
+      // rewind would hand the game this timeline's data instead of the zeroes it got before.
+      uint8_t* p = TranslateRelative(uint32_t(i) << page_size_shift_);
+      const uintptr_t lo = reinterpret_cast<uintptr_t>(p) & ~uintptr_t(host_page_size - 1);
+      const uintptr_t hi = (reinterpret_cast<uintptr_t>(p) + page_size_ + host_page_size - 1) &
+                           ~uintptr_t(host_page_size - 1);
+      rex::memory::Protect(reinterpret_cast<void*>(lo), hi - lo, rex::memory::PageAccess::kReadWrite,
+                           nullptr);
+      std::memset(p, 0, page_size_);
+      ++zeroed;
+    }
+    if (is && !was) ++uncommitted;
     page_table_[i].qword = state.pages[i];
   }
   unreserved_page_count_ = state.unreserved_page_count;
+  if (reconcile_host && page_size_ < host_page_size) {
+    SyncHostPageAccess(0, uint32_t(page_table_.size()) - 1);
+  }
+  if (uncommitted) {
+    std::fprintf(stderr, "[savepoint-heap] heap %08X: %u pages committed after capture, %u zeroed\n",
+                 heap_base_, uncommitted, zeroed);
+  }
 }
 
 bool BaseHeap::Save(stream::ByteStream* stream) {
