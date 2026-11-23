@@ -542,6 +542,13 @@ void ServiceSavepointRequest() {
       auto st = CaptureInProcessSavepoint();
       REXSYS_INFO("[savepoint-s3] captured at frame {}: {} MB, {} regions, {} threads with host state, park {:.1f} ms, copy {:.1f} ms",
                   frame, st.bytes >> 20, st.regions, st.threads_parked, st.park_ms, st.write_ms);
+      // Diagnostic: rewind straight after the capture, so almost nothing has run since. A failure here
+      // is in the restore mechanism itself, not in state that drifted between capture and rewind.
+      if (std::getenv("REX_SAVEPOINT_REWIND_AT_CAPTURE")) {
+        rewound = true;
+        auto rst = RewindToInProcessSavepoint();
+        std::fprintf(stderr, "[savepoint-s3] rewound at capture frame %d: ok=%d\n", frame, int(rst.ok));
+      }
     } else if (rew >= 0 && captured && !rewound && frame >= rew) {
       rewound = true;
       auto st = RewindToInProcessSavepoint();
