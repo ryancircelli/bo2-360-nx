@@ -11,6 +11,7 @@
 #include "rex/graphics/metal/metal_shader_prebuild.h"
 
 #include <dlfcn.h>
+#include <dispatch/dispatch.h>
 
 #include <cstdio>
 #include <system_error>
@@ -201,11 +202,28 @@ bool ShaderPrebuild::LookupLibrary(bool vertex, uint64_t ucode_hash,
     return false;
   }
   const ShaderEntry& e = it->second;
-  NS::String* path = NS::String::string(
-      (staged_dir_ / e.file).string().c_str(), NS::UTF8StringEncoding);
+  std::FILE* file = std::fopen((staged_dir_ / e.file).string().c_str(), "rb");
+  if (!file) {
+    REXLOG_WARN("[shader-prebuild] {} failed to open", e.file);
+    return false;
+  }
+  std::vector<uint8_t> bytes;
+  uint8_t buffer[65536];
+  size_t bytes_read;
+  while ((bytes_read = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+    bytes.insert(bytes.end(), buffer, buffer + bytes_read);
+  }
+  const bool read_failed = std::ferror(file) != 0;
+  std::fclose(file);
+  if (read_failed || bytes.empty()) {
+    REXLOG_WARN("[shader-prebuild] {} failed to read", e.file);
+    return false;
+  }
   NS::Error* error = nullptr;
-  MTL::Library* library = device_->newLibrary(
-      NS::URL::fileURLWithPath(path), &error);
+  dispatch_data_t data = dispatch_data_create(
+      bytes.data(), bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+  MTL::Library* library = device_->newLibrary(data, &error);
+  dispatch_release(data);
   if (!library) {
     REXLOG_WARN("[shader-prebuild] {} failed to load: {}",
                 e.file, error ? error->localizedDescription()->utf8String()
