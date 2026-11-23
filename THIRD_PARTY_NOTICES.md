@@ -20,6 +20,16 @@ says so in its header. The upstream code in this repository keeps its own licens
 portions and the Switch layer in `sdk/` under BSD-3-Clause (`sdk/LICENSE`), the translator under MIT
 (`tools/xenosrecomp/translator/LICENSE.md`), and Mesa with the changes to it under its per-file licenses (MIT).
 
+## Later upstream ports (hand-ported, BSD-3-Clause)
+
+Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD-3-Clause, `sdk/LICENSE`) and Xenia Canary
+(BSD-3-Clause). Each commit message names the upstream commit.
+
+| Upstream commit | Change | Where |
+|---|---|---|
+| ReXGlue SDK `c901aa7` (Tom Clay) | `vmaxuw` code generator builder | `sdk/src/codegen/` |
+| ReXGlue SDK `d631595` (Tom Clay, Tiago Lima) | log an exception that `RtlRaiseException` does not handle | `sdk/src/kernel/xboxkrnl/xboxkrnl_debug.cpp` |
+
 ## Libraries
 
 Libraries used by the SDK, the NRO and the code generator, fetched from the submodules of ReXGlue SDK v0.10.0
