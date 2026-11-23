@@ -223,6 +223,8 @@ uint64_t ThreadCpuUs() {
 // The cache whose archives the window-close flush saves (one per process).
 std::atomic<MetalPipelineCache*> g_archive_flush_cache{nullptr};
 
+constexpr uint64_t kMaxArchiveSegmentBytes = 64ULL * 1024 * 1024;
+
 // ".../X.seg000007.binarchive" or ".seg000007.full.binarchive" ->
 // ".../X.seg000008.binarchive" (never ".full": a fresh segment after a failed
 // compacting save must not supersede the older segments).
@@ -2092,6 +2094,15 @@ bool MetalPipelineCache::InitializePipelineBinaryArchive(
         middle.find_first_not_of("0123456789") != std::string::npos) {
       continue;
     }
+    std::error_code size_ec;
+    const uint64_t size = std::filesystem::file_size(entry.path(), size_ec);
+    if (!size_ec && size > kMaxArchiveSegmentBytes) {
+      REXLOG_WARN("Metal binary archive: removing oversized {} ({} bytes)",
+                  entry.path().string(), size);
+      std::error_code remove_ec;
+      std::filesystem::remove(entry.path(), remove_ec);
+      continue;
+    }
     segments.push_back({uint32_t(std::stoul(middle)), full, entry.path()});
   }
   std::sort(segments.begin(), segments.end(),
@@ -2112,6 +2123,8 @@ bool MetalPipelineCache::InitializePipelineBinaryArchive(
 
   uint64_t loaded_bytes = 0;
   for (size_t i = first; i < segments.size(); ++i) {
+    std::error_code size_ec;
+    const uint64_t size = std::filesystem::file_size(segments[i].path, size_ec);
     MTL::BinaryArchiveDescriptor* desc =
         MTL::BinaryArchiveDescriptor::alloc()->init();
     NS::String* path_string = NS::String::string(
@@ -2131,8 +2144,6 @@ bool MetalPipelineCache::InitializePipelineBinaryArchive(
       std::filesystem::remove(segments[i].path, remove_ec);
       continue;
     }
-    std::error_code size_ec;
-    uint64_t size = std::filesystem::file_size(segments[i].path, size_ec);
     loaded_bytes += size_ec ? 0 : size;
     set.segments.push_back(segment);
   }
@@ -2206,15 +2217,28 @@ void MetalPipelineCache::SerializeArchiveSet(size_t set_index) {
     ok = archive->serializeToURL(url, &error);
   }
   std::error_code ec;
+  bool oversized = false;
+  if (ok) {
+    std::error_code size_ec;
+    const uint64_t size = std::filesystem::file_size(temporary, size_ec);
+    oversized = !size_ec && size > kMaxArchiveSegmentBytes;
+    if (oversized) {
+      ok = false;
+      REXLOG_WARN("Metal binary archive: not saving oversized {} ({} bytes)",
+                  path.string(), size);
+    }
+  }
   if (ok) {
     std::filesystem::rename(temporary, path, ec);
     ok = !ec;
   }
   if (!ok) {
-    REXLOG_WARN("Metal binary archive save to {} failed: {}", path.string(),
-                ec ? ec.message()
-                   : (error ? error->localizedDescription()->utf8String()
-                            : "unknown error"));
+    if (!oversized) {
+      REXLOG_WARN("Metal binary archive save to {} failed: {}", path.string(),
+                  ec ? ec.message()
+                     : (error ? error->localizedDescription()->utf8String()
+                              : "unknown error"));
+    }
     std::error_code remove_ec;
     std::filesystem::remove(temporary, remove_ec);
     if (ArchiveSafeSaveEnabled() && device_) {
