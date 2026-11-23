@@ -9,6 +9,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdio>
+#include <rex/system/xfile.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -101,6 +103,9 @@ struct ObjectTable::RewindState {
   std::vector<ObjectTableEntry> entries;
   std::unordered_map<string::string_key_case, X_HANDLE> names;
   std::vector<std::pair<object_ref<XObject>, XObject::RewindState>> objects;
+  // Host-side file positions: reads after the capture advance them, and NtReadFile without an
+  // explicit offset reads from there.
+  std::vector<std::pair<XFile*, uint64_t>> file_positions;
 };
 
 std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
@@ -115,6 +120,10 @@ std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
     if (entry.object && it == state->objects.end()) {
       XObject::RewindState object_state;
       entry.object->CaptureRewindState(&object_state);
+      if (entry.object->type() == XObject::Type::File) {
+        auto* file = static_cast<XFile*>(entry.object);
+        state->file_positions.push_back({file, file->position()});
+      }
       state->objects.push_back({retain_object(entry.object), std::move(object_state)});
     }
   }
@@ -140,6 +149,15 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
   for (const auto& [object, object_state] : state->objects) {
     object->Rewind(object_state);
   }
+  uint32_t moved = 0;
+  for (const auto& [file, position] : state->file_positions) {
+    if (file->position() != position) {
+      ++moved;
+      file->set_position(position);
+    }
+  }
+  std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound\n",
+               state->file_positions.size(), moved);
 }
 
 void ObjectTable::Reset() {
