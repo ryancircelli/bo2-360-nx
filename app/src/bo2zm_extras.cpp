@@ -375,13 +375,15 @@ void SetVsync(int on) {
   ApplyVsync();
 }
 
-// Options > Graphics DISPLAY (Mac/PC only): full screen or a window. The fullscreen cvar's change callback
-// (sdk/src/ui/rex_app.cpp) resizes the window at once.
+// Options > Graphics DISPLAY (Mac/PC only): full screen or a window. Shows the window's real state (a window that
+// starts minimized or tiled is windowed while the fullscreen setting still says full screen); setting it stores the
+// choice and changes the window at once, even when the setting already held that value.
 int WindowMode() {
-  return REXCVAR_GET(fullscreen) ? 0 : 1;
+  return rex::ui::guide::WindowFullscreen(REXCVAR_GET(fullscreen)) ? 0 : 1;
 }
 void SetWindowMode(int window) {
   rex::cvar::SetFlagByName("fullscreen", window ? "false" : "true");
+  rex::ui::guide::SetWindowFullscreen(!window);
 }
 
 // Options KEYBOARD AND MOUSE (Mac/PC only): the SDK's keyboard/mouse driver (sdk/src/input/mnk) acts as player 1's
