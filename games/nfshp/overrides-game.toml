@@ -1,0 +1,10 @@
+# overrides for the game module (none needed so far)
+[functions]
+
+# tail-branch targets (tailfix.py)
+"0x891BAF38" = { }   # lbz r11, 5(r3)   <- 0x89125950
+"0x894BA628" = { }   # lbz r10, 0x1c(r3)   <- 0x894DEFC0
+"0x895D56D0" = { }   # lbz r10, 0(r5)   <- 0x895D5B34
+"0x8986BD00" = { }   # b 0x8986af08   <- 0x8986BDD4
+"0x8986D710" = { }   # b 0x8986af08   <- 0x8986D894
+"0x8986EB40" = { }   # b 0x8986af08   <- 0x8986EC14

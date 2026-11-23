@@ -44,6 +44,7 @@ LABEL = re.compile(r"\bloc_([0-9A-F]{8})\b")
 RETADDR = re.compile(r"ctx\.lr = 0x([0-9A-Fa-f]{8})")
 
 data = b""
+LABELS = set()   # every loc_ label the generated code mentions (addresses that are mid-function on purpose)
 PREFIX = "bo2zm"
 md = capstone.Cs(capstone.CS_ARCH_PPC, capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN)
 
@@ -105,6 +106,7 @@ def measure():
     for addr, idx in part.items():
         by_file[idx].append(int(addr, 16))
     last_seen, mismatches = {}, 0
+    LABELS.clear()
     for idx, addrs in by_file.items():
         addrs.sort()
         names, highs = [], []
@@ -117,6 +119,7 @@ def measure():
                 elif highs:
                     for h in LABEL.findall(line):
                         highs[-1] = max(highs[-1], int(h, 16))
+                        LABELS.add(int(h, 16))
                     for h in RETADDR.findall(line):
                         highs[-1] = max(highs[-1], int(h, 16) - 4)
         if len(names) != len(addrs):
@@ -143,6 +146,45 @@ def measure():
     return ends, mismatches
 
 
+def referenced_entries(starts, ends):
+    """Code addresses the program takes as function pointers that fall inside a generated function body.
+
+    The body walk in measure() counts a call's return address as part of the function, so a function that follows a
+    call to a never-returning function (exit, ExTerminateThread) is swallowed: nothing else marks where it starts. A
+    pointer to it (a lis+addi/ori pair, or a data word) shows it is an entry. Only addresses that no label of the
+    generated code uses and whose previous word ends a function or is a call are taken."""
+    import bisect
+    text_lo, text_hi = TEXT
+    found = {}
+    def consider(t, how):
+        if t % 4 or not (text_lo < t < text_hi) or t in LABELS or t in ends:
+            return
+        i = bisect.bisect_right(starts, t) - 1
+        if i < 0 or not (starts[i] < t < ends[starts[i]]):
+            return
+        prev = word(t - 4)
+        if not (is_exit(prev) or ((prev >> 26) == 18 and (prev & 1) == 1)) or decode(t) is None or IMAGE_RANGE[0] <= word(t) < IMAGE_RANGE[1]:
+            return   # (a word that is itself an image address is table data, not code)
+        found[t] = how
+    n = len(data) // 4
+    for k in range(n):
+        w = struct.unpack_from(">I", data, 4 * k)[0]
+        ea = BASE + 4 * k
+        # (data words are not used: SEH/EH scope tables point at handler labels in the middle of functions)
+        if (w >> 26) == 15 and (w & 0xFFFF) >= 0x8000 and text_lo <= ea < text_hi:
+            hi = (w & 0xFFFF) << 16
+            for j in range(1, 7):
+                if 4 * (k + j) + 4 > len(data):
+                    break
+                v = struct.unpack_from(">I", data, 4 * (k + j))[0]
+                if (v >> 26) == 14 and ((v >> 16) & 31) == ((w >> 21) & 31):   # addi rX, rD, lo on the lis's register
+                    lo = v & 0xFFFF
+                    consider((hi + (lo - 0x10000 if lo & 0x8000 else lo)) & 0xFFFFFFFF, "lis+addi")
+                elif (v >> 26) == 24 and ((v >> 21) & 31) == ((w >> 21) & 31):   # ori rX, rD, lo
+                    consider(hi | (v & 0xFFFF), "lis+ori")
+    return found
+
+
 def native_functions(path):
     """The addresses in the [rexcrt] section of an overrides.toml: functions the codegen drops for native code, so their
     bytes are a gap on purpose."""
@@ -159,19 +201,22 @@ def native_functions(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    global GEN, IMAGE, OUT_TOML, OUT_REPORT, TEXT, IMAGE_RANGE, PREFIX, data
+    global BASE, GEN, IMAGE, OUT_TOML, OUT_REPORT, TEXT, IMAGE_RANGE, PREFIX, data
     ap.add_argument("--min", type=int, default=8)
     ap.add_argument("--gen", default=GEN, help="the generated code's folder")
     ap.add_argument("--prefix", default=PREFIX, help="the project name in the generated file names")
     ap.add_argument("--image", default=IMAGE, help="the decrypted image")
     ap.add_argument("--text", help=".text as START:END in hex (default: default_mp's)")
     ap.add_argument("--image-size", type=lambda v: int(v, 0), help="the image's size in bytes")
+    ap.add_argument("--base", type=lambda v: int(v, 16), help="the image's load address in hex (default 82000000; a DLL module differs)")
     ap.add_argument("--toml", default=OUT_TOML)
     ap.add_argument("--report", default=OUT_REPORT)
     ap.add_argument("--overrides", default=os.path.join(ROOT, "games", "bo2", "overrides.toml"),
                     help="the project's overrides.toml: its [rexcrt] functions are dropped by the codegen on purpose")
     a = ap.parse_args()
     GEN, IMAGE, OUT_TOML, OUT_REPORT, PREFIX = a.gen, a.image, a.toml, a.report, a.prefix
+    if a.base:
+        BASE = a.base
     if a.text:
         TEXT = tuple(int(v, 16) for v in a.text.split(":"))
     if a.image_size:
@@ -183,6 +228,14 @@ def main():
     starts = sorted(ends)
     toml, report = [], []
     counts = defaultdict(int)
+
+    for t, how in sorted(referenced_entries(starts, ends).items()):
+        if t in native:
+            continue
+        counts["referenced"] += 1
+        first = decode(t)
+        toml.append(f'"0x{t:08X}" = {{ }}   # referenced as a function pointer ({how}), inside the body walk of an earlier function: {first.mnemonic} {first.op_str}'.rstrip())
+        report.append(f"referenced  0x{t:08X}  {how}")
 
     for i, s in enumerate(starts[:-1]):
         end, nxt = ends[s], starts[i + 1]
