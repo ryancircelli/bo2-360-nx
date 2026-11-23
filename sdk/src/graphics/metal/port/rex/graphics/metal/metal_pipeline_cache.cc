@@ -1,3 +1,4 @@
+#include <fstream>
 #include "rex/graphics/metal/metal_hitch.h"
 #include "rex/graphics/metal/metal_converter_census.h"
 #include "rex/graphics/metal/metal_frame_log.h"
@@ -1788,6 +1789,11 @@ bool MetalPipelineCache::InitializeShaderStorageInternal(
                 fmt::format("{}{:06}.binarchive", seg_prefix, 1);
             std::filesystem::copy_file(gpubin, dst, std::filesystem::copy_options::none,
                                        seg_ec);
+            if (!seg_ec) {
+              // Shipped, build-time-verified archive: exempt from the
+              // oversized-segment cap (the cap targets runtime-grown segments).
+              std::ofstream(dst.string() + ".prebuilt").put('\n');
+            }
             REXLOG_INFO(
                 "[shader-prebuild] {} installed as archive segment {} ({})",
                 gpubin.filename().string(), dst.filename().string(),
@@ -2096,7 +2102,10 @@ bool MetalPipelineCache::InitializePipelineBinaryArchive(
     }
     std::error_code size_ec;
     const uint64_t size = std::filesystem::file_size(entry.path(), size_ec);
-    if (!size_ec && size > kMaxArchiveSegmentBytes) {
+    std::error_code prebuilt_ec;
+    const bool prebuilt = std::filesystem::exists(
+        entry.path().string() + ".prebuilt", prebuilt_ec);
+    if (!size_ec && size > kMaxArchiveSegmentBytes && !prebuilt) {
       REXLOG_WARN("Metal binary archive: removing oversized {} ({} bytes)",
                   entry.path().string(), size);
       std::error_code remove_ec;
