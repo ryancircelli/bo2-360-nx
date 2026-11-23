@@ -43,7 +43,14 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
     .allowed({"sdl", "xinput"});
 #endif
 
-REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
+REXCVAR_DEFINE_STRING(guide_button, "on", "Input",
+                      "The controller's Guide (Xbox) button: on = opens the Guide overlay (the game never sees "
+                      "it), hold = a long press opens the Guide (a short press reaches the game), off = passed "
+                      "to the game. true/false are the old pass-through switch (true = off, false = on).")
+    .allowed({"on", "off", "hold", "true", "false"});
+REXCVAR_DEFINE_INT32(guide_hold_ms, 600, "Input",
+                     "guide_button = hold: how long the Guide button must be held to open the Guide, in ms")
+    .range(150, 3000);
 REXCVAR_DEFINE_BOOL(input_vibration, false, "Input",
                     "Controller vibration (off by default: the controllers only get "
                     "zero vibration). true = the game's vibration");
@@ -439,6 +446,16 @@ void InputSystem::LogStateIfDue() {
     REXLOG_INFO("Input state: {} {} {}", player, DescribeDevice(snap.info),
                 snap.has_state ? FormatGamepad(snap.state.gamepad) : std::string("no state"));
   }
+  if (gate_.filter_state) {
+    // With a gate installed, also show what the guest was handed.
+    std::lock_guard lock(mutex_);
+    for (size_t user = 0; user < guest_seen_.size(); ++user) {
+      if (!guest_seen_valid_[user]) continue;
+      const bool keys_blocked = gate_.block_keys && gate_.block_keys(static_cast<uint32_t>(user));
+      REXLOG_INFO("Input state: guest P{} {}{}", user + 1, FormatGamepad(guest_seen_[user]),
+                  keys_blocked ? " (held by overlay)" : "");
+    }
+  }
 }
 
 InputDriver* InputSystem::DriverForDevice(DeviceId id) {
@@ -524,10 +541,26 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   if (!any) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
+  if (!gate_.filter_state && !GuideButtonToGame()) {
+    // No Guide overlay to give it to: the game still does not see it.
+    merged.gamepad.buttons = static_cast<uint16_t>(merged.gamepad.buttons & ~X_INPUT_GAMEPAD_GUIDE);
+  }
+  if (gate_.filter_state) {
+    gate_.filter_state(user_index, merged);
+  }
+  if (user_index < guest_seen_.size()) {
+    guest_seen_[user_index] = merged.gamepad;
+    guest_seen_valid_[user_index] = true;
+  }
   if (out_state) {
     *out_state = merged;
   }
   return X_ERROR_SUCCESS;
+}
+
+void InputSystem::SetGuestGate(GuestGate gate) {
+  std::lock_guard lock(mutex_);
+  gate_ = std::move(gate);
 }
 
 X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
@@ -590,6 +623,7 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
   std::vector<DeviceId> ids;
   assignment_->DevicesForUser(user_index, ids);
 
+  const bool blocked = gate_.block_keys && gate_.block_keys(user_index);
   bool any_connected = false;
   for (DeviceId id : ids) {
     auto* driver = DriverForDevice(id);
@@ -597,6 +631,17 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
       continue;
     }
     X_RESULT result = driver->GetDeviceKeystroke(id, flags, out_keystroke);
+    if (blocked) {
+      // Drain and drop: the overlay owns this player's pad for now.
+      X_INPUT_KEYSTROKE dropped = {};
+      while (result == X_ERROR_SUCCESS) {
+        result = driver->GetDeviceKeystroke(id, flags, &dropped);
+      }
+      if (result != X_ERROR_DEVICE_NOT_CONNECTED) {
+        any_connected = true;
+      }
+      continue;
+    }
     if (result == X_ERROR_SUCCESS) {
       out_keystroke->user_index = static_cast<uint8_t>(user_index);
       return result;

@@ -686,9 +686,8 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
   auto xbutton = xbutton_lookup.at(event.gbutton.button);
   // Pressed or released?
   if (event.gbutton.down) {
-    if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
-      return;
-    }
+    // The Guide button is always read: the input system gives it to the Guide
+    // overlay or the game (guide_button).
     xbuttons |= xbutton;
   } else {
     xbuttons &= ~xbutton;
@@ -766,7 +765,7 @@ void SDLInputDriver::UpdateXCapabilities(ControllerState& state) {
   c.type = 0x01;      // XINPUT_DEVTYPE_GAMEPAD
   c.sub_type = 0x01;  // XINPUT_DEVSUBTYPE_GAMEPAD
   c.flags = cap_flags;
-  c.gamepad.buttons = 0xF3FF | (REXCVAR_GET(guide_button) ? X_INPUT_GAMEPAD_GUIDE : 0x0);
+  c.gamepad.buttons = 0xF3FF | (GuideButtonToGame() ? X_INPUT_GAMEPAD_GUIDE : 0x0);
   c.gamepad.left_trigger = 0xFF;
   c.gamepad.right_trigger = 0xFF;
   c.gamepad.thumb_lx = static_cast<int16_t>(0xFFFFu);

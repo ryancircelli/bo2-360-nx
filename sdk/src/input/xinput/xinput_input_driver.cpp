@@ -204,8 +204,10 @@ X_RESULT XinputInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state
 
   // If the guide button is enabled use XInputGetStateEx, otherwise use the
   // default XInputGetState.
-  auto xigs = REXCVAR_GET(guide_button) ? (decltype(&XInputGetState))XInputGetStateEx_
-                                        : (decltype(&XInputGetState))XInputGetState_;
+  // Always XInputGetStateEx: the input system gives the Guide button to the
+  // Guide overlay or the game (guide_button).
+  auto xigs = XInputGetStateEx_ ? (decltype(&XInputGetState))XInputGetStateEx_
+                                : (decltype(&XInputGetState))XInputGetState_;
 
   DWORD result = xigs(user_index, &native_state.state);
   if (result) {
