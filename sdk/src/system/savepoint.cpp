@@ -287,6 +287,14 @@ SavepointStats CaptureInProcessSavepoint() {
       CollectRegions(heap, 0, mem->virtual_membase(), g_snap.regions);
     }
   }
+  // The 0xA0000000/0xC0000000/0xE0000000 views keep their own page tables on top of the physical
+  // heap. Without rewinding them, a physical allocation made or freed after the capture leaves the
+  // view and the physical heap disagreeing, and later physical allocations fail (guest gets 0).
+  if (!std::getenv("REX_SAVEPOINT_SKIP_VIEW_HEAPS")) {
+    for (uint32_t b : {0xA0000000u, 0xC0000000u, 0xE0000000u}) {
+      if (auto* heap = mem->LookupHeap(b)) g_snap.heaps.push_back({heap, heap->CaptureRewindState()});
+    }
+  }
   auto* physical = mem->GetPhysicalHeap();
   g_snap.heaps.push_back({physical, physical->CaptureRewindState()});
   CollectRegions(physical, 1, mem->physical_membase(), g_snap.regions);
