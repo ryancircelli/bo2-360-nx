@@ -239,6 +239,9 @@ bool DetachFromKernelWait(mach_port_t port, const arm_thread_state64_t& base) {
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
   std::vector<object_ref<XThread>> parked;
   for (auto& t : ks->object_table()->GetObjectsByType<XThread>()) {
+    // A thread with several handles is listed once per handle; suspend it only once.
+    if (std::any_of(parked.begin(), parked.end(), [&](const auto& p) { return p.get() == t.get(); }))
+      continue;
     if (t->is_running() && !XThread::IsInThread(t.get()) &&
         thread_suspend(MachPort(t.get())) == KERN_SUCCESS) {
       parked.push_back(t);
@@ -391,10 +394,12 @@ SavepointStats RewindToInProcessSavepoint() {
       ++not_parked;
       continue;
     }
-    if (two_phase && !DetachFromKernelWait(ts.port, ts.gp)) {
-      ++detach_failed;
-      std::fprintf(stderr, "[savepoint-s3] thread port %u never reached the spin stub\n", ts.port);
-    }
+    auto td = Clock::now();
+    bool detached = !two_phase || DetachFromKernelWait(ts.port, ts.gp);
+    if (!detached) ++detach_failed;
+    std::fprintf(stderr, "[savepoint-s3] thread %u port %u syscall %d x16 %lld detach %s %.2f ms\n",
+                 restored + not_parked, ts.port, int(ts.in_syscall), (long long)ts.gp.__x[16],
+                 detached ? "ok" : "FAILED", Ms(td, Clock::now()));
     std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
     if (ts.ctx) std::memcpy(ts.ctx, ts.ctx_data.data(), ts.ctx_data.size());
     arm_thread_state64_t gp = ts.gp;
