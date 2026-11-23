@@ -45,6 +45,7 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_dvars.cpp
     ${BO2ZM_ROOT}/src/bo2zm_extras.cpp
     # Internet play from the home menu: the menu side of the SDK's online_link (UPnP, STUN, join codes).
+    ${BO2ZM_ROOT}/src/bo2zm_online.cpp
     ${BO2ZM_ROOT}/../../core/bo2zm_pc_profiler.cpp
     ${BO2ZM_ROOT}/src/bo2zm_controllers.cpp
     ${BO2ZM_ROOT}/src/bo2zm_pad.cpp

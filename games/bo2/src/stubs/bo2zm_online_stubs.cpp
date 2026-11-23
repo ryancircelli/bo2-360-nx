@@ -8,13 +8,6 @@
 
 #include "../bo2zm_dlc.h"
 #include "../bo2zm_name.h"
-#include "../bo2zm_online.h"
-
-namespace bo2zm::online {
-bool RunCommand(std::string_view, std::string_view) { return false; }
-void EveryFrame(PPCContext&, uint8_t*) {}
-void Stop() {}
-}  // namespace bo2zm::online
 
 namespace bo2zm::name {
 void ApplySaved() {}

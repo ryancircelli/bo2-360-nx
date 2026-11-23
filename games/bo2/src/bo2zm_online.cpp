@@ -10,18 +10,18 @@
 #include <string_view>
 #include <vector>
 
-#include <rex/kernel/xam/text_input.h>
 #include <rex/logging.h>
-#include <rex/system/join_code.h>
-#include <rex/system/online_link.h>
+#include <rex/xam/join_code.h>
+#include <rex/xam/online_link.h>
+#include <rex/xam/text_input.h>
 
 #include "bo2zm_autoexec.h"
 
 namespace bo2zm::online {
 namespace {
 
-namespace net = rex::system::online;
-namespace code = rex::system::join_code;
+namespace net = rex::xam::online;
+namespace code = rex::xam::join_code;
 
 // bo2zm_online_ui (menus.lua reads the same numbers).
 enum MenuState : int { kNothing = 0, kPreparing = 1, kHostReady = 2, kJoinReady = 3, kFailed = 4 };
@@ -225,7 +225,7 @@ bool RunCommand(std::string_view name, std::string_view argument) {
     SetCodeError({});
     net::Start(net::Role::kHost, 0);
   } else if (argument == "join") {
-    const bool opened = rex::kernel::xam::ShowTextInput(
+    const bool opened = rex::xam::ShowTextInput(
         "Join code (XXXX-XXXX)", "", 12, [](std::optional<std::string> text) {
           if (!text) {
             REXLOG_INFO("[online] join code entry cancelled");
