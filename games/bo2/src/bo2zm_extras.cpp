@@ -57,6 +57,9 @@
 #include <string>
 #include <thread>
 
+#include <mutex>
+#include <vector>
+#include <rex/ui/guide.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
@@ -734,6 +737,29 @@ void AppendUi(PPCContext& ctx, uint8_t* base, std::string& pending, std::string 
   pending += command;
 }
 
+// Changes from the Guide (UI thread), run by EveryFrame on the game's thread.
+std::mutex g_guide_mutex;
+std::vector<std::pair<std::string, std::string>> g_guide_commands;
+
+void QueueGuideCommand(std::string name, std::string argument) {
+  std::lock_guard lock(g_guide_mutex);
+  g_guide_commands.emplace_back(std::move(name), std::move(argument));
+  g_changed.store(true, std::memory_order_relaxed);
+}
+
+void RunGuideCommands() {
+  std::vector<std::pair<std::string, std::string>> commands;
+  {
+    std::lock_guard lock(g_guide_mutex);
+    if (g_guide_commands.empty()) [[likely]] return;
+    commands.swap(g_guide_commands);
+  }
+  for (const auto& [name, argument] : commands) {
+    REXLOG_INFO("[extras] guide: {} {}", name, argument);
+    bo2zm::extras::RunCommand(name, argument);
+  }
+}
+
 }  // namespace
 
 // VSYNC's pacing (see the top of the file): the frame starts on the refresh 60 / cap refreshes after the last one's
@@ -892,6 +918,7 @@ bool bo2zm::extras::RunPlayerCommand(int local, std::string_view name, std::stri
 
 void bo2zm::extras::EveryFrame(PPCContext& ctx, uint8_t* base) {
   bo2zm::scripts::EveryFrame(ctx, base);
+  RunGuideCommands();
   static int shown[kCount];
   static bool started = false;
   static int frames = 0;
@@ -1018,4 +1045,148 @@ void bo2zm::extras::EveryFrame(PPCContext& ctx, uint8_t* base) {
   if (!commands.empty()) {
     bo2zm::autoexec::ExecuteCommands(ctx, base, commands);
   }
+}
+
+// ---- Guide pages -------------------------------------------------------------
+
+namespace {
+
+struct GuideLabel {
+  const char* name;
+  const char* label;
+  const char* group;
+  const char* description;
+};
+
+// Every kOptions row the Guide shows, in menu order. Rows not listed here (the debug ones) go to "Debug".
+constexpr GuideLabel kGuideLabels[] = {
+    {"fps", "FPS Counter", "Display", "Show the frame rate in the corner of the screen."},
+    {"fps_cap", "FPS Cap", "Display", "Limit matches to 60 or 30 frames per second."},
+    {"vsync", "Vertical Sync", "Display", "Wait for the display before showing each frame."},
+    {"window_mode", "Window Mode", "Display", "Full screen or a window."},
+    {"loading_video", "Loading Video", "Display", "Play the video behind the loading screens."},
+    {"split_quality", "Split-Screen Quality", "Split-Screen", "Graphics preset used in split-screen."},
+    {"split_model", "Split-Screen Model Scale", "Split-Screen", "Model detail scale in split-screen."},
+    {"ipak_rate", "Texture Streaming Rate", "Performance", "How fast textures stream in."},
+    {"texture_memory", "Texture Memory", "Performance", "Memory given to streamed textures."},
+    {"cpu_cores", "CPU Cores", "Performance", "Cores the game may use (3 or 4). Applies on the next launch."},
+    {"cpu_cores_in_use", "CPU Cores In Use", "Performance", "Cores the game uses now."},
+    {"keyboard", "Keyboard and Mouse", "Controls", "Play with the keyboard and mouse."},
+    {"default_mode", "Start In", "Game", "The mode the game starts in."},
+    {"platform", "Platform", "Game", "The platform this build runs on."},
+    {"show_preset", "Show Preset", "Game", "Show the active split-screen preset."},
+    {"cheats", "Cheats", "Cheats", "Master switch: the cheats below only work while this is on (Zombies)."},
+    {"god", "God Mode", "Cheats", "You take no damage."},
+    {"zm_ignore", "Zombies Ignore You", "Cheats", "Zombies do not target you."},
+    {"ammo", "Infinite Ammo", "Cheats", "Never run out of ammunition."},
+    {"noclip", "Noclip", "Cheats", "Fly through walls."},
+    {"ufo", "UFO", "Cheats", "Fly freely."},
+    {"collision", "Fly Collision", "Cheats", "Collide with the world while flying."},
+    {"combo", "Fly Combo", "Cheats", "Toggle flying with a button combination."},
+    {"combo_mode", "Fly Combo Mode", "Cheats", "What the fly combo turns on."},
+    {"explosive", "Explosive Bullets", "Cheats", "Bullets explode."},
+    {"norecoil", "No Recoil", "Cheats", "Weapons do not kick."},
+    {"zm_nospawn", "Stop Zombie Spawns", "Cheats", "No new zombies spawn."},
+    {"keep_perks", "Keep Perks", "Cheats", "Keep perks when downed."},
+    {"round", "Round", "Cheats", "The round GO TO ROUND jumps to."},
+    {"jump", "Jump Height", "Cheats", "How high you jump."},
+    {"speed", "Move Speed", "Cheats", "How fast you move."},
+    {"feather", "Feather Falling", "Cheats", "No fall damage."},
+    {"fov", "Field of View", "Cheats", "The camera's field of view."},
+    {"hud", "HUD", "Cheats", "Show or hide the HUD."},
+    {"third", "Third Person", "Cheats", "Play in third person."},
+    {"third_crosshair", "Third-Person Crosshair", "Cheats", "When the third-person crosshair shows."},
+    {"tpp_type", "Crosshair Type", "Cheats", "The third-person crosshair's shape."},
+    {"tpp_color", "Crosshair Color", "Cheats", "The third-person crosshair's color."},
+    {"give_pap", "Give Pack-a-Punch", "Cheats", "Weapons you get come Pack-a-Punched."},
+    {"cross_perks", "Cross-Map Perks", "Cheats", "Perks from every map."},
+};
+
+const GuideLabel* FindGuideLabel(std::string_view name) {
+  for (const auto& l : kGuideLabels) {
+    if (name == l.name) return &l;
+  }
+  return nullptr;
+}
+
+std::string Pretty(std::string_view value) {
+  std::string out(value);
+  for (auto& c : out) {
+    if (c == '_') c = ' ';
+  }
+  if (!out.empty()) out[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(out[0])));
+  return out;
+}
+
+rex::ui::guide::Item OptionItem(size_t index, const char* label, const char* description) {
+  namespace guide = rex::ui::guide;
+  const Option& option = kOptions[index];
+  const std::string name = option.name;
+  std::vector<std::string> shown;
+  for (int v = 0; v < option.count; ++v) shown.push_back(Pretty(option.values[v]));
+  auto get = [index] {
+    const int local = bo2zm::cheats::PrimaryLocalPlayer();
+    return ValidLocal(local) && IsPlayerOption(kOptions[index].name) ? PlayerValue(local, index)
+                                                                      : kOptions[index].get();
+  };
+  if (option.count == 2 && option.values == kOffOn) {
+    auto item = guide::Toggle(
+        label, [get] { return get() != 0; },
+        [name](bool on) { QueueGuideCommand("bo2zm_" + name, on ? "on" : "off"); }, description);
+    return item;
+  }
+  return guide::Choice(
+      label, std::move(shown), get,
+      [name, index](int v) { QueueGuideCommand("bo2zm_" + name, kOptions[index].values[v]); }, description);
+}
+
+bool CheatsUsable() {
+  const int local = bo2zm::cheats::PrimaryLocalPlayer();
+  return bo2zm::mode::IsZombies() && ValidLocal(local) && PlayerMaster(local) != 0;
+}
+
+}  // namespace
+
+void bo2zm::extras::RegisterGuidePages() {
+  namespace guide = rex::ui::guide;
+  guide::Page page;
+  page.id = "bo2zm.extras";
+  page.title = "Black Ops II";
+  page.blade = std::string(guide::kBladeGame);
+  page.description = "The port's Extras: display, split-screen, performance and cheats.";
+  std::vector<guide::Item> debug;
+  // Listed rows first, in kGuideLabels order, then the rest under Debug.
+  for (const auto& l : kGuideLabels) {
+    for (size_t i = 0; i < kCount; ++i) {
+      if (std::string_view(kOptions[i].name) != l.name) continue;
+      auto item = OptionItem(i, l.label, l.description).InGroup(l.group);
+      const std::string_view name = l.name;
+      if (name == "cpu_cores_in_use" || name == "platform") {
+        item.enabled = [] { return false; };
+      } else if (IsCheat(name)) {
+        item.enabled = CheatsUsable;
+      } else if (name == "cheats" || IsPlayerOption(name)) {
+        item.enabled = [] { return bo2zm::mode::IsZombies(); };
+      }
+      page.items.push_back(std::move(item));
+    }
+  }
+  for (size_t i = 0; i < kCount; ++i) {
+    if (FindGuideLabel(kOptions[i].name)) continue;
+    debug.push_back(OptionItem(i, kOptions[i].name, "Debug option.").InGroup("Debug"));
+  }
+  // Zombies actions, as in the menu's CHEATS page.
+  auto action = [](const char* label, const char* command, const char* description) {
+    return guide::Action(label, [command] { QueueGuideCommand(command, ""); }, description)
+        .InGroup("Cheats")
+        .EnabledWhen(CheatsUsable);
+  };
+  page.items.push_back(action("Go To Round", "bo2zm_goto_round", "Jump to the round picked above."));
+  page.items.push_back(action("Kill All Zombies", "bo2zm_kill_zombies", "Kill every zombie now."));
+  page.items.push_back(action("Max Points", "bo2zm_max_points", "Give yourself the maximum points."));
+  page.items.push_back(action("Turn On Power", "bo2zm_power", "Turn the map's power on."));
+  page.items.push_back(action("Open All Doors", "bo2zm_doors", "Open every door."));
+  page.items.push_back(action("Reset Cheats", "bo2zm_reset_cheats", "Turn every cheat off."));
+  for (auto& item : debug) page.items.push_back(std::move(item));
+  guide::RegisterPage(std::move(page));
 }

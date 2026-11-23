@@ -97,6 +97,7 @@ constexpr Button kButtons[] = {
     {"stick_right", 1u << 20, 0x5822}, {"stick_left", 1u << 21, 0x5823},
     {"look_up", 1u << 22, 0x5830},  {"look_down", 1u << 23, 0x5831},
     {"look_right", 1u << 24, 0x5832}, {"look_left", 1u << 25, 0x5833},
+    {"guide", 0x0400, 0},  // the Guide button: no keystroke (the SDK's Guide overlay takes it)
 };
 
 struct Step {
@@ -295,7 +296,7 @@ class ScriptPad final : public in::InputDriver {
       for (const Button& b : kButtons) {
         const bool before = (current_ & b.bits) != 0;
         const bool now = (bits & b.bits) != 0;
-        if (before == now) {
+        if (before == now || b.key == 0) {
           continue;
         }
         in::X_INPUT_KEYSTROKE key{};
