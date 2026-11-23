@@ -22,7 +22,9 @@
 //   3. Info.plist key BO2DataPath (pack_app.py --data-mode external --data-path)
 //   4. Contents/Resources/data (pack_app.py --data-mode clone)
 // Saves and settings: ~/Library/Application Support/bo2-360-nx (passed as --user_data_root).
-// Logs: ~/Library/Logs/bo2-360-nx/bo2zm-<time>.log, the newest 20 kept (passed as --log_file).
+// Logs: ~/Library/Logs/bo2-360-nx/bo2zm-<time>.log (passed as --log_file). Old logs are pruned at start by log_prune.h: the newest 20 always stay, older
+// ones go after 30 days or past 2 GB in total; a noisy session never costs an earlier log (the game caps each session's
+// log itself, keeping its start and end).
 // Extra options: ~/Library/Application Support/bo2-360-nx/args.txt, one "name = value" or "--name=value" per line
 // (# starts a comment), added before the command line; the command line (open APP --args --name=value) comes last
 // and an option given there replaces the same name from args.txt or the launcher.
@@ -47,6 +49,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "log_prune.h"
 
 extern char **environ;
 static pid_t g_child;
@@ -98,7 +102,7 @@ static void trim(char *s) {
 
 static int cmp_str(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
-static void prune_logs(const char *dir, int keep) {   // keep the newest `keep` <exe>-*.log (names sort by time)
+static void prune_logs(const char *dir) {   // old <exe>-*.log files: policy in log_prune.h (names sort by time)
     DIR *d = opendir(dir); if (!d) return;
     char *names[4096]; int n = 0; struct dirent *e;
     char prefix[300]; snprintf(prefix, sizeof prefix, "%s-", g_exe); size_t pl = strlen(prefix);
@@ -106,10 +110,19 @@ static void prune_logs(const char *dir, int keep) {   // keep the newest `keep` 
         if (!strncmp(e->d_name, prefix, pl) && strstr(e->d_name, ".log")) names[n++] = strdup(e->d_name);
     closedir(d);
     qsort(names, n, sizeof *names, cmp_str);
+    LogEntry *ent = calloc(n ? n : 1, sizeof *ent); char *del = calloc(n ? n : 1, 1);
     for (int i = 0; i < n; i++) {
-        if (i < n - keep) { char p[PATH_MAX]; snprintf(p, sizeof p, "%s/%s", dir, names[i]); unlink(p); }
+        char p[PATH_MAX]; snprintf(p, sizeof p, "%s/%s", dir, names[i]);
+        struct stat st; ent[i].name = names[i];
+        if (!stat(p, &st)) { ent[i].size = (long long)st.st_size; ent[i].mtime = (long long)st.st_mtime; }
+        else ent[i].mtime = (long long)time(NULL);   // unreadable: counts as new, so it is never pruned for its age
+    }
+    log_prune_plan(ent, n, (long long)time(NULL), LOG_KEEP_MIN, LOG_KEEP_DAYS * 86400LL, LOG_KEEP_BYTES, del);
+    for (int i = 0; i < n; i++) {
+        if (del[i]) { char p[PATH_MAX]; snprintf(p, sizeof p, "%s/%s", dir, names[i]); unlink(p); }
         free(names[i]);
     }
+    free(ent); free(del);
 }
 
 #define MAXARGS 256
@@ -331,7 +344,7 @@ int main(int argc, char **argv) {
     }
     g_argv[g_argc] = NULL;
 
-    prune_logs(logs, 20);
+    prune_logs(logs);
     setenv("MVK_CONFIG_FAST_MATH_ENABLED", "0", 0);   // the game's shaders expect IEEE results (see tools/mac/bo2zm.command)
     { char n[128]; snprintf(n, sizeof n, "%s_LOG_DIR", g_prefix); setenv(n, logs, 0); }
     chdir(support);
