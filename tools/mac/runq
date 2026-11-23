@@ -963,7 +963,11 @@ class Daemon:
                 return min(self.c.get('run_cap', 12), self.c['idle_cap']), \
                     f'build window with {len(self.jobs) + len(self.outside)} unmeasured game(s)'
             return self.c['idle_cap'], 'build window: no solo jobs; idle build cap'
-        if quiet or self.quiet_starting or self.perf_batch:
+        # Builds stay up while ordinary games still drain ahead of a speed batch (a 29 min Forza drive froze every build
+        # for the whole drain, 11-23); the cap drops to 0 only when no such game remains or a quiet job is starting.
+        draining = [j for j in self.jobs.values() if not (is_solo(j['job']) or j['job'].get('quiet_machine') or
+                                                           job_class(j['job']) == CLASSES['perf'])]
+        if quiet or self.quiet_starting or (self.perf_batch and not draining):
             return 0, 'quiet machine: ' + (', '.join(quiet) if quiet else 'preparing')
         measured = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if is_measured(j['job'])]
         if measured:
