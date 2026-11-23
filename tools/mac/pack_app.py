@@ -3,7 +3,7 @@
 games/ with --game <game> (its games/<game>/app.toml names the app, its saves folder and its game data folder).
 
 Borrowed from switch2mac's dm/mac/pack_app.py (MIT, Copyright (c) 2026 seedds): the APFS clone copy, the .icns
-from a picture with sips and iconutil, the atomic swap of the finished app, the codesign retry on detritus. The
+from a picture with sips and iconutil (or the game's own title picture), the atomic swap of the finished app, the codesign retry on detritus. The
 rest is written for this project. No game data is ever written inside the repository.
 
   python3 -I tools/mac/pack_app.py --build <build folder> --shaders <shader folder> --data <data folder> [options]
@@ -27,7 +27,7 @@ Layout of the app:
                                     relative links into Resources/runtime (codesign refuses plain data files in
                                     MacOS/); the SDK finds all of them beside the executable
   Contents/Frameworks/              any other non-system library the binaries linked (copied, install names fixed)
-  Contents/Resources/AppIcon.icns   from docs/images/icon.png
+  Contents/Resources/AppIcon.icns   from --icon, else the game title picture
   Contents/Resources/runtime/       the real vulkan/ (loader, MoltenVK, icd file), shader library, bo2zm.toml
   Contents/Resources/data/          the clones, with --data-mode clone
 
@@ -38,10 +38,11 @@ needs no entitlement), inner files first.
 import argparse, ctypes, os, plistlib, re, shutil, subprocess, sys, tempfile, tomllib
 from pathlib import Path
 
+from game_icon import extract_icon, make_icns
+
 ROOT = Path(__file__).resolve().parents[2]
 EXE_NAME = 'Black Ops II'   # the launcher; --game sets both from games/<game>/app.toml
 GAME = 'bo2zm'              # the game executable
-ICON_SIZES = (16, 32, 128, 256, 512)
 SYSTEM_PREFIXES = ('/usr/lib/', '/System/', '/Library/Apple/')
 LOADER_RPATH = '@loader_path'
 FRAMEWORKS_RPATH = '@executable_path/../Frameworks'
@@ -79,16 +80,6 @@ def copy_tree(src, dst, clone):
 
 def tree_bytes(p):
     return p.stat().st_size if p.is_file() else sum((Path(r) / f).stat().st_size for r, _, fs in os.walk(p) for f in fs)
-
-
-def make_icns(png, out):
-    with tempfile.TemporaryDirectory(dir=out.parent) as t:
-        s = Path(t) / 'AppIcon.iconset'
-        s.mkdir()
-        for n in ICON_SIZES:
-            for k, suffix in ((1, ''), (2, '@2x')):
-                run(['sips', '-s', 'format', 'png', '-z', n * k, n * k, png, '--out', s / f'icon_{n}x{n}{suffix}.png'])
-        run(['iconutil', '-c', 'icns', s, '-o', out])
 
 
 # ---- Mach-O handling -------------------------------------------------------------------------------------------
@@ -305,7 +296,9 @@ def pack(a):
         raise SystemExit('--data-mode clone needs --data')
     if data and not (data / 'game').is_dir() and not (data / 'default.xex').is_file():
         raise SystemExit(f'{data} has neither a game/ folder nor default.xex')
-    icon = Path(a.icon)
+    icon = Path(a.icon).expanduser() if a.icon else None
+    if icon and not icon.is_file():
+        raise SystemExit(f'icon PNG does not exist: {icon}')
     toml = Path(a.toml) if a.toml else None
     if toml is None and not a.game_manifest and (ROOT / 'tools/mac/bo2zm.toml').is_file():
         toml = ROOT / 'tools/mac/bo2zm.toml'   # the build's own settings file, when this branch has it
@@ -370,10 +363,29 @@ def pack(a):
             copy_tree(data, res / 'data', clone)
 
     has_icon = False
-    if icon.is_file():
-        step('icon')
+    if icon is not None:
+        step('icon (supplied PNG)')
         make_icns(icon, res / 'AppIcon.icns')
         has_icon = True
+    else:   # no supplied picture: use the game's own title picture, which only passes through a temp folder
+        game_data = data
+        if game_data is None and a.data_path:
+            game_data = Path(a.data_path).expanduser()
+        if game_data and (game_data / 'game').is_dir():
+            game_data = game_data / 'game'
+        rexglue = a.rexglue or next((p for p in (build / 'rexglue', build / 'bin/rexglue',
+                                                ROOT / 'sdk/out/mac-arm64/rexglue') if p.is_file()), None)
+        step('icon (extracting the game title picture)')
+        try:
+            if game_data is None:
+                raise RuntimeError('no game data to take the icon from')
+            with tempfile.TemporaryDirectory(prefix='.title-', dir=tmp.parent) as td:
+                title = Path(td) / 'title.png'
+                extract_icon(game_data, title, rexglue)
+                make_icns(title, res / 'AppIcon.icns')
+            has_icon = True
+        except (OSError, RuntimeError) as e:
+            print(f'warning: no game icon, the app gets the generic one: {e}', flush=True)
 
     step('fixing install names and rpaths')
     search = [Path(p) for p in (a.lib_dir or [])] + [build, Path(run(['brew', '--prefix'], check=False).strip() or '/opt/homebrew') / 'lib']
@@ -430,7 +442,9 @@ def parse(argv):
     ap.add_argument('--data-mode', choices=('clone', 'external'), default=None)
     ap.add_argument('--data-path', help='external mode: data folder baked into Info.plist (BO2DataPath)')
     ap.add_argument('--toml', help='settings file placed beside the executable (default tools/mac/bo2zm.toml when present)')
-    ap.add_argument('--icon', default=str(ROOT / 'docs/images/icon.png'))
+    ap.add_argument('--icon', default=str(ROOT / 'docs/images/icon.png'),
+                    help='a supplied PNG (wins); without one the game\'s own title picture is extracted')
+    ap.add_argument('--rexglue', help='rexglue host tool used to extract the title picture (default: beside the build)')
     ap.add_argument('--name', default='Black Ops II')
     ap.add_argument('--version', default='1.1.0')
     ap.add_argument('--bundle-id', default='io.github.ryancircelli.bo2-360-nx')
