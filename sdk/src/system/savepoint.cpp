@@ -353,6 +353,9 @@ void Install() {
 }
 }  // namespace defer_free
 
+std::vector<XThread*> g_held;
+Clock::time_point g_capture_time;
+
 SavepointStats CaptureInProcessSavepoint() {
   std::set_terminate(SavepointTerminate);
   ::signal(SIGABRT, SavepointAbortSignal);
@@ -447,9 +450,21 @@ SavepointStats CaptureInProcessSavepoint() {
     defer_free::g_active.store(true);
   }
   auto t2 = Clock::now();
+  // Bisect switch REX_SAVEPOINT_HOLD=guest|host: keep guest threads (or host XHostThreads) suspended
+  // from capture to rewind, so only the other side can change state in between.
+  const char* hold = std::getenv("REX_SAVEPOINT_HOLD");
+  g_held.clear();
   for (auto& t : parked) {
+    bool held = hold && ((std::strcmp(hold, "guest") == 0 && t->is_guest_thread()) ||
+                         (std::strcmp(hold, "host") == 0 && !t->is_guest_thread()));
+    if (held) {
+      g_held.push_back(t.get());
+      continue;
+    }
     thread_resume(MachPort(t.get()));
   }
+  if (hold) std::fprintf(stderr, "[savepoint-s3] holding %zu %s threads until the rewind\n", g_held.size(), hold);
+  g_capture_time = Clock::now();
   st.threads_parked = uint32_t(g_snap.threads.size());
   st.park_ms = Ms(t0, t1);
   st.write_ms = Ms(t1, t2);
@@ -511,6 +526,9 @@ SavepointStats RewindToInProcessSavepoint() {
   g_rewind_phase = 1;
   StartRewindWatchdog(&rewind_done);
   auto parked = ParkThreads(ks);
+  for (auto* t : g_held) thread_resume(MachPort(t));  // ParkThreads suspended them a second time
+  if (!g_held.empty()) std::fprintf(stderr, "[savepoint-s3] released hold on %zu threads\n", g_held.size());
+  g_held.clear();
   g_rewind_phase = 2;
   std::fprintf(stderr, "[savepoint-s3] rewind start, %zu parked\n", parked.size());
   auto t1 = Clock::now();
@@ -747,7 +765,10 @@ void ServiceSavepointRequest() {
         auto rst = RewindToInProcessSavepoint();
         std::fprintf(stderr, "[savepoint-s3] rewound at capture frame %d: ok=%d\n", frame, int(rst.ok));
       }
-    } else if (rew >= 0 && captured && !rewound && frame >= rew) {
+    } else if (captured && !rewound &&
+               ((rew >= 0 && frame >= rew) ||
+                (std::getenv("REX_SAVEPOINT_REWIND_AFTER_MS") &&
+                 Ms(g_capture_time, Clock::now()) >= std::atof(std::getenv("REX_SAVEPOINT_REWIND_AFTER_MS"))))) {
       rewound = true;
       auto st = RewindToInProcessSavepoint();
       REXSYS_INFO("[savepoint-s3] rewound at frame {}: {} MB, {} threads restored, park {:.1f} ms, restore {:.1f} ms (frame counter keeps running; watch the game for continuity)",

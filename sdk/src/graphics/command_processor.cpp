@@ -35,6 +35,7 @@
 #include <rex/memory/ring_buffer.h>
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
+#include <cstdlib>
 #include <rex/system/savepoint.h>
 #include <rex/system/user_module.h>
 
@@ -273,6 +274,8 @@ void CommandProcessor::WorkerThreadMain() {
         rex::thread::MaybeYield();
         loop_count++;
 #endif
+        // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
+        system::ServiceSavepointRequest();
         write_ptr_index = write_ptr_index_.load();
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
@@ -383,7 +386,10 @@ void CommandProcessor::Rewind(const RewindState& state) {
   read_ptr_writeback_ptr_ = state.read_ptr_writeback_ptr;
   write_ptr_index_.store(state.write_ptr_index);
   write_ptr_index_event_->Reset();
-  rewound_during_primary[this] = true;
+  // Rewinds run from ServiceSavepointRequest between batches, never inside ExecutePrimaryBuffer.
+  // Flagging "rewound during primary" here discarded the read-pointer advance of the next batch, so
+  // the CP executed it twice (its fences, interrupts and memory writes reached the guest twice).
+  if (std::getenv("REX_SAVEPOINT_CP_OLD_FLAG")) rewound_during_primary[this] = true;
   bin_select_ = state.bin_select;
   bin_mask_ = state.bin_mask;
   active_vertex_shader_ = state.active_vertex_shader;
