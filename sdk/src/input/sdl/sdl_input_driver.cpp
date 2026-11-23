@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdlib>
 #include <array>
 #include <filesystem>
 
@@ -64,10 +65,15 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
 
 void SDLInputDriver::InitSubsystems() {
 #if REX_PLATFORM_MAC
-  SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB, "1");
-  SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB_WHITELIST, "0");
-  SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360, "1");
-  SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360_WIRELESS, "1");
+  // Test runs set SDL_JOYSTICK_HIDAPI=0 / SDL_HIDAPI_LIBUSB=0 so no real USB device is ever opened. The driver
+  // specific Xbox 360 hints below would switch HIDAPI back on past the master switch, so when either variable is
+  // set by the caller we set none of them.
+  if (!std::getenv("SDL_JOYSTICK_HIDAPI") && !std::getenv("SDL_HIDAPI_LIBUSB")) {
+    SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB, "1");
+    SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB_WHITELIST, "0");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360_WIRELESS, "1");
+  }
 #endif
 
   // Initialize SDL events subsystem
