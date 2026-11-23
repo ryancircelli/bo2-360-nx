@@ -16,6 +16,8 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <list>
+#include <functional>
 #include <mutex>
 #include <typeinfo>
 #include <vector>
@@ -175,6 +177,8 @@ struct InProcess {
   std::vector<ThreadSnap> threads;
   std::vector<XThread*> all_parked;  // every thread parked at capture, snapshotted or not
   std::shared_ptr<util::ObjectTable::RewindState> object_table;
+  std::list<std::function<void()>> dispatch_queue;
+  uint32_t dpc_head = 0;
   std::vector<std::pair<memory::BaseHeap*, memory::BaseHeap::RewindState>> heaps;
   std::vector<object_ref<XObject>> objects_at_rewind;
   IGraphicsSystem* graphics = nullptr;
@@ -360,6 +364,8 @@ SavepointStats CaptureInProcessSavepoint() {
   auto t1 = Clock::now();
   g_snap = InProcess{};
   g_snap.object_table = ks->object_table()->CaptureRewindState();
+  g_snap.dispatch_queue = ks->CaptureDispatchQueue();
+  g_snap.dpc_head = ks->dpc_list()->head();  // head is host-side; the entries are guest memory
   if (auto* runtime = rex::Runtime::instance()) {
     g_snap.graphics = runtime->graphics_system();
     if (g_snap.graphics) g_snap.graphics->CaptureSavepoint();
@@ -513,6 +519,10 @@ SavepointStats RewindToInProcessSavepoint() {
     g_snap.objects_at_rewind = ks->object_table()->GetAllObjects();
     g_rewind_phase = 3;
     ks->object_table()->Rewind(g_snap.object_table);
+    size_t queued = ks->RewindDispatchQueue(g_snap.dispatch_queue);
+    std::fprintf(stderr, "[savepoint-s3] kernel dispatch queue: %zu -> %zu\n", queued, g_snap.dispatch_queue.size());
+    std::fprintf(stderr, "[savepoint-s3] dpc list head: %08X -> %08X\n", ks->dpc_list()->head(), g_snap.dpc_head);
+    ks->dpc_list()->set_head(g_snap.dpc_head);
     g_rewind_phase = 4;
   } else {
     std::fprintf(stderr, "[savepoint-s3] skipping kernel object restore\n");

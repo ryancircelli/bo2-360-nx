@@ -309,6 +309,19 @@ class KernelState {
 
   util::NativeList* dpc_list() { return &dpc_list_; }
 
+  // Savepoint rewind: the deferred-completion queue is host-side; entries queued after a capture
+  // carry guest pointers from after it.
+  std::list<std::function<void()>> CaptureDispatchQueue() {
+    auto global_lock = global_critical_region_.Acquire();
+    return dispatch_queue_;
+  }
+  size_t RewindDispatchQueue(const std::list<std::function<void()>>& queue) {
+    auto global_lock = global_critical_region_.Acquire();
+    size_t before = dispatch_queue_.size();
+    dispatch_queue_ = queue;
+    return before;
+  }
+
   void CompleteOverlapped(uint32_t overlapped_ptr, X_RESULT result);
   void CompleteOverlappedEx(uint32_t overlapped_ptr, X_RESULT result, uint32_t extended_error,
                             uint32_t length);
