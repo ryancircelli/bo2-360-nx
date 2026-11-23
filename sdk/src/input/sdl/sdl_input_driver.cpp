@@ -70,7 +70,10 @@ void SDLInputDriver::InitSubsystems() {
   // set by the caller we set none of them.
   if (!std::getenv("SDL_JOYSTICK_HIDAPI") && !std::getenv("SDL_HIDAPI_LIBUSB")) {
     SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB, "1");
-    SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB_WHITELIST, "0");
+    // Keep the whitelist on: libusb then opens only the devices in SDL's libusb-required list, which
+    // patches/sdl3-xbox360w-libusb-whitelist.patch extends with the Xbox 360 wireless receivers. With it off,
+    // libusb opens every USB HID device (keyboards, mouse dongles).
+    SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB_WHITELIST, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX_360_WIRELESS, "1");
   }
