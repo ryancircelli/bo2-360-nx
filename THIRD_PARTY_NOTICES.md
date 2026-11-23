@@ -35,6 +35,9 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `d8a93be` (Tom Clay) | a new FPSCR register starts with host FP exceptions masked | `sdk/include/rex/ppc/context.h`, `sdk/include/rex/platform/fpscr.h` |
 | Xenia Canary `c0ea2c443` (Adrian Cassar) | `vpkd3d128` packs a NaN as the field minimum | `sdk/src/codegen/builders/vector.cpp` |
 | Xenia Canary `28c265ed7` (Adrian Cassar) | handle `PM4_EVENT_WRITE_CFL` as a fence write | `sdk/src/graphics/command_processor.cpp`, `sdk/src/graphics/packet_disassembler.cpp` |
+| ReXGlue SDK `a04d6fc` (Tom Clay) | critical section `lock_count` kept as a big endian guest word | `sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp` |
+| Xenia Canary `a4ef31cdf` (Adrian Cassar) | XMA drops a decode position's start subframes | `sdk/src/audio/xma_context.cpp`, `sdk/include/rex/audio/xma/context.h` |
+| ReXGlue SDK PR 628 (open upstream) | `dcbz` clears the full 128-byte cache line | `sdk/src/codegen/builders/system.cpp` |
 
 ## Libraries
 
