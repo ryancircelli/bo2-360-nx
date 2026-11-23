@@ -365,7 +365,7 @@ def pack(a):
     has_icon = False
     if icon is not None:
         step('icon (supplied PNG)')
-        make_icns(icon, res / 'AppIcon.icns')
+        make_icns(icon, res / 'AppIcon.icns', rounded=False)
         has_icon = True
     else:   # no supplied picture: use the game's own title picture, which only passes through a temp folder
         game_data = data
