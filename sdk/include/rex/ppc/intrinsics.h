@@ -26,6 +26,7 @@
 #include <arm_neon.h>
 #endif
 
+#include <rex/platform/fpscr.h>
 #include <rex/types.h>
 
 namespace rex::ppc {
@@ -116,22 +117,20 @@ inline uint8_t VectorShiftTableR[] = {
 // SIMD Helper Functions
 //=============================================================================
 
-// Xenon dot products accumulate in double precision in guest lane order,
-// then narrow once. Finite overflow produces QNaN, which matters to callers
-// using a maximum-float sentinel before their first search iteration.
-// Keep this consistent with Interpreter::VmxDot.
-template <int Elements>
-inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
-  static_assert(Elements == 3 || Elements == 4);
 #if defined(__aarch64__) || defined(_M_ARM64)
-  // Same arithmetic as the portable path below, two lanes per instruction.
-  // Products of two floats are exact in double; the additions keep the same order.
-  // A denormal input becomes a signed zero: keep the bits where the exponent is nonzero, else only the sign.
+namespace detail {
+// VmxDot's portable arithmetic, two lanes per instruction: the same exact double products and the same
+// addition order. FlushInSoftware is false when FPCR.FZ is set, because then the conversions themselves
+// flush denormal inputs and a denormal result to a signed zero.
+template <int Elements, bool FlushInSoftware>
+inline simde__m128 VmxDotNeon(simde__m128 a, simde__m128 b) {
   const uint32x4_t exponent = vdupq_n_u32(0x7F800000u), sign = vdupq_n_u32(0x80000000u);
   uint32x4_t ab = vreinterpretq_u32_f32(simde__m128_to_neon_f32(a));
   uint32x4_t bb = vreinterpretq_u32_f32(simde__m128_to_neon_f32(b));
-  ab = vandq_u32(ab, vorrq_u32(vtstq_u32(ab, exponent), sign));
-  bb = vandq_u32(bb, vorrq_u32(vtstq_u32(bb, exponent), sign));
+  if constexpr (FlushInSoftware) {  // keep the bits where the exponent is nonzero, else only the sign
+    ab = vandq_u32(ab, vorrq_u32(vtstq_u32(ab, exponent), sign));
+    bb = vandq_u32(bb, vorrq_u32(vtstq_u32(bb, exponent), sign));
+  }
   const float32x4_t af = vreinterpretq_f32_u32(ab), bf = vreinterpretq_f32_u32(bb);
   // Host lane 3 - i is guest element i: lo = {p3, p2}, hi = {p1, p0}.
   const float64x2_t lo = vmulq_f64(vcvt_f64_f32(vget_low_f32(af)), vcvt_f64_f32(vget_low_f32(bf)));
@@ -143,15 +142,29 @@ inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
     const float64x2_t pairs = vaddq_f64(hi, lo);  // {p1 + p3, p0 + p2}
     sum = vpaddq_f64(pairs, pairs);
   }
-  // The portable tail, branch-free: keep a finite result (denormal flushed to a signed zero) or an infinite
-  // sum's infinity; anything else (NaN, finite overflow) is QNaN.
-  const float32x2_t result = vcvt_f32_f64(sum);
-  uint32x2_t bits = vreinterpret_u32_f32(result);
-  bits = vand_u32(bits, vorr_u32(vtst_u32(bits, vget_low_u32(exponent)), vget_low_u32(sign)));
-  const uint32x2_t keep = vorr_u32(vcagt_f32(vdup_n_f32(INFINITY), result),
-                                   vmovn_u64(vcageq_f64(sum, vdupq_n_f64(INFINITY))));
-  bits = vbsl_u32(keep, bits, vdup_n_u32(0x7FC00000u));
+  uint32x2_t bits = vreinterpret_u32_f32(vcvt_f32_f64(sum));
+  if constexpr (FlushInSoftware)
+    bits = vand_u32(bits, vorr_u32(vtst_u32(bits, vget_low_u32(exponent)), vget_low_u32(sign)));
+  // An infinite or NaN result is QNaN unless the double sum was itself infinite.
+  if ((~vget_lane_u32(bits, 0) & 0x7F800000u) == 0) [[unlikely]] {
+    if (!std::isinf(vgetq_lane_f64(sum, 0))) return simde_mm_castsi128_ps(simde_mm_set1_epi32(0x7FC00000));
+  }
   return simde__m128_from_neon_f32(vreinterpretq_f32_u32(vdupq_lane_u32(bits, 0)));
+}
+}  // namespace detail
+#endif
+
+// Xenon dot products accumulate in double precision in guest lane order,
+// then narrow once. Finite overflow produces QNaN, which matters to callers
+// using a maximum-float sentinel before their first search iteration.
+// Keep this consistent with Interpreter::VmxDot.
+template <int Elements>
+inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
+  static_assert(Elements == 3 || Elements == 4);
+#if defined(__aarch64__) || defined(_M_ARM64)
+  using platform::FPSCRPlatform;
+  if (FPSCRPlatform::getcsr() & FPSCRPlatform::FlushMask) return detail::VmxDotNeon<Elements, false>(a, b);
+  return detail::VmxDotNeon<Elements, true>(a, b);
 #else
   alignas(16) float av[4], bv[4];
   simde_mm_store_ps(av, a);
