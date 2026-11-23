@@ -19,7 +19,7 @@ REXCVAR_DECLARE(int32_t, guide_hold_ms);
 namespace rex::input {
 // guide_button: the game sees the Guide button (off, or the old "true").
 inline bool GuideButtonToGame() {
-  const std::string mode = REXCVAR_GET(guide_button);
+  const std::string& mode = REXCVAR_GET(guide_button);  // a reference: no copy per pad poll
   return mode == "off" || mode == "true";
 }
 // guide_button: a long press opens the Guide.

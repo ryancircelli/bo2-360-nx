@@ -254,6 +254,9 @@ void GuideInputGate::Filter(uint32_t user, in::X_INPUT_STATE& state) {
     draining_.store(-1, std::memory_order_release);
   }
 
+  // The usual case on every poll while the Guide is closed: no Guide button, nothing to strip or open.
+  if (!down) return;
+
   if (in::GuideButtonToGame()) return;
   if (in::GuideButtonHold()) {
     if (down && !fired_[user] && NowMs() - down_since_ms_[user] >= REXCVAR_GET(guide_hold_ms)) {
