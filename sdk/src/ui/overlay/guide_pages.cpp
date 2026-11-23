@@ -221,7 +221,11 @@ Item Cvar(std::string name, std::string label, std::string description) {
                       std::move(label), std::move(description), integral ? "%.0f" : "%.2f");
   }
   label = CvarLabel(name, std::move(label));
-  Item item = Info(label, [name] { return rex::cvar::GetFlagByName(name); },
+  Item item = Info(label,
+                   [name] {
+                     std::string value = rex::cvar::GetFlagByName(name);
+                     return value.empty() ? std::string("default") : value;
+                   },
                    CvarDescription(name, std::move(description)));
   item.cvar = name;
   item.visible = [name] { return CvarExists(name); };
