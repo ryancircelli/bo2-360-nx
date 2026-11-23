@@ -892,8 +892,11 @@ class Daemon:
         self.quiet_starting = False
         self.last_repair = 0.0
         self.outside = []
+        self.outside_builds = []   # CPU-active build processes no buildq build owns: [{pid, exe, cwd}] (runq status)
+        self.outside_builds_t = 0.0
         st = rjson(STATE) or {}
         self.last_start = st.get('last_start_by_owner') or {}
+        self.phase = st.get('phase') or new_phase('ord', time.time())
         self.last_external_build_activity = restorable_external_activity(
             st.get('last_external_build_activity'), st.get('last_external_build_activity_source'))
         self.last_external_build_activity_source = ('outside' if self.last_external_build_activity is not None else None)
@@ -1008,7 +1011,8 @@ class Daemon:
             o = job_owner(j['job'])
             rbo[o] = rbo.get(o, 0) + 1
         jobs = [(f, rjson(os.path.join(D['queue'], f)) or {}) for f in q]
-        jobs.sort(key=lambda fj: sched_key(fj[1], rbo, self.last_start))
+        key = fair_key if jobs and all(is_solo(j) for _, j in jobs) else sched_key
+        jobs.sort(key=lambda fj: key(fj[1], rbo, self.last_start))
         return jobs[0][0]
 
     def launch(self, qfile):
@@ -1425,7 +1429,8 @@ class Daemon:
                                       'quiet_machine': bool(v['job'].get('quiet_machine')),
                                       'since_s': round(time.time() - v['start'])} for k, v in self.jobs.items()},
                       'quiet_starting': self.quiet_starting,
-                      'queued': self.queued(), 'last_start_by_owner': self.last_start})
+                      'queued': self.queued(), 'last_start_by_owner': self.last_start, 'phase': self.phase,
+                      'outside_builds': self.outside_builds})
 
     def resume_builds(self, pids):
         for pid in pids:
@@ -1505,6 +1510,11 @@ class Daemon:
                     self.power_hold = None
                 activity = external_build_activity()
                 now = time.time()
+                if now - self.outside_builds_t >= 10:   # who is compiling outside buildq (it invalidates speed runs)
+                    self.outside_builds_t = now
+                    act = (activity or [])[:12]
+                    cwds = process_cwds([a['pid'] for a in act]) if act else {}
+                    self.outside_builds = [{'pid': a['pid'], 'exe': a['exe'], 'cwd': cwds.get(a['pid'], '?')} for a in act]
                 if activity is None:
                     self.last_external_build_activity = now
                     self.last_external_build_activity_source = 'unknown'
@@ -1539,28 +1549,25 @@ class Daemon:
                 # Held speed work must not keep a batch open and block builds or non-speed jobs.
                 self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
                 self.perf_batch.intersection_update(qids | set(self.jobs))
-                self.perf_batch.update(bumped_perf_jobs(qjobs, perf_eligible))
-                if not self.perf_batch:
-                    waiting_perf = [(qf, j) for qf, j in qjobs
-                                    if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible]
-                    batch_n = max(1, int(self.c.get('perf_batch_size', 3)))
-                    batch_age = max(1, int(self.c.get('perf_batch_age_s', PERF_BATCH_AGE_S)))
-                    running_by_owner = {}
-                    for active in self.jobs.values():
-                        owner = job_owner(active['job'])
-                        running_by_owner[owner] = running_by_owner.get(owner, 0) + 1
-                    selected, batch_kind, oldest_age = (choose_perf_batch(
-                        waiting_perf, time.time(), batch_n, batch_age, running_by_owner, self.last_start)
-                        if not self.stop_requested else ([], False, 0))
-                    if selected:
-                        self.perf_batch = set(selected)
-                        if batch_kind == 'urgent':
-                            self.log(f'urgent perf batch opened: {next(iter(self.perf_batch))}')
-                        elif batch_kind == 'bump':
-                            self.log(f'bumped perf job opened next: {next(iter(self.perf_batch))}')
-                        else:
-                            self.log(f'perf batch opened: {len(self.perf_batch)} job(s), oldest waited '
-                                     f'{int(oldest_age)}s; builds and non-speed work held until batch drains')
+                # Alternating windows (runq-fairness): a solo window runs up to solo_batch_n solo jobs back to back,
+                # then an ordinary window runs games (up to slots at once) for ord_window_s or until none wait.
+                # Neither kind waits for the other's whole backlog. Fair order inside each kind is sched_key.
+                solos_w = [j for _, j in qjobs if is_solo(j) and j.get('id') in perf_eligible]
+                ords_w = [j for _, j in qjobs if not is_solo(j) and j.get('id') in power_eligible]
+                new_phase = phase_step(self.phase, time.time(), solos_w, ords_w, not (self.jobs or self.outside),
+                                       any(is_solo(j['job']) for j in self.jobs.values()), self.c)
+                if new_phase is not self.phase:
+                    if new_phase['phase'] != self.phase['phase']:
+                        self.log(f'window -> {new_phase["phase"]} ({len(solos_w)} solo, {len(ords_w)} ordinary waiting; '
+                                 f'previous {self.phase["phase"]} window ran {int(time.time() - self.phase["t0"])}s, '
+                                 f'{self.phase.get("solo_started", 0)} solo started)')
+                    self.phase = new_phase
+                if self.phase['phase'] == 'solo' and not self.stop_requested:
+                    self.perf_batch = {j.get('id') for _, j in qjobs
+                                       if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible} | \
+                                      {k for k, v in self.jobs.items() if job_class(v['job']) == CLASSES['perf']}
+                else:
+                    self.perf_batch = set()
                 if self.stop_requested and not self.jobs:
                     # A TERM stops new launches; release the perf hold so token-waiting buildq jobs can finish.
                     self.perf_batch.clear()
@@ -1588,11 +1595,12 @@ class Daemon:
                     if time.time() - getattr(self, 'hist_t', 0) > 60:
                         self.hist, self.hist_t = history_wall(), time.time()
                     solo_waiting = any(is_solo(j) and not adapter_hold_reason(j, self.power_status) for _, j in qjobs)
+                    machine_empty = not (self.jobs or self.outside)
                     for qf in q:
                         job = rjson(os.path.join(D['queue'], qf)) or {}
-                        if not is_solo(job) and long_job_held(estimate_s(job, self.hist),
-                                                              time.time() - job.get('submitted_t', time.time()),
-                                                              solo_waiting):
+                        if not phase_admits(self.phase, is_solo(job), time.time(), machine_empty,
+                                            estimate_s(job, self.hist), time.time() - job.get('submitted_t', time.time()),
+                                            solo_waiting, interleave_active, self.c):
                             continue
                         if adapter_hold_reason(job, self.power_status):
                             continue
@@ -1612,20 +1620,13 @@ class Daemon:
                         jobs_per_owner.append((qf, job))
                     non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
                     non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
-                    gated, drain = solo_gate(jobs_per_owner, not (self.jobs or self.outside), time.time(),
-                                             float(self.c.get('solo_max_wait_s', SOLO_MAX_WAIT_S)))
-                    if drain and drain.get('id') != getattr(self, 'drain_logged', None):
-                        self.drain_logged = drain.get('id')
-                        self.log(f'solo drain: {drain.get("id")} waited {int(time.time() - drain.get("submitted_t", 0))}s; '
-                                 'no new games start until the running ones end')
-                    allowed = set(gated)
-                    candidates = [qf for qf, job in jobs_per_owner if qf in allowed and
-                                  (self.perf_batch or non_speed_running < non_speed_cap)]
+                    candidates = [qf for qf, job in jobs_per_owner if is_solo(job) or non_speed_running < non_speed_cap]
                     if not candidates:
                         break
                     qf = self.pick(candidates)
                     if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
-                        solo_running = True   # (the gate only lets a solo job through on an empty machine)
+                        solo_running = True   # (a solo job is only admitted on an empty machine)
+                        self.phase = dict(self.phase, solo_started=self.phase.get('solo_started', 0) + 1)
                     q.remove(qf)
                     self.launch(qf)
                 if time.time() - getattr(self, 'remote_checked', 0) >= 5:
@@ -1681,58 +1682,65 @@ def job_owner(j):
 PERF_HOLD_MAX_S = 900   # a speed job held by outside builds this long runs anyway, outside builds frozen
 SOLO_SHORT_S = 300       # while a solo job waits, only jobs expected to finish within this start...
 SOLO_LONG_MAX_AGE_S = 1800   # ...except a long job that has itself waited this long (no starving the soaks)
-SOLO_MAX_WAIT_S = 600   # a queued solo job lets other games keep flowing this long, then the machine drains for it
+SOLO_BATCH_N = 3        # solo jobs run back to back per solo window
+ORD_WINDOW_S = 1200     # an ordinary window lasts this long while solo jobs wait
+ORD_GRACE_S = 300       # a game may outlast the window by this much when it starts
+SOLO_PHASE_MAX_S = 1800 # a solo window ends after this long if ordinary jobs wait
 
 
-def long_job_held(est_s, age_s, solo_waiting):
-    """A solo job is waiting: a long game (history median over SOLO_SHORT_S) would lengthen the drain, so it waits,
-    unless it has already waited SOLO_LONG_MAX_AGE_S."""
-    return bool(solo_waiting) and est_s > SOLO_SHORT_S and age_s < SOLO_LONG_MAX_AGE_S
+def fair_key(j, running_by_owner, last_start):
+    """Order inside a solo window: owners take turns across ALL solo classes (a chain of short proof-class solo jobs
+    from one owner kept class-perf solo jobs from other owners waiting 25+ min, 11-23). Class does not rank."""
+    return sched_key(dict(j, **{'class': 0}), running_by_owner, last_start)
 
 
-def solo_gate(entries, machine_empty, now, max_wait):
-    """Which queued jobs may start now. entries: [(qfile, job)] already passed the hold filters. A solo job needs the
-    machine alone, but while games run it must not block the others (2026-11-22: a solo proof at the head held four
-    non-solo jobs for ~10 min with free slots). So: a quiet machine may start anything, but once the oldest solo job
-    has waited max_wait it goes first and nothing else starts (drain). A busy machine runs non-solo jobs until then.
-    -> (eligible qfiles, drain solo job or None)"""
-    solos = [(qf, j) for qf, j in entries if is_solo(j)]
-    others = [qf for qf, j in entries if not is_solo(j)]
-    aged = [(qf, j) for qf, j in solos if now - j.get('submitted_t', now) >= max_wait]
-    if aged:
-        return ([qf for qf, _ in solos] if machine_empty else []), min(aged, key=lambda x: x[1].get('submitted_t', now))[1]
-    if machine_empty:
-        return [qf for qf, _ in entries], None
-    return others, None
+def new_phase(name, now):
+    return {'phase': name, 't0': now, 'solo_started': 0, 'closing': False}
+
+
+def phase_step(ph, now, solos, ords, machine_empty, solo_running, c):
+    """Alternating windows. ph = {'phase': 'solo'|'ord', 't0', 'solo_started', 'closing'}; solos / ords = eligible waiting
+    solo / ordinary jobs. Returns ph itself when nothing changed, else a new dict.
+    solo window: runs solo jobs one at a time (the machine must be empty); ends once solo_batch_n have started and none
+      runs, or when no solo job waits, or after solo_phase_max_s with ordinary jobs waiting.
+    ord window: runs ordinary games; closes (no new admissions) after ord_window_s or when no ordinary job waits, and
+      only if a solo job waits; flips to the solo window once the machine is empty. A bumped/urgent solo closes it now."""
+    n = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
+    if ph['phase'] == 'solo':
+        if solo_running:
+            return ph
+        over = ph.get('solo_started', 0) >= n or not solos or (
+            ords and now - ph['t0'] >= float(c.get('solo_phase_max_s', SOLO_PHASE_MAX_S)))
+        return new_phase('ord', now) if over else ph
+    if not solos:
+        return ph if not ph.get('closing') else dict(ph, closing=False)
+    urgent = any(j.get('bump') or j.get('urgent') for j in solos)
+    closing = urgent or not ords or now - ph['t0'] >= float(c.get('ord_window_s', ORD_WINDOW_S))
+    if closing and machine_empty:
+        return new_phase('solo', now)
+    return ph if closing == bool(ph.get('closing')) else dict(ph, closing=closing)
+
+
+def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, interleave_active, c):
+    """May this queued job start now under the current window?"""
+    if ph['phase'] == 'solo':
+        n = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
+        if solo:
+            return machine_empty and ph.get('solo_started', 0) < n
+        return bool(interleave_active)   # build windows between solo runs still let short checks through
+    if solo or ph.get('closing'):
+        return False
+    if not solo_waiting:
+        return True
+    # a solo job waits: a game that would outlast the window by more than the grace would stretch the drain
+    left = ph['t0'] + float(c.get('ord_window_s', ORD_WINDOW_S)) - now
+    return est_s <= max(SOLO_SHORT_S, left + ORD_GRACE_S) or age_s >= SOLO_LONG_MAX_AGE_S
 
 
 def sched_key(j, running_by_owner, last_start):
     o = job_owner(j)
     return (job_class(j), 0 if j.get('bump') else 1, -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
             last_start.get(o, 0.0), j.get('submitted_t', 0.0))
-
-
-def choose_perf_batch(waiting_perf, now, batch_n, batch_age, running_by_owner, last_start):
-    """Return IDs for an urgent one-job batch or a fair N/age-triggered perf block."""
-    bumped = sorted(((qf, j) for qf, j in waiting_perf if j.get('bump')),
-                    key=lambda fj: sched_key(fj[1], running_by_owner, last_start))
-    oldest_age = max((now - j.get('submitted_t', now) for _, j in waiting_perf), default=0)
-    if bumped:
-        return [bumped[0][1]['id']], 'bump', oldest_age
-    urgent = sorted(((qf, j) for qf, j in waiting_perf if j.get('urgent')),
-                    key=lambda fj: fj[1].get('submitted_t', 0))
-    if urgent:
-        return [urgent[0][1]['id']], 'urgent', oldest_age
-    if len(waiting_perf) < batch_n and oldest_age < batch_age:
-        return [], None, oldest_age
-    ordered = sorted(waiting_perf, key=lambda fj: sched_key(fj[1], running_by_owner, last_start))
-    return [j['id'] for _, j in ordered[:batch_n]], 'batch', oldest_age
-
-
-def bumped_perf_jobs(qjobs, power_eligible):
-    """Include a newly bumped queued speed job in an already-open batch, regardless of owner rotation."""
-    return {j.get('id') for _, j in qjobs
-            if j.get('id') in power_eligible and job_class(j) == CLASSES['perf'] and j.get('bump')}
 
 
 PERF_STARVE_S = 600   # checks may pass an open speed batch this long after speed work last ran; then they wait
@@ -1787,11 +1795,15 @@ def estimate_s(j, hist):
     return min(j.get('timeout_s', 600), 600)
 
 
-def plan(queued, running, slots, last_start, now=None, hist=None):
+def plan(queued, running, slots, last_start, now=None, hist=None, phase=None, c=None):
     """Simulate the scheduler. queued: [(qfile, job)]; running: [(job, started_t)]; slots: slots free of games
-    outside runq. -> [(qfile, job, est_start_t, est_s)] in run order (the daemon picks the first)."""
+    outside runq; phase / c: the daemon's current window and config. -> [(qfile, job, est_start_t, est_s)] in run
+    order (the daemon picks the first)."""
     now = now or time.time()
     hist = hist or history_wall()
+    c = c or {}
+    ph = dict(phase) if phase else new_phase('ord', now)
+    n_batch = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
     busy = [(max(now + 30, t + estimate_s(j, hist)), job_owner(j)) for j, t in running]
     free_at = [now] * max(0, slots - len(busy)) + [e for e, _ in busy]
     if not free_at:
@@ -1801,16 +1813,27 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
     pending = list(queued)
     out = []
     while pending:
+        solos = [x for x in pending if is_solo(x[1])]
+        plain = [x for x in pending if not is_solo(x[1])]
         t = min(free_at)
         busy = [(e, o) for e, o in busy if e > t]
+        if not solos:
+            ph = new_phase('ord', ph['t0']) if ph['phase'] != 'ord' else ph
+        elif not plain:
+            ph = new_phase('solo', max(free_at)) if ph['phase'] != 'solo' else ph
+        elif ph['phase'] == 'solo' and (ph['solo_started'] >= n_batch or
+                                        max(free_at) - ph['t0'] >= float(c.get('solo_phase_max_s', SOLO_PHASE_MAX_S))):
+            ph = new_phase('ord', max(free_at))
+        elif ph['phase'] == 'ord' and (t - ph['t0'] >= float(c.get('ord_window_s', ORD_WINDOW_S)) or
+                                       any(x[1].get('bump') or x[1].get('urgent') for x in solos)):
+            ph = new_phase('solo', max(free_at))
         rbo = {}
         for _, o in busy:
             rbo[o] = rbo.get(o, 0) + 1
-        pending.sort(key=lambda qj: sched_key(qj[1], rbo, ls))
-        # a solo job waits behind non-solo work until it has waited solo_max_wait_s (see solo_gate)
-        aged = [x for x in pending if is_solo(x[1]) and t - x[1].get('submitted_t', t) >= SOLO_MAX_WAIT_S]
-        plain = [x for x in pending if not is_solo(x[1])]
-        pick_ = aged[0] if aged else (plain[0] if plain else pending[0])
+        group = solos if ph['phase'] == 'solo' else plain
+        key = fair_key if ph['phase'] == 'solo' else sched_key
+        group.sort(key=lambda qj: key(qj[1], rbo, ls))
+        pick_ = group[0]
         pending.remove(pick_)
         qf, j = pick_
         est = estimate_s(j, hist)
@@ -1820,6 +1843,7 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
             free_at = [t + est] * len(free_at)
             busy = [(t + est, job_owner(j))]
             ls[job_owner(j)] = t
+            ph['solo_started'] += 1
             continue
         out.append((qf, j, t, est))
         free_at.remove(t)
@@ -2257,6 +2281,18 @@ def cmd_status(_argv):
     print(f'build throttle: cap now {st.get("build_cap_now")} ({st.get("build_cap_why", "")}; idle {st.get("idle_cap")}, '
           f'unmeasured games {st.get("run_cap")}, measured {st.get("game_cap")}), tokens held back {st.get("tokens_held_back")}, active buildq builds '
           f'{active_builds()}, compiler processes {compile_procs()}')
+    ph = st.get('phase') or {}
+    if ph:
+        print(f'window: {ph.get("phase")} for {int(time.time() - ph.get("t0", time.time()))} s'
+              f'{" (closing, solo jobs next)" if ph.get("closing") else ""}'
+              f'{", " + str(ph.get("solo_started", 0)) + " solo started" if ph.get("phase") == "solo" else ""}')
+    ob = st.get('outside_builds') or []
+    if ob:
+        by = {}
+        for b in ob:
+            by.setdefault(b.get('cwd', '?'), []).append(b.get('exe', '?'))
+        print('OUTSIDE BUILDS (compiling without buildq, they spoil speed runs): ' + '; '.join(
+            f'{cwd} [{", ".join(sorted(set(exes)))} x{len(exes)}]' for cwd, exes in by.items()))
     if st.get('power_hold'):
         print(st['power_hold'])
     if st.get('perf_hold'):
@@ -2285,7 +2321,8 @@ def cmd_status(_argv):
             rj = rjson(os.path.join(D['remote'], rf)) or {}
             print(f'running {rj.get("id")} ON LAPTOP {rj.get("name")} since {rj.get("claim", {}).get("started")} '
                   f'attempt {rj.get("attempts", 0) + 1}')
-    for qf, j, t, est in plan([(f, j) for f, j in load_queue() if j.get('where') != 'laptop'], running, max(1, slots), st.get('last_start_by_owner') or {}, now=start):
+    for qf, j, t, est in plan([(f, j) for f, j in load_queue() if j.get('where') != 'laptop'], running, max(1, slots), st.get('last_start_by_owner') or {}, now=start,
+                                 phase=st.get('phase'), c=cfg()):
         k = job_class(j)
         print(f'queued  {j.get("id")} {j.get("name")}  class {CLASS_NAMES.get(k, k)}{" bumped" if j.get("bump") else ""}'
               f'{" solo" if is_solo(j) else ""}  owner {job_owner(j)}  est start {time.strftime("%H:%M", time.localtime(t))} (~{int(est // 60)} min)')
@@ -2703,6 +2740,62 @@ def test_laptop():
           'Mac fallback after 3 tries, lost for laptop-only, result, cancel')
 
 
+def test_phases(bump_waiting):
+    """Alternating windows: phase_step / phase_admits / plan on synthetic queues."""
+    c = {'solo_batch_n': 3, 'ord_window_s': 1200}
+    S = lambda i, o='o1', **k: {'id': f's{i}', 'class': CLASSES['perf'], 'solo': True, 'owner': o, 'submitted_t': 0 + i, **k}
+    O = lambda i, o='o2', **k: {'id': f'g{i}', 'class': CLASSES['proof'], 'owner': o, 'submitted_t': 0 + i, **k}
+    ord0 = new_phase('ord', 0)
+    # ordinary window with solo + ordinary waiting stays open until the window time, then closes and flips on empty
+    assert phase_step(ord0, 100, [S(1)], [O(1)], False, False, c) is ord0
+    closing = phase_step(ord0, 1300, [S(1)], [O(1)], False, False, c)
+    assert closing['phase'] == 'ord' and closing['closing']
+    assert phase_step(closing, 1301, [S(1)], [O(1)], False, False, c) is closing
+    assert phase_step(closing, 1500, [S(1)], [O(1)], True, False, c)['phase'] == 'solo'
+    # nothing ordinary waiting: flip as soon as the machine is empty; no solo waiting: stay ordinary
+    assert phase_step(ord0, 5, [S(1)], [], True, False, c)['phase'] == 'solo'
+    assert phase_step(ord0, 5, [], [O(1)], True, False, c) is ord0
+    assert phase_step(ord0, 5, [S(1, bump=True)], [O(1)], True, False, c)['phase'] == 'solo'   # bump closes at once
+    # solo window: runs N back to back, then hands over; never flips while a solo runs
+    sol = new_phase('solo', 0)
+    assert phase_step(sol, 10, [S(1)], [O(1)], True, True, c) is sol
+    assert phase_step(sol, 10, [S(1)], [O(1)], True, False, c) is sol
+    done3 = dict(sol, solo_started=3)
+    assert phase_step(done3, 10, [S(1)], [O(1)], True, True, c) is done3
+    assert phase_step(done3, 10, [S(1)], [O(1)], True, False, c)['phase'] == 'ord'
+    assert phase_step(sol, 10, [], [O(1)], True, False, c)['phase'] == 'ord'
+    assert phase_step(sol, 2000, [S(1)], [O(1)], True, False, c)['phase'] == 'ord'      # solo window time bound
+    # admission
+    assert phase_admits(sol, True, 5, True, 360, 5, True, False, c)
+    assert not phase_admits(sol, True, 5, False, 360, 5, True, False, c)               # needs an empty machine
+    assert not phase_admits(dict(sol, solo_started=3), True, 5, True, 360, 5, True, False, c)
+    assert not phase_admits(sol, False, 5, True, 60, 5, True, False, c)                # ordinary waits in solo window...
+    assert phase_admits(sol, False, 5, True, 60, 5, True, True, c)                     # ...except in a build window
+    assert not phase_admits(ord0, True, 5, True, 360, 5, True, False, c)
+    assert phase_admits(ord0, False, 5, False, 60, 5, True, False, c)
+    assert not phase_admits(closing, False, 1400, False, 60, 5, True, False, c)
+    assert phase_admits(ord0, False, 5, False, 1200, 5, True, False, c)                # a 20 min soak fits a fresh window
+    assert not phase_admits(ord0, False, 1100, False, 1200, 5, True, False, c)         # ...not near the end
+    assert phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)          # unless it already waited 30 min
+    assert phase_admits(ord0, False, 1100, False, 2400, 5, False, False, c)            # no solo waiting: anything
+    # plan(): 9 solo (3 owners x 3) + 6 ordinary, 3 slots: solo batch of 3 then ordinary window, owners rotate
+    hist = ({}, {})
+    q = [(f'qs{i}', S(i, 'ab' if i < 5 else ('cd' if i < 7 else 'ef'), timeout_s=360)) for i in range(1, 10)]
+    q += [(f'qg{i}', O(i, 'x', timeout_s=300)) for i in range(1, 7)]
+    out = plan(q, [], 3, {}, now=1000, hist=hist, phase=new_phase('ord', 1000), c=c)
+    first = [qf for qf, *_ in out]
+    assert first[:6] == ['qg1', 'qg2', 'qg3', 'qg4', 'qg5', 'qg6'] or first[0].startswith('qg'), first
+    solo_order = [j['owner'] for _, j, *_ in out if is_solo(j)]
+    assert solo_order[:3] != ['ab', 'ab', 'ab'], solo_order       # one owner's halves do not take a whole batch
+    starts = {qf: t for qf, _, t, _ in out}
+    assert max(t for qf, t in starts.items() if qf.startswith('qg')) - 1000 < 2400   # ordinary starts bounded
+    mixed = [(f'm{i}', j) for i, j in enumerate([S(1, 'sp', **{'class': CLASSES['proof']}), S(2, 'sp', **{'class': CLASSES['proof']}),
+                                                  S(3, 'ct'), S(4, 'ge')])]
+    o = plan(mixed, [], 3, {'sp': 500}, now=1000, hist=({}, {}), phase=new_phase('solo', 1000), c=c)
+    assert [j['owner'] for _, j, *_ in o][:3] == ['ct', 'ge', 'sp'], [j['owner'] for _, j, *_ in o]   # proof-class chain does not jump perf solos
+    print('runq window self-test passed')
+
+
 def main():
     if os.path.basename(sys.argv[0]) == 'buildq':
         sys.exit(buildq(sys.argv[1:]))
@@ -2772,9 +2865,6 @@ def main():
         clear = [j['id'] for j in fake if not defer_perf_for_activity(j, False, False, False)]
         assert drained == ['proof'] and compiling == ['proof'], (drained, compiling)
         assert clear == ['perf-a', 'perf-b', 'proof'], clear
-        waiting = [(str(i), {'id': f'p{i}', 'class': CLASSES['perf'], 'submitted_t': 990 + i})
-                   for i in range(3)]
-        assert choose_perf_batch(waiting, 1000, 3, 1800, {}, {})[0] == ['p0', 'p1', 'p2']
         late = {'compiler_activity': {2718: {'pid': 2718, 'cpu_delta_s': 2.47, 'observed_s': 0.0},
                                       2900: {'pid': 2900, 'cpu_delta_s': 2.47, 'observed_s': 0.0}}, 'quiet_pids': []}
         sent = []
@@ -2783,19 +2873,8 @@ def main():
         assert [p['pid'] for p in meaningful_compiler_activity(late['compiler_activity'])] == [2900]  # outside one still counts
         assert freeze_late_buildq_compilers(late, {2900}, 1020.0, 1000.0, kill=lambda p, s_: sent.append(p)) == []
         assert [p['pid'] for p in meaningful_compiler_activity(late['compiler_activity'])] == [2900]
-        assert choose_perf_batch(waiting[:2], 1000, 3, 1800, {}, {})[0] == []
-        assert choose_perf_batch(waiting[:1], 2800, 3, 1800, {}, {})[0] == ['p0']
-        urgent = [("u", {'id': 'u', 'class': CLASSES['perf'], 'urgent': True, 'submitted_t': 999}), *waiting]
-        assert choose_perf_batch(urgent, 1000, 3, 1800, {}, {})[:2] == (['u'], 'urgent')
-        bump_waiting = [('q-stutter', {'id': 'stutter', 'class': CLASSES['perf'], 'owner': 'stutter',
-                                       'bump': True, 'bump_t': 1000}),
-                        ('q-perfvar', {'id': 'perfvar', 'class': CLASSES['perf'], 'owner': 'perf-variance'})]
-        selected, kind, _ = choose_perf_batch(bump_waiting, 1000, 3, 1800,
-                                              {'perf-variance': 0, 'stutter': 0}, {})
-        assert (selected, kind) == (['stutter'], 'bump'), (selected, kind)
+        bump_waiting = [{'id': 'stutter', 'class': CLASSES['perf'], 'owner': 'stutter', 'bump': True}]
         already_open = {'perfvar-B1'}
-        assert bumped_perf_jobs(bump_waiting, {'stutter', 'perfvar'}) == {'stutter'}
-        assert already_open | bumped_perf_jobs(bump_waiting, {'stutter', 'perfvar'}) == {'perfvar-B1', 'stutter'}
         assert allowed_during_perf_batch({'id': 'stutter', 'class': CLASSES['ship']}, already_open, False)
         assert not allowed_during_perf_batch({'id': 'long-ab', 'class': CLASSES['perf'] + 1},
                                              already_open, False)
@@ -2806,19 +2885,7 @@ def main():
         assert defer_perf_for_activity(perf, False, True, False, False)
         assert not defer_perf_for_activity(perf, False, True, False, True)
         assert defer_perf_for_activity(perf, False, True, True, True)
-        assert long_job_held(900, 100, True) and not long_job_held(120, 100, True)
-        assert not long_job_held(900, 100, False) and not long_job_held(900, 2000, True)
-        sg = lambda *a: solo_gate(*a)
-        ents = [('s', {'id': 's', 'class': CLASSES['proof'], 'solo': True, 'submitted_t': 900}),
-                ('a', {'id': 'a', 'class': CLASSES['sweep'], 'submitted_t': 950}),
-                ('b', {'id': 'b', 'class': CLASSES['proof'], 'submitted_t': 960})]
-        assert sg(ents, False, 1000, 600) == (['a', 'b'], None)        # busy machine: non-solo flows past a young solo
-        assert sg(ents, True, 1000, 600) == (['s', 'a', 'b'], None)    # quiet machine: anything may start
-        eligible, drain = sg(ents, False, 1600, 600)                    # solo waited 700 s: drain, start nothing
-        assert eligible == [] and drain['id'] == 's'
-        eligible, drain = sg(ents, True, 1600, 600)                     # drained: only the solo job starts
-        assert eligible == ['s'] and drain['id'] == 's'
-        assert sg(ents[1:], False, 1000, 600) == (['a', 'b'], None)
+        test_phases(bump_waiting)
         assert should_open_build_window(11, 300)
         assert not should_open_build_window(11, 299)
         assert not should_open_build_window(0, 600)
