@@ -360,13 +360,11 @@ void MslShaderTranslator::StartTranslation() {
   if (shader.uses_register_dynamic_addressing()) {
     Fail("dynamic register addressing");
   }
-  if (shader.memexport_eM_written() && !is_vertex_shader()) {
-    Fail("memexport in a pixel shader");
-  }
   if (is_vertex_shader()) {
     StartVertexShader();
     return;
   }
+  DeclareMemExport();
   // Float24 depth (docs/no-converter.md): converted in the epilogue like
   // CompletePixelShader_DSV_DepthTo24Bit, from the position's depth. The DXBC
   // declares SV_Position with sample interpolation for this; the converter's
@@ -1397,6 +1395,26 @@ void MslShaderTranslator::ExportToMemory(uint8_t export_eM) {
   Close();
 }
 
+void MslShaderTranslator::DeclareMemExport() {
+  uint8_t eM = current_shader().memexport_eM_written();
+  if (!eM) {
+    return;
+  }
+  // Memory export allowed: the shared memory is bound as a UAV. Helper pixels
+  // (derivative-only invocations) must not export, as on the console.
+  Line("uint xe_me_en = ((xe_sys[{}] & {}) != 0u{}) ? 0xFFFFFFFFu : 0u;",
+       offsetof(SystemConstants, flags) / 4,
+       U(DxbcShaderTranslator::kSysFlag_SharedMemoryIsUAV),
+       is_vertex_shader() ? "" : " && !simd_is_helper_thread()");
+  Line("uint xe_me_written = 0u;");
+  Line("float4 xe_eA = float4(0.0f);");
+  for (uint32_t i = 0; i < 5; ++i) {
+    if (eM & (1u << i)) {
+      Line("float4 xe_eM{} = float4(0.0f);", i);
+    }
+  }
+}
+
 void MslShaderTranslator::StartVertexShader() {
   Modification m = modification();
   // Domain shaders: the quad domain with patch indexing only, the only kind
@@ -1441,19 +1459,7 @@ void MslShaderTranslator::StartVertexShader() {
   Line("float4 xe_pos = float4(0.0f);");
   Line("float4 xe_pse = float4(-1.0f, 0.0f, 0.0f, 0.0f);");
   Line("int xe_vfetch_address = 0;");
-  if (uint8_t eM = current_shader().memexport_eM_written()) {
-    // Memory export allowed: the shared memory is bound as a UAV.
-    Line("uint xe_me_en = ((xe_sys[{}] & {}) != 0u) ? 0xFFFFFFFFu : 0u;",
-         offsetof(SystemConstants, flags) / 4,
-         U(DxbcShaderTranslator::kSysFlag_SharedMemoryIsUAV));
-    Line("uint xe_me_written = 0u;");
-    Line("float4 xe_eA = float4(0.0f);");
-    for (uint32_t i = 0; i < 5; ++i) {
-      if (eM & (1u << i)) {
-        Line("float4 xe_eM{} = float4(0.0f);", i);
-      }
-    }
-  }
+  DeclareMemExport();
   if (domain_quad) {
     // DxbcShaderTranslator::StartDomainShader, kQuadDomainPatchIndexed:
     // r0.x = patch index (from the hull shader), r0.yz = domain location,
@@ -3579,6 +3585,10 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
     }
     CompleteVertexShader();
   } else {
+    if (uint8_t eM =
+            current_shader().memexport_eM_potentially_written_before_end()) {
+      ExportToMemory(eM);
+    }
     CompletePixelShader();
   }
   if (failed()) {
