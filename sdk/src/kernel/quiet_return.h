@@ -9,3 +9,9 @@
     ctx.r3.u64 = (retval);                                                    \
   }                                                                           \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
+
+// Same, but leaves r3 untouched: what the old REX_EXPORT_STUB did. For functions BO2 polls where
+// returning 0 changed behaviour (town4: "Downloadable content has changed" Com_Error).
+#define REX_EXPORT_QUIET_PASSTHROUGH(name)                \
+  extern "C" REX_FUNC(name) { (void)base; (void)ctx; }    \
+  static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
