@@ -48,11 +48,17 @@ set(REXSYSTEM_SOURCES
     gpu_plugin_loader.cpp
     live_control.cpp
     patch_loader.cpp
-    savepoint.cpp
     thread.cpp
     thread_state.cpp
     xex_module.cpp
 )
+
+# Savepoints use Mach thread suspend: macOS only, no-op stubs elsewhere.
+if(APPLE)
+    list(APPEND REXSYSTEM_SOURCES savepoint.cpp)
+else()
+    list(APPEND REXSYSTEM_SOURCES savepoint_stub.cpp)
+endif()
 
 if(REXGLUE_PLATFORM_SWITCH)
     # A NRO is a single static executable: no shared libraries, no dlopen.

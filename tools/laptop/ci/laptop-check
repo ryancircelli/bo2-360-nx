@@ -1,0 +1,9 @@
+#!/bin/bash
+# laptop-check BRANCH [--bless] : run the laptop CI on a pushed bo2-360-nx branch, print PASS/FAIL per part.
+# `laptop-check --last [SHA]` shows the stored result. Results live on the laptop: ~/bo2-worker/ci/results/<sha>/
+H=ryanr@100.73.92.76
+case "${1:-}" in
+  ""|-h) echo "usage: laptop-check BRANCH [--bless] | --last [SHA]"; exit 2;;
+  --last) ssh $H "cat ~/bo2-worker/ci/results/${2:-latest}/summary.txt"; exit;;
+esac
+ssh -o ConnectTimeout=15 $H "bash ~/bo2-worker/ci/check.sh '$1' ${2:-}"
