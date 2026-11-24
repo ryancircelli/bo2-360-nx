@@ -11,12 +11,24 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xenumerator.h>
 #include "../quiet_return.h"
 
 namespace rex::kernel::xam {
 // No dashboard app is active: report an empty X_DASH_APP_INFO (three zero words).
 void XamGetActiveDashAppInfo_entry(mapped_void dash_app) {
   if (dash_app) std::memset(dash_app.as<uint8_t*>(), 0, 12);
+}
+
+// Offline: no profile manager, so the enumerator is valid but lists no accounts.
+u32 XamProfileCreateEnumerator_entry(u32 device_id, mapped_u32 handle_ptr) {
+  if (!handle_ptr) return X_ERROR_INVALID_PARAMETER;
+  auto e = make_object<XStaticUntypedEnumerator>(REX_KERNEL_STATE(), 1, 0x28);
+  auto result = e->Initialize(0xFF, 0xFE, 0x23001, 0x23003, 0);
+  if (XFAILED(result)) return result;
+  *handle_ptr = e->handle();
+  return X_ERROR_SUCCESS;
 }
 }  // namespace rex::kernel::xam
 REX_EXPORT(__imp__XamGetActiveDashAppInfo, rex::kernel::xam::XamGetActiveDashAppInfo_entry)
@@ -658,7 +670,7 @@ REX_EXPORT_STUB(__imp__XamPrepareGamerTiles);
 REX_EXPORT_STUB(__imp__XamProfileClose);
 REX_EXPORT_STUB(__imp__XamProfileControlPec);
 REX_EXPORT_STUB(__imp__XamProfileCreate);
-REX_EXPORT_STUB_RETURN(__imp__XamProfileCreateEnumerator, 0x8007065B);
+REX_EXPORT(__imp__XamProfileCreateEnumerator, rex::kernel::xam::XamProfileCreateEnumerator_entry)
 REX_EXPORT_STUB(__imp__XamProfileDelete);
 REX_EXPORT_STUB_RETURN(__imp__XamProfileEnumerate, 0x80070012);
 REX_EXPORT_STUB(__imp__XamProfileFindAccount);

@@ -753,6 +753,32 @@ u32 XamUserCreateAchievementEnumerator_entry(u32 title_id, u32 user_index, u32 x
   return X_ERROR_SUCCESS;
 }
 
+// Offline: no Live stats service. Validates like the real call and returns an empty enumerator.
+u32 XamUserCreateStatsEnumerator_entry(u32 title_id, u32 by_rank, u64 pivot, u32 row_count,
+                                       u32 spec_count, mapped_void specs_ptr,
+                                       mapped_u32 buffer_size_ptr, mapped_u32 handle_ptr) {
+  constexpr u32 kMaxRows = 100, kMaxSpecs = 10, kAttrsInSpec = 64;
+  constexpr u32 kSpecSize = 8 + kAttrsInSpec * 2, kResultsSize = 8, kViewSize = 16, kRowSize = 48,
+                kColumnSize = 24;
+  if (!row_count || row_count > kMaxRows || !spec_count || spec_count > kMaxSpecs || !specs_ptr ||
+      !buffer_size_ptr || !handle_ptr) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+  const uint8_t* specs = specs_ptr.as<const uint8_t*>();
+  uint64_t buffer_size = kResultsSize;
+  for (u32 i = 0; i < spec_count; ++i) {
+    const u32 columns = *reinterpret_cast<const rex::be<uint32_t>*>(specs + size_t(i) * kSpecSize + 4);
+    if (columns > kAttrsInSpec) return X_ERROR_INVALID_PARAMETER;
+    buffer_size += kViewSize + uint64_t(row_count) * (kRowSize + columns * kColumnSize);
+  }
+  *buffer_size_ptr = static_cast<u32>(buffer_size);
+  auto e = make_object<XStaticUntypedEnumerator>(REX_KERNEL_STATE(), 1, static_cast<size_t>(buffer_size));
+  auto result = e->Initialize(0xFF, 0xFB, 0xB0023, 0xB0024, 0);
+  if (XFAILED(result)) return result;
+  *handle_ptr = e->handle();
+  return X_ERROR_SUCCESS;
+}
+
 u32 XamParseGamerTileKey_entry(mapped_u32 key_ptr, mapped_u32 out1_ptr, mapped_u32 out2_ptr,
                                mapped_u32 out3_ptr) {
   *out1_ptr = 0xC0DE0001;
@@ -842,7 +868,7 @@ REX_EXPORT_STUB(__imp__XamUserAddRecentPlayer);
 REX_EXPORT_STUB(__imp__XamUserAllowedToPostToSocialNetwork);
 REX_EXPORT_STUB(__imp__XamUserCreateAvatarAssetEnumerator);
 REX_EXPORT_STUB_RETURN(__imp__XamUserCreatePlayerEnumerator, 0x8007065B);
-REX_EXPORT_STUB_RETURN(__imp__XamUserCreateStatsEnumerator, 0x8007065B);
+REX_EXPORT(__imp__XamUserCreateStatsEnumerator, rex::kernel::xam::XamUserCreateStatsEnumerator_entry)
 REX_EXPORT_STUB(__imp__XamUserCreateTitlesPlayedEnumerator);
 REX_EXPORT_STUB(__imp__XamUserFlushLogonQueue);
 REX_EXPORT_STUB(__imp__XamUserGetAge);
