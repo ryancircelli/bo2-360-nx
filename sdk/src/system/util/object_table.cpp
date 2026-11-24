@@ -172,16 +172,21 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
   for (const auto& [object, object_state] : state->objects) {
     object->Rewind(object_state);
   }
-  uint32_t moved = 0;
+  uint32_t moved = 0, locked = 0;
   for (const auto& [file, position] : state->file_positions) {
+    // Parking waits for free file locks; if it gave up, skip rather than block forever.
+    if (file->lock_held()) {
+      ++locked;
+      continue;
+    }
     if (file->position() != position) {
       ++moved;
       file->set_position(position);
     }
   }
   std::fprintf(stderr, "[savepoint-s3] object table: %u slots re-took their reference\n", retained);
-  std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound\n",
-               state->file_positions.size(), moved);
+  std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound, %u skipped (lock held)\n",
+               state->file_positions.size(), moved, locked);
   for (const auto& [port, q] : state->completions) {
     size_t before = port->RewindQueue(q);
     std::fprintf(stderr, "[savepoint-s3] io completion queue: %zu -> %zu\n", before, q.notifications.size());

@@ -41,6 +41,7 @@
 #include <rex/thread.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/xfile.h>
 #include <rex/system/xmemory.h>
 #include <rex/system/thread_state.h>
 #include <rex/system/xthread.h>
@@ -294,8 +295,8 @@ void StartMallocProbe() {
   pthread_create(&t, nullptr, MallocProbeMain, nullptr);
   pthread_detach(t);
 }
-int g_lock_fail_gcr = 0, g_lock_fail_malloc = 0;
-bool ParkedLocksFree() {
+int g_lock_fail_gcr = 0, g_lock_fail_malloc = 0, g_lock_fail_file = 0;
+bool ParkedLocksFree(KernelState* ks) {
   auto& m = rex::thread::global_critical_region::mutex();
   if (!m.try_lock()) { ++g_lock_fail_gcr; return false; }
   m.unlock();
@@ -307,23 +308,27 @@ bool ParkedLocksFree() {
   semaphore_signal(g_probe_sem);
   for (int i = 0; i < 25 && g_probe_done.load() < gen; ++i) usleep(1000);
   if (g_probe_done.load() < gen) { ++g_lock_fail_malloc; return false; }
+  // Host file locks (XFile::file_lock_): malloc is free now, so listing the files is safe.
+  for (auto& f : ks->object_table()->GetObjectsByType<XFile>()) {
+    if (f->lock_held()) { ++g_lock_fail_file; return false; }
+  }
   return true;
 }
 
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
   StartMallocProbe();
-  g_lock_fail_gcr = g_lock_fail_malloc = 0;
+  g_lock_fail_gcr = g_lock_fail_malloc = g_lock_fail_file = 0;
   auto start = std::chrono::steady_clock::now();
   for (int attempt = 0;; ++attempt) {
     auto parked = ParkThreadsOnce(ks);
-    bool free_now = ParkedLocksFree();
+    bool free_now = ParkedLocksFree(ks);
     bool give_up = std::chrono::steady_clock::now() - start > std::chrono::seconds(3);
     if (free_now || give_up) {
       if (attempt)
-        std::fprintf(stderr, "[savepoint-s3] park: %s after %d retries (%.0f ms; busy: global region %d, malloc %d)\n",
+        std::fprintf(stderr, "[savepoint-s3] park: %s after %d retries (%.0f ms; busy: global region %d, malloc %d, file %d)\n",
                      free_now ? "locks free" : "GAVE UP, locks still held", attempt,
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
-                     g_lock_fail_gcr, g_lock_fail_malloc);
+                     g_lock_fail_gcr, g_lock_fail_malloc, g_lock_fail_file);
       return parked;
     }
     for (auto& t : parked) thread_resume(MachPort(t.get()));
