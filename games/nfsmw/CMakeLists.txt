@@ -52,6 +52,7 @@ add_executable(nfsmw src/main.cpp)
 # GPU_PLUGINS: the native Metal renderer (game.toml's default) and the emulated Xbox 360 GPU, loaded
 # at runtime.
 rexglue_setup_target(nfsmw GPU_PLUGINS metal xenos)
+rexglue_patchable_all(nfsmw_recomp)   # test builds: -DREXGLUE_PATCHABLE_ALL=ON (default OFF)
 rexglue_game_manifest(nfsmw "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
 # rex_app.cpp (compiled into this target) includes imgui.h, but rexruntime links

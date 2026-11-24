@@ -31,6 +31,7 @@ endif()
 
 if(TARGET fh1_recomp)
     target_precompile_headers(fh1_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fh1_guest_memory.h")
+    rexglue_patchable_all(fh1_recomp)   # test builds: -DREXGLUE_PATCHABLE_ALL=ON (default OFF)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(fh1_recomp PRIVATE -fasync-exceptions)
     endif()
