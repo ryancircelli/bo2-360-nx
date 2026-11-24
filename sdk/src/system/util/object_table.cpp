@@ -147,10 +147,21 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
   if (table_capacity_ < state->entries.size() && !Resize(state->entries.size())) {
     return;
   }
+  // Every table slot owns one reference (AddHandle retains, RemoveHandle releases). An object the
+  // game closed after the capture is alive only through our retain, so the slot we put back must
+  // take its reference again; otherwise the next close after this load frees it and a later load
+  // revives a dangling pointer. Objects created after the capture lose their slot and are leaked
+  // on purpose (a thread may still hold them).
+  uint32_t retained = 0;
   for (uint32_t slot = 0; slot < table_capacity_; ++slot) {
     if (slot < state->entries.size()) {
       table_[slot].handle_ref_count = state->entries[slot].handle_ref_count;
-      AtomicStore(table_[slot].object, state->entries[slot].object);
+      XObject* want = state->entries[slot].object;
+      if (want && table_[slot].object != want) {
+        want->Retain();
+        ++retained;
+      }
+      AtomicStore(table_[slot].object, want);
     } else {
       table_[slot].handle_ref_count = 0;
       AtomicStore(table_[slot].object, static_cast<XObject*>(nullptr));
@@ -168,6 +179,7 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
       file->set_position(position);
     }
   }
+  std::fprintf(stderr, "[savepoint-s3] object table: %u slots re-took their reference\n", retained);
   std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound\n",
                state->file_positions.size(), moved);
   for (const auto& [port, q] : state->completions) {
