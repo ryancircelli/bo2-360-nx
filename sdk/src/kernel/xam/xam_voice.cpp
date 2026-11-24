@@ -67,5 +67,5 @@ REX_EXPORT_STUB(__imp__XamVoiceMuteMicArray);
 REX_EXPORT_STUB(__imp__XamVoiceRecordUserPrivileges);
 REX_EXPORT_STUB(__imp__XamVoiceSetAudioCaptureRoutine);
 REX_EXPORT_STUB(__imp__XamVoiceSetMicArrayBeamAngle);
-REX_EXPORT_STUB(__imp__XamVoiceSetMicArrayIdleUsers);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__XamVoiceSetMicArrayIdleUsers)  // no reference implementation; success, no log
 REX_EXPORT_STUB_RETURN(__imp__XamVoiceSubmitPacket, 0);
