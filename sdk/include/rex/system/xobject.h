@@ -186,18 +186,36 @@ class XObject {
     std::vector<X_HANDLE> handles;
     rex::thread::WaitHandleRewindState wait;
     bool has_wait = false;
+    int32_t pointer_refs = 0;
   };
   void CaptureRewindState(RewindState* state) {
     state->handles = handles_;
+    state->pointer_refs = pointer_ref_count_.load(std::memory_order_acquire);
     if (auto* wait = GetWaitHandle()) {
       state->has_wait = rex::thread::CaptureWaitHandleRewindState(wait, &state->wait);
     }
   }
-  void Rewind(const RewindState& state) {
+  // Returns true when the pointer reference count had fallen below its captured value. The guest
+  // replays every ObDereferenceObject it made after the capture, once per load, while the references
+  // it took before the capture are not replayed: without this, repeated loads drain the count to
+  // zero and free an object the guest still uses (the next KeSetEvent then runs on freed memory).
+  // `held` = references the savepoint itself added after capturing. Only ever raised: references
+  // taken after the capture by objects that are now leaked stay counted.
+  bool Rewind(const RewindState& state, int32_t held) {
     handles_ = state.handles;
     if (state.has_wait) {
       rex::thread::RewindWaitHandle(GetWaitHandle(), state.wait);
     }
+    const int32_t want = state.pointer_refs + held;
+    int32_t count = pointer_ref_count_.load(std::memory_order_acquire);
+    bool raised = false;
+    while (count < want) {
+      if (pointer_ref_count_.compare_exchange_weak(count, want, std::memory_order_acq_rel)) {
+        raised = true;
+        break;
+      }
+    }
+    return raised;
   }
 
   static object_ref<XObject> Restore(KernelState* kernel_state, Type type,

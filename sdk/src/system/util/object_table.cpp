@@ -169,8 +169,12 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
   }
   last_free_entry_ = state->last_free_entry;
   name_table_ = state->names;
+  uint32_t refs_raised = 0;
   for (const auto& [object, object_state] : state->objects) {
-    object->Rewind(object_state);
+    // +1: the object_ref this RewindState holds was taken after the count was captured.
+    if (object->Rewind(object_state, 1)) {
+      ++refs_raised;
+    }
   }
   uint32_t moved = 0, locked = 0;
   for (const auto& [file, position] : state->file_positions) {
@@ -184,7 +188,8 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
       file->set_position(position);
     }
   }
-  std::fprintf(stderr, "[savepoint-s3] object table: %u slots re-took their reference\n", retained);
+  std::fprintf(stderr, "[savepoint-s3] object table: %u slots re-took their reference, %u objects got back pointer references\n",
+               retained, refs_raised);
   std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound, %u skipped (lock held)\n",
                state->file_positions.size(), moved, locked);
   for (const auto& [port, q] : state->completions) {
