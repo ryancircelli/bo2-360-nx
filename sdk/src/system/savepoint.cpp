@@ -494,6 +494,8 @@ void Install() {
 std::vector<XThread*> g_held;
 Clock::time_point g_capture_time;
 
+namespace cs_trace { void SetPhase(uint32_t p); }
+
 SavepointStats CaptureInProcessSavepoint() {
   std::set_terminate(SavepointTerminate);
   ::signal(SIGABRT, SavepointAbortSignal);
