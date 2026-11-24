@@ -1,2 +1,0 @@
-bo1-menu-60	KNOWN: metal replay deadlocks (main thread waits on CP future, 0% GPU) on BO1 traces; open bug, not a picture regression
-bo1-zombies-300	KNOWN: same BO1 replay deadlock

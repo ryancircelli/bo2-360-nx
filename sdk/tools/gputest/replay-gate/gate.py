@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "replay"))
 import replay_diff as rd
 
 GATE = os.environ.get("REPLAY_GATE_DIR", os.path.expanduser("~/Games/Xbox360/bo2-build/replay-gate"))
-TIMEOUT = 150
+TIMEOUT = 1500  # bo1-menu-60 (1919 draws, per-draw readback) takes minutes under load; it never deadlocked
 PX_TOL = 3 / 255.0      # per-channel error that counts as a differing pixel
 PX_FRAC = 2e-4          # fraction of differing pixels allowed (PASS)
 MAX_ERR = 24 / 255.0    # any single pixel beyond this is a FAIL

@@ -17,4 +17,4 @@ CHANGED (listed in expected.tsv, not failing). FAIL prints the first diverging d
 
 Intended picture change: run `check`, look at the diff images, then `accept` that trace and say why in expected.tsv/commit.
 Not covered: CPU/PPC-side fixes (e.g. dot-product), flags that only act on the live path (constant-override file,
-FH1 blur threshold), anything the saved traces don't draw. Known gap: BO1 traces deadlock in Metal replay (no golden).
+FH1 blur threshold), anything the saved traces don't draw. BO1 traces replay slowly (per-draw readback, up to ~15 min under load), they do not deadlock.
