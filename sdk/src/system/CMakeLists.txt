@@ -48,6 +48,7 @@ set(REXSYSTEM_SOURCES
     gpu_plugin_loader.cpp
     patch_loader.cpp
     savepoint.cpp
+    savepoint_file.cpp
     thread.cpp
     thread_state.cpp
     xex_module.cpp

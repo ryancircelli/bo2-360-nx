@@ -27,6 +27,9 @@
 #include "rex/ui/windowed_app_context.h"
 #include "rex/graphics/flags.h"
 #include "rex/graphics/metal/metal_vsync_lock.h"
+#include "rex/graphics/metal/metal_shared_memory.h"
+#include <rex/stream.h>
+#include <rex/system/savepoint.h>
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/kernel/xboxkrnl/video.h>
@@ -57,7 +60,60 @@ namespace rex {
 namespace graphics {
 namespace metal {
 
-MetalGraphicsSystem::MetalGraphicsSystem() {}
+namespace {
+// Fresh-load save point file hook (rex/system/savepoint.h, GraphicsFileHook).
+bool FileHook(rex::system::IGraphicsSystem* interface, int op, std::vector<uint8_t>& state,
+              std::vector<uint8_t>& gpu_pages) {
+  auto* graphics = dynamic_cast<MetalGraphicsSystem*>(interface);
+  if (!graphics || !graphics->command_processor()) return false;
+  auto* cp = static_cast<MetalCommandProcessor*>(graphics->command_processor());
+  auto& regs = graphics->register_file()->values;
+  if (op == 0) {
+    // On the command-processor thread at its safe point: finish GPU work so the buffer is final.
+    if (!cp->DrainForCheckpoint()) return false;
+    std::vector<uint8_t> gs(256);
+    rex::stream::ByteStream gss(gs.data(), gs.size());
+    if (!graphics->Save(&gss)) return false;
+    uint32_t gs_len = uint32_t(gss.offset());
+    state.resize(4 + gs_len + sizeof(regs) + sizeof(g_last_swap));
+    uint8_t* o = state.data();
+    std::memcpy(o, &gs_len, 4);
+    std::memcpy(o + 4, gs.data(), gs_len);
+    std::memcpy(o + 4 + gs_len, regs, sizeof(regs));
+    std::memcpy(o + 4 + gs_len + sizeof(regs), g_last_swap, sizeof(g_last_swap));
+    auto* sm = cp->shared_memory();
+    const uint8_t* gpu = static_cast<const uint8_t*>(sm->GetBuffer()->contents());
+    gpu_pages.clear();
+    for (auto [address, size] : sm->GpuWrittenRanges()) {
+      size_t at = gpu_pages.size();
+      gpu_pages.resize(at + 8 + size);
+      std::memcpy(gpu_pages.data() + at, &address, 4);
+      std::memcpy(gpu_pages.data() + at + 4, &size, 4);
+      std::memcpy(gpu_pages.data() + at + 8, gpu + address, size);
+    }
+    return true;
+  }
+  if (op == 1) {
+    // shortcut: stage 1 restores the register file and presents the saved frame only; the ring
+    // and interrupt state (the first gs_len bytes) are applied once guest threads resume (stage 2).
+    uint32_t gs_len = 0;
+    if (state.size() < 4) return false;
+    std::memcpy(&gs_len, state.data(), 4);
+    if (state.size() != 4 + gs_len + sizeof(regs) + sizeof(g_last_swap)) return false;
+    std::memcpy(regs, state.data() + 4 + gs_len, sizeof(regs));
+    uint32_t swap[9];
+    std::memcpy(swap, state.data() + 4 + gs_len + sizeof(regs), sizeof(swap));
+    std::memcpy(&regs[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], &swap[3], 6 * sizeof(uint32_t));
+    graphics->InvalidateGpuMemory();
+    CommandProcessor* base_cp = cp;  // IssueSwap is public on the base class only
+    if (swap[0]) cp->CallInThread([base_cp, swap] { base_cp->IssueSwap(swap[0], swap[1], swap[2]); });
+    return true;
+  }
+  return false;
+}
+}  // namespace
+
+MetalGraphicsSystem::MetalGraphicsSystem() { rex::system::SetGraphicsFileHook(this, FileHook); }
 
 MetalGraphicsSystem::~MetalGraphicsSystem() {}
 

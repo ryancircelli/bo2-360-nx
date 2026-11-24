@@ -1123,6 +1123,8 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader, 
   return true;
 }
 
+uint32_t g_last_swap[9] = {};
+
 bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, uint32_t packet,
                                                   uint32_t count) {
   SCOPE_profile_cpu_f("gpu");
@@ -1155,6 +1157,10 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
   uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
   reader->AdvanceRead((count - 4) * sizeof(uint32_t));
 
+  g_last_swap[0] = frontbuffer_ptr;
+  g_last_swap[1] = frontbuffer_width;
+  g_last_swap[2] = frontbuffer_height;
+  std::memcpy(&g_last_swap[3], &register_file_->values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], 6 * sizeof(uint32_t));
   IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
 
   ++counter_;

@@ -105,6 +105,24 @@ void SharedMemory::SetSystemPageBlocksValidWithGpuDataWritten() {
   system_page_flags_valid_ = system_page_flags_valid_and_gpu_written_;
 }
 
+std::vector<std::pair<uint32_t, uint32_t>> SharedMemory::GpuWrittenRanges() {
+  auto global_lock = global_critical_region_.Acquire();
+  std::vector<std::pair<uint32_t, uint32_t>> out;
+  const uint32_t page = 1u << page_size_log2_;
+  const size_t blocks = ((kBufferSize >> page_size_log2_) + 63) / 64;  // vector here, raw array in the Metal copy
+  for (size_t b = 0; b < blocks; ++b) {
+    for (uint64_t bits = system_page_flags_valid_and_gpu_written_[b]; bits; bits &= bits - 1) {
+      uint32_t address = uint32_t((b * 64 + __builtin_ctzll(bits)) << page_size_log2_);
+      if (!out.empty() && out.back().first + out.back().second == address) {
+        out.back().second += page;
+      } else {
+        out.push_back({address, page});
+      }
+    }
+  }
+  return out;
+}
+
 void SharedMemory::ClearCache() {
   // Keeping GPU-written data, so "invalidated by GPU".
   FireWatches(0, (kBufferSize - 1) >> page_size_log2_, true);

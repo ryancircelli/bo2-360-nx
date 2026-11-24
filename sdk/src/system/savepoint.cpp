@@ -915,14 +915,25 @@ int g_op = 0;  // 1 save, 2 load
 uint64_t g_seq = 0, g_done = 0;
 std::string g_result;
 int g_loads = 0;
+std::string g_path;  // op 3
 }  // namespace control
 
+// savepoint_file.cpp writes the capture out through this.
+void VisitInProcessSnapshot(
+    const std::function<void(memory::BaseHeap*, const memory::BaseHeap::RewindState&)>& heap,
+    const std::function<void(uint32_t space, uint32_t base, uint32_t size, uint32_t protect,
+                             const uint8_t* data)>& region) {
+  for (auto& h : g_snap.heaps) heap(h.first, h.second);
+  for (auto& r : g_snap.regions) region(r.space, r.base, r.size, r.protect, r.data.data());
+}
+
 std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms) {
-  int code = op == "save" ? 1 : op == "load" ? 2 : 0;
-  if (!code) return "error usage: savepoint save|load";
+  int code = op == "save" ? 1 : op == "load" ? 2 : op.rfind("file ", 0) == 0 ? 3 : 0;
+  if (!code) return "error usage: savepoint save|load|file PATH";
   std::unique_lock<std::mutex> l(control::g_m);
   if (control::g_op) return "error busy";
   control::g_op = code;
+  if (code == 3) control::g_path = op.substr(5);
   uint64_t seq = ++control::g_seq;
   if (!control::g_cv.wait_for(l, std::chrono::milliseconds(timeout_ms), [&] { return control::g_done >= seq; })) {
     control::g_op = 0;
@@ -940,8 +951,10 @@ void ServiceControlRequest(int frame) {
     seq = control::g_seq;
   }
   if (!op) return;
-  char buf[200];
-  if (op == 1) {
+  char buf[1024];
+  if (op == 3) {
+    std::snprintf(buf, sizeof buf, "%s", WriteSavepointFile(control::g_path, frame).c_str());
+  } else if (op == 1) {
     auto st = CaptureInProcessSavepoint();
     control::g_loads = 0;
     std::snprintf(buf, sizeof buf, "ok save frame=%d mb=%llu ms=%.1f threads=%u", frame,

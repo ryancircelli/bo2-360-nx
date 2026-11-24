@@ -33,6 +33,8 @@ class SharedMemory {
   virtual void ClearCache();
   void SetSystemPageBlocksValidWithGpuDataWritten();
   void InvalidateAllPages();
+  // {physical address, size} of every page whose current data only the GPU copy holds (fresh-load save points).
+  std::vector<std::pair<uint32_t, uint32_t>> GpuWrittenRanges();
 
   typedef void (*GlobalWatchCallback)(const std::unique_lock<std::recursive_mutex>& global_lock,
                                       void* context, uint32_t address_first, uint32_t address_last,
