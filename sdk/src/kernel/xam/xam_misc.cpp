@@ -24,7 +24,7 @@ void XamGetActiveDashAppInfo_entry(mapped_void dash_app) {
 // Offline: no profile manager, so the enumerator is valid but lists no accounts.
 u32 XamProfileCreateEnumerator_entry(u32 device_id, mapped_u32 handle_ptr) {
   if (!handle_ptr) return X_ERROR_INVALID_PARAMETER;
-  auto e = make_object<XStaticUntypedEnumerator>(REX_KERNEL_STATE(), 1, 0x28);
+  auto e = make_object<system::XStaticUntypedEnumerator>(REX_KERNEL_STATE(), 1, 0x28);
   auto result = e->Initialize(0xFF, 0xFE, 0x23001, 0x23003, 0);
   if (XFAILED(result)) return result;
   *handle_ptr = e->handle();
