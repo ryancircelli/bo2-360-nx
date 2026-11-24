@@ -44,7 +44,9 @@ bad=0; n=0; nog=""
 t=$(date +%s)
 for x in "$CI"/traces/*.xtr; do
   name=$(basename "$x" .xtr); g=$CI/goldens/$name.json; d=$out/replay-$name; n=$((n+1))
-  "$ref" replay "$x" -o "$d" --rop edram --frame 0 --dump-shaders >"$d.log" 2>&1
+  # time -v leaves the exit status/signal and peak RSS at the end of the log: a silent death shows up there
+  /usr/bin/time -v "$ref" replay "$x" -o "$d" --rop edram --frame 0 --dump-shaders >"$d.log" 2>&1
+  echo "refxenos $name exit $?" >>"$d.log"
   mkdir -p "$out/shaders"; cp -n "$d"/shaders/*.bin "$out/shaders/" 2>/dev/null
   [ -f "$d/draws.jsonl" ] || { rec replay FAIL "$name: no draws.jsonl, see $d.log"; bad=1; continue; }
   # slim golden = {draw: {target: hash}}; accepts the Mac baseline format too
