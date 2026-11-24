@@ -33,7 +33,7 @@ GAMES = {
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
     'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
-    'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=330, settle_s=75, seed='nfshp-360'),
+    'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
@@ -646,7 +646,7 @@ def g_speed_bench(a):
 
 
 # Measured same-build run-to-run CV for speed routes without a template route in abverdict (see reports/gate-kit-rest.md).
-SPEED_SIGMA = {}
+SPEED_SIGMA = {'nfsmw': 0.02}   # 2 valid same-build runs 58.52/58.19 (0.56% apart) -> 2%, rounded up; fh1 unmeasured (its one run was invalid: compiler overlap)
 
 
 def g_speed(a):
@@ -688,7 +688,8 @@ def g_speed(a):
         sh([RUNQ, 'wait'] + jobs)
         if ckey and jobs:
             control_store(ckey, outs['A'][-1]) if outs['A'][-1].startswith(base) and os.path.isfile(os.path.join(outs['A'][-1], 'run', 'perf.tsv')) else None
-        v = sh(['python3', abv, '--a'] + outs['A'] + ['--b'] + outs['B'])
+        sig = ['--sigma', str(SPEED_SIGMA[a.game])] if a.game in SPEED_SIGMA else []
+        v = sh(['python3', abv] + sig + ['--a'] + outs['A'] + ['--b'] + outs['B'])
         print(v.stdout.strip().splitlines()[-1] if v.stdout.strip() else v.stderr.strip()[-200:])
         word = re.search(r'\b(FASTER|SLOWER|SAME|MORE|INVALID)\b', v.stdout or '')
         if v.returncode == 0:
