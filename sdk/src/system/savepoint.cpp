@@ -636,8 +636,20 @@ SavepointStats CaptureInProcessSavepoint() {
   const char* hold = std::getenv("REX_SAVEPOINT_HOLD");
   g_held.clear();
   for (auto& t : parked) {
+    // Also "guest-but:7,1A" (every guest thread except those thread ids, hex) and "ids:7,1A" (only those).
+    auto listed = [&](const char* list) {
+      for (const char* q = list; *q;) {
+        char* end = nullptr;
+        if (std::strtoul(q, &end, 16) == t->thread_id()) return true;
+        q = (*end == ',') ? end + 1 : end;
+        if (end == q && *q != ',') break;
+      }
+      return false;
+    };
     bool held = hold && ((std::strcmp(hold, "guest") == 0 && t->is_guest_thread()) ||
-                         (std::strcmp(hold, "host") == 0 && !t->is_guest_thread()));
+                         (std::strcmp(hold, "host") == 0 && !t->is_guest_thread()) ||
+                         (std::strncmp(hold, "guest-but:", 10) == 0 && t->is_guest_thread() && !listed(hold + 10)) ||
+                         (std::strncmp(hold, "ids:", 4) == 0 && listed(hold + 4)));
     if (held) {
       g_held.push_back(t.get());
       continue;
