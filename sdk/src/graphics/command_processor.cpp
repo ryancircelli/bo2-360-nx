@@ -102,14 +102,6 @@ using namespace rex::graphics::xenos;
 
 static std::unordered_map<CommandProcessor*, std::unique_ptr<CommandProcessor::RewindState>>
     rewind_states;
-static std::unordered_map<CommandProcessor*, bool> rewound_during_primary;
-
-bool ConsumeRewoundDuringPrimary(CommandProcessor* processor) {
-  auto it = rewound_during_primary.find(processor);
-  if (it == rewound_during_primary.end()) return false;
-  rewound_during_primary.erase(it);
-  return true;
-}
 
 namespace {
 
@@ -260,6 +252,20 @@ void CommandProcessor::WorkerThreadMain() {
       uint32_t loop_count = 0;
 #endif
       do {
+        static const bool savepoint_diag = std::getenv("REX_SAVEPOINT_DIAG") != nullptr;
+        if (savepoint_diag) {
+          static auto last = std::chrono::steady_clock::now();
+          auto now = std::chrono::steady_clock::now();
+          if (now - last > std::chrono::seconds(2)) {
+            last = now;
+            std::fprintf(stderr, "[savepoint-cp] stalled: read %u write %u wb %u swaps %llu\n", read_ptr_index_,
+                         write_ptr_index_.load(),
+                         read_ptr_writeback_ptr_ ? memory::load_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_)) : 0u,
+                         (unsigned long long)swap_count_.load());
+          }
+        }
+        // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
+        system::ServiceSavepointRequest();
 #if REX_PLATFORM_SWITCH
         // UpdateWritePointer and CallInThread signal the event. Leave the CPU free
         // for the guest from the first attempt, without 501 polls beforehand.
@@ -275,20 +281,6 @@ void CommandProcessor::WorkerThreadMain() {
         rex::thread::MaybeYield();
         loop_count++;
 #endif
-        static const bool savepoint_diag = std::getenv("REX_SAVEPOINT_DIAG") != nullptr;
-        if (savepoint_diag) {
-          static auto last = std::chrono::steady_clock::now();
-          auto now = std::chrono::steady_clock::now();
-          if (now - last > std::chrono::seconds(2)) {
-            last = now;
-            std::fprintf(stderr, "[savepoint-cp] stalled: read %u write %u wb %u swaps %llu\n", read_ptr_index_,
-                         write_ptr_index_.load(),
-                         read_ptr_writeback_ptr_ ? memory::load_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_)) : 0u,
-                         (unsigned long long)swap_count_.load());
-          }
-        }
-        // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
-        system::ServiceSavepointRequest();
         write_ptr_index = write_ptr_index_.load();
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
@@ -300,10 +292,7 @@ void CommandProcessor::WorkerThreadMain() {
     assert_true(read_ptr_index_ != write_ptr_index);
 
     // Execute. Note that we handle wraparound transparently.
-    uint32_t executed_read_index = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
-    if (!ConsumeRewoundDuringPrimary(this)) {
-      read_ptr_index_ = executed_read_index;
-    }
+    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
 
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.
@@ -402,7 +391,6 @@ void CommandProcessor::Rewind(const RewindState& state) {
   // Rewinds run from ServiceSavepointRequest between batches, never inside ExecutePrimaryBuffer.
   // Flagging "rewound during primary" here discarded the read-pointer advance of the next batch, so
   // the CP executed it twice (its fences, interrupts and memory writes reached the guest twice).
-  if (std::getenv("REX_SAVEPOINT_CP_OLD_FLAG")) rewound_during_primary[this] = true;
   bin_select_ = state.bin_select;
   bin_mask_ = state.bin_mask;
   active_vertex_shader_ = state.active_vertex_shader;
