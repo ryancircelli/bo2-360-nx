@@ -527,6 +527,10 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
         driver->frames_unused_.push(buffer);
+        // The frame is dropped; give its request back or the game runs out of requests after a few failures.
+        if (!driver->pump_active_.load(std::memory_order_relaxed)) {
+          driver->semaphore_->Release(1, nullptr);
+        }
         break;
       }
       RecordOutput(data, len, driver->sdl_device_channels_);
