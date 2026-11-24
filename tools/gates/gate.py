@@ -769,6 +769,24 @@ def g_install(a):
                     f'{dest} codesign rc {cs2} identical-to-new {same} leftovers {leftovers or "none"} | ' + '; '.join(notes) + f' | restore: {restore}', out, out)
 
 
+def g_replay(a):
+    """gate replay BUILD_DIR [--repo R] [--only a,b]: picture-regression replay of the saved GPU traces (sdk/tools/gputest/replay-gate).
+    Run it first for any change under sdk/src/graphics. Its runs go through runq (harness, non-solo); BO1 traces take minutes."""
+    if len(a.game) != 1:
+        sys.exit('gate replay: BUILD_DIR (dir with rexgpu-replay + librexgpu-metal.dylib, flat or per-game subdirs)')
+    tool = os.path.join(os.path.expanduser(a.repo or '.'), 'sdk/tools/gputest/replay-gate/replay-gate')
+    if not os.path.exists(tool):
+        sys.exit(f'gate replay: no {tool} (pass --repo of a tree with the replay-gate tool)')
+    out = a.out or default_out('all', 'replay')
+    os.makedirs(out, exist_ok=True)
+    r = subprocess.run([tool, 'check', os.path.expanduser(a.game[0])] + (['--only', a.only] if a.only else []), capture_output=True, text=True)
+    open(os.path.join(out, 'replay-gate.txt'), 'w').write(r.stdout + r.stderr)
+    res = re.search(r'^RESULT: (.*)$', r.stdout, re.M)
+    bad = [l.split()[1] for l in r.stdout.splitlines() if re.match(r'\s+(FAIL|ERROR)\b', l)]
+    ok = r.returncode == 0
+    return out_line('PASS' if ok else 'FAIL', 'replay', 'all', (res.group(1).strip() if res else 'no RESULT line') + (' failing ' + ','.join(bad) if bad else ''), out, out)
+
+
 def game_word(game):
     return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops'}[game]
 
@@ -776,7 +794,7 @@ def game_word(game):
 # ----------------------------------------------------------------------------------------------- cli
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun'])
+    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay'])
     p.add_argument('game', nargs='*')
     p.add_argument('--app', help='app to test (default: the installed one); for install: the NEW app')
     p.add_argument('--out')
@@ -792,7 +810,7 @@ def main():
     p.add_argument('--now', action='store_true', help='run inline instead of through runq (debugging only)')
     p.add_argument('--inner', action='store_true', help=argparse.SUPPRESS)
     p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3), p.add_argument('--bench', action='store_true', help='speed bo2: deterministic bench instead of fps pairs'), p.add_argument('--no-control-cache', action='store_true')
-    p.add_argument('--repo'), p.add_argument('--head', default='HEAD'), p.add_argument('--integration', default='origin/main')
+    p.add_argument('--only'), p.add_argument('--repo'), p.add_argument('--head', default='HEAD'), p.add_argument('--integration', default='origin/main')
     p.add_argument('--dest'), p.add_argument('--restore-dir', dest='restore_dir'), p.add_argument('--dry-run', action='store_true')
     argv = sys.argv[1:]
     inner = '--inner' in argv
@@ -804,6 +822,8 @@ def main():
     if a.gate == 'set':
         a.games, a.game = a.game, None
         return g_set(a)
+    if a.gate == 'replay':
+        return g_replay(a)
     if len(a.game) != 1 or a.game[0] not in GAMES:
         sys.exit(f'gate: GAME must be one of {" ".join(GAMES)}')
     a.game = a.game[0]
