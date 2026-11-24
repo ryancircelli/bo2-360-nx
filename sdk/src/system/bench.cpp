@@ -189,6 +189,11 @@ void Arm(const char* reason) {
   const int64_t at = int64_t(g_frame.load()) + std::max(0, REXCVAR_GET(bench_warmup_frames));
   if (g_arm_frame.compare_exchange_strong(expected, at)) {
     g_reason = reason ? reason : "";
+    // A fast-forwarded boot (guest_time_scale, e.g. 2) ends here: the window and what leads to it run at 1x.
+    if (chrono::Clock::guest_time_scalar() != 1.0) {
+      REXLOG_INFO("[bench] guest_time_scale {} -> 1 for the window", chrono::Clock::guest_time_scalar());
+      chrono::Clock::set_guest_time_scalar(1.0);
+    }
     REXLOG_INFO("[bench] armed ({}): window of {} frames starts at frame {}", g_reason, REXCVAR_GET(bench_frames), at);
   }
 }

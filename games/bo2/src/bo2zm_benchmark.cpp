@@ -764,6 +764,8 @@ void AnnotatePlayer(bool present) {
   }
   g_start.store(Now() + int64_t(kWait * 1e9), std::memory_order_relaxed);
   REXLOG_INFO("[benchmark] player in a match: the {:.0f} s route starts in {:.0f} s", Duration(), kWait);
+  // bench_frames: the window starts at the spawn, standing still before zombies arrive (least random), then the route.
+  rex::bench::Arm("player in a match");
   if (ParsedSpot().valid) {
     bo2zm::cheats::SetStopSpawns(true);  // a still scene: the spot's burst compares frames
     REXLOG_INFO("[spot] the route is a test spot: {} (no zombie spawns from here)", REXCVAR_GET(bo2zm_test_spot));
@@ -892,7 +894,6 @@ void AnnotateFrame() {
     g_earlier = now;
     return;
   }
-  rex::bench::Arm("benchmark route start");  // bench_frames: the window starts with the route (first call only)
   if (t >= Duration()) {
     g_summarized = true;
     bo2zm::perf_log::Event("route_end");  // the end of perf_summary.py's window
