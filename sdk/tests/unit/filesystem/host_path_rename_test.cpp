@@ -2,10 +2,13 @@
 
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 
 #include <rex/filesystem/devices/host_path_device.h>
+#include <rex/filesystem.h>
 #include <rex/filesystem/entry.h>
+#include <rex/filesystem/vfs.h>
 #include <rex/system/xtypes.h>
 
 using rex::filesystem::HostPathDevice;
@@ -92,5 +95,25 @@ TEST_CASE("Rename into a subdirectory moves the entry under that directory") {
   CHECK(device.ResolvePath("sub\\a.sav") == entry);
   CHECK(CountChildren(device.ResolvePath(""), "a.tmp") == 0);
   CHECK(Read(dir / "sub" / "a.sav") == "x");
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("Open-if of a host file missing from the tree opens it instead of truncating it") {
+  auto dir = MakeDir();
+  rex::filesystem::VirtualFileSystem vfs;
+  auto device = std::make_unique<HostPathDevice>("\\Device\\Content\\1", dir, false);
+  REQUIRE(device->Initialize());
+  REQUIRE(vfs.RegisterDevice(std::move(device)));
+  Write(dir / "late.sav", "progress");  // appears after the mount walked the directory
+
+  rex::filesystem::File* file = nullptr;
+  rex::filesystem::FileAction action{};
+  REQUIRE(vfs.OpenFile(nullptr, "\\Device\\Content\\1\\late.sav",
+                       rex::filesystem::FileDisposition::kOpenIf,
+                       rex::filesystem::FileAccess::kFileReadData, false, true, &file,
+                       &action) == X_STATUS_SUCCESS);
+  CHECK(action == rex::filesystem::FileAction::kOpened);
+  CHECK(Read(dir / "late.sav") == "progress");
+  file->Destroy();
   std::filesystem::remove_all(dir);
 }
