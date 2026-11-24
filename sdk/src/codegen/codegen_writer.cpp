@@ -33,6 +33,7 @@
 #include <rex/system/xmemory.h>
 
 #include "codegen_logging.h"
+#include "xdk_signatures.h"
 #include "file_io.h"
 #include "template_registry_internal.h"
 
@@ -284,6 +285,15 @@ bool CodegenWriter::write(bool force) {
     if (auto* node = graph().getFunction(addr)) {
       node->setName(std::move(crtName));
     }
+  }
+  // XDK library routines recognised by signature; a game's own [rexcrt] entry (by key or address) wins.
+  for (const auto& [key, addr] : FindXdkLibraryFunctions(ctx_.binary())) {
+    auto* node = graph().getFunction(addr);
+    if (!node || config().rexcrtFunctions.contains(key) || rexcrtByAddr.contains(addr))
+      continue;
+    REXCODEGEN_INFO("[xdk] {} recognised at 0x{:08X}, calling rexcrt_{}", key, addr, key);
+    rexcrtByAddr[addr] = fmt::format("rexcrt_{}", key);
+    node->setName(rexcrtByAddr[addr]);
   }
 
   const std::string& projectName = config().projectName;
