@@ -1,0 +1,32 @@
+#!/bin/bash
+# CMAKE_<LANG>_COMPILER_LAUNCHER for all bo2 builds: ccache that works across worktrees even with a PCH.
+# A PCH embeds absolute paths, so ccache can never match it between worktrees. We hide the PCH from ccache (it then hashes the
+# textual -include header; preprocessor mode, base_dir) and re-add it only when a real compile runs. PCH generation is never cached.
+[ -n "$BO2CC_DEBUG" ] && set -x
+D=$(cd "$(dirname "$0")" && pwd)
+export CCACHE_CONFIGPATH=${CCACHE_CONFIGPATH:-$D/ccache.conf}
+# LC_CTYPE is hashed by ccache and differs between buildq and a shell.
+export LC_CTYPE=C.UTF-8
+# Configure with physical paths (/private/tmp/..., buildq rewrites /tmp/ for you): ninja runs in the physical dir, and ccache base_dir
+# then rewrites every path relative to it. A /tmp spelling anywhere gives ../../../tmp/<worktree>/ paths that differ per worktree.
+comp=$1; shift
+args=() pch= inc=
+while [ $# -gt 0 ]; do
+  if [ "$1" = -emit-pch ]; then exec "$comp" "${args[@]}" "$@"; fi
+  if [ "$1" = -Xclang ] && [ "$2" = -include ] && [ "$3" = -Xclang ]; then inc=$4; shift 4; continue; fi
+  if [ "$1" = -Xclang ] && [ "$2" = -include-pch ] && [ "$3" = -Xclang ]; then pch=$4; shift 4; continue; fi
+  args+=("$1"); shift
+done
+# Path-neutral objects: __FILE__ (REX_LOG macros) and debug info otherwise embed the worktree path and every worktree misses.
+# The flag is added in the shim, so ccache does not hash the worktree path in the argument itself.
+src=; for a in "${args[@]}"; do src=$a; done
+root=$(git -C "$(dirname "$src")" rev-parse --show-toplevel 2>/dev/null)
+# macOS: /tmp is /private/tmp, git reports the real path but cmake spells /tmp: map both spellings.
+export BO2CC_INC=$inc BO2CC_ROOT=$root
+export BO2CC_MAP="${root:+-ffile-prefix-map=$root=/bo2src -ffile-prefix-map=${root#/private}=/bo2src} -ffile-prefix-map=$PWD=/bo2build -ffile-prefix-map=${PWD#/private}=/bo2build"
+if [ -n "$pch" ]; then
+  export BO2CC_REAL=$comp BO2CC_PCH=$pch
+  exec ccache "$D/shim/clang++" "${args[@]}"
+fi
+export BO2CC_REAL=$comp
+exec ccache "$D/shim/clang++" "${args[@]}"

@@ -1,0 +1,11 @@
+#!/bin/bash
+# ccache sees this as "the compiler". -E (hash) runs: textual -include header, -P (no path line markers), and a prefix map for the
+# relative spelling ccache base_dir rewrote paths to, so keys do not depend on where the build dir sits relative to the source.
+real=$BO2CC_REAL
+inc=(); [ -n "$BO2CC_INC" ] && inc=(-Xclang -include -Xclang "$BO2CC_INC")
+for a in "$@"; do if [ "$a" = -E ]; then
+  [ -z "$BO2CC_ROOT" ] && exec "$real" $BO2CC_MAP "$@"
+  rel=$(/usr/bin/python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1]))' "$BO2CC_ROOT")
+  exec "$real" $BO2CC_MAP -ffile-prefix-map=$rel=/bo2src -P "${inc[@]}" "$@"; fi; done
+[ -n "$BO2CC_PCH" ] && exec "$real" $BO2CC_MAP -Xclang -include-pch -Xclang "$BO2CC_PCH" "${inc[@]}" "$@"
+exec "$real" $BO2CC_MAP "${inc[@]}" "$@"
