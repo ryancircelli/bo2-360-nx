@@ -114,8 +114,12 @@ std::string Savepoint(const std::string& args) {
     RequestSavepoint(path);
     return "ok savepoint requested at the next frame: " + path;
   }
-  if (verb == "load") return "error savepoint load is not available yet (savepoint-rewind work)";
-  return "error usage: savepoint save PATH | savepoint load PATH";
+  // No path: the in-memory savepoint (save once, load it any number of times). The Metal test control
+  // answers these itself on a helper thread; this path serves other front ends. Blocks until the
+  // command processor reaches a safe point (20 s max), so never call it on the GPU command thread.
+  if ((verb == "save" || verb == "load") && path.empty()) return ControlInProcessSavepoint(verb, 20000);
+  if (verb == "load") return "error loading a savepoint file is not available yet (savepoint-fresh-load); 'savepoint load' loads the in-memory one";
+  return "error usage: savepoint save [PATH] | savepoint load";
 }
 
 }  // namespace
