@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <random>
 
 #if REX_PLATFORM_MAC
 #include <sys/select.h>
@@ -238,9 +239,11 @@ u32 NetDll_XNetGetOpt_entry(u32 one, u32 option_id, mapped_void buffer_ptr,
 }
 
 u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer_ptr, u32 length) {
-  // For now, constant values.
-  // This makes replicating things easier.
-  std::memset(buffer_ptr, 0xBB, length);
+  // Real random bytes: the game seeds nonces and keys from this, and a constant would give
+  // every copy of the game (and every console in a System Link match) the same values.
+  thread_local std::mt19937_64 gen{std::random_device{}()};
+  auto* bytes = buffer_ptr.as<uint8_t*>();
+  for (u32 i = 0; i < length; ++i) bytes[i] = static_cast<uint8_t>(gen());
 
   return 0;
 }
