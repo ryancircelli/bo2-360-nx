@@ -33,8 +33,13 @@ void XMutant::Initialize(bool initial_owner) {
 void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
   assert_false(mutant_);
 
-  // Haven't seen this yet, but it's possible.
-  assert_always();
+  // KeInitializeMutant leaves signal_state 0 when the caller is the initial owner.
+  const bool owned = header->signal_state <= 0;
+  mutant_ = rex::thread::Mutant::Create(owned);
+  assert_not_null(mutant_);
+  if (owned) {
+    owning_thread_ = XThread::GetCurrentThread();
+  }
 }
 
 X_STATUS XMutant::ReleaseMutant(uint32_t priority_increment, bool abandon, bool wait) {

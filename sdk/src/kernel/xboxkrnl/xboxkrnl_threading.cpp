@@ -616,6 +616,25 @@ u32 KeReleaseSemaphore_entry(ppc_ptr_t<X_KSEMAPHORE> semaphore_ptr, u32 incremen
   return xeKeReleaseSemaphore(semaphore_ptr, increment, adjustment, wait);
 }
 
+void KeInitializeMutant_entry(ppc_ptr_t<X_KMUTANT> mutant_ptr, u32 initial_owner) {
+  mutant_ptr->header.type = 2;  // MutantObject
+  mutant_ptr->header.signal_state = initial_owner ? 0 : 1;
+  mutant_ptr->owner_thread = 0;
+  mutant_ptr->abandoned = 0;
+  [[maybe_unused]] auto mutant =
+      XObject::GetNativeObject<XMutant>(REX_KERNEL_STATE(), mutant_ptr, 2 /* MutantObject */);
+  assert_not_null(mutant);
+}
+
+// Returns 0 on success; the real kernel raises on a non-owner release, we return the status.
+u32 KeReleaseMutant_entry(ppc_ptr_t<X_KMUTANT> mutant_ptr, u32 increment, u32 abandoned, u32 wait) {
+  auto mutant = XObject::GetNativeObject<XMutant>(REX_KERNEL_STATE(), mutant_ptr);
+  if (!mutant) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  return mutant->ReleaseMutant(increment, false, wait != 0);
+}
+
 u32 NtCreateSemaphore_entry(mapped_u32 handle_ptr, mapped_void obj_attributes_ptr, u32 count,
                             u32 limit) {
   // Check for an existing semaphore with the same name.
@@ -1409,7 +1428,6 @@ REX_EXPORT_STUB(__imp__KeInsertByKeyDeviceQueue);
 REX_EXPORT_STUB(__imp__KeInsertDeviceQueue);
 REX_EXPORT_STUB(__imp__KeInsertHeadQueue);
 REX_EXPORT_STUB(__imp__KeInsertQueue);
-REX_EXPORT_STUB(__imp__KeReleaseMutant);
 REX_EXPORT_STUB(__imp__KeRemoveByKeyDeviceQueue);
 REX_EXPORT_STUB(__imp__KeRemoveDeviceQueue);
 REX_EXPORT_STUB(__imp__KeRemoveEntryDeviceQueue);
@@ -1462,6 +1480,8 @@ REX_EXPORT(__imp__NtCreateEvent, rex::kernel::xboxkrnl::NtCreateEvent_entry)
 REX_EXPORT(__imp__NtSetEvent, rex::kernel::xboxkrnl::NtSetEvent_entry)
 REX_EXPORT(__imp__NtPulseEvent, rex::kernel::xboxkrnl::NtPulseEvent_entry)
 REX_EXPORT(__imp__NtClearEvent, rex::kernel::xboxkrnl::NtClearEvent_entry)
+REX_EXPORT(__imp__KeInitializeMutant, rex::kernel::xboxkrnl::KeInitializeMutant_entry)
+REX_EXPORT(__imp__KeReleaseMutant, rex::kernel::xboxkrnl::KeReleaseMutant_entry)
 REX_EXPORT(__imp__KeInitializeSemaphore, rex::kernel::xboxkrnl::KeInitializeSemaphore_entry)
 REX_EXPORT(__imp__KeReleaseSemaphore, rex::kernel::xboxkrnl::KeReleaseSemaphore_entry)
 REX_EXPORT(__imp__NtCreateSemaphore, rex::kernel::xboxkrnl::NtCreateSemaphore_entry)
@@ -1529,7 +1549,6 @@ REX_EXPORT_STUB(__imp__KeFlushUserModeCurrentTb);
 REX_EXPORT_STUB(__imp__KeFlushUserModeTb);
 REX_EXPORT_STUB(__imp__KeInitializeDeviceQueue);
 REX_EXPORT_STUB(__imp__KeInitializeInterrupt);
-REX_EXPORT_STUB(__imp__KeInitializeMutant);
 REX_EXPORT_STUB(__imp__KeInitializeQueue);
 // REX_EXPORT_STUB(__imp__KeInitializeTimerEx); -- implemented below
 REX_EXPORT_STUB(__imp__KeIpiGenericCall);
