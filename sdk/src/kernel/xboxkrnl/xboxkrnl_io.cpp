@@ -978,7 +978,10 @@ u32 NtQueryFullAttributesFile_entry(ppc_ptr_t<X_OBJECT_ATTRIBUTES> obj_attribs,
   // Resolve the file using the virtual file system.
   auto entry = REX_KERNEL_FS()->ResolvePath(target_path);
   if (entry) {
-    // Found.
+    // Found. Writes do not update the tree; refresh sizes on writable devices (saves).
+    if (!entry->is_read_only()) {
+      entry->update();
+    }
     file_info->creation_time = entry->create_timestamp();
     file_info->last_access_time = entry->access_timestamp();
     file_info->last_write_time = entry->write_timestamp();
