@@ -55,6 +55,18 @@ class XNotifyListener : public XObject {
   bool DequeueNotification(XNotificationID* out_id, uint32_t* out_data);
   bool DequeueNotification(XNotificationID id, uint32_t* out_data);
 
+  // Savepoint rewind: the pending notifications are host-side, outside guest memory.
+  std::vector<std::pair<XNotificationID, uint32_t>> CaptureQueueRewindState() {
+    auto lock = global_critical_region_.Acquire();
+    return notifications_;
+  }
+  size_t RewindQueue(const std::vector<std::pair<XNotificationID, uint32_t>>& state) {
+    auto lock = global_critical_region_.Acquire();
+    size_t before = notifications_.size();
+    notifications_ = state;
+    return before;
+  }
+
   bool Save(stream::ByteStream* stream) override;
   static object_ref<XNotifyListener> Restore(KernelState* kernel_state, stream::ByteStream* stream);
 

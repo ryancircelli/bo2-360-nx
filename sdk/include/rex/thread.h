@@ -213,6 +213,14 @@ enum class WaitResult {
   kFailed,
 };
 
+struct WaitHandleRewindState {
+  uint64_t word = 0;
+  uint64_t auxiliary = 0;
+  uintptr_t owner = 0;
+  void* blocks = nullptr;
+  uint32_t waiters = 0;
+};
+
 class WaitHandle {
  public:
   virtual ~WaitHandle() = default;
@@ -224,6 +232,9 @@ class WaitHandle {
  protected:
   WaitHandle() = default;
 };
+
+bool CaptureWaitHandleRewindState(WaitHandle* handle, WaitHandleRewindState* state);
+void RewindWaitHandle(WaitHandle* handle, const WaitHandleRewindState& state);
 
 // Waits until the wait handle is in the signaled state, an alert triggers and
 // a user callback is queued to the thread, or the timeout interval elapses.

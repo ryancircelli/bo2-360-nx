@@ -30,7 +30,9 @@ SavepointStats SaveGuestMemory(const std::string& path);
 
 // Asks the frame boundary to take a savepoint (used by tests and control hooks).
 void RequestSavepoint(const std::string& path);
-// Called at every frame boundary; runs a pending request or the savepoint_at_frame cvar.
+// Counts guest swaps; capture/rewind runs at the next command-processor safe point.
+void NoteSavepointSwap();
+// Called at the top of the command-processor loop, outside ring packet execution.
 void ServiceSavepointRequest();
 
 // S3 (experimental): same-process rewind. CaptureInProcessSavepoint keeps guest memory,
@@ -38,5 +40,11 @@ void ServiceSavepointRequest();
 // RewindToInProcessSavepoint writes them all back while the threads are parked and resumes.
 SavepointStats CaptureInProcessSavepoint();
 SavepointStats RewindToInProcessSavepoint();
+
+// On-demand same-process save/load for tests ("savepoint save" / "savepoint load" in the test
+// control folder). Queues the op for the next command-processor safe point and waits for it.
+// Returns "ok save frame=<f> mb=<n> ms=<t>", "ok load frame=<f> ms=<t> loads=<n>" or "error ...".
+// A load can be repeated any number of times; a new save replaces the old one.
+std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms);
 
 }  // namespace rex::system

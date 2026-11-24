@@ -9,6 +9,10 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdio>
+#include <rex/system/xfile.h>
+#include <rex/system/xiocompletion.h>
+#include <rex/system/xnotifylistener.h>
 #include <algorithm>
 #include <rex/thread.h>
 #include <atomic>
@@ -95,6 +99,108 @@ ObjectTable::ObjectTable() {}
 
 ObjectTable::~ObjectTable() {
   Reset();
+}
+
+struct ObjectTable::RewindState {
+  uint32_t last_free_entry = 0;
+  std::vector<ObjectTableEntry> entries;
+  std::unordered_map<string::string_key_case, X_HANDLE> names;
+  std::vector<std::pair<object_ref<XObject>, XObject::RewindState>> objects;
+  // Host-side file positions: reads after the capture advance them, and NtReadFile without an
+  // explicit offset reads from there.
+  std::vector<std::pair<XFile*, uint64_t>> file_positions;
+  std::vector<std::pair<XIOCompletion*, XIOCompletion::QueueRewindState>> completions;
+  std::vector<std::pair<XNotifyListener*, std::vector<std::pair<XNotificationID, uint32_t>>>> listeners;
+};
+
+std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
+  auto global_lock = global_critical_region_.Acquire();
+  auto state = std::make_shared<RewindState>();
+  state->last_free_entry = last_free_entry_;
+  state->entries.assign(table_, table_ + table_capacity_);
+  state->names = name_table_;
+  for (const auto& entry : state->entries) {
+    auto it = std::find_if(state->objects.begin(), state->objects.end(),
+                           [&](const auto& item) { return item.first == entry.object; });
+    if (entry.object && it == state->objects.end()) {
+      XObject::RewindState object_state;
+      entry.object->CaptureRewindState(&object_state);
+      if (entry.object->type() == XObject::Type::File) {
+        auto* file = static_cast<XFile*>(entry.object);
+        state->file_positions.push_back({file, file->position()});
+      } else if (entry.object->type() == XObject::Type::IOCompletion) {
+        auto* port = static_cast<XIOCompletion*>(entry.object);
+        XIOCompletion::QueueRewindState q;
+        port->CaptureQueueRewindState(&q);
+        state->completions.push_back({port, std::move(q)});
+      } else if (entry.object->type() == XObject::Type::NotifyListener) {
+        auto* listener = static_cast<XNotifyListener*>(entry.object);
+        state->listeners.push_back({listener, listener->CaptureQueueRewindState()});
+      }
+      state->objects.push_back({retain_object(entry.object), std::move(object_state)});
+    }
+  }
+  return state;
+}
+
+void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (table_capacity_ < state->entries.size() && !Resize(state->entries.size())) {
+    return;
+  }
+  // Every table slot owns one reference (AddHandle retains, RemoveHandle releases). An object the
+  // game closed after the capture is alive only through our retain, so the slot we put back must
+  // take its reference again; otherwise the next close after this load frees it and a later load
+  // revives a dangling pointer. Objects created after the capture lose their slot and are leaked
+  // on purpose (a thread may still hold them).
+  uint32_t retained = 0;
+  for (uint32_t slot = 0; slot < table_capacity_; ++slot) {
+    if (slot < state->entries.size()) {
+      table_[slot].handle_ref_count = state->entries[slot].handle_ref_count;
+      XObject* want = state->entries[slot].object;
+      if (want && table_[slot].object != want) {
+        want->Retain();
+        ++retained;
+      }
+      AtomicStore(table_[slot].object, want);
+    } else {
+      table_[slot].handle_ref_count = 0;
+      AtomicStore(table_[slot].object, static_cast<XObject*>(nullptr));
+    }
+  }
+  last_free_entry_ = state->last_free_entry;
+  name_table_ = state->names;
+  uint32_t refs_raised = 0;
+  for (const auto& [object, object_state] : state->objects) {
+    // +1: the object_ref this RewindState holds was taken after the count was captured.
+    if (object->Rewind(object_state, 1)) {
+      ++refs_raised;
+    }
+  }
+  uint32_t moved = 0, locked = 0;
+  for (const auto& [file, position] : state->file_positions) {
+    // Parking waits for free file locks; if it gave up, skip rather than block forever.
+    if (file->lock_held()) {
+      ++locked;
+      continue;
+    }
+    if (file->position() != position) {
+      ++moved;
+      file->set_position(position);
+    }
+  }
+  std::fprintf(stderr, "[savepoint-s3] object table: %u slots re-took their reference, %u objects got back pointer references\n",
+               retained, refs_raised);
+  std::fprintf(stderr, "[savepoint-s3] file positions: %zu files, %u rewound, %u skipped (lock held)\n",
+               state->file_positions.size(), moved, locked);
+  for (const auto& [port, q] : state->completions) {
+    size_t before = port->RewindQueue(q);
+    std::fprintf(stderr, "[savepoint-s3] io completion queue: %zu -> %zu\n", before, q.notifications.size());
+  }
+  for (const auto& [listener, q] : state->listeners) {
+    size_t before = listener->RewindQueue(q);
+    std::fprintf(stderr, "[savepoint-s3] notify listener queue: %zu -> %zu\n", before, q.size());
+  }
 }
 
 void ObjectTable::Reset() {

@@ -151,6 +151,27 @@ class CommandProcessor {
   bool Save(::rex::stream::ByteStream* stream);
   bool Restore(::rex::stream::ByteStream* stream);
 
+  struct RewindState {
+    uint32_t counter = 0;
+    uint64_t swap_count = 0;
+    uint32_t primary_buffer_ptr = 0;
+    uint32_t primary_buffer_size = 0;
+    uint32_t read_ptr_index = 0;
+    uint32_t read_ptr_update_freq = 0;
+    uint32_t read_ptr_writeback_ptr = 0;
+    uint32_t write_ptr_index = 0;
+    uint64_t bin_select = 0;
+    uint64_t bin_mask = 0;
+    Shader* active_vertex_shader = nullptr;
+    Shader* active_pixel_shader = nullptr;
+    std::unordered_map<uint32_t, uint32_t> extended_register_values;
+    std::vector<uint32_t> registers;
+  };
+  RewindState CaptureRewindState() const;
+  void Rewind(const RewindState& state);
+  void StoreRewindState();
+  void RewindStoredState();
+
  protected:
   struct IndexBufferInfo {
     xenos::IndexFormat format = xenos::IndexFormat::kInt16;

@@ -45,7 +45,7 @@ void NotifySwap(uint32_t width, uint32_t height) {
   if (rex::patch::CommitPendingPatch()) {
     REXSYS_INFO("[patch-reload] version {} ok", rex::patch::CommittedPatchVersion());
   }
-  rex::system::ServiceSavepointRequest();
+  rex::system::NoteSavepointSwap();
   {
     static thread_local PPCContext probe_ctx{};
     static uint64_t last = 0;
