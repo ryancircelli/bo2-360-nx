@@ -507,6 +507,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool IssueCopy() override;
 #if defined(REX_GPU_TRACE)
   void TraceReadbackGuestMemory(uint32_t physical_address, uint32_t length) override;
+  void TraceFillGpuMemory(uint32_t physical_address, uint32_t length, uint8_t value) override;
 #endif
 
   void WriteRegister(uint32_t index, uint32_t value) override;

@@ -75,8 +75,9 @@
 #include "rex/graphics/xenos.h"
 
 DEFINE_bool(
-    metal_allow_gamma_unorm16, false,
-    "Allow gamma_render_target_as_unorm16 on Metal despite known issues",
+    metal_allow_gamma_unorm16, true,
+    "Allow gamma_render_target_as_unorm16 on Metal (linear storage so gamma "
+    "targets blend in linear space like Xenos)",
     "Metal");
 DEFINE_bool(metal_transfer_fast_divmod, true,
             "Use fast exact div/mod in Metal transfer shaders", "Metal");

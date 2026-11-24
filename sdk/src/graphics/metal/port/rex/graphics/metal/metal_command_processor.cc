@@ -1237,13 +1237,16 @@ bool CollectMetalVertexFetchSharedMemoryRanges(const RegisterFile& regs,
                 "type. Use --gpu_allow_invalid_fetch_constants to bypass.",
                 vfetch_index, vfetch.dword_0, vfetch.dword_1);
           }
-          return false;
+          // Skip the slot, don't drop the draw: shaders often declare fetch
+          // slots on paths they don't take (FH1 drive VS D34A83D9E6B3A399
+          // slot 90 is all zero), and the hardware draws them.
+          continue;
         default:
           if (strict_logging) {
             REXLOG_WARN("Vertex fetch constant {} ({:08X} {:08X}) is invalid.",
                    vfetch_index, vfetch.dword_0, vfetch.dword_1);
           }
-          return false;
+          continue;
       }
       uint32_t buffer_offset = vfetch.address << 2;
       uint32_t buffer_length = vfetch.size << 2;
@@ -10555,6 +10558,21 @@ void MetalCommandProcessor::TraceReadbackGuestMemory(uint32_t physical_address, 
   }
   std::atomic_thread_fence(std::memory_order_acquire);
   std::memcpy(memory_->TranslatePhysical(physical_address), gpu + physical_address, length);
+}
+
+void MetalCommandProcessor::TraceFillGpuMemory(uint32_t physical_address, uint32_t length,
+                                               uint8_t value) {
+  physical_address &= 0x1FFFFFFF;
+  if (!length || !shared_memory_ || !shared_memory_->GetBuffer()) {
+    return;
+  }
+  // No flush: an encoder may be open here. The range is replay scratch that
+  // only the previous readback (already waited on) touched.
+  auto* gpu = static_cast<uint8_t*>(shared_memory_->GetBuffer()->contents());
+  if (gpu) {
+    std::memset(gpu + physical_address, value, length);
+    std::atomic_thread_fence(std::memory_order_release);
+  }
 }
 
 #endif

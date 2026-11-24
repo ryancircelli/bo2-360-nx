@@ -132,6 +132,10 @@ class CommandProcessor {
   // readback_resolve = full) need nothing; backends that keep resolve output
   // on the GPU (Metal) override it.
   virtual void TraceReadbackGuestMemory(uint32_t /*physical_address*/, uint32_t /*length*/) {}
+  // Diagnostic (gputest): fill the host GPU copy of guest memory directly,
+  // bypassing guest RAM and upload tracking.
+  virtual void TraceFillGpuMemory(uint32_t /*physical_address*/, uint32_t /*length*/,
+                                  uint8_t /*value*/) {}
 
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);

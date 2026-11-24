@@ -157,6 +157,13 @@ const uint32_t kReadbackRegisters[] = {
     XE_GPU_REG_PA_SU_SC_MODE_CNTL,
     XE_GPU_REG_PA_SC_VIZ_QUERY,
     XE_GPU_REG_VGT_DRAW_INITIATOR,
+    // The readback resolve rectangle is clipped by the draw's scissor and
+    // window offset (draw_util::GetResolveInfo); open them for the copy.
+    XE_GPU_REG_PA_SC_WINDOW_OFFSET,
+    XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL,
+    XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR,
+    XE_GPU_REG_PA_SC_SCREEN_SCISSOR_TL,
+    XE_GPU_REG_PA_SC_SCREEN_SCISSOR_BR,
 };
 
 std::string JsonEscape(std::string_view s) {
@@ -1271,6 +1278,16 @@ bool Replayer::ReadbackTarget(int source, uint32_t width, uint32_t height, Targe
   memory_->TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(),
                                           0xA0000000u | image_address, image_bytes, true, false);
   std::memset(memory_->TranslatePhysical(image_address), 0xFF, image_bytes);
+  // REX_GPU_TRACE_POISON_GPU=1: also fill the GPU copy with 0xEE, so a
+  // readback page left 0xEE was skipped by the resolve and one left 0xFF came
+  // from an upload of the guest RAM poison.
+  static const bool poison_gpu = [] {
+    const char* v = std::getenv("REX_GPU_TRACE_POISON_GPU");  // getenv-ok: once
+    return v && v[0] == '1';
+  }();
+  if (poison_gpu) {
+    cp_.TraceFillGpuMemory(image_address, image_bytes, 0xEE);
+  }
 
   auto write = [&](uint32_t index, uint32_t value) {
     TraceAccess::WriteRegister(cp_, index, value);
@@ -1311,6 +1328,11 @@ bool Replayer::ReadbackTarget(int source, uint32_t width, uint32_t height, Targe
   sc_mode.vtx_window_offset_enable = 0;
   write(XE_GPU_REG_PA_SU_SC_MODE_CNTL, sc_mode.value);
   write(XE_GPU_REG_PA_SC_VIZ_QUERY, 0);
+  write(XE_GPU_REG_PA_SC_WINDOW_OFFSET, 0);
+  write(XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL, 1u << 31);  // window_offset_disable
+  write(XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR, (height << 16) | width);
+  write(XE_GPU_REG_PA_SC_SCREEN_SCISSOR_TL, 0);
+  write(XE_GPU_REG_PA_SC_SCREEN_SCISSOR_BR, (8192u << 16) | 8192u);
 
   hooks_.suppress = true;
   cp_.ExecutePacket(scratch + kScratchPm4Offset, 2);
@@ -1502,12 +1524,32 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
                     (options_.flags & kRexGpuTraceReplayDepthOnlyDraws);
   if (in_window && draw.succeeded && (color_depth || depth_only)) {
     auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
-    auto scissor_br = regs.Get<reg::PA_SC_WINDOW_SCISSOR_BR>();
+    // The EDRAM rectangle the draw can touch: scissor bottom-right after the
+    // window offset (draw_util::GetScissor), read back from row/column 0.
+    draw_util::Scissor scissor;
+    draw_util::GetScissor(regs, scissor, true);
     uint32_t pitch = surface_info.surface_pitch;
-    uint32_t width = std::min<uint32_t>(scissor_br.br_x, pitch);
-    uint32_t height = scissor_br.br_y;
+    uint32_t width = std::min<uint32_t>(scissor.offset[0] + scissor.extent[0], pitch);
+    uint32_t height = scissor.offset[1] + scissor.extent[1];
     uint32_t sx = surface_info.msaa_samples >= xenos::MsaaSamples::k4X ? 2 : 1;
     uint32_t sy = surface_info.msaa_samples >= xenos::MsaaSamples::k2X ? 2 : 1;
+
+    // EDRAM bases of the targets this draw uses: a readback must stop before
+    // the next one (rows past it are another target's tiles, e.g. NFS colour
+    // at base 0 reading the depth buffer at base 1024).
+    auto color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
+    auto depthcontrol = regs.Get<reg::RB_DEPTHCONTROL>();
+    std::vector<uint32_t> used_bases;
+    for (uint32_t rt = 0; rt < xenos::kMaxColorRenderTargets; ++rt) {
+      if (color_depth && ps && ps->writes_color_target(rt) && ((color_mask >> (4 * rt)) & 0xF)) {
+        reg::RB_COLOR_INFO info;
+        info.value = regs.values[reg::RB_COLOR_INFO::rt_register_indices[rt]];
+        used_bases.push_back(info.color_base);
+      }
+    }
+    if (depthcontrol.z_enable || depthcontrol.stencil_enable) {
+      used_bases.push_back(regs.Get<reg::RB_DEPTH_INFO>().depth_base);
+    }
 
     auto clamp_height = [&](uint32_t base_tiles, bool is_64bpp) {
       uint32_t tile_w = is_64bpp ? 40 : 80;
@@ -1515,11 +1557,16 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
       if (!tiles_per_row || base_tiles >= 2048) {
         return 0u;
       }
-      uint32_t rows = (2048 - base_tiles) / tiles_per_row;
+      uint32_t end_tiles = 2048;
+      for (uint32_t b : used_bases) {
+        if (b > base_tiles) {
+          end_tiles = std::min(end_tiles, b);
+        }
+      }
+      uint32_t rows = (end_tiles - base_tiles) / tiles_per_row;
       return std::min(height, rows * 16 / sy);
     };
 
-    auto color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
     if (color_depth && (options_.flags & kRexGpuTraceReplayReadbackColor) && ps && width) {
       for (uint32_t rt = 0; rt < xenos::kMaxColorRenderTargets; ++rt) {
         if (!ps->writes_color_target(rt) || !((color_mask >> (4 * rt)) & 0xF)) {
@@ -1548,7 +1595,6 @@ void Replayer::RecordDraw(const DrawEvent& draw) {
         EmitTarget(fmt::format("rt{}", rt), image, json);
       }
     }
-    auto depthcontrol = regs.Get<reg::RB_DEPTHCONTROL>();
     if ((options_.flags & kRexGpuTraceReplayReadbackDepth) && width &&
         (depthcontrol.z_enable || depthcontrol.stencil_enable)) {
       auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
