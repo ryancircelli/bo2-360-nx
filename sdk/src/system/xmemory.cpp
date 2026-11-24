@@ -1399,7 +1399,7 @@ bool BaseHeap::AllocFixed(uint32_t base_address, uint32_t size, uint32_t alignme
   uint32_t page_count = get_page_count(size, page_size_, page_size_shift_);
   uint32_t start_page_number = (base_address - heap_base_) >> page_size_shift_;
   uint32_t end_page_number = start_page_number + page_count - 1;
-  if (start_page_number >= page_table_.size() || end_page_number > page_table_.size()) {
+  if (start_page_number >= page_table_.size() || end_page_number >= page_table_.size()) {
     REXSYS_ERROR("BaseHeap::AllocFixed passed out of range address range");
     return false;
   }
