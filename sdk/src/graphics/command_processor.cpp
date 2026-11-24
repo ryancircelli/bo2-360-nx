@@ -275,7 +275,8 @@ void CommandProcessor::WorkerThreadMain() {
         rex::thread::MaybeYield();
         loop_count++;
 #endif
-        if (std::getenv("REX_SAVEPOINT_DIAG")) {
+        static const bool savepoint_diag = std::getenv("REX_SAVEPOINT_DIAG") != nullptr;
+        if (savepoint_diag) {
           static auto last = std::chrono::steady_clock::now();
           auto now = std::chrono::steady_clock::now();
           if (now - last > std::chrono::seconds(2)) {
