@@ -316,8 +316,10 @@ std::chrono::steady_clock::time_point WaitNow() {
   return std::chrono::steady_clock::now() -
          std::chrono::nanoseconds(g_wait_clock_shift_ns.load(std::memory_order_relaxed));
 }
+void RearmRewoundTimers(std::chrono::nanoseconds shift);
 void ShiftWaitClock(std::chrono::nanoseconds back) {
   g_wait_clock_shift_ns.fetch_add(back.count(), std::memory_order_relaxed);
+  RearmRewoundTimers(back);
 }
 
 // TODO(bwrsandman) Implement by allowing alert interrupts from IO operations
@@ -1354,6 +1356,7 @@ class PosixConditionBase {
     state->auxiliary = CaptureRewindAuxiliary();
     state->owner = CaptureRewindOwner();
     state->waiters = waiters_;
+    CaptureRewindTimer(state);
     return true;
   }
   void Rewind(const WaitHandleRewindState& state) {
@@ -1361,6 +1364,7 @@ class PosixConditionBase {
     RestoreRewindAuxiliary(state.auxiliary);
     RestoreRewindOwner(state.owner);
     waiters_ = state.waiters;
+    RewindTimer(state);
   }
 
  protected:
@@ -1370,6 +1374,8 @@ class PosixConditionBase {
   virtual void RestoreRewindAuxiliary(uint64_t) {}
   virtual uintptr_t CaptureRewindOwner() const { return 0; }
   virtual void RestoreRewindOwner(uintptr_t) {}
+  virtual void CaptureRewindTimer(WaitHandleRewindState*) {}
+  virtual void RewindTimer(const WaitHandleRewindState&) {}
 
   inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
@@ -1530,9 +1536,17 @@ template <>
 class PosixCondition<Timer> : public PosixConditionBase {
  public:
   explicit PosixCondition(bool manual_reset)
-      : callback_(nullptr), signal_(false), manual_reset_(manual_reset) {}
+      : callback_(nullptr), signal_(false), manual_reset_(manual_reset) {
+    std::lock_guard<std::mutex> lock(g_timers_mutex);
+    g_timers.push_back(this);
+  }
 
-  virtual ~PosixCondition() { Cancel(); }
+  virtual ~PosixCondition() {
+    Cancel();
+    std::lock_guard<std::mutex> lock(g_timers_mutex);
+    g_timers.erase(std::remove(g_timers.begin(), g_timers.end(), this), g_timers.end());
+    g_rearm.erase(std::remove(g_rearm.begin(), g_rearm.end(), this), g_rearm.end());
+  }
 
   bool Signal() override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1548,6 +1562,9 @@ class PosixCondition<Timer> : public PosixConditionBase {
 
     callback_ = std::move(opt_callback);
     signal_ = false;
+    due_ = due_time;
+    period_ = std::chrono::milliseconds(0);
+    armed_ = true;
     wait_item_ = QueueTimerOnce(&CompletionRoutine, this, due_time);
   }
 
@@ -1559,13 +1576,56 @@ class PosixCondition<Timer> : public PosixConditionBase {
 
     callback_ = std::move(opt_callback);
     signal_ = false;
+    due_ = due_time;
+    period_ = period;
+    armed_ = true;
     wait_item_ = QueueTimerRecurring(&CompletionRoutine, this, due_time, period);
   }
 
   void Cancel() {
+    armed_ = false;
     if (auto wait_item = wait_item_.lock()) {
       wait_item->Disarm();
     }
+  }
+
+  // Savepoint rewind, see DisarmAllTimersForRewind / ShiftWaitClock.
+  void CaptureRewindTimer(WaitHandleRewindState* state) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state->timer_armed = armed_;
+    state->timer_due = due_;
+    state->timer_period = period_;
+    state->timer_callback = callback_;
+  }
+  void RewindTimer(const WaitHandleRewindState& state) override {
+    Cancel();
+    std::lock_guard<std::mutex> lock(mutex_);
+    callback_ = state.timer_callback;
+    due_ = state.timer_due;
+    period_ = state.timer_period;
+    if (state.timer_armed) {
+      std::lock_guard<std::mutex> list_lock(g_timers_mutex);
+      g_rearm.push_back(this);
+    }
+  }
+  static void DisarmAll() {
+    std::lock_guard<std::mutex> lock(g_timers_mutex);
+    for (auto* timer : g_timers) timer->Cancel();
+    g_rearm.clear();
+  }
+  static void RearmAll(std::chrono::nanoseconds shift) {
+    std::lock_guard<std::mutex> list_lock(g_timers_mutex);
+    for (auto* timer : g_rearm) {
+      std::lock_guard<std::mutex> lock(timer->mutex_);
+      timer->due_ += std::chrono::duration_cast<std::chrono::steady_clock::duration>(shift);
+      timer->armed_ = true;
+      timer->wait_item_ = timer->period_.count()
+                              ? QueueTimerRecurring(&CompletionRoutine, timer, timer->due_, timer->period_)
+                              : QueueTimerOnce(&CompletionRoutine, timer, timer->due_);
+    }
+    std::fprintf(stderr, "[savepoint-timer] %zu live timers, %zu re-armed as at the capture\n", g_timers.size(),
+                 g_rearm.size());
+    g_rearm.clear();
   }
 
   void* native_handle() const override {
@@ -1583,6 +1643,11 @@ class PosixCondition<Timer> : public PosixConditionBase {
     {
       std::lock_guard<std::mutex> lock(timer->mutex_);
       callback = timer->callback_;
+      if (timer->period_.count()) {
+        timer->due_ += timer->period_;
+      } else {
+        timer->armed_ = false;
+      }
     }
     if (callback) {
       callback();
@@ -1598,6 +1663,12 @@ class PosixCondition<Timer> : public PosixConditionBase {
   }
   uint64_t CaptureRewindValue() const override { return signal_; }
   void RestoreRewindValue(uint64_t value) override { signal_ = value != 0; }
+  static inline std::mutex g_timers_mutex;
+  static inline std::vector<PosixCondition*> g_timers;  // every live timer
+  static inline std::vector<PosixCondition*> g_rearm;   // armed at the capture, re-armed at resume
+  std::chrono::steady_clock::time_point due_{};
+  std::chrono::milliseconds period_{0};
+  std::atomic<bool> armed_{false};
   std::weak_ptr<TimerQueueWaitItem> wait_item_;
   std::function<void()> callback_;
   bool signal_;  // Protected by mutex_
@@ -2536,6 +2607,14 @@ class PosixTimer : public PosixConditionHandle<Timer> {
     return true;
   }
 };
+
+#if !REX_FAST_WAITS
+void DisarmAllTimersForRewind() { PosixCondition<Timer>::DisarmAll(); }
+void RearmRewoundTimers(std::chrono::nanoseconds shift) { PosixCondition<Timer>::RearmAll(shift); }
+#else
+void DisarmAllTimersForRewind() {}
+void RearmRewoundTimers(std::chrono::nanoseconds) {}
+#endif
 
 std::unique_ptr<Timer> Timer::CreateManualResetTimer() {
   return std::make_unique<PosixTimer>(true);

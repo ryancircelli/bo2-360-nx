@@ -834,6 +834,7 @@ SavepointStats RewindToInProcessSavepoint() {
   if (restore_objects) {
     g_snap.objects_at_rewind = ks->object_table()->GetAllObjects();
     g_rewind_phase = 3;
+    rex::thread::DisarmAllTimersForRewind();  // timers armed after the capture must not fire
     ks->object_table()->Rewind(g_snap.object_table);
     size_t queued = ks->RewindDispatchQueue(g_snap.dispatch_queue);
     std::fprintf(stderr, "[savepoint-s3] kernel dispatch queue: %zu -> %zu\n", queued, g_snap.dispatch_queue.size());
@@ -988,10 +989,9 @@ SavepointStats RewindToInProcessSavepoint() {
     // Guest time is guest state: without this the rewound frame sees the whole save-to-rewind gap as elapsed.
     rex::chrono::Clock::RewindGuestTickCount(g_capture_guest_ticks);
   }
-  if (!std::getenv("REX_SAVEPOINT_NO_WAIT_SHIFT")) {
-    // Waits restored mid-flight keep their captured deadlines; without this they all time out at once.
-    rex::thread::ShiftWaitClock(Clock::now() - g_capture_park_time);
-  }
+  // Also re-arms the timers that were armed at the capture, shifted by the same amount.
+  rex::thread::ShiftWaitClock(std::getenv("REX_SAVEPOINT_NO_WAIT_SHIFT") ? Clock::duration::zero()
+                                                                         : Clock::now() - g_capture_park_time);
   auto t2 = Clock::now();
   uint32_t left_parked = 0;
   for (auto& t : parked) {

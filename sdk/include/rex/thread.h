@@ -203,6 +203,11 @@ struct WaitHandleRewindState {
   uintptr_t owner = 0;
   void* blocks = nullptr;
   uint32_t waiters = 0;
+  // Timers: the schedule lives in the host timer queue, outside guest memory.
+  bool timer_armed = false;
+  std::chrono::steady_clock::time_point timer_due{};
+  std::chrono::milliseconds timer_period{0};
+  std::function<void()> timer_callback;
 };
 
 class WaitHandle {
@@ -218,6 +223,9 @@ class WaitHandle {
 };
 
 bool CaptureWaitHandleRewindState(WaitHandle* handle, WaitHandleRewindState* state);
+// Savepoint rewind: disarm every host timer (ones armed after the capture must not fire). Timers that
+// were armed at the capture get re-armed by ShiftWaitClock, with their due time moved by the same amount.
+void DisarmAllTimersForRewind();
 void RewindWaitHandle(WaitHandle* handle, const WaitHandleRewindState& state);
 
 // Waits until the wait handle is in the signaled state, an alert triggers and
