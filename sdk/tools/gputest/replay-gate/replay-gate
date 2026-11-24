@@ -1,0 +1,5 @@
+#!/bin/sh
+# replay-gate BUILD_DIR [--only a,b]   (see gate.py --help)
+D=$(cd "$(dirname "$0")" && pwd)
+[ $# -ge 1 ] && case "$1" in check|golden|accept) ;; *) set -- check "$@";; esac
+exec uv run -q --no-project --with numpy --with pillow python -I "$D/gate.py" "$@"
