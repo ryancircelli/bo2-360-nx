@@ -985,6 +985,56 @@ std::unique_lock<std::recursive_mutex> BaseHeap::AcquireHostPageReconcileLock() 
   return rex::thread::global_critical_region::AcquireDirect();
 }
 
+rex::memory::PageAccess BaseHeap::GuestAccessOfHostPage(uint32_t host_page_number) const {
+  const uint32_t host_page_size = memory_->system_page_size_;
+  const uint64_t host_page_start = uint64_t(host_page_number) * host_page_size;
+  const uint64_t host_page_end = host_page_start + host_page_size;
+  const uint64_t heap_host_start = host_address_offset_;
+  const uint64_t heap_host_end = heap_host_start + heap_size_;
+  const uint64_t overlap_start = std::max(host_page_start, heap_host_start);
+  const uint64_t overlap_end = std::min(host_page_end, heap_host_end);
+  if (overlap_start >= overlap_end) {
+    return rex::memory::PageAccess::kNoAccess;
+  }
+
+  const uint32_t guest_page_start = uint32_t(overlap_start - heap_host_start) >> page_size_shift_;
+  const uint32_t guest_page_end = uint32_t(overlap_end - heap_host_start - 1) >> page_size_shift_;
+
+  bool has_read = false;
+  bool has_write = false;
+  bool has_committed = false;
+  for (uint32_t page_number = guest_page_start; page_number <= guest_page_end; ++page_number) {
+    const auto& page_entry = page_table_[page_number];
+    if (!(page_entry.state & memory::kMemoryAllocationCommit)) {
+      continue;
+    }
+    has_committed = true;
+    const rex::memory::PageAccess page_access =
+        ToHostPageAccess(page_entry.current_protect, heap_type_);
+    if (page_access == rex::memory::PageAccess::kReadWrite) {
+      has_read = true;
+      has_write = true;
+      break;
+    }
+    if (page_access == rex::memory::PageAccess::kReadOnly) {
+      has_read = true;
+    }
+  }
+
+  rex::memory::PageAccess access;
+  // Physical aliases are intentionally left accessible after release unless
+  // protect_on_release is enabled because GPU users may still reference them.
+  if (!has_committed && heap_type_ == memory::HeapType::kGuestPhysical &&
+      !REXCVAR_GET(protect_on_release)) {
+    access = rex::memory::PageAccess::kReadWrite;
+  } else if (!has_read) {
+    access = rex::memory::PageAccess::kNoAccess;
+  } else {
+    access = has_write ? rex::memory::PageAccess::kReadWrite : rex::memory::PageAccess::kReadOnly;
+  }
+  return access;
+}
+
 bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_number) {
   const uint32_t host_page_size = memory_->system_page_size_;
   if (page_size_ >= host_page_size) {
@@ -1001,51 +1051,7 @@ bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_
   // guest page while a neighbor needs broader access, but it keeps neighboring
   // committed pages usable and allows guest protection metadata to stay exact.
   const auto get_host_page_access = [&](uint32_t host_page_number) {
-    const uint64_t host_page_start = uint64_t(host_page_number) * host_page_size;
-    const uint64_t host_page_end = host_page_start + host_page_size;
-    const uint64_t heap_host_start = host_address_offset_;
-    const uint64_t heap_host_end = heap_host_start + heap_size_;
-    const uint64_t overlap_start = std::max(host_page_start, heap_host_start);
-    const uint64_t overlap_end = std::min(host_page_end, heap_host_end);
-    if (overlap_start >= overlap_end) {
-      return rex::memory::PageAccess::kNoAccess;
-    }
-
-    const uint32_t guest_page_start = uint32_t(overlap_start - heap_host_start) >> page_size_shift_;
-    const uint32_t guest_page_end = uint32_t(overlap_end - heap_host_start - 1) >> page_size_shift_;
-
-    bool has_read = false;
-    bool has_write = false;
-    bool has_committed = false;
-    for (uint32_t page_number = guest_page_start; page_number <= guest_page_end; ++page_number) {
-      const auto& page_entry = page_table_[page_number];
-      if (!(page_entry.state & memory::kMemoryAllocationCommit)) {
-        continue;
-      }
-      has_committed = true;
-      const rex::memory::PageAccess page_access =
-          ToHostPageAccess(page_entry.current_protect, heap_type_);
-      if (page_access == rex::memory::PageAccess::kReadWrite) {
-        has_read = true;
-        has_write = true;
-        break;
-      }
-      if (page_access == rex::memory::PageAccess::kReadOnly) {
-        has_read = true;
-      }
-    }
-
-    rex::memory::PageAccess access;
-    // Physical aliases are intentionally left accessible after release unless
-    // protect_on_release is enabled because GPU users may still reference them.
-    if (!has_committed && heap_type_ == memory::HeapType::kGuestPhysical &&
-        !REXCVAR_GET(protect_on_release)) {
-      access = rex::memory::PageAccess::kReadWrite;
-    } else if (!has_read) {
-      access = rex::memory::PageAccess::kNoAccess;
-    } else {
-      access = has_write ? rex::memory::PageAccess::kReadWrite : rex::memory::PageAccess::kReadOnly;
-    }
+    rex::memory::PageAccess access = GuestAccessOfHostPage(host_page_number);
 
     // The guest page table is not the whole truth: a physical heap page may
     // also be write-watched for GPU invalidation. EnableAccessCallbacks records
@@ -2230,16 +2236,9 @@ void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t len
     // polled for the last time without releasing the lock.
     SystemPageFlagsBlock& page_flags_block = system_page_flags_[i >> 6];
     uint64_t page_flags_bit = uint64_t(1) << (i & 63);
-    uint32_t guest_page_number =
-        rex::sat_sub(i * system_page_size_, host_address_offset()) >> page_size_shift_;
-    if (guest_page_number >= page_table_.size()) {
-      REXSYS_ERROR("Access callback page OOB: system_page={} guest_page={} offset=0x{:X}", i,
-                   guest_page_number, host_address_offset());
-      assert_always();
-      continue;
-    }
-    rex::memory::PageAccess current_page_access =
-        ToPageAccess(page_table_[guest_page_number].current_protect);
+    // One host page can hold several guest pages; judge it by all of them, not
+    // just the first, or a texture after a free/read-only page is never watched.
+    rex::memory::PageAccess current_page_access = GuestAccessOfHostPage(i);
     bool protect_system_page = false;
     // Don't do anything with inaccessible pages - don't protect, don't enable
     // callbacks - because real access violations are needed there. And don't
@@ -2391,13 +2390,9 @@ bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> globa
       // Check if need to allow writing to this page.
       bool unprotect_page =
           (system_page_flags_[i >> 6].notify_on_invalidation & (uint64_t(1) << (i & 63))) != 0;
-      if (unprotect_page) {
-        uint32_t guest_page_number =
-            rex::sat_sub(i * system_page_size_, host_address_offset()) >> page_size_shift_;
-        if (ToPageAccess(page_table_[guest_page_number].current_protect) !=
-            rex::memory::PageAccess::kReadWrite) {
-          unprotect_page = false;
-        }
+      if (unprotect_page &&
+          GuestAccessOfHostPage(i) != rex::memory::PageAccess::kReadWrite) {
+        unprotect_page = false;
       }
       if (unprotect_page) {
         if (unprotect_system_page_first == UINT32_MAX) {
