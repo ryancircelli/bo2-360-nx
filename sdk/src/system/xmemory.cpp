@@ -1684,8 +1684,14 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
 
   // Given address must be a region base address.
   uint32_t base_page_number = (base_address - heap_base_) >> page_size_shift_;
+  if (base_page_number >= page_table_.size()) {
+    REXSYS_ERROR("BaseHeap::Release passed out of range address");
+    return false;
+  }
   auto base_page_entry = page_table_[base_page_number];
-  if (base_page_entry.base_address != base_page_number) {
+  // A free page also has base_address 0, so page 0 needs the state check: a
+  // double free there would loop over a page count of 0 - 1.
+  if (!base_page_entry.state || base_page_entry.base_address != base_page_number) {
     REXSYS_ERROR("BaseHeap::Release failed because address is not a region start");
     return false;
   }
