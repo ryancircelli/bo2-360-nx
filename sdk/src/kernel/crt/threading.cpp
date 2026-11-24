@@ -111,14 +111,17 @@ u32 ConvertFiberToThread_impl(XThread* thread) {
 
   auto* info = ks->LookupFiber(fiber_addr);
   if (info) {
-    info->host_fiber->Destroy();
+    if (info->is_thread_fiber) {
+      info->host_fiber->Destroy();
+      // Null main_fiber_ after Destroy(): ~XThread also destroys it if non-null.
+      thread->set_main_fiber(nullptr);
+    }
+    // else: a CreateFiber fiber converting or deleting itself still runs on its host stack, so it is not freed.
+    // shortcut: that host stack (virtual, touched pages only) leaks; free it later if a title does this in a loop.
     ks->UnregisterFiber(fiber_addr);
   }
 
   kthread->fiber_ptr = 0u;
-  // Must null main_fiber_ AFTER Destroy() above to avoid double-free
-  // in ~XThread, which also calls main_fiber_->Destroy() if non-null.
-  thread->set_main_fiber(nullptr);
   mem->SystemHeapFree(fiber_addr);
 
   return 1;  // TRUE
