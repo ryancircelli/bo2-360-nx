@@ -794,7 +794,6 @@ REX_EXPORT_STUB(__imp__XamShowRecentMessageUI);
 REX_EXPORT_STUB(__imp__XamShowRecentMessageUIEx);
 REX_EXPORT_STUB(__imp__XamShowReputationUI);
 REX_EXPORT_STUB(__imp__XamShowSigninUIEx);
-REX_EXPORT_STUB_RETURN(__imp__XamShowSigninUIp, 0x32);
 REX_EXPORT_STUB(__imp__XamShowSignupCreditCardUI);
 REX_EXPORT_STUB(__imp__XamShowSocialPostUI);
 REX_EXPORT_STUB(__imp__XamShowStorePickerUI);
