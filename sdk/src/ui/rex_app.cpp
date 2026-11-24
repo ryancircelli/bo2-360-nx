@@ -34,7 +34,9 @@
 #else
 #include <rex/audio/sdl/sdl_audio_system.h>
 #endif
+#include <rex/input/input_record.h>
 #include <rex/input/input_system.h>
+#include <rex/system/savepoint.h>
 #include <rex/input/script/kbm_script.h>
 #include <rex/kernel/init.h>
 #include <rex/kernel/xam/module.h>
@@ -65,7 +67,12 @@ NX_NORETURN void __libnx_exit(int rc);
 #include <imgui.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <thread>
 #include <filesystem>
 #include <string_view>
 
@@ -74,7 +81,15 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
                       "GPU emulation")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(glitch_savepoint, true, "UI",
+                    "Report a glitch also writes a savepoint (all guest memory, hundreds of MB) next to the report");
+
 namespace rex {
+
+namespace {
+std::filesystem::path GlitchRoot();
+}  // namespace
+
 
 // --- ReXApp ---
 
@@ -207,6 +222,16 @@ bool ReXApp::SetupEnvironment() {
   rex::InitLogging(log_config);
   rex::RegisterLogLevelCallback();
 
+  // Arm the GPU frame recorder for "Report a glitch": it records the next frame when the trigger file appears,
+  // and does nothing (one stat per frame) until then. An explicit REX_GPU_TRACE_* setting wins.
+  if (!std::getenv("REX_GPU_TRACE_TRIGGER") && !std::getenv("REX_GPU_TRACE_FRAME")) {
+    const auto pending = GlitchRoot() / ".pending";
+    std::error_code ec;
+    std::filesystem::create_directories(pending, ec);
+    setenv("REX_GPU_TRACE_TRIGGER", (pending / "trigger").c_str(), 0);
+    setenv("REX_GPU_TRACE_DIR", pending.c_str(), 0);
+  }
+
   log_sink_ = std::make_shared<rex::LogCaptureSink>();
   rex::AddSink(log_sink_);
 
@@ -279,6 +304,11 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
 
   if (ppc_info_.register_modules) {
     ppc_info_.register_modules(runtime_->kernel_state());
+  }
+
+  if (runtime_->graphics_system()) {
+    rex::input::SetFrameSource([](void* gfx) { return static_cast<system::IGraphicsSystem*>(gfx)->swap_count(); },
+                               runtime_->graphics_system());
   }
 
   if (guide_gate_ && runtime_->input_system()) {
@@ -512,6 +542,8 @@ void ReXApp::SetupGuide() {
   // The gate goes on the input system once the runtime exists (OnInitialize, after runtime setup).
   // F1 or Home opens and closes it for player 1.
   rex::ui::RegisterBind("bind_guide", "F1", "Open or close the Guide", [this] { ToggleGuide(); });
+  rex::ui::RegisterBind("bind_glitch", "F8", "Report a glitch (screenshot, GPU frame, logs, input)",
+                        [this] { ReportGlitch(); });
   rex::ui::RegisterBind("bind_guide_alt", "Home", "Open or close the Guide", [this] { ToggleGuide(); });
 
   // ---- System ----
@@ -540,6 +572,20 @@ void ReXApp::SetupGuide() {
       guide::Cvar("show_fps", "Frame Counter"),
   };
   guide::RegisterPage(std::move(display));
+
+  guide::Page support;
+  support.id = "rex.system.support";
+  support.title = "Report a Glitch";
+  support.blade = std::string(guide::kBladeSystem);
+  support.order = 20;
+  support.description =
+      "Saves a screenshot, the next GPU frame, the log, your settings, build ids, the last minute of controller "
+      "input and a savepoint to a folder in the game's log folder (glitches), so a bug can be reproduced.";
+  support.items = {
+      guide::Action(
+          "Report a Glitch", [this] { ReportGlitch(); }, "Capture everything needed to reproduce what is on screen."),
+  };
+  guide::RegisterPage(std::move(support));
 
   guide::Page audio;
   audio.id = "rex.system.audio";
@@ -618,6 +664,177 @@ void ReXApp::SetupGuide() {
           "Close the game. Unsaved progress is lost."),
   };
   guide::RegisterPage(std::move(leave));
+}
+
+namespace {
+
+// ~/Library/Logs/<support folder>/glitches next to the log (or the user data folder without a log file).
+std::filesystem::path GlitchRoot() {
+  std::filesystem::path log = rex::CurrentLogFile();
+  return (log.empty() ? rex::filesystem::GetUserFolder() : log.parent_path()) / "glitches";
+}
+
+uint32_t Crc32(uint32_t crc, const uint8_t* p, size_t n) {
+  static uint32_t table[256];
+  static bool init = [] {
+    for (uint32_t i = 0; i < 256; i++) {
+      uint32_t c = i;
+      for (int k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+      table[i] = c;
+    }
+    return true;
+  }();
+  (void)init;
+  crc = ~crc;
+  for (size_t i = 0; i < n; i++) crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+  return ~crc;
+}
+
+// shortcut: PNG with stored (uncompressed) deflate blocks, so a 1080p capture is ~8 MB; swap in zlib if size matters.
+bool WritePng(const std::filesystem::path& path, const rex::ui::RawImage& img) {
+  std::vector<uint8_t> raw;
+  raw.reserve((size_t(img.width) * 3 + 1) * img.height);
+  for (uint32_t y = 0; y < img.height; y++) {
+    raw.push_back(0);
+    const uint8_t* row = img.data.data() + y * img.stride;
+    for (uint32_t x = 0; x < img.width; x++) raw.insert(raw.end(), row + x * 4, row + x * 4 + 3);
+  }
+  std::vector<uint8_t> z = {0x78, 0x01};
+  uint32_t a = 1, b = 0;
+  for (uint8_t v : raw) {
+    a = (a + v) % 65521;
+    b = (b + a) % 65521;
+  }
+  for (size_t pos = 0; pos < raw.size() || pos == 0;) {
+    size_t n = std::min<size_t>(65535, raw.size() - pos);
+    bool last = pos + n >= raw.size();
+    z.push_back(last ? 1 : 0);
+    z.insert(z.end(), {uint8_t(n), uint8_t(n >> 8), uint8_t(~n), uint8_t((~n) >> 8)});
+    z.insert(z.end(), raw.begin() + pos, raw.begin() + pos + n);
+    pos += n;
+    if (last) break;
+  }
+  uint32_t adler = (b << 16) | a;
+  z.insert(z.end(), {uint8_t(adler >> 24), uint8_t(adler >> 16), uint8_t(adler >> 8), uint8_t(adler)});
+  std::ofstream out(path, std::ios::binary);
+  auto be32 = [&](uint32_t v) {
+    const char c[4] = {char(v >> 24), char(v >> 16), char(v >> 8), char(v)};
+    out.write(c, 4);
+  };
+  auto chunk = [&](const char* type, const std::vector<uint8_t>& d) {
+    be32(uint32_t(d.size()));
+    std::vector<uint8_t> t(type, type + 4);
+    t.insert(t.end(), d.begin(), d.end());
+    out.write(reinterpret_cast<const char*>(t.data()), t.size());
+    be32(Crc32(0, t.data(), t.size()));
+  };
+  out.write("\x89PNG\r\n\x1a\n", 8);
+  std::vector<uint8_t> ihdr;
+  for (uint32_t v : {img.width, img.height})
+    ihdr.insert(ihdr.end(), {uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)});
+  ihdr.insert(ihdr.end(), {8, 2, 0, 0, 0});
+  chunk("IHDR", ihdr);
+  chunk("IDAT", z);
+  chunk("IEND", {});
+  return bool(out);
+}
+
+void WriteText(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream(path, std::ios::binary) << text;
+}
+
+std::atomic<bool> g_glitch_busy{false};
+
+}  // namespace
+
+void ReXApp::ReportGlitch() {
+  if (g_glitch_busy.exchange(true)) return;
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t t = std::chrono::system_clock::to_time_t(now);
+  char stamp[32];
+  std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&t));
+  const std::filesystem::path root = GlitchRoot();
+  const std::filesystem::path dir = root / stamp;
+  const std::filesystem::path pending = root / ".pending";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+
+  auto* gfx = runtime_ ? runtime_->graphics_system() : nullptr;
+  const uint64_t frame = gfx ? gfx->swap_count() : 0;
+  std::string notes = fmt::format("glitch report {}\nname: {}\nbuild: {} {} ({})\nswap_count: {}\n", stamp, GetName(),
+                                  REXGLUE_VERSION_STRING, REXGLUE_BUILD_TITLE, REXGLUE_BUILD_TIMESTAMP, frame);
+
+  // Input first: it is the cheapest and the part that must not move on.
+  WriteText(dir / "input.txt",
+            rex::input::SamplesToText(rex::input::GlobalInputRing().Window(rex::input::ProcessMs(), 60000)));
+  WriteText(dir / "settings.toml", rex::cvar::SerializeToTOML());
+
+  // Arm the trace now, so it records the frame after this call; collected by the worker below.
+  const bool trace_armed = std::getenv("REX_GPU_TRACE_TRIGGER") != nullptr;
+  if (trace_armed) {
+    for (const auto& e : std::filesystem::directory_iterator(pending, ec))
+      if (e.path().extension() == ".xtr") std::filesystem::remove(e.path(), ec);
+    WriteText(std::getenv("REX_GPU_TRACE_TRIGGER"), "1");
+  }
+  if (REXCVAR_GET(glitch_savepoint)) {
+    rex::system::RequestSavepoint((dir / "savepoint.bin").string());
+    notes += "savepoint: requested (savepoint.bin, written at the next frame boundary)\n";
+  }
+  rex::ui::Presenter* presenter = gfx ? gfx->presenter() : nullptr;
+
+  // The rest can wait on frames, so it runs off the UI thread.
+  std::thread([=, notes = std::move(notes)]() mutable {
+    rex::ui::RawImage img;
+    if (presenter && presenter->CaptureGuestOutput(img) && img.width && img.height && WritePng(dir / "screenshot.png", img)) {
+      notes += fmt::format("screenshot: screenshot.png {}x{}\n", img.width, img.height);
+    } else {
+      notes += "screenshot: not captured\n";
+    }
+    rex::FlushLogging();
+    std::string log;
+    {
+      std::ifstream in(rex::CurrentLogFile(), std::ios::binary);
+      std::stringstream ss;
+      ss << in.rdbuf();
+      log = ss.str();
+    }
+    size_t keep = log.size(), lines = 0;
+    while (keep > 0 && lines < 5000) {
+      keep = log.rfind('\n', keep - 1);
+      if (keep == std::string::npos) { keep = 0; break; }
+      lines++;
+    }
+    WriteText(dir / "log-tail.txt", log.substr(keep == 0 ? 0 : keep + 1));
+    notes += "log: log-tail.txt (last 5000 lines)\n";
+
+    if (trace_armed) {
+      std::filesystem::path found;
+      uintmax_t last_size = 0;
+      for (int i = 0; i < 100 && found.empty(); i++) {  // up to 10 s
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::error_code e;
+        for (const auto& f : std::filesystem::directory_iterator(pending, e)) {
+          if (f.path().extension() != ".xtr") continue;
+          auto size = std::filesystem::file_size(f.path(), e);
+          // The recorder closes the file when the frame ends; a size that stops growing means it is done.
+          if (size && size == last_size) found = f.path();
+          last_size = size;
+        }
+      }
+      if (!found.empty()) {
+        std::filesystem::rename(found, dir / found.filename(), ec);
+        notes += fmt::format("gpu trace: {}\n", found.filename().string());
+      } else {
+        std::filesystem::remove(std::getenv("REX_GPU_TRACE_TRIGGER"), ec);
+        notes += "gpu trace: none (no frame was swapped within 10 s, or the renderer has no recorder)\n";
+      }
+    } else {
+      notes += "gpu trace: off (REX_GPU_TRACE_* set by hand or the renderer has no recorder)\n";
+    }
+    WriteText(dir / "report.txt", notes);
+    REXLOG_INFO("[glitch] report written to {}", dir.string());
+    g_glitch_busy = false;
+  }).detach();
 }
 
 void ReXApp::ToggleGuide(int user, std::string_view blade) {

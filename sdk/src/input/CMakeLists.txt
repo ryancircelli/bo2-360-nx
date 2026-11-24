@@ -3,6 +3,7 @@
 
 add_library(rexinput OBJECT
     input_system.cpp
+    input_record.cpp
     device_assignment.cpp
     slot_table.cpp
     state_log.cpp
