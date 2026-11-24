@@ -201,6 +201,7 @@ class MslShaderTranslator : public ShaderTranslator {
   void PreSaturatedLinearToPWLGamma(const std::string& value);
 
   void CompletePixelShader();
+  void DeclareMemExport();
   void StartVertexShader();
   void ExportToMemory(uint8_t export_eM);
   void CompleteVertexShader();
