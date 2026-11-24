@@ -55,3 +55,7 @@ add_executable(log_sink_tests logging/log_sink_test.cpp)
 target_include_directories(log_sink_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(log_sink_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME log_sink_tests COMMAND log_sink_tests)
+
+add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
+target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
+add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
