@@ -310,7 +310,49 @@ if(UNIX AND NOT APPLE)
     set(SDL_PIPEWIRE_SHARED   ON  CACHE BOOL "" FORCE)
 endif()
 
-add_subdirectory(sdl3)
+# patches/sdl3-*.patch are applied to a per-build copy of SDL, never to the fetched source,
+# which worktrees share through a symlink.
+file(GLOB _sdl3_patches "${CMAKE_CURRENT_SOURCE_DIR}/../../patches/sdl3-*.patch")
+if(_sdl3_patches)
+    list(SORT _sdl3_patches)
+    set(_sdl3_stamp_text "")
+    foreach(_p IN LISTS _sdl3_patches)
+        file(SHA256 "${_p}" _h)
+        string(APPEND _sdl3_stamp_text "${_h}\n")
+    endforeach()
+    set(_sdl3_root "${CMAKE_BINARY_DIR}/thirdparty-patched")
+    # shortcut: the stamp tracks the patches only; delete thirdparty-patched after re-fetching SDL.
+    set(_sdl3_old_stamp "")
+    if(EXISTS "${_sdl3_root}/sdl3.stamp")
+        file(READ "${_sdl3_root}/sdl3.stamp" _sdl3_old_stamp)
+    endif()
+    if(NOT _sdl3_old_stamp STREQUAL _sdl3_stamp_text OR NOT EXISTS "${_sdl3_root}/sdl3/CMakeLists.txt")
+        file(REMOVE_RECURSE "${_sdl3_root}/sdl3")
+        file(MAKE_DIRECTORY "${_sdl3_root}/sdl3")
+        file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/sdl3" _sdl3_src)
+        if(APPLE)
+            # APFS clone: no data copied.
+            execute_process(COMMAND cp -cR "${_sdl3_src}/." "${_sdl3_root}/sdl3" RESULT_VARIABLE _rc)
+        else()
+            execute_process(COMMAND cp -R "${_sdl3_src}/." "${_sdl3_root}/sdl3" RESULT_VARIABLE _rc)
+        endif()
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "copying SDL to ${_sdl3_root}/sdl3 failed")
+        endif()
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E env "THIRDPARTY_ROOT=${_sdl3_root}"
+                    bash "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/apply_thirdparty_patches.sh"
+            RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "SDL patches did not apply to ${_sdl3_root}/sdl3")
+        endif()
+        file(WRITE "${_sdl3_root}/sdl3.stamp" "${_sdl3_stamp_text}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_sdl3_patches})
+    add_subdirectory("${_sdl3_root}/sdl3" sdl3)
+else()
+    add_subdirectory(sdl3)
+endif()
 endif()  # NOT REXGLUE_PLATFORM_SWITCH
 
 #=============================================================================

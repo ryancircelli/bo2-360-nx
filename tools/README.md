@@ -8,7 +8,7 @@ from the game is ever written inside the repository.
 | Tool | What it does | Run |
 |---|---|---|
 | `fetch_thirdparty.py` | Fetches the SDK's third-party sources from the ReXGlue v0.10.0 release, keeping this project's changes | `python tools/fetch_thirdparty.py` |
-| `apply_thirdparty_patches.sh` | Applies `patches/<library>-*.patch` under `sdk/thirdparty`, skipping patches already applied | `tools/apply_thirdparty_patches.sh` |
+| `apply_thirdparty_patches.sh` | Applies `patches/<library>-*.patch` under `$THIRDPARTY_ROOT` (default `sdk/thirdparty`), skipping patches already applied. The SDK configure runs it on its own per-build copy of SDL | `tools/apply_thirdparty_patches.sh` |
 | `build_host.sh` | Builds `rexglue.exe` (code generator) and `xexdump` | `tools/build_host.sh` |
 | `build_mesa.sh` | Builds NVK for the Switch from mesa-switch plus `patches/mesa-bo2zm.patch` | `tools/build_mesa.sh` (`MESA_DIR`, no spaces) |
 | `build_zstd_switch.sh` | A static zstd for the Switch, into the Mesa SDK | `tools/build_zstd_switch.sh` |
