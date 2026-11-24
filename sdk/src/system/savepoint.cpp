@@ -12,6 +12,7 @@
 #include <chrono>
 #include <execinfo.h>
 #include <dlfcn.h>
+#include <rex/ppc/function.h>
 #include <malloc/malloc.h>
 #include <sys/mman.h>
 #include <exception>
@@ -712,6 +713,7 @@ void StartRewindWatchdog(std::atomic<bool>* done) {
 
 namespace cs_trace {
 struct Entry {
+  const void* import = nullptr;  // set for kernel import entries (REX_SAVEPOINT_TRACE_IMPORTS)
   uint32_t seq, thread, lr, phase;
   uint32_t regs[7];  // r3 r4 r5 r28 r29 r30 r31
   uint32_t chain[8];
@@ -732,6 +734,7 @@ void SetPhase(uint32_t p) {
   if (!g_ring) g_ring = new Entry[kSize]();
   if (p == 1) g_next = 0;
   g_phase = p;
+  if (std::getenv("REX_SAVEPOINT_TRACE_IMPORTS")) rex::ppc::g_import_trace = p != 0;
 }
 void Dump() {
   const char* path = std::getenv("REX_SAVEPOINT_TRACE_OUT");
@@ -741,6 +744,13 @@ void Dump() {
   const uint32_t n = std::min(g_next.load(), kSize);
   for (uint32_t i = 0; i < n; ++i) {
     const Entry& e = g_ring[i];
+    if (e.import) {
+      Dl_info info{};
+      dladdr(e.import, &info);
+      std::fprintf(f, "%u p%u t%08X lr %08X imp %s = %08X\n", e.seq, e.phase, e.thread, e.lr,
+                   info.dli_sname ? info.dli_sname : "?", e.regs[0]);
+      continue;
+    }
     std::fprintf(f, "%u p%u t%08X lr %08X r3 %08X r4 %08X r5 %08X r28 %08X r29 %08X r30 %08X r31 %08X |", e.seq,
                  e.phase, e.thread, e.lr, e.regs[0], e.regs[1], e.regs[2], e.regs[3], e.regs[4], e.regs[5], e.regs[6]);
     for (uint32_t c : e.chain) {
@@ -753,6 +763,28 @@ void Dump() {
   std::fprintf(stderr, "[savepoint-cstrace] dumped %u entries to %s\n", n, path);
 }
 }  // namespace cs_trace
+
+}  // namespace rex::system
+namespace rex::ppc {
+using rex::system::XThread;
+namespace cs_trace = rex::system::cs_trace;
+std::atomic<bool> g_import_trace{false};
+void TraceImport(const void* fn, PPCContext& ctx) {
+  const uint32_t phase = cs_trace::g_phase.load(std::memory_order_relaxed);
+  if (!phase || !XThread::IsInThread()) return;
+  const uint32_t i = cs_trace::g_next.fetch_add(1, std::memory_order_relaxed);
+  if (i >= cs_trace::kSize) return;
+  auto& e = cs_trace::g_ring[i];
+  e = {};
+  e.import = fn;
+  e.seq = i;
+  e.phase = phase;
+  e.thread = XThread::GetCurrentThread()->guest_object();
+  e.lr = uint32_t(ctx.lr);
+  e.regs[0] = ctx.r3.u32;
+}
+}  // namespace rex::ppc
+namespace rex::system {
 
 void SavepointTraceCs(uint32_t cs) {
   const uint32_t phase = cs_trace::g_phase.load(std::memory_order_relaxed);

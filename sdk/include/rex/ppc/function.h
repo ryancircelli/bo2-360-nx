@@ -397,6 +397,11 @@ void _translate_args_to_guest(PPCContext& ctx, uint8_t* base, std::tuple<TArgs..
 //=============================================================================
 // Calls a native C++ function with arguments extracted from PPC context
 
+// Savepoint diagnostic: when on, every kernel import records (import, return address, result) per
+// thread, so the timeline after a rewind can be compared with the original (savepoint.cpp).
+extern std::atomic<bool> g_import_trace;
+void TraceImport(const void* fn, PPCContext& ctx);
+
 template <auto Func>
 __attribute__((noinline)) void HostToGuestFunction(PPCContext& ctx, uint8_t* base) {
   using ret_t = decltype(std::apply(Func, function_args(Func)));
@@ -424,6 +429,9 @@ __attribute__((noinline)) void HostToGuestFunction(PPCContext& ctx, uint8_t* bas
     } else {
       ctx.r3.u64 = static_cast<uint64_t>(v);
     }
+  }
+  if (g_import_trace.load(std::memory_order_relaxed)) [[unlikely]] {
+    TraceImport(reinterpret_cast<const void*>(&HostToGuestFunction<Func>), ctx);
   }
 }
 
