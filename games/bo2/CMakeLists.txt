@@ -187,8 +187,10 @@ if(TARGET bo2zm_recomp)
   # macOS: the function registration table (1.6 MB, run once at startup) takes Apple clang 30 minutes at -O3 on a
   # loaded machine. At -O0, without the PCH and without GlobalISel it takes seconds and runs as fast. The idea comes
   # from the Fable II Recomp for macOS project.
+  # The path must be spelled as generated/rexglue.cmake lists the source (CMAKE_CURRENT_SOURCE_DIR, which is app/ when
+  # configured through the link), or the properties land on a different source object and nothing changes.
   if(APPLE)
-    set_source_files_properties("${BO2ZM_ROOT}/generated/default_mp/bo2zm_register.cpp"
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/generated/default_mp/bo2zm_register.cpp"
                                 TARGET_DIRECTORY bo2zm_recomp
                                 PROPERTIES COMPILE_OPTIONS "-O0;-fno-global-isel" SKIP_PRECOMPILE_HEADERS ON)
   endif()
