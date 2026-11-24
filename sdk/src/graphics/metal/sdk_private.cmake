@@ -9,7 +9,8 @@ file(REMOVE_RECURSE ${_stage})
 file(MAKE_DIRECTORY ${_stage}/include/rex ${_stage}/src ${_stage}/thirdparty)
 file(COPY ${ROOT}/include/rex/graphics DESTINATION ${_stage}/include/rex)
 file(COPY ${ROOT}/src/graphics DESTINATION ${_stage}/src REGEX "/src/graphics/metal$" EXCLUDE)
-file(COPY ${ROOT}/thirdparty/dxbc DESTINATION ${_stage}/thirdparty)
+file(REAL_PATH ${ROOT}/thirdparty/dxbc _dxbc)  # dxbc may be a symlink to a shared checkout
+file(COPY ${_dxbc} DESTINATION ${_stage}/thirdparty)
 foreach(_p IN LISTS PATCHES)
     execute_process(
         COMMAND ${PATCH} --batch --no-backup-if-mismatch -p1 -i ${METAL_DIR}/patches/${_p}
@@ -33,6 +34,8 @@ foreach(_f IN LISTS _new)
             list(APPEND _bad ${_f})
         endif()
     else()
+        cmake_path(GET _f PARENT_PATH _d)
+        file(MAKE_DIRECTORY ${PRIVATE}/${_d})
         file(COPY_FILE ${_stage}/${_f} ${PRIVATE}/${_f} ONLY_IF_DIFFERENT)
     endif()
 endforeach()
