@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <algorithm>
@@ -598,6 +599,8 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
     pages.push_back(pg);
   }
 
+  std::error_code ec;  // runq live save puts files in <session>/savepoints/, which may not exist yet
+  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
   std::string tmp = path + ".tmp";
   int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) return "error open " + tmp + ": " + std::strerror(errno);

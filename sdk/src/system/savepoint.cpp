@@ -955,7 +955,11 @@ void VisitInProcessThreads(const std::function<void(XThread*, const arm_thread_s
 }
 
 std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms) {
-  int code = op == "save" ? 1 : op == "load" ? 2 : op.rfind("file ", 0) == 0 ? 3 : 0;
+  // "save PATH" (runq live save NAME SP) = "file PATH": the file save keeps the in-memory one too.
+  if (op.rfind("load ", 0) == 0)
+    return "error a running game loads only its in-memory save point; start a new game with REX_LOAD_SAVEPOINT=" +
+           op.substr(5);
+  int code = op == "save" ? 1 : op == "load" ? 2 : op.rfind("file ", 0) == 0 || op.rfind("save ", 0) == 0 ? 3 : 0;
   if (!code) return "error usage: savepoint save|load|file PATH";
   std::unique_lock<std::mutex> l(control::g_m);
   if (control::g_op) return "error busy";
