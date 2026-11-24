@@ -215,6 +215,7 @@ endif()
 add_compile_definitions(REXGLUE_BUILD_CONFIG="$<CONFIG>")
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_pch.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_patchable.cmake)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_version.cmake)
 rex_resolve_version(REXGLUE_FULL_VERSION

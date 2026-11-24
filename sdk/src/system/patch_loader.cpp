@@ -27,14 +27,41 @@ std::atomic<PPCFunc*>& SlotTable::Declare(const char* name, PPCFunc* original) {
   }
   auto* slot = new PatchSlot{name, original, {original}};
   slots_.push_back(slot);
+  index_.emplace(slot->name, slot);
+  return slot->current;
+}
+
+std::atomic<PPCFunc*>& SlotTable::DeclareBody(const char* name, PPCFunc* body) {
+  PatchSlot* slot = Find(name);
+  if (!slot) {
+    return Declare(name, body);
+  }
+  // Static initialization: no guest code runs yet, so the slot is still unpatched.
+  slot->original = body;
+  slot->current.store(body, std::memory_order_release);
   return slot->current;
 }
 
 PatchSlot* SlotTable::Find(const std::string& name) {
+  auto it = index_.find(name);
+  return it == index_.end() ? nullptr : it->second;
+}
+
+std::vector<PatchSlot*> SlotTable::List(const std::string& filter, size_t limit) const {
+  std::vector<PatchSlot*> out;
   for (PatchSlot* s : slots_) {
-    if (s->name == name) return s;
+    if (out.size() >= limit) break;
+    if (filter.empty() || s->name.find(filter) != std::string::npos) out.push_back(s);
   }
-  return nullptr;
+  return out;
+}
+
+size_t SlotTable::PatchedCount() const {
+  size_t n = 0;
+  for (PatchSlot* s : slots_) {
+    if (s->current.load(std::memory_order_relaxed) != s->original) ++n;
+  }
+  return n;
 }
 
 void SlotTable::ResetAll() {

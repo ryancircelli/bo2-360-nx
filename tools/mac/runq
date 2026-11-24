@@ -30,6 +30,8 @@
   runq bump ID              run a queued job next within its class (ahead of the owner turns)
   runq solo ID on|off       make a queued job solo or not
   runq result ID            print result.txt
+  runq live start|exec|cvar|shot|swap-patch|save|load|status|list|stop ...   a game that stays up while you change it
+                            (runq live help)
   runq install              copy runq, buildq and the boot_test tools to the spool's bin/ (a path that outlives worktrees)
 
   buildq [-t N] [--ship] [--] CMD ARGS...
@@ -2140,7 +2142,7 @@ def cmd_cancel(ids):
 def cmd_install(_argv):
     mkdirs()
     for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py',
-              'scenes_gate.sh'):
+              'scenes_gate.sh', 'runq_live.py', 'live_session.py'):
         s = os.path.join(HERE, f)
         if os.path.exists(s):
             # copy then rename: bash reads a running script as it goes, so never rewrite boot_test.sh in place
@@ -2517,6 +2519,7 @@ def test_laptop():
           'Mac fallback after 3 tries, lost for laptop-only, result, cancel')
 
 
+
 def main():
     if os.path.basename(sys.argv[0]) == 'buildq':
         sys.exit(buildq(sys.argv[1:]))
@@ -2750,6 +2753,11 @@ def main():
         os.execvpe(argv[0], argv, os.environ)
     elif sub == '_scene':
         sys.exit(cmd_scene(argv))
+    elif sub == 'live':
+        # runq_live.py (next to runq) runs in runq's namespace: it uses the queue helpers, nothing is duplicated.
+        live = os.path.join(HERE, 'runq_live.py')
+        exec(compile(open(live).read(), live, 'exec'), globals())
+        sys.exit(cmd_live(argv))
     elif sub == 'submit':
         cmd_submit(argv)
     elif sub == 'wait':
