@@ -97,10 +97,11 @@ set(_metal_patches
 )
 set(_sdk_private ${_metal_work}/sdk-private)
 
+# GLOB_RECURSE already descends; "**/" would skip files directly in src/graphics.
 file(GLOB_RECURSE _sdk_graphics_inputs CONFIGURE_DEPENDS
     ${REXGLUE_ROOT}/include/rex/graphics/*
-    ${REXGLUE_ROOT}/src/graphics/**/*.cpp
-    ${REXGLUE_ROOT}/src/graphics/**/*.h
+    ${REXGLUE_ROOT}/src/graphics/*.cpp
+    ${REXGLUE_ROOT}/src/graphics/*.h
     ${REXGLUE_ROOT}/thirdparty/dxbc/*)
 list(FILTER _sdk_graphics_inputs EXCLUDE REGEX "/src/graphics/metal/")
 set(_sdk_fingerprint "")
