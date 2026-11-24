@@ -21,8 +21,6 @@ __attribute__((visibility("default"))) void RequestEncodeNosync(bool on);
 // Command-thread state early-outs (default false); same request/latch protocol.
 __attribute__((visibility("default"))) bool RegEarlyOutRequested();
 __attribute__((visibility("default"))) void RequestRegEarlyOut(bool on);
-__attribute__((visibility("default"))) bool BindlessCacheRequested();
-__attribute__((visibility("default"))) void RequestBindlessCache(bool on);
 __attribute__((visibility("default"))) bool DrawConstsDirtyRequested();
 __attribute__((visibility("default"))) void RequestDrawConstsDirty(bool on);
 }  // namespace rex::graphics::metal

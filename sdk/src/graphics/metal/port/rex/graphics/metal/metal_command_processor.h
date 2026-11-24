@@ -1731,34 +1731,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   // Command-thread state early-outs (latched at a drained frame boundary).
   bool reg_early_out_active_ = false;
   uint64_t reg_early_out_hits_[2] = {0, 0};  // [0] fetch constants, [1] bool/loop constants
-  bool bindless_cache_active_ = false;
-  uint64_t bindless_cache_hits_ = 0;
-  uint64_t bindless_cache_calls_ = 0;
-  // Last fully-processed PopulateBindlessTables inputs (lever B).
-  struct BindlessCacheKey {
-    bool valid = false;
-    bool shared_memory_is_uav = false;
-    bool use_geometry_emulation = false;
-    bool use_tessellation_emulation = false;
-    uint32_t shared_memory_usage_bits = 0;
-    uint64_t frame = 0;
-    uint64_t fixed_source_serial = 0;
-    const void* encoder = nullptr;
-    const void* root_buffer = nullptr;
-    uint64_t root_serial = 0;
-    std::array<uint32_t, kStageCount> active_cbv_masks = {};
-    struct Cbv {
-      const void* buffer;
-      uint64_t offset;
-      uint64_t gpu_address;
-    };
-    std::array<std::array<Cbv, kCbvSlotCount>, kStageCount> cbvs = {};
-  };
-  BindlessCacheKey bindless_cache_key_;
-  // Miss reasons: 0 no key,1 flags,2 frame,3 fixed serial,4 encoder,5 root buf,
-  // 6 root serial,7 cbv masks,8 cbv identity,9 bound-state check.
-  uint64_t bindless_cache_miss_[10] = {};
-  uint64_t bindless_cache_cbv_miss_[64] = {};
   bool draw_consts_dirty_active_ = false;
   // Lever C (metal_draw_consts_dirty): every register PrepareDrawConstants /
   // UpdateSystemConstantValues read. A value-changing write to one bumps the

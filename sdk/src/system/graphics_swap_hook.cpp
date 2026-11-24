@@ -124,18 +124,6 @@ std::atomic<bool>& RegEarlyOutSwitch() {
 bool RegEarlyOutRequested() { return RegEarlyOutSwitch().load(std::memory_order_relaxed); }
 void RequestRegEarlyOut(bool on) { RegEarlyOutSwitch().store(on, std::memory_order_relaxed); }
 namespace {
-std::atomic<bool>& BindlessCacheSwitch() {
-  static std::atomic<bool> requested{[] {
-    const char* env = std::getenv("REX_METAL_BINDLESS_CACHE");
-    if (env && env[0]) return env[0] == '1';
-    return rex::cvar::Query<bool>("metal_bindless_cache");
-  }()};
-  return requested;
-}
-}
-bool BindlessCacheRequested() { return BindlessCacheSwitch().load(std::memory_order_relaxed); }
-void RequestBindlessCache(bool on) { BindlessCacheSwitch().store(on, std::memory_order_relaxed); }
-namespace {
 std::atomic<bool>& DrawConstsDirtySwitch() {
   static std::atomic<bool> requested{[] {
     const char* env = std::getenv("REX_METAL_DRAW_CONSTS_DIRTY");

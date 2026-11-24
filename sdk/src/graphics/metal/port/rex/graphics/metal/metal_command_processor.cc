@@ -142,11 +142,6 @@ DEFINE_bool(
     "Metal");
 
 DEFINE_bool(
-    metal_bindless_cache, false,
-    "Reuse the previous draw's bindless tables when none of their inputs changed. Runtime-switchable at a drained frame boundary.",
-    "Metal");
-
-DEFINE_bool(
     metal_draw_consts_dirty, true,
     "Skip recomputing viewport/scissor/system constants when none of their inputs changed. Runtime-switchable at a drained frame boundary Default on; env REX_METAL_DRAW_CONSTS_DIRTY=0/1 overrides.",
     "Metal");
@@ -1353,7 +1348,6 @@ MetalCommandProcessor::MetalCommandProcessor(
                encode_nosync_active_ ? "on" : "off");
   type0_register_batching_active_ = Type0BatchingRequested();
   reg_early_out_active_ = RegEarlyOutRequested();
-  bindless_cache_active_ = BindlessCacheRequested();
   draw_consts_dirty_active_ = DrawConstsDirtyRequested();
   BuildDrawConstsInputTable();
   pending_shared_memory_writes_.reserve(kMaxPendingSharedMemoryWriteCapacity);
@@ -1362,27 +1356,18 @@ MetalCommandProcessor::MetalCommandProcessor(
 }
 
 MetalCommandProcessor::~MetalCommandProcessor() {
-  if (reg_early_out_active_ || bindless_cache_active_ ||
-      draw_consts_dirty_active_) {
+  if (reg_early_out_active_ || draw_consts_dirty_active_) {
     std::fprintf(stderr,
                  "[warn] [cpstate] final reg_early_out(%s) fetch=%llu "
-                 "boolloop=%llu bindless(%s)=%llu/%llu drawconsts(%s)=%llu/%llu "
-                 "verify_mismatch=%llu bindless_miss=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                 "boolloop=%llu drawconsts(%s)=%llu/%llu "
+                 "verify_mismatch=%llu\n",
                  reg_early_out_active_ ? "on" : "off",
                  (unsigned long long)reg_early_out_hits_[0],
                  (unsigned long long)reg_early_out_hits_[1],
-                 bindless_cache_active_ ? "on" : "off",
-                 (unsigned long long)bindless_cache_hits_,
-                 (unsigned long long)bindless_cache_calls_,
                  draw_consts_dirty_active_ ? "on" : "off",
                  (unsigned long long)draw_consts_hits_,
                  (unsigned long long)draw_consts_calls_,
-                 (unsigned long long)draw_consts_verify_mismatches_,
-                 (unsigned long long)bindless_cache_miss_[0], (unsigned long long)bindless_cache_miss_[1],
-                 (unsigned long long)bindless_cache_miss_[2], (unsigned long long)bindless_cache_miss_[3],
-                 (unsigned long long)bindless_cache_miss_[4], (unsigned long long)bindless_cache_miss_[5],
-                 (unsigned long long)bindless_cache_miss_[6], (unsigned long long)bindless_cache_miss_[7],
-                 (unsigned long long)bindless_cache_miss_[8], (unsigned long long)bindless_cache_miss_[9]);
+                 (unsigned long long)draw_consts_verify_mismatches_);
   }
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kShutdown);
@@ -1449,7 +1434,6 @@ MetalCommandProcessor::~MetalCommandProcessor() {
   render_encoder_bindless_table_bind_mesh_path_ = false;
   render_encoder_bindless_table_bind_tessellation_ = false;
   current_bindless_stage_root_arguments_ = {};
-  bindless_cache_key_.valid = false;
 }
 
 void MetalCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
@@ -2906,37 +2890,24 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     REXLOG_INFO("Metal type0 register batching: {} at drained frame boundary",
                 type0_requested ? "on" : "off");
   }
-  if (reg_early_out_active_ || bindless_cache_active_ ||
-      draw_consts_dirty_active_) {
+  if (reg_early_out_active_ || draw_consts_dirty_active_) {
     static uint64_t cpstate_frames = 0;
     if ((++cpstate_frames % 600) == 0) {
       std::fprintf(stderr,
                    "[warn] [cpstate] frame=%llu reg_early_out fetch=%llu "
-                   "boolloop=%llu bindless=%llu/%llu drawconsts=%llu/%llu "
-                   "verify_mismatch=%llu bindless_miss=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                   "boolloop=%llu drawconsts=%llu/%llu "
+                   "verify_mismatch=%llu\n",
                    (unsigned long long)cpstate_frames,
                    (unsigned long long)reg_early_out_hits_[0],
                    (unsigned long long)reg_early_out_hits_[1],
-                   (unsigned long long)bindless_cache_hits_,
-                   (unsigned long long)bindless_cache_calls_,
                    (unsigned long long)draw_consts_hits_,
                    (unsigned long long)draw_consts_calls_,
-                   (unsigned long long)draw_consts_verify_mismatches_,
-                   (unsigned long long)bindless_cache_miss_[0], (unsigned long long)bindless_cache_miss_[1],
-                   (unsigned long long)bindless_cache_miss_[2], (unsigned long long)bindless_cache_miss_[3],
-                   (unsigned long long)bindless_cache_miss_[4], (unsigned long long)bindless_cache_miss_[5],
-                   (unsigned long long)bindless_cache_miss_[6], (unsigned long long)bindless_cache_miss_[7],
-                   (unsigned long long)bindless_cache_miss_[8], (unsigned long long)bindless_cache_miss_[9]);
+                   (unsigned long long)draw_consts_verify_mismatches_);
     }
   }
   if (reg_early_out_active_ != RegEarlyOutRequested()) {
     reg_early_out_active_ = RegEarlyOutRequested();
     REXLOG_INFO("Metal reg early-out: {} at drained frame boundary (hits so far: fetch {}, bool/loop {})", reg_early_out_active_ ? "on" : "off", reg_early_out_hits_[0], reg_early_out_hits_[1]);
-  }
-  if (bindless_cache_active_ != BindlessCacheRequested()) {
-    bindless_cache_active_ = BindlessCacheRequested();
-    bindless_cache_key_.valid = false;
-    REXLOG_INFO("Metal bindless cache: {} at drained frame boundary (hits so far: {}/{})", bindless_cache_active_ ? "on" : "off", bindless_cache_hits_, bindless_cache_calls_);
   }
   if (draw_consts_dirty_active_ != DrawConstsDirtyRequested()) {
     draw_consts_dirty_active_ = DrawConstsDirtyRequested();
@@ -8161,104 +8132,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
   }
 
   constexpr size_t kGraphicsRootStage = kStageVertex;
-  // Lever B (metal_bindless_cache): when every input and every piece of derived
-  // state is identical to the previous completed call on this encoder, the full
-  // path below is a no-op (entries diff empty -> root reuse, same CBV arrays,
-  // serial-skipped resource sets, binds already applied), so return early.
-  BindlessCacheKey cache_key;
-  const bool cache_enabled = bindless_cache_active_;
-  if (cache_enabled) {
-    ++bindless_cache_calls_;
-    cache_key.valid = true;
-    cache_key.shared_memory_is_uav = shared_memory_is_uav;
-    cache_key.use_geometry_emulation = use_geometry_emulation;
-    cache_key.use_tessellation_emulation = use_tessellation_emulation;
-    cache_key.shared_memory_usage_bits =
-        MetalResourceUsageBits(shared_memory_usage);
-    cache_key.frame = frame_current_;
-    cache_key.fixed_source_serial =
-        GetBindlessFixedResourceSourceSerial(shared_memory_usage);
-    cache_key.encoder = current_render_encoder_;
-    const StageRootArgumentAllocation& cache_root =
-        current_bindless_stage_root_arguments_[kGraphicsRootStage];
-    cache_key.root_buffer = cache_root.valid ? cache_root.buffer : nullptr;
-    cache_key.root_serial = current_bindless_stage_root_serials_[kGraphicsRootStage];
-    for (size_t stage = 0; stage < kStageCount; ++stage) {
-      cache_key.active_cbv_masks[stage] = uniforms.active_cbv_masks[stage];
-      for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
-        const UniformBufferInfo::Cbv& u = uniforms.cbvs[stage][cbv];
-        const bool active = uniforms.active_cbv_masks[stage] & (uint32_t(1) << cbv);
-        cache_key.cbvs[stage][cbv] = {active ? u.buffer : nullptr,
-                                      active ? uint64_t(u.offset) : 0,
-                                      active ? u.gpu_address : 0};
-      }
-    }
-    const BindlessCacheKey& last = bindless_cache_key_;
-    int miss = -1;
-    if (!last.valid) miss = 0;
-    else if (last.shared_memory_is_uav != shared_memory_is_uav ||
-             last.use_geometry_emulation != use_geometry_emulation ||
-             last.use_tessellation_emulation != use_tessellation_emulation ||
-             last.shared_memory_usage_bits != cache_key.shared_memory_usage_bits) miss = 1;
-    else if (last.frame != cache_key.frame) miss = 2;
-    else if (last.fixed_source_serial != cache_key.fixed_source_serial) miss = 3;
-    else if (last.encoder != cache_key.encoder || !current_render_encoder_) miss = 4;
-    else if (last.root_buffer != cache_key.root_buffer) miss = 5;
-    else if (last.root_serial != cache_key.root_serial) miss = 6;
-    else if (!(last.active_cbv_masks == cache_key.active_cbv_masks)) miss = 7;
-    bool hit = miss < 0;
-    if (hit) {
-      for (size_t stage = 0; stage < kStageCount && hit; ++stage) {
-        for (size_t cbv = 0; cbv < kCbvSlotCount; ++cbv) {
-          const auto& a = last.cbvs[stage][cbv];
-          const auto& b = cache_key.cbvs[stage][cbv];
-          if (a.buffer != b.buffer || a.offset != b.offset ||
-              a.gpu_address != b.gpu_address) {
-            hit = false;
-            miss = 8;
-            ++bindless_cache_cbv_miss_[stage * kCbvSlotCount + cbv < 64 ? stage * kCbvSlotCount + cbv : 63];
-            break;
-          }
-        }
-      }
-    }
-    if (hit) {
-      const uint64_t graphics_root_serial =
-          current_bindless_stage_root_serials_[kGraphicsRootStage];
-      const bool use_mesh = use_geometry_emulation || use_tessellation_emulation;
-      hit = current_bindless_stage_root_valid_[kGraphicsRootStage] &&
-            current_bindless_stage_root_entries_valid_[kGraphicsRootStage] &&
-            current_bindless_stage_root_arguments_[kGraphicsRootStage].valid &&
-            current_bindless_shared_memory_is_uav_ == shared_memory_is_uav &&
-            heap_binds_set_on_encoder_ &&
-            render_encoder_bindless_fixed_resources_serial_ ==
-                current_bindless_fixed_resource_set_.serial &&
-            render_encoder_bindless_texture_resources_serial_ ==
-                current_bindless_texture_resource_set_.serial &&
-            render_encoder_bindless_root_resources_serial_ ==
-                current_bindless_root_resource_set_.serial &&
-            current_bindless_fixed_resource_set_.serial &&
-            current_bindless_texture_resource_set_.serial &&
-            current_bindless_root_resource_set_.serial &&
-            render_encoder_bindless_stage_root_bind_serials_[kStageVertex] ==
-                graphics_root_serial &&
-            render_encoder_bindless_stage_root_bind_serials_[kStagePixel] ==
-                graphics_root_serial &&
-            render_encoder_bindless_table_bind_mesh_path_ == use_mesh &&
-            render_encoder_bindless_table_bind_tessellation_ ==
-                use_tessellation_emulation &&
-            !current_bindless_stage_root_valid_[kStagePixel] &&
-            !current_bindless_stage_root_serials_[kStagePixel];
-    }
-    if (!hit && miss < 0) miss = 9;
-    if (!hit) ++bindless_cache_miss_[miss];
-    if (hit) {
-      ++bindless_cache_hits_;
-      ++backend_telemetry_.bindless_root_reuse_hits[kGraphicsRootStage];
-      return true;
-    }
-    bindless_cache_key_.valid = false;
-  }
   const bool bindless_shared_memory_uav_mismatch =
       current_bindless_shared_memory_is_uav_ != shared_memory_is_uav;
   StageRootArgumentEntries entries = BuildGraphicsRootArgumentEntries(
@@ -8642,17 +8515,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     }
   }
 
-  if (cache_enabled) {
-    // Re-capture root identity after the (possible) root rebuild above.
-    const StageRootArgumentAllocation& root_after =
-        current_bindless_stage_root_arguments_[kGraphicsRootStage];
-    cache_key.root_buffer = root_after.valid ? root_after.buffer : nullptr;
-    cache_key.root_serial =
-        current_bindless_stage_root_serials_[kGraphicsRootStage];
-    cache_key.fixed_source_serial =
-        GetBindlessFixedResourceSourceSerial(shared_memory_usage);
-    bindless_cache_key_ = cache_key;
-  }
   return true;
 }
 
