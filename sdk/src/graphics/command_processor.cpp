@@ -1116,6 +1116,8 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
   }
 
   bool matched = false;
+  auto wait_start = std::chrono::steady_clock::now();
+  bool wait_logged = false;
   do {
     uint32_t value = 0;
     if (is_memory) {
@@ -1156,6 +1158,12 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
         break;
     }
     if (!matched) {
+      // A wait that never ends hangs the guest silently; name what it waits on.
+      if (!wait_logged && std::chrono::steady_clock::now() - wait_start > std::chrono::seconds(5)) {
+        wait_logged = true;
+        REXGPU_ERROR("WAIT_REG_MEM still waiting after 5 s: {} {:08X} func {} ref {:08X} mask {:08X} value {:08X} wait {:X}",
+                     is_memory ? "memory" : "register", poll_reg_addr, wait_info & 0x7, ref, mask, value, wait);
+      }
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
