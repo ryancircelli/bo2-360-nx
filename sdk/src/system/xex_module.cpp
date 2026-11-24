@@ -186,6 +186,8 @@ uint32_t XexModule::GetProcAddress(const std::string_view name) const {
   return 0;
 }
 
+static_assert(offsetof(xex2_opt_delta_patch_descriptor, info) == 0x4C);
+
 int XexModule::ApplyPatch(XexModule* module) {
   if (!is_patch()) {
     // This isn't a XEX2 patch.
@@ -195,7 +197,13 @@ int XexModule::ApplyPatch(XexModule* module) {
   // Grab the delta descriptor and get to work.
   xex2_opt_delta_patch_descriptor* patch_header = nullptr;
   GetOptHeader(XEX_HEADER_DELTA_PATCH_DESCRIPTOR, reinterpret_cast<void**>(&patch_header));
-  assert_not_null(patch_header);
+  if (!patch_header ||
+      patch_header->size < offsetof(xex2_opt_delta_patch_descriptor, info) +
+                                offsetof(xex2_delta_patch, patch_data)) {
+    // A full-replacement update (PATCH_FULL) carries no delta; it is an executable in its own right.
+    REXLOG_ERROR("XEX patch has no usable delta patch descriptor");
+    return 1;
+  }
 
   // Compare hash inside delta descriptor to base XEX signature
   uint8_t digest[0x14];
@@ -268,7 +276,9 @@ int XexModule::ApplyPatch(XexModule* module) {
   assert_not_null(file_format_header);
 
   // Apply header patch...
-  uint32_t headerpatch_size = patch_header->info.compressed_len + 0xC;
+  // Every header delta record, not just the first: the descriptor's size covers them all.
+  uint32_t headerpatch_size =
+      patch_header->size - offsetof(xex2_opt_delta_patch_descriptor, info);
 
   int result_code =
       lzxdelta_apply_patch(&patch_header->info, headerpatch_size,
