@@ -33,8 +33,8 @@ GAMES = {
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
     'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
-    'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive=None, scene_s=0, settle_s=75, seed='nfshp-360'),
-    'bo1':   dict(app='Black Ops.app',                    drive=None, scene_s=0, settle_s=60, seed='bo1'),
+    'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=330, settle_s=75, seed='nfshp-360'),
+    'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
@@ -612,11 +612,52 @@ def control_store(key, out):
     json.dump({'t': time.time(), 'out': out, 'machine': os.uname().nodename}, open(os.path.join(d, f'{time.time():.0f}-{os.path.basename(out)}.json'), 'w'))
 
 
+def g_speed_bench(a):
+    """bo2 deterministic bench (class bench, solo): N runs per side interleaved, abverdict --bench on CPU work and GPU ms.
+    Needs apps built with branch deterministic-bench (SDK bench cvars); older apps are refused."""
+    abv = os.path.join(SPOOL, 'bin', 'abverdict.py')
+    base = a.out or default_out('bo2', 'speed-bench')
+    for app in (a.a, a.b):
+        if sh(['grep', '-rlaqF', '[bench] done', os.path.join(app, 'Contents', 'MacOS')]).returncode:
+            return out_line('FAIL', 'speed', 'bo2', f'{app} has no deterministic bench (built before origin/deterministic-bench); use the fps-pair gate', base, base)
+    route = resolve_route('bo2', a.route or 'town4_det')
+    outs = {'A': [], 'B': []}
+    for n in range(1, a.pairs + 1):    # a.pairs = max runs per side here; the verdict needs >= 2 valid per side
+        jobs = []
+        for side, app in (('A', a.a), ('B', a.b)) if n % 2 else (('B', a.b), ('A', a.a)):
+            out = os.path.join(base, f'{side}{n}')
+            outs[side].append(out)
+            r = sh([RUNQ, 'submit', '--class', 'bench', '--solo', '--timing', '--app', app, '--route', route, '--timeout', '420',
+                    '--env', 'END_ON_LOG=[bench] done', '--name', f'gate-bench-{side}{n}', '--out', out])
+            m = re.search(r'job (\S+)', r.stdout)
+            if not m:
+                return out_line('FAIL', 'speed', 'bo2', f'submit failed: {(r.stdout + r.stderr)[-200:]}', base)
+            jobs.append(m.group(1))
+        sh([RUNQ, 'wait'] + jobs)
+        if n < 2:
+            continue
+        v = sh(['python3', abv, '--bench', '--a'] + outs['A'] + ['--b'] + outs['B'])
+        print(v.stdout.strip())
+        if v.returncode == 0:
+            words = re.findall(r'-> (FASTER|SLOWER|SAME)', v.stdout)
+            return out_line('FAIL' if 'SLOWER' in words else 'PASS', 'speed', 'bo2', f'bench {"/".join(words)} (CPU work/GPU) after {n} runs per side: ' + ' | '.join(l for l in v.stdout.splitlines() if '->' in l), base, base)
+        # exit 2: a run was invalid -> drop nothing, abverdict skips invalid ones; exit 3: MORE -> another run per side
+    return out_line('FAIL', 'speed', 'bo2', f'no bench verdict after {a.pairs} runs per side (MORE = same within noise)', base, base)
+
+
+# Measured same-build run-to-run CV for speed routes without a template route in abverdict (see reports/gate-kit-rest.md).
+SPEED_SIGMA = {}
+
+
 def g_speed(a):
     """A/B speed pairs through the queue (class perf, solo) and abverdict; bo2 uses town4 via runq's route runs."""
     abv = os.path.join(SPOOL, 'bin', 'abverdict.py')
     if not (a.a and a.b):
         sys.exit('speed needs --a APP --b APP (the two builds to compare)')
+    if a.bench:
+        if a.game != 'bo2':
+            sys.exit('speed --bench is bo2 only (the other games have no bench)')
+        return g_speed_bench(a)
     outs = {'A': [], 'B': []}
     base = a.out or default_out(a.game, 'speed')
     # Control cache: pair 1 always runs a fresh control A (interleaved with B, same machine state). Pairs 2+ reuse
@@ -749,7 +790,7 @@ def main():
     p.add_argument('--class', dest='klass', default='harness')
     p.add_argument('--now', action='store_true', help='run inline instead of through runq (debugging only)')
     p.add_argument('--inner', action='store_true', help=argparse.SUPPRESS)
-    p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3), p.add_argument('--no-control-cache', action='store_true')
+    p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3), p.add_argument('--bench', action='store_true', help='speed bo2: deterministic bench instead of fps pairs'), p.add_argument('--no-control-cache', action='store_true')
     p.add_argument('--repo'), p.add_argument('--head', default='HEAD'), p.add_argument('--integration', default='origin/main')
     p.add_argument('--dest'), p.add_argument('--restore-dir', dest='restore_dir'), p.add_argument('--dry-run', action='store_true')
     argv = sys.argv[1:]
