@@ -1996,6 +1996,13 @@ class PosixCondition<Thread> : public PosixConditionBase {
 
   void set_priority(int new_priority) {
     WaitStarted();
+#if defined(__APPLE__)
+    // pthread_setschedparam permanently opts a thread out of QoS (qos.h), undoing the user-interactive class
+    // ThreadStartRoutine set, so macOS could park the thread on efficiency cores. Xbox priorities 0..2 are not
+    // even in Darwin's SCHED_FIFO range (15..47); keep the QoS class instead.
+    (void)new_priority;
+    return;
+#endif
     sched_param param{};
     param.sched_priority = new_priority;
     int result = pthread_setschedparam(thread_, SCHED_FIFO, &param);
@@ -2831,7 +2838,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   // Guest threads (game, render, audio) at the user-interactive QoS class, as the main thread already is: the
   // default class lets macOS move them to efficiency cores and delay their wake-ups. Only a thread itself can set
   // its class once it runs.
-  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  if (const int qos_result = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); qos_result != 0) {
+    REXSYS_WARN("guest thread QoS: user-interactive refused ({})", qos_result);
+  }
 #endif
   {
     std::unique_lock<std::mutex> lock(thread->handle_.state_mutex_);

@@ -13,6 +13,11 @@
 #include <rex/ppc/context.h>
 #include <rex/runtime.h>
 #include <rex/system/xthread.h>
+#include <rex/thread.h>
+
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 
 namespace {
 
@@ -68,3 +73,22 @@ TEST_CASE("XHostThread initializes host floating-point exception masks", "[runti
   REQUIRE(callback_called.load(std::memory_order_acquire));
   CHECK(TrapsMasked(callback_csr.load(std::memory_order_relaxed)));
 }
+
+#if defined(__APPLE__)
+TEST_CASE("Thread priority changes keep the user-interactive QoS class on macOS", "[thread][qos]") {
+  std::atomic<bool> priority_set{false};
+  std::atomic<qos_class_t> qos{QOS_CLASS_UNSPECIFIED};
+  auto thread = rex::thread::Thread::Create({}, [&]() {
+    while (!priority_set.load(std::memory_order_acquire)) {
+    }
+    qos_class_t q = QOS_CLASS_UNSPECIFIED;
+    pthread_get_qos_class_np(pthread_self(), &q, nullptr);
+    qos.store(q, std::memory_order_release);
+  });
+  REQUIRE(thread);
+  thread->set_priority(rex::thread::ThreadPriority::kAboveNormal);
+  priority_set.store(true, std::memory_order_release);
+  REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
+  CHECK(qos.load(std::memory_order_acquire) == QOS_CLASS_USER_INTERACTIVE);
+}
+#endif
