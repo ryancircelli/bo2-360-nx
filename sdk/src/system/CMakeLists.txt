@@ -46,6 +46,7 @@ set(REXSYSTEM_SOURCES
     module.cpp
     function_dispatcher.cpp
     gpu_plugin_loader.cpp
+    live_control.cpp
     patch_loader.cpp
     savepoint.cpp
     thread.cpp

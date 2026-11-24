@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/ppc/func.h>
@@ -51,13 +52,23 @@ class SlotTable {
   static SlotTable& Get();
   // Registers (or returns the existing) slot, initially pointing at `original`.
   std::atomic<PPCFunc*>& Declare(const char* name, PPCFunc* original);
+  // Same, for the recompiled body itself (REXGLUE_PATCHABLE_ALL): it becomes the slot's original even when a
+  // REX_PATCHABLE stub declared the slot first with `__imp__X`, which in such a build jumps through the slot.
+  std::atomic<PPCFunc*>& DeclareBody(const char* name, PPCFunc* body);
   PatchSlot* Find(const std::string& name);
   size_t size() const { return slots_.size(); }
+  // Slots whose name contains `filter` (empty: all), at most `limit` of them.
+  std::vector<PatchSlot*> List(const std::string& filter, size_t limit) const;
+  // Slots currently pointing away from their original body.
+  size_t PatchedCount() const;
   // Points every slot back at its original recompiled body.
   void ResetAll();
 
  private:
+  // A build with every function patchable (REXGLUE_PATCHABLE_ALL) declares ~100k slots during static
+  // initialization, so lookups go through an index instead of a scan.
   std::vector<PatchSlot*> slots_;
+  std::unordered_map<std::string, PatchSlot*> index_;
 };
 
 struct LoadResult {
