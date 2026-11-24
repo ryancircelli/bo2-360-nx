@@ -322,6 +322,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::unique_ptr<Runtime> runtime_;
   std::unique_ptr<ui::Window> window_;
   std::thread module_thread_;
+  std::thread glitch_thread_;  // ReportGlitch worker; joined in OnDestroy (it uses the presenter)
   std::atomic<bool> shutting_down_{false};
   std::unique_ptr<ui::ImmediateDrawer> immediate_drawer_;
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;

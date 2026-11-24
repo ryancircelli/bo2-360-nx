@@ -164,6 +164,32 @@ TEST_CASE("capped file: past the cap the middle goes, the head and the tail stay
   fs::remove_all(dir);
 }
 
+TEST_CASE("capped file: a head over 64 KB still ends on a whole line", "[log]") {
+  // The cut scans only the last 64 KB before the head limit for a line end.
+  const fs::path dir = TempDir("cap_big_head");
+  const fs::path file = dir / "s.log";
+  const size_t cap = 1000 * 1000;  // head 250 KB
+  {
+    rex::CappedFileSink sink(file.string(), cap);
+    sink.set_pattern("%v");
+    for (int i = 0; i < 300000; ++i) {
+      char line[64];
+      snprintf(line, sizeof line, "line-%06d", i);
+      sink.log(spdlog::details::log_msg(spdlog::source_loc{}, "t", spdlog::level::info, line));
+    }
+  }
+  const std::string text = ReadAll(file);
+  REQUIRE(text.size() <= cap);
+  REQUIRE(text.rfind("line-000000\n", 0) == 0);
+  const size_t marker = text.find("[log truncated: ");
+  REQUIRE(marker != std::string::npos);
+  REQUIRE(marker > 200 * 1000);                 // the head was kept, not just its last 64 KB
+  REQUIRE(text[marker - 1] == '\n');            // and it ends on a whole line
+  REQUIRE((marker % 12) == 0);                  // 12-byte lines from the start: no partial line
+  REQUIRE(text.find("line-299999\n") != std::string::npos);
+  fs::remove_all(dir);
+}
+
 TEST_CASE("capped file: the marker counts everything left out", "[log]") {
   const fs::path dir = TempDir("cap_count");
   const fs::path file = dir / "s.log";

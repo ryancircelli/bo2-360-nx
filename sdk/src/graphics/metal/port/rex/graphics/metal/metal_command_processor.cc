@@ -5923,6 +5923,13 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           regs.GetVertexFetch(binding.fetch_constant);
       uint32_t buffer_offset = vfetch.address << 2;
       uint32_t buffer_length = vfetch.size << 2;
+      // Skipped (invalid) slots still bind: give them an in-bounds empty range, never a raw address past the buffer.
+      if ((vfetch.type != xenos::FetchConstantType::kVertex &&
+           !REXCVAR_GET(gpu_allow_invalid_fetch_constants)) ||
+          uint64_t(buffer_offset) + buffer_length > SharedMemory::kBufferSize) {
+        buffer_offset = 0;
+        buffer_length = 0;
+      }
       VertexBindingRange range;
       range.binding_index = static_cast<uint32_t>(binding.binding_index);
       range.offset = buffer_offset;

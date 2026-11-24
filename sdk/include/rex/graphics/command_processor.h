@@ -98,7 +98,8 @@ class CommandProcessor {
   Shader* active_vertex_shader() const { return active_vertex_shader_; }
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
 
-  trace::TraceHooks* trace_hooks() const { return trace_hooks_; }
+  // The environment recorder counts even while idle (unhooked), so a replay chains to it as before.
+  trace::TraceHooks* trace_hooks() const { return trace_hooks_ ? trace_hooks_ : owned_trace_hooks_.get(); }
   void set_trace_hooks(trace::TraceHooks* hooks) { trace_hooks_ = hooks; }
 
   virtual bool Initialize();

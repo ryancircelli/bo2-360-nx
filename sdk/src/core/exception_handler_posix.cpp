@@ -438,6 +438,15 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
 #if REX_PLATFORM_MAC
   if (signal_number == SIGBUS) previous = &original_sigbus_handler_;
 #endif
+  // A real previous handler is called from here, so ours stays installed if it recovers (e.g. guest SEH).
+  if ((previous->sa_flags & SA_SIGINFO) && previous->sa_sigaction) {
+    previous->sa_sigaction(signal_number, signal_info, signal_context);
+    return;
+  }
+  if (!(previous->sa_flags & SA_SIGINFO) && previous->sa_handler != SIG_DFL && previous->sa_handler != SIG_IGN) {
+    previous->sa_handler(signal_number);
+    return;
+  }
   struct sigaction action = *previous;
   // Ignoring a synchronous fault cannot make forward progress.
   if (action.sa_handler == SIG_IGN) {

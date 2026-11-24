@@ -911,7 +911,7 @@ void NoteSavepointSwap() {
 namespace control {
 std::mutex g_m;
 std::condition_variable g_cv;
-int g_op = 0;  // 1 save, 2 load
+std::atomic<int> g_op{0};  // 1 save, 2 load; atomic so the command-processor stall loop can skip the lock
 uint64_t g_seq = 0, g_done = 0;
 std::string g_result;
 int g_loads = 0;
@@ -932,6 +932,7 @@ std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms) {
 }
 
 void ServiceControlRequest(int frame) {
+  if (!control::g_op.load(std::memory_order_acquire)) return;  // fast path: called every stall-loop spin
   int op;
   uint64_t seq;
   {

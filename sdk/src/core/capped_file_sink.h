@@ -45,12 +45,15 @@ inline bool CompactHeadTail(const std::filesystem::path& path, size_t head_bytes
     return false;
   }
   // The head ends after the last line end inside the first head_bytes (the whole span if there is none).
-  std::vector<char> buffer(head_bytes);
-  in.read(buffer.data(), std::streamsize(head_bytes));
-  uint64_t head_len = uint64_t(in.gcount());
-  for (uint64_t i = head_len; i > 0; --i) {
+  // Only the last 64 KB before the cut is scanned, so a 4 GB cap does not allocate 1 GB.
+  const uint64_t scan_from = head_bytes > (64u << 10) ? head_bytes - (64u << 10) : 0;
+  std::vector<char> buffer(size_t(head_bytes - scan_from));
+  in.seekg(std::streamoff(scan_from));
+  in.read(buffer.data(), std::streamsize(buffer.size()));
+  uint64_t head_len = scan_from + uint64_t(in.gcount());
+  for (uint64_t i = uint64_t(in.gcount()); i > 0; --i) {
     if (buffer[i - 1] == '\n') {
-      head_len = i;
+      head_len = scan_from + i;
       break;
     }
   }
@@ -149,7 +152,7 @@ class CappedFileSink final : public spdlog::sinks::base_sink<spdlog::details::nu
     formatter_->format(msg, formatted);
     file_.write(formatted);
     bytes_ += formatted.size();
-    if (bytes_ > cap_) {
+    if (bytes_ > std::max(cap_, retry_at_)) {
       Cut();
     }
   }
@@ -159,14 +162,17 @@ class CappedFileSink final : public spdlog::sinks::base_sink<spdlog::details::nu
   void Cut() {
     file_.flush();
     file_.close();
-    CompactHeadTail(path_, cap_ / 4, cap_ / 4, state_);
+    const bool cut = CompactHeadTail(path_, cap_ / 4, cap_ / 4, state_);
     file_.open(path_, false);  // throws if it cannot; the caller drops that batch and the next write tries again
     bytes_ = file_.size();
+    // A failed cut (disk full, rename refused) waits for another cap/4 of log instead of retrying every line.
+    retry_at_ = cut ? 0 : bytes_ + cap_ / 4;
   }
 
   std::string path_;
   size_t cap_;
   size_t bytes_ = 0;
+  size_t retry_at_ = 0;
   spdlog::details::file_helper file_;
   LogCutState state_;
 };

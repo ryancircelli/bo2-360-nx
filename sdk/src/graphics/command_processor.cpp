@@ -156,8 +156,8 @@ bool CommandProcessor::Initialize() {
 
 #if REX_GPU_TRACE
   if (!trace_hooks_) {
+    // Hooked in (trace_hooks_) only while it records, see the swap below: an idle recorder costs one check per swap.
     owned_trace_hooks_ = trace::FrameCapture::CreateFromEnvironment(memory_);
-    trace_hooks_ = owned_trace_hooks_.get();
   }
 #endif
 
@@ -1168,7 +1168,15 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
 
   ++counter_;
   swap_count_.fetch_add(1, std::memory_order_relaxed);
-  if (trace_hooks_) { trace_hooks_->OnSwap(*this, frontbuffer_ptr, frontbuffer_width, frontbuffer_height); }
+  if (trace_hooks_) {
+    trace_hooks_->OnSwap(*this, frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  } else if (owned_trace_hooks_) {
+    owned_trace_hooks_->OnSwap(*this, frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  }
+  // Recording starts and stops at a swap, so the per-packet/per-draw hooks run only for recorded frames.
+  if (owned_trace_hooks_ && (!trace_hooks_ || trace_hooks_ == owned_trace_hooks_.get())) {
+    trace_hooks_ = owned_trace_hooks_->is_recording() ? owned_trace_hooks_.get() : nullptr;
+  }
   return true;
 }
 

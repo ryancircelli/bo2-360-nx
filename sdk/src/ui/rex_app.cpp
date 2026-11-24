@@ -73,6 +73,11 @@ NX_NORETURN void __libnx_exit(int rc);
 #include <fstream>
 #include <sstream>
 #include <thread>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <filesystem>
 #include <string_view>
 
@@ -81,13 +86,14 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
                       "GPU emulation")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(glitch_savepoint, true, "UI",
+REXCVAR_DEFINE_BOOL(glitch_savepoint, false, "UI",
                     "Report a glitch also writes a savepoint (all guest memory, hundreds of MB) next to the report");
 
 namespace rex {
 
 namespace {
 std::filesystem::path GlitchRoot();
+std::filesystem::path GlitchPending();
 }  // namespace
 
 
@@ -225,9 +231,10 @@ bool ReXApp::SetupEnvironment() {
   // Arm the GPU frame recorder for "Report a glitch": it records the next frame when the trigger file appears,
   // and does nothing (one stat per frame) until then. An explicit REX_GPU_TRACE_* setting wins.
   if (!std::getenv("REX_GPU_TRACE_TRIGGER") && !std::getenv("REX_GPU_TRACE_FRAME")) {
-    const auto pending = GlitchRoot() / ".pending";
+    const auto pending = GlitchPending();
     std::error_code ec;
     std::filesystem::create_directories(pending, ec);
+    std::filesystem::remove(pending / "trigger", ec);  // left by a crash, it would record frame 1
     setenv("REX_GPU_TRACE_TRIGGER", (pending / "trigger").c_str(), 0);
     setenv("REX_GPU_TRACE_DIR", pending.c_str(), 0);
   }
@@ -674,6 +681,17 @@ std::filesystem::path GlitchRoot() {
   return (log.empty() ? rex::filesystem::GetUserFolder() : log.parent_path()) / "glitches";
 }
 
+// Per process: 4-player split screen runs one process per player against the same log folder.
+// shortcut: folders of exited processes stay behind (empty or one small trace); prune by pid if they pile up.
+std::filesystem::path GlitchPending() {
+#ifdef _WIN32
+  const int pid = _getpid();
+#else
+  const int pid = getpid();
+#endif
+  return GlitchRoot() / (".pending-" + std::to_string(pid));
+}
+
 uint32_t Crc32(uint32_t crc, const uint8_t* p, size_t n) {
   static uint32_t table[256];
   static bool init = [] {
@@ -744,6 +762,8 @@ void WriteText(const std::filesystem::path& path, const std::string& text) {
 }
 
 std::atomic<bool> g_glitch_busy{false};
+std::atomic<bool> g_glitch_stop{false};  // OnDestroy: stop waiting for the GPU trace
+constexpr size_t kGlitchReportsKept = 5;  // each holds a screenshot and a trace (tens of MB)
 
 }  // namespace
 
@@ -754,10 +774,19 @@ void ReXApp::ReportGlitch() {
   char stamp[32];
   std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&t));
   const std::filesystem::path root = GlitchRoot();
-  const std::filesystem::path dir = root / stamp;
-  const std::filesystem::path pending = root / ".pending";
+  const std::filesystem::path pending = GlitchPending();
   std::error_code ec;
+  std::filesystem::path dir = root / stamp;
+  for (int n = 2; std::filesystem::exists(dir, ec); n++) dir = root / fmt::format("{}-{}", stamp, n);
   std::filesystem::create_directories(dir, ec);
+  {
+    // Keep only the newest reports; names sort by time (same-second reports get -2, -3 ...).
+    std::vector<std::filesystem::path> reports;
+    for (const auto& e : std::filesystem::directory_iterator(root, ec))
+      if (e.is_directory(ec) && e.path().filename().string()[0] != '.') reports.push_back(e.path());
+    std::sort(reports.begin(), reports.end());
+    for (size_t i = 0; i + kGlitchReportsKept < reports.size(); i++) std::filesystem::remove_all(reports[i], ec);
+  }
 
   auto* gfx = runtime_ ? runtime_->graphics_system() : nullptr;
   const uint64_t frame = gfx ? gfx->swap_count() : 0;
@@ -782,8 +811,9 @@ void ReXApp::ReportGlitch() {
   }
   rex::ui::Presenter* presenter = gfx ? gfx->presenter() : nullptr;
 
-  // The rest can wait on frames, so it runs off the UI thread.
-  std::thread([=, notes = std::move(notes)]() mutable {
+  // The rest can wait on frames, so it runs off the UI thread. The previous worker has finished (busy flag).
+  if (glitch_thread_.joinable()) glitch_thread_.join();
+  glitch_thread_ = std::thread([=, notes = std::move(notes)]() mutable {
     rex::ui::RawImage img;
     if (presenter && presenter->CaptureGuestOutput(img) && img.width && img.height && WritePng(dir / "screenshot.png", img)) {
       notes += fmt::format("screenshot: screenshot.png {}x{}\n", img.width, img.height);
@@ -810,7 +840,7 @@ void ReXApp::ReportGlitch() {
     if (trace_armed) {
       std::filesystem::path found;
       uintmax_t last_size = 0;
-      for (int i = 0; i < 100 && found.empty(); i++) {  // up to 10 s
+      for (int i = 0; i < 100 && found.empty() && !g_glitch_stop; i++) {  // up to 10 s
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         std::error_code e;
         for (const auto& f : std::filesystem::directory_iterator(pending, e)) {
@@ -834,7 +864,7 @@ void ReXApp::ReportGlitch() {
     WriteText(dir / "report.txt", notes);
     REXLOG_INFO("[glitch] report written to {}", dir.string());
     g_glitch_busy = false;
-  }).detach();
+  });
 }
 
 void ReXApp::ToggleGuide(int user, std::string_view blade) {
@@ -1085,6 +1115,7 @@ void ReXApp::OnDestroy() {
   rex::ui::UnregisterBind("bind_achievements");
   rex::ui::UnregisterBind("bind_guide");
   rex::ui::UnregisterBind("bind_guide_alt");
+  rex::ui::UnregisterBind("bind_glitch");
   rex::ui::guide::SetWindowHooks({}, {});
 
   // ImGui cleanup (reverse of setup)
@@ -1126,6 +1157,10 @@ void ReXApp::OnDestroy() {
   }
   if (module_thread_.joinable()) {
     module_thread_.join();
+  }
+  g_glitch_stop = true;
+  if (glitch_thread_.joinable()) {
+    glitch_thread_.join();
   }
   // Retire the input drivers while the window they listen to still exists. A title that quits by
   // itself (XamLoaderLaunchTitle / TerminateTitle) never sends OnClosing, so the mouse-and-keyboard
