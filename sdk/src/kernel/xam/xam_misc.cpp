@@ -13,6 +13,14 @@
 #include <rex/hook.h>
 #include "../quiet_return.h"
 
+namespace rex::kernel::xam {
+// No dashboard app is active: report an empty X_DASH_APP_INFO (three zero words).
+void XamGetActiveDashAppInfo_entry(mapped_void dash_app) {
+  if (dash_app) std::memset(dash_app.as<uint8_t*>(), 0, 12);
+}
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__XamGetActiveDashAppInfo, rex::kernel::xam::XamGetActiveDashAppInfo_entry)
+
 // kinda gross but oh well
 REX_EXPORT_STUB(__imp__CancelWaitableTimer);
 REX_EXPORT_STUB(__imp__ControlPackGetCursorPosition);
@@ -432,7 +440,6 @@ REX_EXPORT_STUB(__imp__XamFitnessUnInitialize);
 REX_EXPORT_STUB(__imp__XamFlushAgraTemperatureReport);
 REX_EXPORT_STUB(__imp__XamFreeToken);
 REX_EXPORT_STUB(__imp__XamGetActiveCounterMeasures);
-REX_EXPORT_STUB(__imp__XamGetActiveDashAppInfo);
 REX_EXPORT_STUB(__imp__XamGetAdaptersCollection);
 REX_EXPORT_STUB(__imp__XamGetAppliesTo);
 REX_EXPORT_STUB(__imp__XamGetCachedGamerTag);

@@ -64,6 +64,11 @@ u32 XamShowNuiTroubleshooterUI_entry(u32 unk1, u32 unk2, u32 unk3) {
   return 0;
 }
 
+// Identifies the Kinect identity session; any non-zero id works with no sensor attached.
+u32 XamNuiIdentityGetSessionId_entry() {
+  return 0xDEADF00D;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -105,13 +110,13 @@ REX_EXPORT_STUB(__imp__XamNuiHudGetVersions);
 REX_EXPORT_STUB(__imp__XamNuiHudInterpretFrame);
 REX_EXPORT_STUB(__imp__XamNuiHudIsEnabled);
 REX_EXPORT_STUB(__imp__XamNuiHudSetEngagedTrackingID);
+REX_EXPORT(__imp__XamNuiIdentityGetSessionId, rex::kernel::xam::XamNuiIdentityGetSessionId_entry)
 REX_EXPORT_STUB(__imp__XamNuiIdentityAbort);
 REX_EXPORT_STUB(__imp__XamNuiIdentityEnrollForSignIn);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetColorTexture);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetEnrollmentInfo);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlags);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlagsMessage);
-REX_EXPORT_STUB(__imp__XamNuiIdentityGetSessionId);
 REX_EXPORT_STUB(__imp__XamNuiIdentityIdentifyWithBiometric);
 REX_EXPORT_STUB(__imp__XamNuiIdentityUnenroll);
 REX_EXPORT_STUB(__imp__XamNuiIsChatMicEnabled);

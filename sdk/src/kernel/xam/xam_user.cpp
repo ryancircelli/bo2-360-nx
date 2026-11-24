@@ -552,6 +552,16 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
   return X_ERROR_SUCCESS;
 }
 
+// The title passes (user, users_needed, flags); we have no sign-in dialog, so it behaves like XamShowSigninUI.
+u32 XamShowSigninUIp_entry(u32 user_index, u32 users_needed, u32 flags) {
+  return XamShowSigninUI_entry(users_needed, flags);
+}
+
+// No profile flags are cached for the offline users.
+u32 XamUserGetCachedUserFlags_entry(u32 user_index) {
+  return 0;
+}
+
 // TODO(gibbed): probably a FILETIME/LARGE_INTEGER, unknown currently
 struct X_ACHIEVEMENT_UNLOCK_TIME {
   rex::be<uint32_t> unk_0;
@@ -813,6 +823,8 @@ REX_EXPORT(__imp__XamUserIsOnlineEnabled, rex::kernel::xam::XamUserIsOnlineEnabl
 REX_EXPORT(__imp__XamUserGetMembershipTier, rex::kernel::xam::XamUserGetMembershipTier_entry)
 REX_EXPORT(__imp__XamUserAreUsersFriends, rex::kernel::xam::XamUserAreUsersFriends_entry)
 REX_EXPORT(__imp__XamShowSigninUI, rex::kernel::xam::XamShowSigninUI_entry)
+REX_EXPORT(__imp__XamShowSigninUIp, rex::kernel::xam::XamShowSigninUIp_entry)
+REX_EXPORT(__imp__XamUserGetCachedUserFlags, rex::kernel::xam::XamUserGetCachedUserFlags_entry)
 REX_EXPORT(__imp__XamUserGetIndexFromXUID, rex::kernel::xam::XamUserGetIndexFromXUID_entry)
 REX_EXPORT(__imp__XamUserGetMembershipTierFromXUID, rex::kernel::xam::XamUserGetMembershipTierFromXUID_entry)
 REX_EXPORT(__imp__XamUserGetOnlineCountryFromXUID, rex::kernel::xam::XamUserGetOnlineCountryFromXUID_entry)
@@ -834,7 +846,6 @@ REX_EXPORT_STUB(__imp__XamUserCreateStatsEnumerator);
 REX_EXPORT_STUB(__imp__XamUserCreateTitlesPlayedEnumerator);
 REX_EXPORT_STUB(__imp__XamUserFlushLogonQueue);
 REX_EXPORT_STUB(__imp__XamUserGetAge);
-REX_EXPORT_STUB(__imp__XamUserGetCachedUserFlags);
 REX_EXPORT_STUB(__imp__XamUserGetDeviceId);
 REX_EXPORT_STUB(__imp__XamUserGetOnlineLanguageFromXUID);
 REX_EXPORT_STUB(__imp__XamUserGetOnlineXUIDFromOfflineXUID);
