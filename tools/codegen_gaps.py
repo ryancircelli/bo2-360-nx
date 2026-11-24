@@ -254,6 +254,10 @@ def main():
         IMAGE_RANGE = (BASE, BASE + a.image_size)
     data = open(IMAGE, "rb").read()
     native = native_functions(a.overrides)
+    # plus the ones the codegen swapped for rexcrt_ itself (XDK library signatures), as its register file lists them
+    for f in os.listdir(GEN):
+        if f.endswith("_register.cpp"):
+            native |= {int(m, 16) for m in re.findall(r"SetFunction\((0x[0-9A-Fa-f]+), rexcrt_", open(os.path.join(GEN, f)).read())}
 
     ends, mismatches = measure()
     starts = sorted(ends)
