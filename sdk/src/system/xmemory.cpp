@@ -2099,7 +2099,7 @@ bool PhysicalHeap::Decommit(uint32_t address, uint32_t size) {
   }
 
   // Not caring about the contents anymore.
-  TriggerCallbacks(std::move(global_lock), address, size, true, true);
+  TriggerCallbacks(global_critical_region_.Acquire(), address, size, true, true);
 
   return BaseHeap::Decommit(address, size);
 }
@@ -2121,9 +2121,12 @@ bool PhysicalHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
   // state of the allocator as of February 24th, 2020). If memory is invalidated
   // in Alloc instead, Alloc won't be aware of callbacks enabled in other heaps,
   // thus callback handlers will keep considering this range valid forever.
+  // global_lock stays held through BaseHeap::Release: another thread's Alloc
+  // could otherwise take the freed parent range and have its new page table
+  // entries wiped by the Release below.
   uint32_t region_size;
   if (QuerySize(base_address, &region_size)) {
-    TriggerCallbacks(std::move(global_lock), base_address, region_size, true, true);
+    TriggerCallbacks(global_critical_region_.Acquire(), base_address, region_size, true, true);
   }
 
   return BaseHeap::Release(base_address, out_region_size);
@@ -2136,7 +2139,7 @@ bool PhysicalHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
   // Only invalidate if making writable again, for simplicity - not when simply
   // marking some range as immutable, for instance.
   if (protect & memory::kMemoryProtectWrite) {
-    TriggerCallbacks(std::move(global_lock), address, size, true, true, false);
+    TriggerCallbacks(global_critical_region_.Acquire(), address, size, true, true, false);
   }
 
   if (!parent_heap_->Protect(GetPhysicalAddress(address), size, protect, old_protect)) {
