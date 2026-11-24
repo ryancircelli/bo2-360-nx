@@ -601,6 +601,7 @@ SavepointStats CaptureInProcessSavepoint() {
     g_snap.threads.push_back(std::move(ts));
   }
   g_snap.valid = true;
+  cs_trace::SetPhase(1);
   {
     const char* mode = std::getenv("REX_SAVEPOINT_DEFER");
     if (std::getenv("REX_SAVEPOINT_NO_DEFER_FREE")) mode = "none";
@@ -689,9 +690,87 @@ void StartRewindWatchdog(std::atomic<bool>* done) {
 // Diagnostic, called from the unhandled guest access violation handler: what changed in guest memory
 // since the last rewind restored it. Prints changed words on the faulting allocator's pages, and a count
 // of changed pages overall. Runs once.
+
+namespace cs_trace {
+struct Entry {
+  uint32_t seq, thread, lr, phase;
+  uint32_t regs[7];  // r3 r4 r5 r28 r29 r30 r31
+  uint32_t chain[8];
+};
+constexpr uint32_t kSize = 1u << 19;
+std::atomic<uint32_t> g_next{0};
+std::atomic<uint32_t> g_phase{0};  // 0 off, 1 after capture, 2 after rewind
+Entry* g_ring = nullptr;
+uint32_t Target() {
+  static const uint32_t t = [] {
+    const char* e = std::getenv("REX_SAVEPOINT_TRACE_CS");
+    return e ? uint32_t(std::strtoul(e, nullptr, 16)) : 0u;
+  }();
+  return t;
+}
+void SetPhase(uint32_t p) {
+  if (!Target()) return;
+  if (!g_ring) g_ring = new Entry[kSize]();
+  if (p == 1) g_next = 0;
+  g_phase = p;
+}
+void Dump() {
+  const char* path = std::getenv("REX_SAVEPOINT_TRACE_OUT");
+  if (!g_ring || !path) return;
+  FILE* f = std::fopen(path, "w");
+  if (!f) return;
+  const uint32_t n = std::min(g_next.load(), kSize);
+  for (uint32_t i = 0; i < n; ++i) {
+    const Entry& e = g_ring[i];
+    std::fprintf(f, "%u p%u t%08X lr %08X r3 %08X r4 %08X r5 %08X r28 %08X r29 %08X r30 %08X r31 %08X |", e.seq,
+                 e.phase, e.thread, e.lr, e.regs[0], e.regs[1], e.regs[2], e.regs[3], e.regs[4], e.regs[5], e.regs[6]);
+    for (uint32_t c : e.chain) {
+      if (!c) break;
+      std::fprintf(f, " %08X", c);
+    }
+    std::fputc('\n', f);
+  }
+  std::fclose(f);
+  std::fprintf(stderr, "[savepoint-cstrace] dumped %u entries to %s\n", n, path);
+}
+}  // namespace cs_trace
+
+void SavepointTraceCs(uint32_t cs) {
+  const uint32_t phase = cs_trace::g_phase.load(std::memory_order_relaxed);
+  if (!phase || cs != cs_trace::Target()) return;
+  auto* ts = runtime::ThreadState::Get();
+  if (!ts) return;
+  const uint32_t i = cs_trace::g_next.fetch_add(1, std::memory_order_relaxed);
+  if (i >= cs_trace::kSize) return;
+  auto& e = cs_trace::g_ring[i];
+  const auto* ctx = ts->context();
+  e = {};
+  e.seq = i;
+  e.phase = phase;
+  e.thread = XThread::IsInThread() ? XThread::GetCurrentThread()->guest_object() : 0;
+  e.lr = uint32_t(ctx->lr);
+  const uint32_t r[7] = {ctx->r3.u32, ctx->r4.u32, ctx->r5.u32, ctx->r28.u32, ctx->r29.u32, ctx->r30.u32, ctx->r31.u32};
+  std::memcpy(e.regs, r, sizeof(r));
+  auto* membase = kernel_state()->memory()->virtual_membase();
+  uint32_t sp = ctx->r1.u32;
+  for (int k = 0; k < 8; ++k) {
+    if (sp < 0x40000000u || sp >= 0x7F000000u) break;
+    uint32_t back;
+    std::memcpy(&back, membase + sp, 4);
+    back = rex::byte_swap(back);
+    if (back <= sp || back >= 0x7F000000u) break;
+    uint32_t lr;
+    std::memcpy(&lr, membase + back - 8, 4);
+    e.chain[k] = rex::byte_swap(lr);
+    sp = back;
+  }
+}
+
 void SavepointCrashDiff(uint32_t fault, uint32_t r3, uint32_t r4) {
   static std::atomic<bool> done{false};
   if (!g_snap.valid || done.exchange(true)) return;
+  cs_trace::g_phase = 0;
+  cs_trace::Dump();
   auto* mem = kernel_state()->memory();
   uint64_t changed_pages = 0;
   for (auto& r : g_snap.regions) {
@@ -738,6 +817,7 @@ SavepointStats RewindToInProcessSavepoint() {
   StartRewindWatchdog(&rewind_done);
   auto parked = ParkThreads(ks);
   for (auto* t : g_held) thread_resume(MachPort(t));  // ParkThreads suspended them a second time
+  cs_trace::SetPhase(2);  // threads parked: later entries belong to the rewound timeline
   if (!g_held.empty()) std::fprintf(stderr, "[savepoint-s3] released hold on %zu threads\n", g_held.size());
   g_held.clear();
   g_rewind_phase = 2;

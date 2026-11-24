@@ -41,6 +41,9 @@ void ServiceSavepointRequest();
 SavepointStats CaptureInProcessSavepoint();
 SavepointStats RewindToInProcessSavepoint();
 void SavepointCrashDiff(uint32_t fault, uint32_t r3, uint32_t r4);
+// Diagnostic: REX_SAVEPOINT_TRACE_CS=<hex guest address> records every enter of that critical section
+// after the capture (thread, guest lr, return chain, r3-r5/r28-r31) and dumps it on a guest crash.
+void SavepointTraceCs(uint32_t cs);
 
 // On-demand same-process save/load for tests ("savepoint save" / "savepoint load" in the test
 // control folder). Queues the op for the next command-processor safe point and waits for it.
