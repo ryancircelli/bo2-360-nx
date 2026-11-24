@@ -225,6 +225,11 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
 
     auto file_name = rex::string::utf8_find_name_from_guest_path(path);
     entry = parent_entry->GetChild(file_name);
+    if (!entry && !parent_entry->is_read_only()) {
+      // A host file the tree does not know yet (copied in, or a stale tree): look it up on the
+      // host, or CreatePath below would recreate it with "wb" and truncate it.
+      entry = !root_entry ? ResolvePath(path) : root_entry->ResolvePath(path);
+    }
   } else {
     entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
   }
