@@ -1,7 +1,8 @@
 #!/bin/bash
 # Laptop CI: check one bo2-360-nx branch. usage: check.sh BRANCH [--bless]
-# Parts: build (SDK, incremental), unit (ctest -L unit), replay (refxenos CPU replay of saved traces vs goldens),
+# Parts: build (SDK, incremental), unit (ctest, all registered tests), replay (refxenos CPU replay of saved traces vs goldens),
 # codegen (SKIP: needs game images, not on laptop), shaders (covered by unit graphics tests; no separate sweep tool in main).
+# --bless seeds missing goldens only; --rebless overwrites all.
 # Results: ~/bo2-worker/ci/results/<sha>/{summary.txt,*.log}. Exit 0 only when no part FAILs.
 set -u
 CI=$HOME/bo2-worker/ci
@@ -27,7 +28,7 @@ else rec build FAIL "$(grep -m1 -E 'error:|FAILED' "$out/build.log") (see $out/b
 # unit
 if [ $rc = 0 ]; then
   t=$(date +%s)
-  (cd "$CI/build" && ctest -L unit -j2 --output-on-failure) >"$out/unit.log" 2>&1
+  (cd "$CI/build" && ctest -j2 --output-on-failure) >"$out/unit.log" 2>&1
   r=$(grep -E "tests passed" "$out/unit.log" | tail -1)
   if grep -q "100% tests passed" "$out/unit.log"; then rec unit PASS "$r, $(part_time $t)"
   else rec unit FAIL "${r:-no result} ($(grep -E '\*\*\*Failed|Failed' "$out/unit.log" | head -3 | tr '\n' ';'))"; rc=1; fi
@@ -52,7 +53,7 @@ if not os.path.exists(gold):
     print('NOGOLDEN'); sys.exit(3)
 g = json.load(open(gold))
 if isinstance(g, list): g = {str(r['draw']): {t['target']: t['hash'] for t in r.get('targets', [])} for r in g}
-if bless == '--bless': json.dump(cur, open(gold, 'w')); print('RE-BLESSED', len(cur)); sys.exit(0)
+if bless == '--rebless': json.dump(cur, open(gold, 'w')); print('RE-BLESSED', len(cur)); sys.exit(0)
 bad = [k for k in sorted(g.keys() | cur.keys(), key=int) if g.get(k) != cur.get(k)]
 print(f'draws {len(cur)} mismatches {len(bad)}' + (f' first draw {bad[0]}' if bad else ''))
 sys.exit(1 if bad else 0)
