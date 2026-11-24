@@ -44,7 +44,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "summary in the log ('[benchmark]'). Use with bo2zm_test_god")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(bo2zm_benchmark_ab_factors, "", "BO2",
-                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_type0_register_batching,metal_cmdcost_all,metal_reg_early_out,metal_draw_consts_dirty")
+                      "Up to three named runtime switches: waits_fence_wake,metal_encode_thread,metal_cmdcost_all,metal_reg_early_out,metal_draw_consts_dirty")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_settle_s, 3, "BO2",
                      "Seconds excluded after each A/B arm change (also recorded in perf abarm events)")
@@ -193,7 +193,6 @@ const Factor kFactors[] = {
     {"waits_group_own", &bo2zm::waits::GroupOwn, &bo2zm::waits::SetGroupOwn},
 #if defined(__APPLE__)
     {"metal_encode_thread", &rex::graphics::metal::EncodeThreadRequested, &rex::graphics::metal::RequestEncodeThread},
-    {"metal_type0_register_batching", &rex::graphics::metal::Type0BatchingRequested, &rex::graphics::metal::RequestType0Batching},
     {"metal_cmdcost_all", &rex::graphics::metal::CmdcostAllRequested, &rex::graphics::metal::RequestCmdcostAll},
     {"metal_encode_nosync", &rex::graphics::metal::EncodeNosyncRequested, &rex::graphics::metal::RequestEncodeNosync},
     {"metal_reg_early_out", &rex::graphics::metal::RegEarlyOutRequested, &rex::graphics::metal::RequestRegEarlyOut},

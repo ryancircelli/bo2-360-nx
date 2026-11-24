@@ -5890,13 +5890,10 @@ index 9ae30ab..7d209af 100644
  
  #include <fmt/format.h>
  
-@@ -35,7 +38,13 @@
+@@ -35,7 +38,10 @@
  #include <rex/system/kernel_state.h>
  #include <rex/system/user_module.h>
  
-+REXCVAR_DEFINE_BOOL(metal_type0_register_batching, false, "Metal",
-+                    "Experimental: route sequential type-0 register writes through the backend range writer.");
-+
  REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
 +REXCVAR_DEFINE_BOOL(gpu_ring_reinit_sync, true, "GPU",
 +                    "Drain the command processor before a primary ring buffer re-init and "
@@ -5904,7 +5901,7 @@ index 9ae30ab..7d209af 100644
  
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
-@@ -80,6 +89,10 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
+@@ -80,6 +86,10 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
                      "pipelines are being prepared.")
      .lifecycle(rex::cvar::Lifecycle::kHotReload);
  
@@ -5915,7 +5912,7 @@ index 9ae30ab..7d209af 100644
  namespace rex::graphics {
  
  using namespace rex::graphics::xenos;
-@@ -207,6 +220,24 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -207,6 +217,24 @@ void CommandProcessor::WorkerThreadMain() {
      return;
    }
  
@@ -5940,7 +5937,7 @@ index 9ae30ab..7d209af 100644
    while (worker_running_) {
      while (!pending_fns_.empty()) {
        auto fn = std::move(pending_fns_.front());
-@@ -214,8 +245,8 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -214,8 +242,8 @@ void CommandProcessor::WorkerThreadMain() {
        fn();
      }
  
@@ -5951,7 +5948,7 @@ index 9ae30ab..7d209af 100644
        SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
        // We've run out of commands to execute.
        // We spin here waiting for new ones, as the overhead of waiting on our
-@@ -240,9 +271,7 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -240,9 +268,7 @@ void CommandProcessor::WorkerThreadMain() {
          rex::thread::MaybeYield();
          loop_count++;
  #endif
@@ -5962,7 +5959,7 @@ index 9ae30ab..7d209af 100644
        ReturnFromWait();
        if (!worker_running_ || !pending_fns_.empty()) {
          continue;
-@@ -251,14 +280,20 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -251,14 +277,20 @@ void CommandProcessor::WorkerThreadMain() {
      assert_true(read_ptr_index_ != write_ptr_index);
  
      // Execute. Note that we handle wraparound transparently.
@@ -5985,7 +5982,7 @@ index 9ae30ab..7d209af 100644
  
      // FIXME: We're supposed to process the WAIT_UNTIL register at this point,
      // but no games seem to actually use it.
-@@ -324,9 +359,51 @@ bool CommandProcessor::SetupContext() {
+@@ -324,9 +356,51 @@ bool CommandProcessor::SetupContext() {
  void CommandProcessor::ShutdownContext() {}
  
  void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
@@ -6038,19 +6035,6 @@ index 9ae30ab..7d209af 100644
  }
  
  void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {
-@@ -762,6 +839,12 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
- 
-   uint32_t base_index = (packet & 0x7FFF);
-   uint32_t write_one_reg = (packet >> 15) & 0x1;
-+  if (!write_one_reg && type0_register_batching_active_) {
-+    // The backend range writer retains side-effecting/invalid-range fallbacks.
-+    // Repeated writes to one register must retain their individual ordering.
-+    WriteRegisterRangeFromRing(reader, base_index, count);
-+    return true;
-+  }
-   for (uint32_t m = 0; m < count; m++) {
-     uint32_t reg_data = reader->ReadAndSwap<uint32_t>();
-     uint32_t target_index = write_one_reg ? base_index : base_index + m;
 diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
 index e2983a4..4b5dfb3 100644
 --- a/src/graphics/flags.cpp

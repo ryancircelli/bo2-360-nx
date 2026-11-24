@@ -1346,7 +1346,6 @@ MetalCommandProcessor::MetalCommandProcessor(
   encode_nosync_active_ = EncodeNosyncRequested();
   std::fprintf(stderr, "[warn] [encode-nosync] %s\n",
                encode_nosync_active_ ? "on" : "off");
-  type0_register_batching_active_ = Type0BatchingRequested();
   reg_early_out_active_ = RegEarlyOutRequested();
   draw_consts_dirty_active_ = DrawConstsDirtyRequested();
   BuildDrawConstsInputTable();
@@ -2883,12 +2882,6 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     encode_nosync_active_ = encode_nosync_requested;
     std::fprintf(stderr, "[encode-nosync] %s\n",
                  encode_nosync_active_ ? "on" : "off");
-  }
-  const bool type0_requested = Type0BatchingRequested();
-  if (type0_register_batching_active_ != type0_requested) {
-    type0_register_batching_active_ = type0_requested;
-    REXLOG_INFO("Metal type0 register batching: {} at drained frame boundary",
-                type0_requested ? "on" : "off");
   }
   if (reg_early_out_active_ || draw_consts_dirty_active_) {
     static uint64_t cpstate_frames = 0;

@@ -160,9 +160,6 @@ class CommandProcessor {
   virtual bool SetupContext() = 0;
   virtual void ShutdownContext() = 0;
 
-  // Metal CP-owned mode, changed only at a drained frame boundary. Type-0 packets
-  // finish their synchronous range/per-register writes before the next packet.
-  bool type0_register_batching_active_ = false;
   virtual void WriteRegister(uint32_t index, uint32_t value);
   // Trace replay writes registers straight into the register file (bypassing
   // WriteRegister); backends caching state derived from registers must drop it.

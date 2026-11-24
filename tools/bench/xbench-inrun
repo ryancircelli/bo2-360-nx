@@ -8,7 +8,7 @@ Wraps the stutter-lead abflip method (branch codex/stutter-abflip): the game fli
 every REX_BO2ZM_BENCHMARK_AB_S seconds in a 2x2 order inside one run; abflip.py reports per-factor on/off
 frame stats. Launch goes through runq (boot_test.sh), which starts the game minimized and muted, so this
 never takes over the desktop. Only factors registered in the app build can be flipped (currently
-waits_fence_wake, metal_encode_thread, metal_type0_register_batching; two-stage is NOT registered).
+waits_fence_wake, metal_encode_thread; two-stage is NOT registered).
 """
 import argparse, os, subprocess, sys
 
