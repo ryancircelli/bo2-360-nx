@@ -6,6 +6,8 @@
  * @license     BSD 3-Clause License
  */
 
+#include <mutex>
+#include <unordered_set>
 #include <rex/platform.h>
 #include <rex/thread.h>
 #include <rex/thread_audio.h>
@@ -1128,9 +1130,23 @@ class PosixCondition<Timer> : public PosixConditionBase {
 
 #else  // !REX_FAST_WAITS
 
+// Savepoint parking: every live condition, so a park can be refused while a parked thread is inside
+// one's mutex. Captured/rewound threads resume as if they never held it, so a lock held at the park
+// would either stay held by a thread that is no longer there or be skipped, letting two threads in.
+class PosixConditionBase;
+std::mutex g_condition_registry_mutex;
+std::unordered_set<PosixConditionBase*>& ConditionRegistry() {
+  static auto* set = new std::unordered_set<PosixConditionBase*>();
+  return *set;
+}
+
 class PosixConditionBase {
  public:
   PosixConditionBase() {
+    {
+      std::lock_guard<std::mutex> lock(g_condition_registry_mutex);
+      ConditionRegistry().insert(this);
+    }
 #if REX_PLATFORM_LINUX
     // Use robust mutexes so waits can recover if owner thread terminates.
     pthread_mutexattr_t attr;
@@ -1145,8 +1161,18 @@ class PosixConditionBase {
 #endif
   }
 
-  virtual ~PosixConditionBase() = default;
+  virtual ~PosixConditionBase() {
+    std::lock_guard<std::mutex> lock(g_condition_registry_mutex);
+    ConditionRegistry().erase(this);
+  }
   virtual bool Signal() = 0;
+
+  // False when another thread holds this condition's mutex (caller holds the registry lock).
+  bool MutexFree() {
+    if (!mutex_.try_lock()) return false;
+    mutex_.unlock();
+    return true;
+  }
 
   WaitResult Wait(std::chrono::milliseconds timeout) {
     bool executed;
@@ -2348,6 +2374,21 @@ PosixConditionHandle<Thread>::PosixConditionHandle(pthread_t thread) : handle_(t
 bool CaptureWaitHandleRewindState(WaitHandle* handle, WaitHandleRewindState* state) {
   auto* posix_handle = dynamic_cast<PosixWaitHandle*>(handle);
   return posix_handle && posix_handle->condition().CaptureRewindState(state);
+}
+
+bool AllWaitLocksFree() {
+#if REX_FAST_WAITS
+  return true;  // fast waits take no per-condition mutex across a sleep
+#else
+  if (!g_condition_registry_mutex.try_lock()) return false;
+  bool free = true;
+  for (auto* c : ConditionRegistry()) {
+    if (!free) break;
+    free = c->MutexFree();
+  }
+  g_condition_registry_mutex.unlock();
+  return free;
+#endif
 }
 
 void RewindWaitHandle(WaitHandle* handle, const WaitHandleRewindState& state) {

@@ -114,6 +114,8 @@ void SyncMemory();
 // Sleeps the current thread for at least as long as the given duration.
 // Moves the clock timed waits measure against back by `back` (savepoint rewind; see threading_posix.cpp).
 void ShiftWaitClock(std::chrono::nanoseconds back);
+// Savepoint parking: no thread holds the internal mutex of any wait object (see threading_posix.cpp).
+bool AllWaitLocksFree();
 
 void Sleep(std::chrono::microseconds duration);
 template <typename Rep, typename Period>

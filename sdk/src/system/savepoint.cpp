@@ -302,6 +302,8 @@ void StartMallocProbe() {
   pthread_detach(t);
 }
 bool ParkedLocksFree() {
+  static const bool wait_locks = std::getenv("REX_SAVEPOINT_NO_WAITLOCK_CHECK") == nullptr;
+  if (wait_locks && !rex::thread::AllWaitLocksFree()) return false;
   auto& m = rex::thread::global_critical_region::mutex();
   if (!m.try_lock()) return false;
   m.unlock();
