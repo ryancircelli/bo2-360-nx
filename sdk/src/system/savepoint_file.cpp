@@ -20,6 +20,7 @@
 #include <mutex>
 #include <algorithm>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <dlfcn.h>
@@ -313,6 +314,72 @@ struct Reloc {
 };
 }  // namespace
 
+namespace {
+// REX_SAVEPOINT_VERIFY=1: page hashes of live guest memory, written beside the file at save and compared
+// at load just before the threads resume. Finds memory a fresh process does not get back.
+std::vector<std::pair<uint64_t, uint64_t>> PageHashes(memory::Memory* mem) {
+  std::vector<std::pair<uint64_t, uint64_t>> out;  // {space<<32 | address, hash}
+  auto skip = mem->FunctionTableRanges();
+  auto walk = [&](memory::BaseHeap* heap, uint64_t space, uint8_t* membase) {
+    if (!heap) return;
+    uint64_t a = heap->heap_base(), end = uint64_t(heap->heap_base()) + heap->heap_size();
+    while (a < end) {
+      memory::HeapAllocationInfo info{};
+      if (!heap->QueryRegionInfo(uint32_t(a), &info)) break;
+      uint64_t size = info.region_size ? info.region_size : heap->page_size();
+      if ((info.state & memory::kMemoryAllocationCommit) && (info.protect & memory::kMemoryProtectRead)) {
+        for (uint64_t p = a; p < a + size; p += 4096) {
+          bool table = false;
+          for (auto [tb, ts] : skip) table |= space == 0 && p >= tb && p < uint64_t(tb) + ts;
+          if (table) continue;
+          const uint8_t* d = membase + p;
+          uint64_t h = 1469598103934665603ull;
+          for (int i = 0; i < 4096; i += 8) {
+            uint64_t w;
+            std::memcpy(&w, d + i, 8);
+            h = (h ^ w) * 1099511628211ull;
+          }
+          out.push_back({space << 32 | p, h});
+        }
+      }
+      a += size;
+    }
+  };
+  for (uint32_t b : {0x00000000u, 0x40000000u, 0x80000000u, 0x90000000u})
+    walk(mem->LookupHeap(b), 0, mem->virtual_membase());
+  walk(mem->GetPhysicalHeap(), 1, mem->physical_membase());
+  return out;
+}
+
+void CompareHashes(const std::string& file, memory::Memory* mem) {
+  FILE* f = std::fopen(file.c_str(), "rb");
+  if (!f) {
+    std::fprintf(stderr, "[savepoint] verify: no %s\n", file.c_str());
+    return;
+  }
+  std::vector<std::pair<uint64_t, uint64_t>> saved;
+  std::pair<uint64_t, uint64_t> e;
+  while (std::fread(&e, sizeof e, 1, f) == 1) saved.push_back(e);
+  std::fclose(f);
+  auto now = PageHashes(mem);
+  std::unordered_map<uint64_t, uint64_t> m(now.begin(), now.end());
+  uint32_t diff[2] = {0, 0}, missing[2] = {0, 0}, shown = 0;
+  for (auto& [k, h] : saved) {
+    auto it = m.find(k);
+    uint32_t sp = uint32_t(k >> 32);
+    if (it == m.end()) ++missing[sp];
+    else if (it->second != h) {
+      ++diff[sp];
+      if (sp == 0 && shown++ < 40) std::fprintf(stderr, "[savepoint] verify: virtual page %08X differs\n", uint32_t(k));
+    }
+  }
+  std::fprintf(stderr,
+               "[savepoint] verify: %zu saved pages, %zu now; differ virtual %u physical %u; missing virtual %u "
+               "physical %u\n",
+               saved.size(), now.size(), diff[0], diff[1], missing[0], missing[1]);
+}
+}  // namespace
+
 void SetGraphicsFileHook(IGraphicsSystem* graphics, GraphicsFileHook hook) {
   g_gfx_hook.store(hook, std::memory_order_release);
   g_gfx.store(graphics, std::memory_order_release);
@@ -334,6 +401,13 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   std::string why;
   g_capture_parked_hook = [&] {
     threads.clear(), why.clear();
+    if (std::getenv("REX_SAVEPOINT_VERIFY")) {
+      auto hs = PageHashes(Runtime::instance()->memory());
+      if (FILE* f = std::fopen((path + ".sum").c_str(), "wb")) {
+        std::fwrite(hs.data(), sizeof hs[0], hs.size(), f);
+        std::fclose(f);
+      }
+    }
     ticks = chrono::Clock::QueryGuestTickCount(), time_base = chrono::Clock::guest_system_time_base();
     VisitInProcessThreads([&](XThread* t, const arm_thread_state64_t& gp, const arm_neon_state64_t& neon, void* ctx) {
       if (!t->is_guest_thread() || !why.empty()) return;
@@ -533,6 +607,33 @@ bool LoadSavepointFile(const std::string& path) {
 
   uint32_t region_count = in.U32();
   uint64_t bytes = 0;
+  struct Saved {
+    uint32_t base, size;
+    const uint8_t* data;
+  };
+  std::vector<Saved> saved_virtual;  // REX_SAVEPOINT_VERIFY: compared word by word before the threads resume
+  // REX_SAVEPOINT_VERIFY: guest words that changed since the regions were restored, at each load step.
+  auto verify_words = [&](const char* step) {
+    if (!std::getenv("REX_SAVEPOINT_VERIFY")) return;
+    uint32_t shown = 0, words = 0;
+    for (auto& r : saved_virtual) {
+      const uint8_t* now = mem->virtual_membase() + r.base;
+      for (uint32_t o = 0; o + 4 <= r.size; o += 4) {
+        if (std::memcmp(now + o, r.data + o, 4) == 0) continue;
+        bool table = false;
+        for (auto& [tb, tv] : tables) table |= r.base + o >= tb && r.base + o < tb + tv.size();
+        if (table) continue;
+        ++words;
+        uint32_t a, b;
+        std::memcpy(&a, r.data + o, 4), std::memcpy(&b, now + o, 4);
+        if (shown++ < 12)
+          std::fprintf(stderr, "[savepoint] verify %s: %08X file %08X now %08X\n", step, r.base + o,
+                       __builtin_bswap32(a), __builtin_bswap32(b));
+      }
+    }
+    std::fprintf(stderr, "[savepoint] verify %s: %u virtual words changed since the regions were restored\n", step,
+                 words);
+  };
   const uint32_t rw = memory::kMemoryProtectRead | memory::kMemoryProtectWrite;
   for (uint32_t i = 0; in.ok && i < region_count; ++i) {
     uint32_t space = in.U32(), base = in.U32(), size = in.U32(), protect = in.U32();
@@ -544,10 +645,12 @@ bool LoadSavepointFile(const std::string& path) {
     }
     uint8_t* host = (space == 0 ? mem->virtual_membase() : mem->physical_membase()) + base;
     std::memcpy(host, data, size);
+    if (space == 0) saved_virtual.push_back({base, size, data});
     heap->Protect(base, size, protect);
     bytes += size;
   }
   for (auto* heap : view_heaps) SyncHeapAccess(heap);
+  verify_words("after memory");
   for (auto& [base, saved] : tables) {
     std::memcpy(mem->TranslateVirtual<uint8_t*>(base), saved.data(), saved.size());
   }
@@ -617,7 +720,11 @@ bool LoadSavepointFile(const std::string& path) {
     size_t start = kbs.offset();
     uint32_t handle = 0;
     std::memcpy(&handle, kernel.data() + start + 12, 4);  // SaveObject: alloc flag, guest ptr, count, handles
-    if (type != XObject::Type::Thread && ks->object_table()->LookupObject<XObject>(handle)) {
+    // Modules come from this process's boot (same executable, checked above); their records start with the
+    // module signature, not the handle, and restoring one reloads the XEX over the restored image data.
+    // shortcut: modules loaded after boot (DLLs) are not restored; add when a game needs it.
+    if (type == XObject::Type::Module ||
+        (type != XObject::Type::Thread && ks->object_table()->LookupObject<XObject>(handle))) {
       kbs.set_offset(start + len);
       continue;
     }
@@ -629,6 +736,7 @@ bool LoadSavepointFile(const std::string& path) {
     ++restored_objects;
   }
 
+  verify_words("after objects");
   auto t1 = Clock::now();
   auto* gfx = g_gfx.load(std::memory_order_acquire);
   auto hook = g_gfx_hook.load(std::memory_order_acquire);
@@ -636,6 +744,8 @@ bool LoadSavepointFile(const std::string& path) {
     REXSYS_ERROR("[savepoint] load: GPU state restore failed");
     return false;
   }
+
+  verify_words("before threads");
 
   // Threads: start each restored host thread, wait for it to park, then move its band in and let it go.
   const auto exe = ExeRange();
@@ -658,10 +768,12 @@ bool LoadSavepointFile(const std::string& path) {
     std::memcpy(ctx, rec.ctx_bytes.data(), sizeof(::PPCContext));
     const uint64_t new_top = (g_parked[i]->fp - 65536) & ~15ull;
     const int64_t sd = int64_t(new_top - rec.band_top);
+    // Not the executable range: guest 64-bit sums (sign-extended lis + zero-extended lwz) land at 0x1_0xxxxxxx,
+    // right where the executable is mapped. Code addresses are moved only where they are known to be code.
     Reloc rl{{{rec.band_lo, rec.band_top, sd},
               {head[0], head[0] + kArenaSize, int64_t(membase - head[0])},
-              {rec.ctx, rec.ctx + sizeof(::PPCContext), int64_t(reinterpret_cast<uint64_t>(ctx) - rec.ctx)},
-              {head[1], head[2], int64_t(exe.first - head[1])}}};
+              {rec.ctx, rec.ctx + sizeof(::PPCContext), int64_t(reinterpret_cast<uint64_t>(ctx) - rec.ctx)}}};
+    Reloc code{{{head[1], head[2], int64_t(exe.first - head[1])}}};
     mach_port_t port = g_parked[i]->port;
     if (thread_suspend(port) != KERN_SUCCESS) return false;
     uint8_t* dst = reinterpret_cast<uint8_t*>(new_top - rec.band.size());
@@ -672,6 +784,17 @@ bool LoadSavepointFile(const std::string& path) {
       v = rl(v);
       std::memcpy(dst + o, &v, 8);
     }
+    // Return addresses: walk the frame records (now in the new band) from the innermost game frame.
+    uint32_t moved_returns = 0;
+    for (uint64_t r = rl(arm_thread_state64_get_fp(rec.gp)); r && r != rec.record + sd;) {
+      if (r < new_top - rec.band.size() || r + 16 > new_top) {
+        REXSYS_ERROR("[savepoint] load: thread {:08X} frame record {:X} outside its band", rec.handle, r);
+        return false;
+      }
+      auto* fr = reinterpret_cast<uint64_t*>(r);
+      fr[1] = code(fr[1]), ++moved_returns;
+      r = fr[0];
+    }
     auto* record = reinterpret_cast<uint64_t*>(rec.record + sd);  // oldest game frame returns to the landing
     record[0] = 0;
     record[1] = reinterpret_cast<uint64_t>(&rex_sp_landing);
@@ -679,8 +802,21 @@ bool LoadSavepointFile(const std::string& path) {
     for (int r = 0; r < 29; ++r) gp.__x[r] = rl(gp.__x[r]);
     arm_thread_state64_set_fp(gp, rl(arm_thread_state64_get_fp(rec.gp)));
     arm_thread_state64_set_sp(gp, rl(arm_thread_state64_get_sp(rec.gp)));
-    arm_thread_state64_set_lr_fptr(gp, reinterpret_cast<void*>(rl(arm_thread_state64_get_lr(rec.gp))));
-    arm_thread_state64_set_pc_fptr(gp, reinterpret_cast<void*>(rl(arm_thread_state64_get_pc(rec.gp))));
+    arm_thread_state64_set_lr_fptr(gp, reinterpret_cast<void*>(code(arm_thread_state64_get_lr(rec.gp))));
+    arm_thread_state64_set_pc_fptr(gp, reinterpret_cast<void*>(code(arm_thread_state64_get_pc(rec.gp))));
+    // Bisect switch: REX_SAVEPOINT_RESUME_ONLY=F8000030,F8000034 leaves every other restored thread parked.
+    const char* only = std::getenv("REX_SAVEPOINT_RESUME_ONLY");
+    char hex[16];
+    std::snprintf(hex, sizeof hex, "%08X", rec.handle);
+    const bool resume = !only || std::strstr(only, hex);
+    if (std::getenv("REX_SAVEPOINT_DIAG")) {
+      Dl_info di{};
+      dladdr(reinterpret_cast<void*>(arm_thread_state64_get_pc(gp)), &di);
+      std::fprintf(stderr, "[savepoint] thread %s %s pc %llx (%s) band %zu KB, %u return addresses moved%s\n", hex,
+                   rec.blocked ? "blocked" : "running", (unsigned long long)arm_thread_state64_get_pc(gp),
+                   di.dli_sname ? di.dli_sname : "?", rec.band.size() >> 10, moved_returns, resume ? "" : ", left parked");
+    }
+    if (!resume) continue;  // still suspended, spinning in its park frame when resumed
     if (thread_set_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&gp), ARM_THREAD_STATE64_COUNT) !=
             KERN_SUCCESS ||
         thread_set_state(port, ARM_NEON_STATE64, reinterpret_cast<thread_state_t>(&rec.neon),
