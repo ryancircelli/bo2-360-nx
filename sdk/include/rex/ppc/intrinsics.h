@@ -143,6 +143,44 @@ inline simde__m128i simde_mm_avg_epi32(simde__m128i a, simde__m128i b) {
                             simde_mm_and_si128(simde_mm_or_si128(a, b), simde_mm_set1_epi32(1)));
 }
 
+// vmsum3fp128/vmsum4fp128: hardware returns QNaN when finite inputs overflow the sum
+// (plain dp_ps gives +inf); inf/NaN that come from the inputs pass through (xenia does the same).
+// Mask is the dp_ps mask; lanes outside its high nibble are ignored by the finite check.
+template <int Mask>
+inline simde__m128 vmsum_fp(simde__m128 a, simde__m128 b) {
+  simde__m128 r = simde_mm_dp_ps(a, b, Mask);
+  const simde__m128 abs_mask = simde_mm_castsi128_ps(simde_mm_set1_epi32(0x7FFFFFFF));
+  const simde__m128 inf = simde_mm_set1_ps(__builtin_inff());
+  const simde__m128 used = simde_mm_castsi128_ps(simde_mm_set_epi32(
+      (Mask & 0x80) ? -1 : 0, (Mask & 0x40) ? -1 : 0, (Mask & 0x20) ? -1 : 0, (Mask & 0x10) ? -1 : 0));
+  // lane is "bad" if used and its |a| or |b| is not < inf (inf or NaN)
+  simde__m128 bad = simde_mm_or_ps(
+      simde_mm_cmpnlt_ps(simde_mm_and_ps(a, abs_mask), inf),
+      simde_mm_cmpnlt_ps(simde_mm_and_ps(b, abs_mask), inf));
+  const bool inputs_finite = simde_mm_movemask_ps(simde_mm_and_ps(bad, used)) == 0;
+  const bool overflow = simde_mm_movemask_ps(simde_mm_cmpeq_ps(simde_mm_and_ps(r, abs_mask), inf)) != 0;
+  return (inputs_finite && overflow) ? simde_mm_castsi128_ps(simde_mm_set1_epi32(0x7FC00000)) : r;
+}
+
+// vexptefp: exp2 estimate with out-of-range handling (x>=128 -> +inf, x<=-127 -> 0, NaN -> NaN)
+inline simde__m128 vexptefp_ps(simde__m128 x0) {
+  simde__m128 x = simde_mm_min_ps(simde_mm_max_ps(x0, simde_mm_set1_ps(-127.0f)), simde_mm_set1_ps(128.0f));
+  simde__m128 n = simde_mm_round_ps(x, SIMDE_MM_FROUND_TO_NEG_INF | SIMDE_MM_FROUND_NO_EXC);
+  simde__m128 f = simde_mm_sub_ps(x, n);
+  // 4th-order minimax polynomial for 2^f, f in [0,1), ~12-bit accuracy
+  simde__m128 p = simde_mm_set1_ps(1.8775767e-3f);
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(8.9893397e-3f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(5.5826318e-2f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(2.4015361e-1f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(6.9315308e-1f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(1.0f));
+  // 2^n via exponent bits; n=128 -> 0x7F800000 (+inf), n=-127 -> 0
+  simde__m128i exp_bits = simde_mm_slli_epi32(simde_mm_add_epi32(simde_mm_cvttps_epi32(n), simde_mm_set1_epi32(127)), 23);
+  simde__m128 r = simde_mm_mul_ps(p, simde_mm_castsi128_ps(exp_bits));
+  // NaN input: max/min above would swallow it, so pass it through
+  return simde_mm_blendv_ps(r, x0, simde_mm_cmpunord_ps(x0, x0));
+}
+
 // Convert unsigned 32-bit integers to floats
 inline simde__m128 simde_mm_cvtepu32_ps_(simde__m128i src1) {
   simde__m128i xmm1 = simde_mm_add_epi32(src1, simde_mm_set1_epi32(127));
