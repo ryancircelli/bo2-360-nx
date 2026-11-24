@@ -3,6 +3,7 @@
 #include "bo2zm_gpu_skin.h"
 
 #include <algorithm>
+#include <rex/thread.h>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -184,7 +185,7 @@ class Pool {
     explicit Hold(std::atomic<bool>& lock) : lock_(lock) {
       while (lock_.exchange(true, std::memory_order_acquire)) {
         while (lock_.load(std::memory_order_relaxed)) {
-          std::this_thread::yield();
+          rex::thread::MaybeYield();
         }
       }
     }

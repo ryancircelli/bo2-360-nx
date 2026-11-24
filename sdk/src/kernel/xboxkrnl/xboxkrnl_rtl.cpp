@@ -412,13 +412,21 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
     return;
   }
 
-  // Spin loop
-  while (spin_count--) {
-    if (TryAcquireLockCount(cs)) {
-      // Acquired.
-      cs->owning_thread = cur_thread;
-      cs->recursion_count = 1;
-      return;
+  // Spin loop (counted as spin from the first failed try, rex::thread::SpinScope)
+  if (spin_count && TryAcquireLockCount(cs)) {
+    cs->owning_thread = cur_thread;
+    cs->recursion_count = 1;
+    return;
+  }
+  if (spin_count) {
+    rex::thread::SpinScope spin;
+    while (--spin_count) {
+      if (TryAcquireLockCount(cs)) {
+        // Acquired.
+        cs->owning_thread = cur_thread;
+        cs->recursion_count = 1;
+        return;
+      }
     }
   }
 

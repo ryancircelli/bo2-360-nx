@@ -79,6 +79,10 @@ REXCVAR_DEFINE_INT32(bo2zm_d3d_spin_ns_ab, 0, "BO2",
                      "Test, with bo2zm_benchmark_ab_s: each DrawIndexedVertices spins this many ns on the calling thread "
                      "in the arms of A/B factor 2 (0 = off)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(bo2zm_d3d_work_iters, 0, "BO2",
+                     "Test: each DrawIndexedVertices runs this many iterations of a fixed loop on the calling thread "
+                     "(a known CPU cost per draw for checking the deterministic bench, 0 = off)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace bo2zm::d3d_trace {
 namespace {
@@ -786,6 +790,9 @@ void Trace(uint32_t id, uint32_t address, Ctx& ctx, uint8_t* base, Original orig
         while (std::chrono::steady_clock::now() < end) {
         }
       }
+    }
+    static const int32_t work_iters = REXCVAR_GET(bo2zm_d3d_work_iters);
+    for (volatile int32_t i = 0; i < work_iters; i = i + 1) {
     }
     bo2zm::native::BeforeDraw(base, ctx.r3.u32, bo2zm::native::DrawFunction::kIndexed, ctx.r4.u32, ctx.r5.u32,
                               ctx.r6.u32, ctx.r7.u32);

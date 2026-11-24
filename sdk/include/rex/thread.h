@@ -105,8 +105,22 @@ void set_current_thread_id(uint32_t id);
 // Sets the current thread name.
 void set_current_thread_name(const std::string_view name);
 
-// Yields the current thread to the scheduler. Maybe.
+// Yields the current thread to the scheduler. Maybe. Counted as spin (SpinScope).
 void MaybeYield();
+
+// Deterministic benchmark (bench_frames): instructions spent inside a SpinScope (yield and spin-wait loops) are
+// counted per thread, so the bench can report them apart from the work. Free until EnableSpinCount().
+void EnableSpinCount();
+bool SpinCountEnabled();
+struct SpinScope {
+  SpinScope();
+  ~SpinScope();
+  SpinScope(const SpinScope&) = delete;
+  SpinScope& operator=(const SpinScope&) = delete;
+  uint64_t start_;
+};
+// fn(thread id as pthread_threadid_np gives it, spin instructions so far) for every thread that spun.
+void ForEachSpinCount(void (*fn)(uint64_t tid, uint64_t instr, void* ctx), void* ctx);
 
 // Memory barrier (request - may be ignored).
 void SyncMemory();

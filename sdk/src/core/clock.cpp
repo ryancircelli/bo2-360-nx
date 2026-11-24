@@ -26,6 +26,16 @@ REXCVAR_DEFINE_DOUBLE(guest_time_scale, 1.0, "Clock",
                       "applied at start-up, 0.1 steps, clamped to 0.1..16). Games drive their own physics, audio "
                       "and AI from guest time, so values above ~2 can change behaviour; for test routes only.");
 
+REXCVAR_DEFINE_DOUBLE(clock_frame_lock_hz, 0.0, "Clock",
+                      "Deterministic benchmark: guest time advances 1/hz per presented frame instead of with wall "
+                      "time (0 = off). Within a frame it follows wall time but stops at the frame's step, so a slow "
+                      "or starved frame still covers exactly one step and the game does the same work per frame.")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(clock_frame_lock_stall_ms, 1000, "Clock",
+                     "With clock_frame_lock_hz: after this many wall ms without a frame (loading, boot) guest time "
+                     "runs with wall time again until the next frame, so nothing waits forever on a stopped clock.")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(clock_source_raw, false, "Clock", "Use raw clock source without scaling");
 
 namespace rex::chrono {
@@ -91,6 +101,37 @@ uint64_t GuestTicksAt(const GuestClockAnchor& anchor, uint64_t host_tick_count) 
 
 }  // namespace
 
+// Frame lock (clock_frame_lock_hz): guest = base + min(elapsed since the last frame, step), or after a stall
+// base + step + (elapsed - stall). OnGuestFrame moves base to max(base + step, guest now), so the clock never goes
+// back. One writer (the swap thread); readers use a seqlock.
+namespace {
+std::atomic<uint32_t> frame_lock_seq_{0};
+uint64_t frame_lock_host_ = 0;   // host tick count of the last frame
+uint64_t frame_lock_base_ = 0;   // guest ticks at the last frame
+std::atomic<uint64_t> frame_lock_frames_{0}, frame_lock_stalls_{0};
+uint64_t frame_lock_step_ = 0;   // guest ticks per frame, 0 = off
+uint64_t frame_lock_stall_ = 0;  // guest ticks
+
+void InitFrameLock() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    const double hz = REXCVAR_GET(clock_frame_lock_hz);
+    if (hz > 0.0) {
+      frame_lock_step_ = std::max<uint64_t>(1, uint64_t(double(guest_tick_frequency_) / hz));
+      frame_lock_stall_ = uint64_t(double(guest_tick_frequency_) * std::max(1, REXCVAR_GET(clock_frame_lock_stall_ms)) / 1000.0);
+      frame_lock_host_ = Clock::QueryHostTickCount();
+    }
+  });
+}
+
+uint64_t FrameLocked(uint64_t elapsed) {  // elapsed guest ticks since the last frame -> ticks above its base
+  if (elapsed <= frame_lock_stall_) {
+    return std::min(elapsed, frame_lock_step_);
+  }
+  return frame_lock_step_ + (elapsed - frame_lock_stall_);
+}
+}  // namespace
+
 // Serializes ratio changes (guest_tick_ratio_ and the anchor).
 std::mutex tick_mutex_;
 
@@ -129,9 +170,46 @@ uint64_t UpdateGuestClock() {
     // Nothing to update, calculate on the fly
     return GuestTicksAt(GuestClockAnchor{0, 0, anchor.numerator, anchor.denominator}, host_tick_count);
   }
+  InitFrameLock();
+  if (frame_lock_step_) [[unlikely]] {
+    for (;;) {
+      const uint32_t seq = frame_lock_seq_.load(std::memory_order_acquire);
+      if (seq & 1) continue;
+      const uint64_t host = frame_lock_host_, base = frame_lock_base_;
+      std::atomic_thread_fence(std::memory_order_acquire);
+      if (frame_lock_seq_.load(std::memory_order_relaxed) != seq) continue;
+      const uint64_t now = Clock::QueryHostTickCount();
+      const uint64_t elapsed = now > host ? GuestTicksAt(GuestClockAnchor{0, 0, anchor.numerator, anchor.denominator}, now - host) : 0;
+      return base + FrameLocked(elapsed);
+    }
+  }
 
   return GuestTicksAt(anchor, host_tick_count);
 }
+
+void Clock::OnGuestFrame() {
+  InitFrameLock();
+  if (!frame_lock_step_) {
+    return;
+  }
+  const uint64_t now_guest = UpdateGuestClock();
+  const uint64_t elapsed = now_guest - frame_lock_base_;
+  if (elapsed > frame_lock_step_) {
+    frame_lock_stalls_.fetch_add(1, std::memory_order_relaxed);
+  }
+  frame_lock_seq_.fetch_add(1, std::memory_order_acq_rel);  // odd: readers wait
+  frame_lock_base_ += std::max(frame_lock_step_, elapsed);
+  frame_lock_host_ = Clock::QueryHostTickCount();
+  frame_lock_seq_.fetch_add(1, std::memory_order_release);
+  frame_lock_frames_.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool Clock::frame_locked() {
+  InitFrameLock();
+  return frame_lock_step_ != 0;
+}
+uint64_t Clock::frame_lock_frames() { return frame_lock_frames_.load(std::memory_order_relaxed); }
+uint64_t Clock::frame_lock_stalls() { return frame_lock_stalls_.load(std::memory_order_relaxed); }
 
 // Offset of the current guest system file time relative to the guest base time.
 inline uint64_t QueryGuestSystemTimeOffset() {

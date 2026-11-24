@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <rex/thread.h>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -64,7 +65,7 @@ bool NoLookupRunning() {
       return true;
     }
     if (i >= 192) {
-      std::this_thread::yield();
+      rex::thread::MaybeYield();
     }
   }
   return false;

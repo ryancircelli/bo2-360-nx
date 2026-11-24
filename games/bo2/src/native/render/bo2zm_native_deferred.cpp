@@ -247,7 +247,7 @@ void WaitRoom(uint64_t bytes) {
   ++g_room_waits;
   Publish();
   while (g_cursor + bytes - g_done.load(std::memory_order_acquire) > kBytes) {
-    std::this_thread::yield();
+    rex::thread::MaybeYield();
   }
   g_done_seen = g_done.load(std::memory_order_acquire);
 }
