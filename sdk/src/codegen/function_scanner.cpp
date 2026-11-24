@@ -1294,6 +1294,12 @@ BoundsInfo scanForBounds(DecodedBinary& decoded, uint32_t bctrAddr, const CodeRe
       "scanForBounds: bctr=0x{:08X} region=[0x{:08X}-0x{:08X}] funcStart=0x{:08X} expectedReg=r{}",
       bctrAddr, region.start, region.end, funcStart, expectedReg);
 
+  // Bounds seen on other registers, nearest to the bctr first. MSVC often copies
+  // the index first and compares the original: mr r30,r4 / cmplwi r4,9 / lbzx r0,r12,r30.
+  // shortcut: a write to the compared register between the mr and the compare is not
+  // checked; compiler-emitted switch preambles do not do that.
+  uint32_t otherBound[32] = {};
+
   uint32_t scanAddr = bctrAddr;
   for (int i = 0; i < backwardScanLimit && scanAddr >= scanLowerBound + 4; i++) {
     scanAddr -= 4;
@@ -1307,6 +1313,26 @@ BoundsInfo scanForBounds(DecodedBinary& decoded, uint32_t bctrAddr, const CodeRe
       break;
 
     using namespace rex::codegen::ppc;
+
+    if ((insn->opcode == Opcode::cmpli || insn->opcode == Opcode::cmpi) &&
+        insn->D.RA != expectedReg && insn->D.RA < 32 && !otherBound[insn->D.RA]) {
+      otherBound[insn->D.RA] = static_cast<uint32_t>(insn->D.d) + 1;
+    }
+
+    // mr expectedReg, rS: the index is a copy of rS from here on
+    if (insn->opcode == Opcode::mr && insn->X.RA == expectedReg) {
+      uint8_t src = insn->X.RT;  // RS sits in the RT field for X-form logical ops
+      if (src < 32 && otherBound[src]) {
+        result.maxEntries = otherBound[src];
+        result.indexReg = expectedReg;
+        result.found = true;
+        REXCODEGEN_TRACE("scanForBounds: compare on copy source r{} maxEntries={}", src,
+                         result.maxEntries);
+        return result;
+      }
+      expectedReg = src;
+      continue;
+    }
 
     // Look for cmpli/cmpi followed by conditional branch
     if (insn->opcode == Opcode::cmpli) {
