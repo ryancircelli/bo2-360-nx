@@ -25,10 +25,6 @@ uint32_t ProgressRing();
 // Waits at most 'limit' for ProgressRing() to differ from 'seen'. true if it advanced.
 bool WaitProgressRing(uint32_t seen, std::chrono::microseconds limit);
 
-// Called by the ring thread after writing the read pointer to game memory, and when delivering
-// an interrupt. Cheap if nobody is waiting.
-void WarnProgressRing();
-
 // Swaps presented by the native renderer since startup (0 with Xenos emulation). The watchdog in
 // bo2zm_register.cpp counts them as progress: with blocking waits the game threads sleep in the same place
 // for most of the frame.

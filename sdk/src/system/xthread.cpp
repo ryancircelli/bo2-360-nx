@@ -37,6 +37,7 @@
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread_audio.h>
+#include <rex/thread_spin.h>
 #include <rex/vec128.h>
 
 #if REX_PLATFORM_SWITCH
@@ -1250,6 +1251,7 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
         rex::thread::Sleep(std::chrono::microseconds(100));
       } else {
         rex::thread::MaybeYield();
+        rex::thread::NoteGuestPoll();
       }
     } else if (DelayReported(thread_name_)) {
       const auto before = std::chrono::steady_clock::now();

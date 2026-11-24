@@ -100,10 +100,6 @@ bo2zm_preset_on_screen = false
 # switch_io_ipak_mb_s = 32
 # bo2zm_ipak_mb_s_in_match = 4
 
-# The job threads: which of the game's waits sleep instead of spinning, one bit each. 2047 = all of them; 1023 = all
-# but the newest (a thread whose last jobs were all put back sleeps), for comparison.
-# bo2zm_wait_sites = 2047
-
 # ---- Benchmark ---------------------------------------------------------------------------------------------------
 
 # Once Town is loaded, the game drives a fixed three-minute route by itself (put the controller down) and writes a

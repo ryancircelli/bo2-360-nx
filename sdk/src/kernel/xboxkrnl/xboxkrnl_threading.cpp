@@ -12,6 +12,7 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include <rex/thread_spin.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -391,6 +392,7 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 
 u32 NtYieldExecution_entry() {
   rex::thread::MaybeYield();
+  rex::thread::NoteGuestPoll();
   return X_STATUS_SUCCESS;
 }
 

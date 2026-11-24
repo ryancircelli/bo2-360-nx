@@ -31,6 +31,11 @@ target_link_libraries(chrono_steady_cast_tests PRIVATE
 
 add_test(NAME chrono_steady_cast_tests COMMAND chrono_steady_cast_tests)
 
+add_executable(thread_spin_tests core/thread_spin_test.cpp)
+target_include_directories(thread_spin_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(thread_spin_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME thread_spin_tests COMMAND thread_spin_tests)
+
 add_executable(slot_table_tests input/slot_table_test.cpp)
 target_link_libraries(slot_table_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME slot_table_tests COMMAND slot_table_tests)
