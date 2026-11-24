@@ -60,29 +60,6 @@ REXCVAR_DEFINE_INT32(bo2zm_benchmark_ab_s, 0, "BO2",
                      "(bo2zm_benchmark.h, AbArm); the summary gets one line per arm and per factor. 0 = no A/B")
     .range(0, 60)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-/*
- * The game threads' priority on the Switch. Every guest thread runs at 0x3B, the only band the kernel time-slices
- * (ignore_thread_priorities). In a profile on the Switch the Main thread had game code under it in 82 % of its
- * samples but a core only 55 % of the time, and the Backend 35 % against 14.5 %: ready and waiting for a core, behind
- * the three job workers (which spin while idle), the Server, and the renderer and audio threads above them. These
- * factors raise one of them above the other game threads in the A/B arms where the factor is on (0x3A by default:
- * above 0x3B, below the renderer's 0x2C-0x2E and the audio's 0x2B). Above 0x3B there is no time slicing, so a raised
- * thread that spins keeps its core from the 0x3B threads; the arms measure the net effect.
- */
-REXCVAR_DEFINE_INT32(bo2zm_benchmark_priority_main_ab, 0, "BO2",
-                     "Test (Switch), with bo2zm_benchmark_ab_s: the A/B factor (1 or 2) whose on arms run the game's "
-                     "Main thread at bo2zm_benchmark_priority_raised instead of 0x3B. 0 = not part of the A/B")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_benchmark_priority_backend_ab, 0, "BO2",
-                     "Test (Switch), with bo2zm_benchmark_ab_s: the A/B factor (1 or 2) whose on arms run the game's "
-                     "Backend (render) thread at bo2zm_benchmark_priority_raised instead of 0x3B. 0 = not part of "
-                     "the A/B")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(bo2zm_benchmark_priority_raised, 0x3A, "BO2",
-                     "Test (Switch): the Horizon priority of a game thread raised by bo2zm_benchmark_priority_*_ab "
-                     "(0x2C-0x3B; lower is more urgent)")
-    .range(0x2C, 0x3B)
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(bo2zm_benchmark_xma_cache_ab, false, "BO2",
                     "Test, with bo2zm_benchmark_ab_s: A/B factor 1 is the SDK's apu_xma_cache (decoded XMA frames "
                     "reused) in each arm, back to its own value after the route")
@@ -561,37 +538,6 @@ void SummarizeArmCpu() {
 }
 #endif
 
-// bo2zm_benchmark_priority_*_ab: the Main and Backend threads' Horizon priority follows their factor (wanted when the
-// arm changes, back to 0x3B after the route), and each thread sets its own (ApplyOwnPriority). Setting it from this
-// thread did not work: in a test the name lookup found two "Main XThread" threads and one "Backend", every change
-// was accepted, and the profile still showed both at 0x3B in all 27 blocks.
-constexpr int kGuestPriority = 0x3B;
-std::atomic<int> g_want_priority[3] = {kGuestPriority, kGuestPriority, kGuestPriority};  // [1] Main, [2] Backend
-
-void ApplyAbPriorities(int arm) {
-  static const int main_factor = REXCVAR_GET(bo2zm_benchmark_priority_main_ab);
-  static const int backend_factor = REXCVAR_GET(bo2zm_benchmark_priority_backend_ab);
-  if (main_factor == 0 && backend_factor == 0) {
-    return;
-  }
-  static int applied_arm = -2;
-  if (arm == applied_arm) {
-    return;
-  }
-  if (applied_arm == -2) {
-    REXLOG_INFO("[benchmark] A/B: factor {} = the Main thread, factor {} = the Backend thread at priority {:#x} "
-                "instead of {:#x} (each thread sets its own)",
-                main_factor, backend_factor, REXCVAR_GET(bo2zm_benchmark_priority_raised), kGuestPriority);
-  }
-  applied_arm = arm;
-  static const int raised = REXCVAR_GET(bo2zm_benchmark_priority_raised);
-  auto want = [&](int factor) {
-    return (factor == 1 || factor == 2) && arm >= 0 && (arm & factor) != 0 ? raised : kGuestPriority;
-  };
-  g_want_priority[1].store(want(main_factor), std::memory_order_relaxed);
-  g_want_priority[2].store(want(backend_factor), std::memory_order_relaxed);
-}
-
 void SummarizeAb() {
   for (int arm = 0; arm < (1 << FactorBits()); ++arm) {
     const Line l = Describe(g_arm_ms[arm]);
@@ -765,38 +711,6 @@ void AnnotatePlayer(bool present) {
   }
 }
 
-void ApplyOwnPriority() {
-#if defined(__SWITCH__)
-  static const bool any = REXCVAR_GET(bo2zm_benchmark_priority_main_ab) != 0 ||
-                          REXCVAR_GET(bo2zm_benchmark_priority_backend_ab) != 0;
-  if (!any) [[likely]] {
-    return;
-  }
-  thread_local int role = -1;  // 0 neither, 1 Main, 2 Backend
-  thread_local int applied = kGuestPriority;
-  thread_local uint32_t changes = 0;
-  if (role < 0) {
-    role = 0;
-    if (rex::system::XThread* self = rex::system::XThread::GetCurrentThread(); self && self->thread()) {
-      const std::string_view name = self->thread()->name();
-      role = name.starts_with("Main XThread") ? 1 : name.starts_with("Backend") ? 2 : 0;
-    }
-  }
-  if (role == 0) {
-    return;
-  }
-  const int want = g_want_priority[role].load(std::memory_order_relaxed);
-  if (want != applied) {
-    const bool ok = RexSwitchSetCurrentThreadPriorityOk(want);
-    applied = want;
-    if (++changes <= 2 || !ok) {
-      REXLOG_INFO("[benchmark] the {} thread set its own priority to {:#x}{}", role == 1 ? "Main" : "Backend", want,
-                  ok ? "" : " (REFUSED by the kernel)");
-    }
-  }
-#endif
-}
-
 std::atomic<int> g_arm_cached{-1};
 int AbArmCached() {
   return g_arm_cached.load(std::memory_order_relaxed);
@@ -866,7 +780,6 @@ void AnnotateFrame() {
 #endif
   ApplyAbXmaCache(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyAbIpak(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
-  ApplyAbPriorities(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyFactors(ArmAt(t, nullptr), Now());
   g_arm_cached.store(AbSeconds() > 0 && t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1, std::memory_order_relaxed);
 #if defined(__SWITCH__)

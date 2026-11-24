@@ -43,9 +43,4 @@ int AbArm();
 // AbArm as of the last frame (set once a frame): for code called too often to read the clock each time.
 int AbArmCached();
 
-// bo2zm_benchmark_priority_*_ab: called often by the game threads (the job picker and the Backend's frame wait,
-// bo2zm_waits.cpp); the Main and Backend threads set their own priority when their factor wants a change. Cheap when
-// the factors are off.
-void ApplyOwnPriority();
-
 }  // namespace bo2zm::benchmark

@@ -681,7 +681,6 @@ void WarnFenceWritten() {
 
 // --- The picker: sub_8284AED8(slot, filter, record out, flag) returns 1 with a job, or yields and returns 0 --------
 REX_HOOK_RAW(sub_8284AED8) {
-  bo2zm::benchmark::ApplyOwnPriority();
   const uint32_t slot = ctx.r3.u32, filter = ctx.r4.u32, reg_index = ctx.r5.u32, lr = uint32_t(ctx.lr);
   WarnYesEnded();
   t.seen_choice = Look();
@@ -948,7 +947,6 @@ REX_HOOK_RAW(sub_824931E8) {
 // The polls of the help loops.
 // sub_82428ED8(ms): WaitForSingleObject(frame event 0x83AF71DC, ms) == 0. The Backend's "next frame" wait.
 REX_HOOK_RAW(sub_82428ED8) {
-  bo2zm::benchmark::ApplyOwnPriority();
   const bool poll = ctx.r3.u32 == 0;
 #if REX_PLATFORM_SWITCH
   // The older, simpler hook, kept for when the blocking waits are off: after 32 idle polls in a row (no job queued

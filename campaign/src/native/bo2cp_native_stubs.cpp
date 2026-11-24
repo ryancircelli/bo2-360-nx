@@ -47,7 +47,6 @@ int AbArmCached() { return -1; }
 bool IsActive() { return false; }  // no benchmark route in the campaign (bo2zm_test_pad.cpp asks)
 bool PathTilts(int&, int&) { return false; }
 uint32_t PathButtons() { return 0; }
-void ApplyOwnPriority() {}  // the benchmark's own thread priority (bo2zm_waits.cpp asks)
 }  // namespace bo2zm::benchmark
 
 // The Zombies program's cheats (bo2zm_cheats.cpp hooks default_mp's players, rounds, perks and weapons): none in the
