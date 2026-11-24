@@ -178,6 +178,10 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
   return X_STATUS_SUCCESS;
 }
 
+uint64_t GraphicsSystem::swap_count() const {
+  return command_processor_ ? command_processor_->swap_count() : 0;
+}
+
 void GraphicsSystem::Shutdown() {
   if (command_processor_) {
     command_processor_->Shutdown();

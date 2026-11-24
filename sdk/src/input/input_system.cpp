@@ -19,6 +19,7 @@
 #include <rex/input/device_assignment.h>
 #include <rex/input/flags.h>
 #include <rex/input/input_driver.h>
+#include <rex/input/input_record.h>
 #include <rex/input/input_system.h>
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/nop/nop_input_driver.h>
@@ -93,6 +94,11 @@ REXCVAR_DEFINE_STRING(hid_virtual_pad1, "", "Input",
 REXCVAR_DEFINE_STRING(hid_virtual_pad2, "", "Input", "Virtual pad 2 script (see hid_virtual_pad1)");
 REXCVAR_DEFINE_STRING(hid_virtual_pad3, "", "Input", "Virtual pad 3 script (see hid_virtual_pad1)");
 REXCVAR_DEFINE_STRING(hid_virtual_pad4, "", "Input", "Virtual pad 4 script (see hid_virtual_pad1)");
+REXCVAR_DEFINE_STRING(hid_replay_input, "", "Input",
+                      "A glitch report's input.txt: replays it as pads on its players, starting hid_replay_delay "
+                      "seconds after launch (use with the route that reaches the same place)");
+REXCVAR_DEFINE_DOUBLE(hid_replay_delay, 0.0, "Input", "Seconds after launch at which hid_replay_input starts")
+    .range(0.0, 3600.0);
 REXCVAR_DEFINE_INT32(hid_virtual_pad_look_speed, 35, "Input",
                      "Right stick tilt of look_* in virtual pad scripts, in percent")
     .range(1, 100);
@@ -552,6 +558,20 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
     guest_seen_[user_index] = merged.gamepad;
     guest_seen_valid_[user_index] = true;
   }
+  if (user_index < 4) {
+    PadSample sample;
+    sample.ms = ProcessMs();
+    sample.frame = GuestFrame();
+    sample.user = user_index;
+    sample.buttons = merged.gamepad.buttons;
+    sample.lt = merged.gamepad.left_trigger;
+    sample.rt = merged.gamepad.right_trigger;
+    sample.lx = merged.gamepad.thumb_lx;
+    sample.ly = merged.gamepad.thumb_ly;
+    sample.rx = merged.gamepad.thumb_rx;
+    sample.ry = merged.gamepad.thumb_ry;
+    GlobalInputRing().Record(sample);
+  }
   if (out_state) {
     *out_state = merged;
   }
@@ -707,10 +727,33 @@ std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
 std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
   auto input = std::make_unique<InputSystem>(nullptr);
 
+  std::function<double()> record_clock;
+  if (REXCVAR_GET(hid_virtual_pad_guest_time)) {
+    // Same clock as a route's pads, so a recorded window replays at the pace it was played.
+    const uint64_t start = chrono::Clock::QueryGuestTickCount();
+    record_clock = [start] {
+      return static_cast<double>(chrono::Clock::QueryGuestTickCount() - start) /
+             static_cast<double>(chrono::Clock::guest_tick_frequency());
+    };
+    SetProcessClock(record_clock);
+  }
   if (!tool_mode) {
     // First, so the script pads are on their players before any controller.
     if (auto script_driver = CreateScriptPadDriverFromConfig()) {
       input->AddDriver(std::move(script_driver));
+    }
+    if (const std::string& replay = REXCVAR_GET(hid_replay_input); !replay.empty()) {
+      std::ifstream stream(replay);
+      std::stringstream text;
+      text << stream.rdbuf();
+      auto samples = SamplesFromText(text.str());
+      if (!stream || samples.empty()) {
+        REXLOG_ERROR("hid_replay_input: no samples in '{}'", replay);
+      } else {
+        REXLOG_INFO("Input replay: {} sample(s) from {}", samples.size(), replay);
+        input->AddDriver(
+            std::make_unique<RecordedPadDriver>(std::move(samples), REXCVAR_GET(hid_replay_delay), record_clock));
+      }
     }
 
 #if !REX_PLATFORM_SWITCH

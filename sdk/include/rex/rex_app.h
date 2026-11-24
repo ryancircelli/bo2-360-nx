@@ -242,6 +242,10 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   void ToggleGuide(int user = -1, std::string_view blade = {});
   bool guide_open() const { return guide_overlay_ != nullptr; }
 
+  /// Writes a glitch report folder (screenshot, GPU trace of the next frame, log tail, settings, build ids,
+  /// the last 60 s of pad input, and a savepoint) under the log folder's glitches/. Any thread; returns at once.
+  void ReportGlitch();
+
   /// Creates the achievement notification UI. Override to replace the
   /// built-in toast renderer. Returning nullptr disables notifications.
   virtual std::unique_ptr<ui::AchievementNotificationDialog> CreateAchievementNotificationDialog();

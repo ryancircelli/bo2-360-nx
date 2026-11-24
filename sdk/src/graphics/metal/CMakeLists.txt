@@ -225,20 +225,24 @@ target_compile_definitions(rexgpu-metal PRIVATE
     FABLE2_NO_CONVERTER=1
 )
 
-# GPU frame capture and offline replay (tools/gputest/replay in the SDK). The
-# trace sources come from the private SDK copy, so capture and replay run the
-# same command processor code the plugin uses.
-if(REXGLUE_BUILD_GPUTEST AND EXISTS ${_sdk_private}/src/graphics/trace/frame_replay.cpp)
+# GPU frame capture is always built in (the Guide's "Report a glitch" records the next frame with it; nothing is
+# written unless a capture is armed). Offline replay (tools/gputest/replay in the SDK) is GPUTEST only. The trace
+# sources come from the private SDK copy, so both run the same command processor code the plugin uses.
+if(EXISTS ${_sdk_private}/src/graphics/trace/frame_capture.cpp)
     target_sources(rexgpu-metal PRIVATE
         ${_sdk_private}/src/graphics/trace/trace_writer.cpp
         ${_sdk_private}/src/graphics/trace/frame_capture.cpp
-        ${_sdk_private}/src/graphics/trace/frame_replay.cpp
-        ${_sdk_private}/src/graphics/trace/replay_export.cpp
-        ${_sdk_private}/src/graphics/trace/texture_check.cpp
     )
     target_compile_definitions(rexgpu-metal PRIVATE REX_GPU_TRACE=1)
     find_package(ZLIB REQUIRED)
     target_link_libraries(rexgpu-metal PRIVATE ZLIB::ZLIB)
+endif()
+if(REXGLUE_BUILD_GPUTEST AND EXISTS ${_sdk_private}/src/graphics/trace/frame_replay.cpp)
+    target_sources(rexgpu-metal PRIVATE
+        ${_sdk_private}/src/graphics/trace/frame_replay.cpp
+        ${_sdk_private}/src/graphics/trace/replay_export.cpp
+        ${_sdk_private}/src/graphics/trace/texture_check.cpp
+    )
 endif()
 
 target_compile_options(rexgpu-metal PRIVATE

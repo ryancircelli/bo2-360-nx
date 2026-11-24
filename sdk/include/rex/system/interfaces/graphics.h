@@ -57,6 +57,9 @@ class IGraphicsSystem {
   virtual ui::GraphicsProvider* provider() const { return nullptr; }
   virtual ui::Presenter* presenter() const { return nullptr; }
 
+  // Frames the guest has swapped so far (0 when the system does not count them).
+  virtual uint64_t swap_count() const { return 0; }
+
   // Guest GPU services reached from the xboxkrnl Vd* exports.
   virtual void SetInterruptCallback(uint32_t callback, uint32_t user_data) {
     (void)callback;
