@@ -470,7 +470,11 @@ int XexModule::ReadImage(const void* xex_addr, size_t xex_length, bool use_dev_k
     return 0;
   }
 
-  memory()->LookupHeap(base_address_)->Reset();
+  // A title DLL shares the image heap with the running executable; resetting it would mark the
+  // executable's pages free.
+  if (!(xex_header()->module_flags & XEX_MODULE_DLL_MODULE)) {
+    memory()->LookupHeap(base_address_)->Reset();
+  }
 
   aes_decrypt_buffer(use_dev_key ? xe_xex2_devkit_key : xe_xex2_retail_key,
                      reinterpret_cast<const uint8_t*>(xex_security_info()->aes_key), 16,
