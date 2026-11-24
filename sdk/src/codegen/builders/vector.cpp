@@ -135,7 +135,7 @@ bool build_vrsqrtefp(BuilderContext& ctx) {
 
 bool build_vexptefp(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(true);
-  ctx.emit_vec_fp_unary_expr("vexptefp_ps(simde_mm_load_ps({vA}.f32))");
+  ctx.emit_vec_fp_unary_expr("rex::ppc::vexptefp_ps(simde_mm_load_ps({vA}.f32))");
   return true;
 }
 
