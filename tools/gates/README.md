@@ -24,7 +24,7 @@ Evidence goes to `~/Games/Xbox360/bo2-build/runs/gates/<game>-<gate>-<time>/` (o
 (normalized warning/error kinds; pass an earlier one as `--kinds-from` to get "new-kinds N").
 
 * Fast by default: `boot` is 45 s after the first frame; `shot` and `guide` run the route at `--ff 2` and drop to 1x
-  before looking; the Guide gate needs no route (the control channel presses the Guide button after the settle time).
+  before looking; the Guide gate writes its own pad script (Guide, RB, LB, Guide at the settle time, default 60-75 s).
   Use `--at S` for another scene time, `--route FILE` for another route (bare names: tools/gates/routes, then
   ~/Games/Xbox360/bo2-build/runq/bin/routes).
 * `install` refuses when: the installed app is running (the owner may be playing), the build tree does not contain the

@@ -16,7 +16,7 @@ inline, for debugging only), so it is muted, minimized, on its own UDP ports and
 --out (default ~/Games/Xbox360/bo2-build/runs/gates/<game>-<gate>-<time>/). Exit 0 = PASS, 1 = FAIL, 2 = setup error.
 Docs: tools/gates/README.md, WORKFLOW.md "Standard gates".
 """
-import argparse, glob, json, math, os, plistlib, re, shutil, signal, subprocess, sys, time, uuid
+import argparse, glob, hashlib, json, math, os, plistlib, re, shutil, signal, subprocess, sys, time, uuid
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -279,10 +279,12 @@ class Game:
         return to_png(dst), image_stats(dst)
 
     def frames(self):
-        """Guest frames presented so far (largest frame number the state/log reports), or None."""
-        r = self.ctl('state', 10)
-        m = re.findall(r'"(?:frame_id|frame|presented|frames)"\s*:\s*(\d+)', r)
-        return max(map(int, m)) if m else None
+        """Frames presented so far: present_submit rows in the game's frame csv (flushed every 500 ms), or None without a csv."""
+        self.ctl('flush 1500', 5)
+        csvs = glob.glob(os.path.join(self.logs, 'frames-*.csv'))
+        if not csvs:
+            return None
+        return sum(1 for line in open(max(csvs, key=os.path.getmtime)) if line.startswith('present_submit'))
 
     def stop(self):
         if self.alive():
@@ -410,27 +412,17 @@ def g_drive(a, G):
 def g_guide(a, G):
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
-    settle = a.at or GAMES[a.game]['settle_s']
-    ff = a.ff or 1
-    t_end = time.monotonic() + settle / ff
-    while time.monotonic() < t_end and G.alive():
-        time.sleep(1)
-    if ff != 1:
-        G.ctl('timescale 1', 10)
     G.shot('before', screen=True)
-    mark = len(G.log_text())
-    r1 = G.ctl('press guide', 10)
-    opened = G.wait_log('[guide] opened', 15, mark)
+    mark = 0
+    opened = G.wait_log('[guide] opened', a.ready_timeout / 4 + 60)
     time.sleep(1)
     G.shot('open', screen=True)
-    G.ctl('press rb', 5)
-    time.sleep(1)
+    time.sleep(3)
     G.shot('open-rb', screen=True)
-    mark2 = len(G.log_text())
-    r2 = G.ctl('press guide', 10)
-    closed = G.wait_log('[guide] closed', 15, mark2)
+    closed = G.wait_log('[guide] closed', 30)
     time.sleep(2)
-    png, st = G.shot('after', screen=True)
+    G.shot('after', screen=True)
+    r1 = r2 = ''
     alive = G.alive()
     text = G.log_text()
     sysui = re.findall(r'XN_SYS_UI\s*=\s*(\d)', text[mark:])
@@ -510,9 +502,13 @@ def run_inner(a):
         a.route_file = resolve_route(a.game, a.route) if (a.route or GAMES[a.game]['drive']) else None
     if need_route and not a.route_file and a.gate != 'shot':
         return out_line('FAIL', a.gate, a.game, 'no drive route for this game yet (pass --route)', a.out, a.out)
+    if a.gate == 'guide':   # the Guide button comes from the pad script: open, RB, LB, close (times in guest seconds)
+        t = a.at or GAMES[a.game]['settle_s']
+        a.route_file = os.path.join(a.out, 'guide.route')
+        open(a.route_file, 'w').write(f'players = 1\npad1 = {t}-{t + 0.4}:guide, {t + 3}-{t + 3.4}:rb, {t + 6}-{t + 6.4}:lb, {t + 9}-{t + 9.4}:guide\n')
     seed = a.gate in ('shot', 'drive', 'guide', 'speedrun') and not a.no_seed
     try:
-        G = Game(a.app, a.out, a.game, route=a.route_file if a.gate != 'guide' else None, ff=a.ff,
+        G = Game(a.app, a.out, a.game, route=a.route_file, ff=a.ff,
                  seed=seed, via_open=(a.gate == 'open'), env=dict(kv.split('=', 1) for kv in a.env))
     except Exception as e:   # noqa: BLE001 - setup problem, report it
         return out_line('FAIL', a.gate, a.game, f'could not start: {e}', a.out, a.out)
@@ -577,6 +573,45 @@ def g_set(a):
     return 0 if not any(res) else 1
 
 
+CONTROL_CACHE = os.path.join(SPOOL, 'control-cache')
+CONTROL_CACHE_VER = 1        # bump when runq's speed-run rules change: old cached controls are then ignored
+CONTROL_MAX_AGE_S = 6 * 3600  # a cached control is reused for pairs 2+ of a verdict only while this fresh
+CONTROL_KEEP = 3
+
+
+def control_key(game, app, route):
+    """Same control binary + game + route + code version. Hashes every file under Contents/MacOS (a rebuilt or
+    re-signed control gets a new key)."""
+    h = hashlib.sha1(f'{CONTROL_CACHE_VER}|{game}|{route}'.encode())
+    for dp, _, fs in sorted(os.walk(os.path.join(app, 'Contents', 'MacOS'))):
+        for f in sorted(fs):
+            h.update(f.encode())
+            with open(os.path.join(dp, f), 'rb') as fh:
+                for blk in iter(lambda: fh.read(1 << 20), b''):
+                    h.update(blk)
+    return h.hexdigest()[:16]
+
+
+def control_cached(key):
+    """Valid, fresh control run dirs for this key, newest first. Validity is re-checked by abverdict (runq status)."""
+    d = os.path.join(CONTROL_CACHE, key)
+    out = []
+    for f in sorted(glob.glob(os.path.join(d, '*.json')), reverse=True):
+        try:
+            e = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        if time.time() - e['t'] <= CONTROL_MAX_AGE_S and os.path.isfile(os.path.join(e['out'], 'run', 'perf.tsv')):
+            out.append(e['out'])
+    return out[:CONTROL_KEEP]
+
+
+def control_store(key, out):
+    d = os.path.join(CONTROL_CACHE, key)
+    os.makedirs(d, exist_ok=True)
+    json.dump({'t': time.time(), 'out': out, 'machine': os.uname().nodename}, open(os.path.join(d, f'{time.time():.0f}-{os.path.basename(out)}.json'), 'w'))
+
+
 def g_speed(a):
     """A/B speed pairs through the queue (class perf, solo) and abverdict; bo2 uses town4 via runq's route runs."""
     abv = os.path.join(SPOOL, 'bin', 'abverdict.py')
@@ -584,10 +619,20 @@ def g_speed(a):
         sys.exit('speed needs --a APP --b APP (the two builds to compare)')
     outs = {'A': [], 'B': []}
     base = a.out or default_out(a.game, 'speed')
+    # Control cache: pair 1 always runs a fresh control A (interleaved with B, same machine state). Pairs 2+ reuse
+    # earlier valid runs of the same control binary instead of re-measuring it (statistical caveat: reused controls
+    # were not interleaved with this B, so slow machine drift between them is not cancelled; hence the 6 h limit and
+    # the fresh first pair). --no-control-cache turns it off.
+    ckey = control_key(a.game, a.a, a.route or 'town4') if a.game == 'bo2' and not getattr(a, 'no_control_cache', False) else None
+    cached = [c for c in control_cached(ckey)] if ckey else []
     for pair in range(1, a.pairs + 1):
         jobs = []
-        for side, app in (('A', a.a), ('B', a.b)):
+        for side, app in ((('A', a.a), ('B', a.b)) if pair % 2 else (('B', a.b), ('A', a.a))):   # alternate who runs first: the 2nd run of a pair is hotter
             out = os.path.join(base, f'{side}{pair}')
+            if side == 'A' and pair > 1 and cached:
+                outs['A'].append(cached.pop(0))
+                print(f'control cache: pair {pair} reuses {outs["A"][-1]}')
+                continue
             outs[side].append(out)
             if a.game == 'bo2':
                 cmd = [RUNQ, 'submit', '--class', 'perf', '--app', app, '--route', resolve_route('bo2', a.route or 'town4'), '--name', f'gate-speed-{side}{pair}', '--out', out]
@@ -600,6 +645,8 @@ def g_speed(a):
                 return out_line('FAIL', 'speed', a.game, f'submit failed: {(r.stdout + r.stderr)[-200:]}', base)
             jobs.append(m.group(1))
         sh([RUNQ, 'wait'] + jobs)
+        if ckey and jobs:
+            control_store(ckey, outs['A'][-1]) if outs['A'][-1].startswith(base) and os.path.isfile(os.path.join(outs['A'][-1], 'run', 'perf.tsv')) else None
         v = sh(['python3', abv, '--a'] + outs['A'] + ['--b'] + outs['B'])
         print(v.stdout.strip().splitlines()[-1] if v.stdout.strip() else v.stderr.strip()[-200:])
         word = re.search(r'\b(FASTER|SLOWER|SAME|MORE|INVALID)\b', v.stdout or '')
@@ -702,7 +749,7 @@ def main():
     p.add_argument('--class', dest='klass', default='harness')
     p.add_argument('--now', action='store_true', help='run inline instead of through runq (debugging only)')
     p.add_argument('--inner', action='store_true', help=argparse.SUPPRESS)
-    p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3)
+    p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3), p.add_argument('--no-control-cache', action='store_true')
     p.add_argument('--repo'), p.add_argument('--head', default='HEAD'), p.add_argument('--integration', default='origin/main')
     p.add_argument('--dest'), p.add_argument('--restore-dir', dest='restore_dir'), p.add_argument('--dry-run', action='store_true')
     argv = sys.argv[1:]
