@@ -239,10 +239,9 @@ void XObject::SetAttributes(uint32_t obj_attributes_ptr) {
 
 uint32_t XObject::TimeoutTicksToMs(int64_t timeout_ticks) {
   if (timeout_ticks > 0) {
-    // Absolute time, based on January 1, 1601.
-    // TODO(benvanik): convert time to relative time.
-    assert_always();
-    return 0;
+    // Absolute time, based on January 1, 1601: wait until then (0 once it has passed).
+    const uint64_t now = chrono::Clock::QueryGuestSystemTime();
+    return uint64_t(timeout_ticks) > now ? uint32_t((uint64_t(timeout_ticks) - now) / 10000) : 0;
   } else if (timeout_ticks < 0) {
     // Relative time.
     return (uint32_t)(-timeout_ticks / 10000);  // Ticks -> MS
