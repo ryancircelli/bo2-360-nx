@@ -31,9 +31,10 @@ struct X_NUI_DEVICE_STATUS {
 };
 static_assert(sizeof(X_NUI_DEVICE_STATUS) == 24, "Size matters");
 
-void XamNuiGetDeviceStatus_entry(ppc_ptr_t<X_NUI_DEVICE_STATUS> status_ptr) {
+u32 XamNuiGetDeviceStatus_entry(ppc_ptr_t<X_NUI_DEVICE_STATUS> status_ptr) {
   status_ptr.Zero();
   status_ptr->status = 0;  // Not connected.
+  return 0xC0050006;       // No Kinect (Xenia's value); r3 used to keep the struct pointer.
 }
 
 u32 XamShowNuiTroubleshooterUI_entry(u32 unk1, u32 unk2, u32 unk3) {
