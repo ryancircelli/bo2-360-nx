@@ -329,8 +329,9 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
               }).detach();
               continue;
             } else result = "error invalid key or hold duration (20..10000ms)";
-          } else if (command == "savepoint") {
-            // savepoint save | savepoint load: same-process save/load at the next CP safe point.
+          } else if (command == "savepoint" && (argument == "save" || argument == "load") && rest.empty()) {
+            // savepoint save | savepoint load (no path): same-process save/load at the next CP safe point.
+            // "savepoint save PATH" (file savepoint) is left to LiveControlCommand.
             // Runs on its own thread so captures and input keep working while it waits.
             std::filesystem::remove(entry.path());
             std::thread([response, argument] {
