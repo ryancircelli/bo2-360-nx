@@ -101,3 +101,7 @@ add_executable(bench_clock_tests core/bench_clock_test.cpp)
 target_include_directories(bench_clock_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(bench_clock_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
+
+add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
+target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
+add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)

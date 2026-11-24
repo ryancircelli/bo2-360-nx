@@ -559,6 +559,21 @@ u32 XamShowPartyUI_entry(u32 r3, u32 r4) {
   return X_ERROR_FUNCTION_FAILED;
 }
 
+// Offline: no marketplace. Validate like xenia-canary, then complete as if the dialog closed.
+u32 XamShowMarketplaceDownloadItemsUI_entry(u32 user_index, u32 ui_type, mapped_u64 offers,
+                                            u32 num_offers, mapped_u32 hresult_ptr,
+                                            u32 overlapped_ptr) {
+  if (user_index >= 4 || !offers || !num_offers || num_offers > 6) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+  if (hresult_ptr) *hresult_ptr = 0;
+  if (overlapped_ptr) {
+    REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped_ptr, X_ERROR_SUCCESS);
+    return X_ERROR_IO_PENDING;
+  }
+  return X_ERROR_SUCCESS;
+}
+
 u32 XamShowCommunitySessionsUI_entry(u32 r3, u32 r4) {
   return X_ERROR_FUNCTION_FAILED;
 }
@@ -741,7 +756,8 @@ REX_EXPORT_STUB(__imp__XamShowKeyboardUIMessenger);
 REX_EXPORT_STUB(__imp__XamShowLiveSignupUI);
 REX_EXPORT_STUB(__imp__XamShowLiveUpsellUI);
 REX_EXPORT_STUB(__imp__XamShowLiveUpsellUIEx);
-REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceDownloadItemsUI, 0x32);
+REX_EXPORT(__imp__XamShowMarketplaceDownloadItemsUI,
+           rex::kernel::xam::XamShowMarketplaceDownloadItemsUI_entry)
 REX_EXPORT_STUB(__imp__XamShowMarketplaceGetOrderReceipts);
 REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUI);
 REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUIEx);
@@ -794,7 +810,6 @@ REX_EXPORT_STUB(__imp__XamShowRecentMessageUI);
 REX_EXPORT_STUB(__imp__XamShowRecentMessageUIEx);
 REX_EXPORT_STUB(__imp__XamShowReputationUI);
 REX_EXPORT_STUB(__imp__XamShowSigninUIEx);
-REX_EXPORT_STUB_RETURN(__imp__XamShowSigninUIp, 0x32);
 REX_EXPORT_STUB(__imp__XamShowSignupCreditCardUI);
 REX_EXPORT_STUB(__imp__XamShowSocialPostUI);
 REX_EXPORT_STUB(__imp__XamShowStorePickerUI);

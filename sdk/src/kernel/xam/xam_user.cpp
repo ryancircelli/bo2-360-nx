@@ -552,6 +552,16 @@ u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
   return X_ERROR_SUCCESS;
 }
 
+// The title passes (user, users_needed, flags); we have no sign-in dialog, so it behaves like XamShowSigninUI.
+u32 XamShowSigninUIp_entry(u32 user_index, u32 users_needed, u32 flags) {
+  return XamShowSigninUI_entry(users_needed, flags);
+}
+
+// No profile flags are cached for the offline users.
+u32 XamUserGetCachedUserFlags_entry(u32 user_index) {
+  return 0;
+}
+
 // TODO(gibbed): probably a FILETIME/LARGE_INTEGER, unknown currently
 struct X_ACHIEVEMENT_UNLOCK_TIME {
   rex::be<uint32_t> unk_0;
@@ -743,6 +753,32 @@ u32 XamUserCreateAchievementEnumerator_entry(u32 title_id, u32 user_index, u32 x
   return X_ERROR_SUCCESS;
 }
 
+// Offline: no Live stats service. Validates like the real call and returns an empty enumerator.
+u32 XamUserCreateStatsEnumerator_entry(u32 title_id, u32 by_rank, u64 pivot, u32 row_count,
+                                       u32 spec_count, mapped_void specs_ptr,
+                                       mapped_u32 buffer_size_ptr, mapped_u32 handle_ptr) {
+  constexpr u32 kMaxRows = 100, kMaxSpecs = 10, kAttrsInSpec = 64;
+  constexpr u32 kSpecSize = 8 + kAttrsInSpec * 2, kResultsSize = 8, kViewSize = 16, kRowSize = 48,
+                kColumnSize = 24;
+  if (!row_count || row_count > kMaxRows || !spec_count || spec_count > kMaxSpecs || !specs_ptr ||
+      !buffer_size_ptr || !handle_ptr) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+  const uint8_t* specs = specs_ptr.as<const uint8_t*>();
+  uint64_t buffer_size = kResultsSize;
+  for (u32 i = 0; i < spec_count; ++i) {
+    const u32 columns = *reinterpret_cast<const rex::be<uint32_t>*>(specs + size_t(i) * kSpecSize + 4);
+    if (columns > kAttrsInSpec) return X_ERROR_INVALID_PARAMETER;
+    buffer_size += kViewSize + uint64_t(row_count) * (kRowSize + columns * kColumnSize);
+  }
+  *buffer_size_ptr = static_cast<u32>(buffer_size);
+  auto e = make_object<XStaticUntypedEnumerator>(REX_KERNEL_STATE(), 1, static_cast<size_t>(buffer_size));
+  auto result = e->Initialize(0xFF, 0xFB, 0xB0023, 0xB0024, 0);
+  if (XFAILED(result)) return result;
+  *handle_ptr = e->handle();
+  return X_ERROR_SUCCESS;
+}
+
 u32 XamParseGamerTileKey_entry(mapped_u32 key_ptr, mapped_u32 out1_ptr, mapped_u32 out2_ptr,
                                mapped_u32 out3_ptr) {
   *out1_ptr = 0xC0DE0001;
@@ -813,6 +849,8 @@ REX_EXPORT(__imp__XamUserIsOnlineEnabled, rex::kernel::xam::XamUserIsOnlineEnabl
 REX_EXPORT(__imp__XamUserGetMembershipTier, rex::kernel::xam::XamUserGetMembershipTier_entry)
 REX_EXPORT(__imp__XamUserAreUsersFriends, rex::kernel::xam::XamUserAreUsersFriends_entry)
 REX_EXPORT(__imp__XamShowSigninUI, rex::kernel::xam::XamShowSigninUI_entry)
+REX_EXPORT(__imp__XamShowSigninUIp, rex::kernel::xam::XamShowSigninUIp_entry)
+REX_EXPORT(__imp__XamUserGetCachedUserFlags, rex::kernel::xam::XamUserGetCachedUserFlags_entry)
 REX_EXPORT(__imp__XamUserGetIndexFromXUID, rex::kernel::xam::XamUserGetIndexFromXUID_entry)
 REX_EXPORT(__imp__XamUserGetMembershipTierFromXUID, rex::kernel::xam::XamUserGetMembershipTierFromXUID_entry)
 REX_EXPORT(__imp__XamUserGetOnlineCountryFromXUID, rex::kernel::xam::XamUserGetOnlineCountryFromXUID_entry)
@@ -830,11 +868,10 @@ REX_EXPORT_STUB(__imp__XamUserAddRecentPlayer);
 REX_EXPORT_STUB(__imp__XamUserAllowedToPostToSocialNetwork);
 REX_EXPORT_STUB(__imp__XamUserCreateAvatarAssetEnumerator);
 REX_EXPORT_STUB_RETURN(__imp__XamUserCreatePlayerEnumerator, 0x8007065B);
-REX_EXPORT_STUB_RETURN(__imp__XamUserCreateStatsEnumerator, 0x8007065B);
+REX_EXPORT(__imp__XamUserCreateStatsEnumerator, rex::kernel::xam::XamUserCreateStatsEnumerator_entry)
 REX_EXPORT_STUB(__imp__XamUserCreateTitlesPlayedEnumerator);
 REX_EXPORT_STUB(__imp__XamUserFlushLogonQueue);
 REX_EXPORT_STUB(__imp__XamUserGetAge);
-REX_EXPORT_STUB(__imp__XamUserGetCachedUserFlags);
 REX_EXPORT_STUB(__imp__XamUserGetDeviceId);
 REX_EXPORT_STUB(__imp__XamUserGetOnlineLanguageFromXUID);
 REX_EXPORT_STUB(__imp__XamUserGetOnlineXUIDFromOfflineXUID);

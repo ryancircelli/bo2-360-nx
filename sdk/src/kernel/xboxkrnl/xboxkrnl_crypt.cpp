@@ -35,6 +35,7 @@
 #include "crypto/des/descbc.h"
 #include "crypto/sha256.cpp"
 #include "crypto/sha256.h"
+#include "sha512.h"
 
 extern "C" {
 #include "aes_128/aes.h"
@@ -205,6 +206,54 @@ void XeCryptSha256Final_entry(ppc_ptr_t<XECRYPT_SHA256_STATE> sha_state, ppc_ptr
   std::copy_n(hash, std::min<size_t>(rex::countof(hash), out_size), static_cast<uint8_t*>(out));
   std::copy(std::begin(hash), std::end(hash), sha_state->buffer);
 }
+
+
+// SHA-384/512 keep their running state in the guest's 0xC8-byte state block. Titles only pass the
+// block back to us, so it is stored as an opaque host-order blob: state[8], count (bit 63 = SHA-384),
+// buffer[128].
+static Sha512 LoadSha512(const uint8_t* blob) {
+  Sha512 sha;
+  std::memcpy(sha.state, blob, 64);
+  uint64_t count;
+  std::memcpy(&count, blob + 64, 8);
+  sha.is384 = (count >> 63) != 0;
+  sha.count = count & ~(1ull << 63);
+  std::memcpy(sha.buffer, blob + 72, 128);
+  return sha;
+}
+
+static void StoreSha512(const Sha512& sha, uint8_t* blob) {
+  std::memcpy(blob, sha.state, 64);
+  const uint64_t count = sha.count | (sha.is384 ? 1ull << 63 : 0);
+  std::memcpy(blob + 64, &count, 8);
+  std::memcpy(blob + 72, sha.buffer, 128);
+}
+
+static void ShaWideInit(ppc_ptr_t<uint8_t> blob, bool sha384) {
+  Sha512 sha;
+  sha.Init(sha384);
+  std::memset(static_cast<uint8_t*>(blob), 0, 0xC8);
+  StoreSha512(sha, static_cast<uint8_t*>(blob));
+}
+
+static void ShaWideUpdate(ppc_ptr_t<uint8_t> blob, mapped_void input, u32 size) {
+  Sha512 sha = LoadSha512(static_cast<uint8_t*>(blob));
+  if (input && size) sha.Update(input.as<const uint8_t*>(), size);
+  StoreSha512(sha, static_cast<uint8_t*>(blob));
+}
+
+static void ShaWideFinal(ppc_ptr_t<uint8_t> blob, ppc_ptr_t<uint8_t> out, u32 out_size) {
+  Sha512 sha = LoadSha512(static_cast<uint8_t*>(blob));
+  sha.Final(static_cast<uint8_t*>(out), out_size);
+  StoreSha512(sha, static_cast<uint8_t*>(blob));
+}
+
+void XeCryptSha384Init_entry(ppc_ptr_t<uint8_t> s) { ShaWideInit(s, true); }
+void XeCryptSha384Update_entry(ppc_ptr_t<uint8_t> s, mapped_void in, u32 n) { ShaWideUpdate(s, in, n); }
+void XeCryptSha384Final_entry(ppc_ptr_t<uint8_t> s, ppc_ptr_t<uint8_t> out, u32 n) { ShaWideFinal(s, out, n); }
+void XeCryptSha512Init_entry(ppc_ptr_t<uint8_t> s) { ShaWideInit(s, false); }
+void XeCryptSha512Update_entry(ppc_ptr_t<uint8_t> s, mapped_void in, u32 n) { ShaWideUpdate(s, in, n); }
+void XeCryptSha512Final_entry(ppc_ptr_t<uint8_t> s, ppc_ptr_t<uint8_t> out, u32 n) { ShaWideFinal(s, out, n); }
 
 // Byteswaps each 8 bytes
 void XeCryptBnQw_SwapDwQwLeBe_entry(ppc_ptr_t<uint64_t> qw_inp, ppc_ptr_t<uint64_t> qw_out,
@@ -643,6 +692,16 @@ u32 XeKeysConsolePrivateKeySign_entry(mapped_void hash, mapped_void signature) {
   return 0;  // Success
 }
 
+// Fixed fake console id (same values as xenia-canary); we have no key vault.
+u32 XeKeysGetConsoleID_entry(mapped_void raw_bytes, mapped_void hex_string) {
+  if (raw_bytes) {
+    static const uint8_t kId[5] = {0x93, 0x01, 0x64, 0xE6, 0x07};
+    std::memcpy(raw_bytes.as<uint8_t*>(), kId, sizeof(kId));
+  }
+  if (hex_string) std::memcpy(hex_string.as<char*>(), "245149100000", 12);
+  return X_STATUS_SUCCESS;
+}
+
 u32 XeKeysConsoleSignatureVerification_entry(mapped_void hash, mapped_void signature,
                                              mapped_void pubkey) {
   REXKRNL_DEBUG("XeKeysConsoleSignatureVerification - stub");
@@ -690,13 +749,7 @@ REX_EXPORT_STUB(__imp__XeCryptParveEcb);
 REX_EXPORT_STUB(__imp__XeCryptParveCbcMac);
 REX_EXPORT_STUB(__imp__XeCryptRotSumSha);
 REX_EXPORT_STUB(__imp__XeCryptSha256);
-REX_EXPORT_STUB(__imp__XeCryptSha384Init);
-REX_EXPORT_STUB(__imp__XeCryptSha384Update);
-REX_EXPORT_STUB(__imp__XeCryptSha384Final);
 REX_EXPORT_STUB(__imp__XeCryptSha384);
-REX_EXPORT_STUB(__imp__XeCryptSha512Init);
-REX_EXPORT_STUB(__imp__XeCryptSha512Update);
-REX_EXPORT_STUB(__imp__XeCryptSha512Final);
 REX_EXPORT_STUB(__imp__XeCryptSha512);
 REX_EXPORT_STUB(__imp__XeCryptBnQwNeCompare);
 REX_EXPORT_STUB(__imp__XeKeysGetFactoryChallenge);
@@ -711,7 +764,7 @@ REX_EXPORT_STUB(__imp__XeKeysSetKey);
 REX_EXPORT_STUB(__imp__XeKeysGenerateRandomKey);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysGetKey, 0xC0000001);
 REX_EXPORT_STUB(__imp__XeKeysGetDigest);
-REX_EXPORT_STUB_RETURN(__imp__XeKeysGetConsoleID, 0xC0000001);
+REX_EXPORT(__imp__XeKeysGetConsoleID, rex::kernel::xboxkrnl::XeKeysGetConsoleID_entry)
 REX_EXPORT_STUB(__imp__XeKeysGetConsoleType);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysQwNeRsaPrvCrypt, 0);
 REX_EXPORT_STUB(__imp__XeKeysAesCbc);
@@ -789,6 +842,12 @@ REX_EXPORT(__imp__XeCryptSha, rex::kernel::xboxkrnl::XeCryptSha_entry)
 REX_EXPORT(__imp__XeCryptSha256Init, rex::kernel::xboxkrnl::XeCryptSha256Init_entry)
 REX_EXPORT(__imp__XeCryptSha256Update, rex::kernel::xboxkrnl::XeCryptSha256Update_entry)
 REX_EXPORT(__imp__XeCryptSha256Final, rex::kernel::xboxkrnl::XeCryptSha256Final_entry)
+REX_EXPORT(__imp__XeCryptSha384Init, rex::kernel::xboxkrnl::XeCryptSha384Init_entry)
+REX_EXPORT(__imp__XeCryptSha384Update, rex::kernel::xboxkrnl::XeCryptSha384Update_entry)
+REX_EXPORT(__imp__XeCryptSha384Final, rex::kernel::xboxkrnl::XeCryptSha384Final_entry)
+REX_EXPORT(__imp__XeCryptSha512Init, rex::kernel::xboxkrnl::XeCryptSha512Init_entry)
+REX_EXPORT(__imp__XeCryptSha512Update, rex::kernel::xboxkrnl::XeCryptSha512Update_entry)
+REX_EXPORT(__imp__XeCryptSha512Final, rex::kernel::xboxkrnl::XeCryptSha512Final_entry)
 REX_EXPORT(__imp__XeCryptBnQw_SwapDwQwLeBe, rex::kernel::xboxkrnl::XeCryptBnQw_SwapDwQwLeBe_entry)
 REX_EXPORT(__imp__XeCryptBnQwNeRsaPubCrypt, rex::kernel::xboxkrnl::XeCryptBnQwNeRsaPubCrypt_entry)
 REX_EXPORT(__imp__XeCryptBnDwLePkcs1Verify, rex::kernel::xboxkrnl::XeCryptBnDwLePkcs1Verify_entry)

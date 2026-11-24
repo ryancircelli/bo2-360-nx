@@ -11,6 +11,27 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xenumerator.h>
+#include "../quiet_return.h"
+
+namespace rex::kernel::xam {
+// No dashboard app is active: report an empty X_DASH_APP_INFO (three zero words).
+void XamGetActiveDashAppInfo_entry(mapped_void dash_app) {
+  if (dash_app) std::memset(dash_app.as<uint8_t*>(), 0, 12);
+}
+
+// Offline: no profile manager, so the enumerator is valid but lists no accounts.
+u32 XamProfileCreateEnumerator_entry(u32 device_id, mapped_u32 handle_ptr) {
+  if (!handle_ptr) return X_ERROR_INVALID_PARAMETER;
+  auto e = make_object<system::XStaticUntypedEnumerator>(REX_KERNEL_STATE(), 1, 0x28);
+  auto result = e->Initialize(0xFF, 0xFE, 0x23001, 0x23003, 0);
+  if (XFAILED(result)) return result;
+  *handle_ptr = e->handle();
+  return X_ERROR_SUCCESS;
+}
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__XamGetActiveDashAppInfo, rex::kernel::xam::XamGetActiveDashAppInfo_entry)
 
 // kinda gross but oh well
 REX_EXPORT_STUB(__imp__CancelWaitableTimer);
@@ -243,7 +264,7 @@ REX_EXPORT_STUB(__imp__XNetLogonGetServiceInfo);
 REX_EXPORT_STUB(__imp__XNetLogonGetServiceNetworkID);
 REX_EXPORT_STUB(__imp__XNetLogonGetState);
 REX_EXPORT_STUB(__imp__XNetLogonGetTicketOpt);
-REX_EXPORT_STUB(__imp__XNetLogonGetTitleID);
+REX_EXPORT_QUIET_RETURN(__imp__XNetLogonGetTitleID, 0)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XNetLogonGetTitleVersion);
 REX_EXPORT_STUB(__imp__XNetLogonGetUserPrivileges);
 REX_EXPORT_STUB(__imp__XNetLogonInitOverrideInfo);
@@ -334,7 +355,7 @@ REX_EXPORT_STUB(__imp__XamBackgroundDownloadNetworkStorageOnContentChange);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadNetworkStorageRegisterChangeCallback);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSelectDevice);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetForegroundPriority);
-REX_EXPORT_STUB_RETURN(__imp__XamBackgroundDownloadSetMode, 0);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__XamBackgroundDownloadSetMode)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetPollingActive);
 REX_EXPORT_STUB(__imp__XamBase64Decode);
 REX_EXPORT_STUB(__imp__XamBeginDemand);
@@ -431,7 +452,6 @@ REX_EXPORT_STUB(__imp__XamFitnessUnInitialize);
 REX_EXPORT_STUB(__imp__XamFlushAgraTemperatureReport);
 REX_EXPORT_STUB(__imp__XamFreeToken);
 REX_EXPORT_STUB(__imp__XamGetActiveCounterMeasures);
-REX_EXPORT_STUB_RETURN(__imp__XamGetActiveDashAppInfo, 0x32);
 REX_EXPORT_STUB(__imp__XamGetAdaptersCollection);
 REX_EXPORT_STUB(__imp__XamGetAppliesTo);
 REX_EXPORT_STUB(__imp__XamGetCachedGamerTag);
@@ -568,7 +588,7 @@ REX_EXPORT_STUB(__imp__XamMediaVerificationClose);
 REX_EXPORT_STUB(__imp__XamMediaVerificationCreate);
 REX_EXPORT_STUB(__imp__XamMediaVerificationFailedBlocks);
 REX_EXPORT_STUB(__imp__XamMediaVerificationInject);
-REX_EXPORT_STUB(__imp__XamMediaVerificationVerify);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__XamMediaVerificationVerify)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XamMoveFile);
 REX_EXPORT_STUB(__imp__XamNetworkStatusAddAddress);
 REX_EXPORT_STUB(__imp__XamNetworkStatusGetInformation);
@@ -650,7 +670,7 @@ REX_EXPORT_STUB(__imp__XamPrepareGamerTiles);
 REX_EXPORT_STUB(__imp__XamProfileClose);
 REX_EXPORT_STUB(__imp__XamProfileControlPec);
 REX_EXPORT_STUB(__imp__XamProfileCreate);
-REX_EXPORT_STUB_RETURN(__imp__XamProfileCreateEnumerator, 0x8007065B);
+REX_EXPORT(__imp__XamProfileCreateEnumerator, rex::kernel::xam::XamProfileCreateEnumerator_entry)
 REX_EXPORT_STUB(__imp__XamProfileDelete);
 REX_EXPORT_STUB_RETURN(__imp__XamProfileEnumerate, 0x80070012);
 REX_EXPORT_STUB(__imp__XamProfileFindAccount);

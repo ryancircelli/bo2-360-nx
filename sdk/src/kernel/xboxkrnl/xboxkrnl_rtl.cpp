@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cwctype>
 #include <string>
 
 #include <rex/chrono/chrono_steady_cast.h>
@@ -610,7 +611,6 @@ REX_EXPORT_STUB(__imp__RtlCompareUnicodeString);
 REX_EXPORT_STUB(__imp__RtlCompareUnicodeStringN);
 REX_EXPORT_STUB(__imp__RtlCompareUtf8ToUnicode);
 REX_EXPORT_STUB(__imp__RtlCreateUnicodeString);
-REX_EXPORT_STUB(__imp__RtlDowncaseUnicodeChar);
 REX_EXPORT_STUB(__imp__RtlGetCallersAddress);
 REX_EXPORT_STUB(__imp__RtlGetStackLimits);
 REX_EXPORT_STUB(__imp__RtlLookupFunctionEntry);
@@ -619,15 +619,25 @@ REX_EXPORT_STUB(__imp__RtlUnicodeToMultiByteSize);
 REX_EXPORT_STUB(__imp__RtlUnicodeToUtf8);
 REX_EXPORT_STUB(__imp__RtlUnicodeToUtf8Size);
 REX_EXPORT_STUB(__imp__RtlUnwind2);
-REX_EXPORT_STUB(__imp__RtlUpcaseUnicodeChar);
 REX_EXPORT_STUB(__imp__RtlVirtualUnwind);
 REX_EXPORT_STUB(__imp__RtlImageDirectoryEntryToData);
 REX_EXPORT_STUB(__imp__RtlCaptureStackBackTrace);
 REX_EXPORT_STUB(__imp__RtlSetVectoredExceptionHandler);
 REX_EXPORT_STUB(__imp__RtlClearVectoredExceptionHandler);
 
+// Single UTF-16 code unit case mapping, as the NT routines do.
+u32 RtlUpcaseUnicodeChar_entry(u32 ch) {
+  return static_cast<uint16_t>(std::towupper(static_cast<wint_t>(ch & 0xFFFF)));
+}
+
+u32 RtlDowncaseUnicodeChar_entry(u32 ch) {
+  return static_cast<uint16_t>(std::towlower(static_cast<wint_t>(ch & 0xFFFF)));
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
+REX_EXPORT(__imp__RtlUpcaseUnicodeChar, rex::kernel::xboxkrnl::RtlUpcaseUnicodeChar_entry)
+REX_EXPORT(__imp__RtlDowncaseUnicodeChar, rex::kernel::xboxkrnl::RtlDowncaseUnicodeChar_entry)
 REX_EXPORT(__imp__RtlCompareMemory, rex::kernel::xboxkrnl::RtlCompareMemory_entry)
 REX_EXPORT(__imp__RtlCompareMemoryUlong, rex::kernel::xboxkrnl::RtlCompareMemoryUlong_entry)
 REX_EXPORT(__imp__RtlFillMemoryUlong, rex::kernel::xboxkrnl::RtlFillMemoryUlong_entry)
