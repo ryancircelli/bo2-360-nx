@@ -1054,6 +1054,63 @@ X_STATUS XSocket::Close() {
   return X_STATUS_SUCCESS;
 }
 
+// Winsock's SOL_SOCKET numbering to the host's (only Linux differs from the BSD numbers Winsock uses).
+X_STATUS XSocket::GetName(XSOCKADDR_IN* out_name) {
+  sockaddr_in host = {};
+  socklen_t len = sizeof(host);
+  if (getsockname(native_handle_, reinterpret_cast<sockaddr*>(&host), &len) < 0) {
+    return X_STATUS_UNSUCCESSFUL;
+  }
+  std::memset(out_name, 0, sizeof(*out_name));
+  out_name->sin_family = 2;  // AF_INET
+  out_name->sin_port = bound_ ? bound_port_ : uint16_t(ntohs(host.sin_port));
+  out_name->sin_addr = ntohl(host.sin_addr.s_addr);
+  return X_STATUS_SUCCESS;
+}
+
+static void MapSocketOption(uint32_t level, uint32_t optname, int* native_level, int* native_optname) {
+  *native_level = int(level);
+  *native_optname = int(optname);
+#if defined(__linux__)
+  // Winsock's SOL_SOCKET options have the BSD numbers (the Switch's and macOS's); Linux numbers them its own way.
+  if (level == 0xFFFF) {
+    *native_level = SOL_SOCKET;
+    switch (optname) {
+      case 0x0001: *native_optname = SO_DEBUG; break;
+      case 0x0004: *native_optname = SO_REUSEADDR; break;
+      case 0x0008: *native_optname = SO_KEEPALIVE; break;
+      case 0x0010: *native_optname = SO_DONTROUTE; break;
+      case 0x0020: *native_optname = SO_BROADCAST; break;
+      case 0x0080: *native_optname = SO_LINGER; break;
+      case 0x0100: *native_optname = SO_OOBINLINE; break;
+      case 0x1001: *native_optname = SO_SNDBUF; break;
+      case 0x1002: *native_optname = SO_RCVBUF; break;
+      default: break;
+    }
+  }
+#endif
+}
+
+X_STATUS XSocket::GetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t* optlen) {
+  int native_level, native_optname;
+  MapSocketOption(level, optname, &native_level, &native_optname);
+  socklen_t len = socklen_t(*optlen);
+  int ret = getsockopt(native_handle_, native_level, native_optname, (char*)optval_ptr, &len);
+  if (ret < 0) {
+    return X_STATUS_UNSUCCESSFUL;
+  }
+  *optlen = uint32_t(len);
+  // The guest reads the value big-endian. Every option set or read by the games is a 32-bit int
+  // (SO_ERROR, SO_TYPE, SO_RCVBUF...); other sizes (SO_LINGER) are left as the host wrote them.
+  if (len == 4) {
+    uint32_t v;
+    std::memcpy(&v, optval_ptr, 4);
+    v = rex::byte_swap(v);
+    std::memcpy(optval_ptr, &v, 4);
+  }
+  return X_STATUS_SUCCESS;
+}
+
 X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t optlen) {
   if (REXCVAR_GET(net_system_link_trace)) {
     uint32_t value = 0;
@@ -1067,26 +1124,8 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr, 
     return X_STATUS_SUCCESS;
   }
 
-  int native_level = int(level);
-  int native_optname = int(optname);
-#if defined(__linux__)
-  // Winsock's SOL_SOCKET options have the BSD numbers (the Switch's and macOS's); Linux numbers them its own way.
-  if (level == 0xFFFF) {
-    native_level = SOL_SOCKET;
-    switch (optname) {
-      case 0x0001: native_optname = SO_DEBUG; break;
-      case 0x0004: native_optname = SO_REUSEADDR; break;
-      case 0x0008: native_optname = SO_KEEPALIVE; break;
-      case 0x0010: native_optname = SO_DONTROUTE; break;
-      case 0x0020: native_optname = SO_BROADCAST; break;
-      case 0x0080: native_optname = SO_LINGER; break;
-      case 0x0100: native_optname = SO_OOBINLINE; break;
-      case 0x1001: native_optname = SO_SNDBUF; break;
-      case 0x1002: native_optname = SO_RCVBUF; break;
-      default: break;
-    }
-  }
-#endif
+  int native_level, native_optname;
+  MapSocketOption(level, optname, &native_level, &native_optname);
   int ret = setsockopt(native_handle_, native_level, native_optname, (char*)optval_ptr, optlen);
   if (ret < 0) {
     // TODO: WSAGetLastError()

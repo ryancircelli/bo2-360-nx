@@ -27,6 +27,7 @@
 #include <rex/kernel/xboxkrnl/error.h>
 #include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/logging.h>
+#include <cstdio>
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/string.h>
@@ -576,7 +577,11 @@ u32 NetDll_XNetXnAddrToMachineId_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr, m
 
 void NetDll_XNetInAddrToString_entry(u32 caller, u32 in_addr, mapped_string string_out,
                                      u32 string_size) {
-  rex::string::copy_truncating(string_out, "666.666.666.666", string_size);
+  // The IN_ADDR is the guest's big-endian dotted-quad value (a.b.c.d = 0xAABBCCDD).
+  char text[16];
+  std::snprintf(text, sizeof(text), "%u.%u.%u.%u", (in_addr >> 24) & 0xFF, (in_addr >> 16) & 0xFF,
+                (in_addr >> 8) & 0xFF, in_addr & 0xFF);
+  rex::string::copy_truncating(string_out, text, string_size);
 }
 
 // This converts a XNet address to an IN_ADDR. The IN_ADDR is used for
@@ -813,6 +818,76 @@ u32 NetDll_setsockopt_entry(u32 caller, u32 socket_handle, u32 level, u32 optnam
 
   X_STATUS status = socket->SetOption(level, optname, optval_ptr, optlen);
   return XSUCCEEDED(status) ? 0 : -1;
+}
+
+u32 NetDll_getsockname_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR_IN> name_ptr,
+                             mapped_u32 namelen_ptr) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
+    XThread::SetLastError(0x2736);  // WSAENOTSOCK
+    return -1;
+  }
+  if (!name_ptr || !namelen_ptr || *namelen_ptr < sizeof(XSOCKADDR_IN)) {
+    XThread::SetLastError(0x271E);  // WSAEFAULT
+    return -1;
+  }
+  if (XFAILED(socket->GetName(name_ptr))) {
+    XThread::SetLastError(0x2726);  // WSAEINVAL
+    return -1;
+  }
+  *namelen_ptr = sizeof(XSOCKADDR_IN);
+  return 0;
+}
+
+u32 NetDll_WSACancelOverlappedIO_entry(u32 caller, u32 socket_handle) {
+  // Our overlapped receives never stay pending (NetDll_WSARecvFrom fails at once), so there is
+  // nothing to cancel on a real socket.
+  if (!REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle)) {
+    XThread::SetLastError(0x2736);  // WSAENOTSOCK
+    return -1;
+  }
+  return 0;
+}
+
+u32 NetDll_WSAGetOverlappedResult_entry(u32 caller, u32 socket_handle,
+                                        ppc_ptr_t<XWSAOVERLAPPED> overlapped,
+                                        mapped_u32 bytes_transferred, u32 wait,
+                                        mapped_u32 flags_ptr) {
+  if (!overlapped) {
+    XThread::SetLastError(0x2726);  // WSAEINVAL
+    return 0;
+  }
+  // shortcut: never waits on the event; nothing here completes an overlapped asynchronously.
+  const uint32_t status = overlapped->internal;
+  if (status == 0x3E4) {  // WSA_IO_INCOMPLETE
+    XThread::SetLastError(status);
+    return 0;
+  }
+  if (bytes_transferred) *bytes_transferred = overlapped->internal_high;
+  if (flags_ptr) *flags_ptr = 0;
+  if (status) {
+    XThread::SetLastError(status);
+    return 0;
+  }
+  return 1;
+}
+
+u32 NetDll_getsockopt_entry(u32 caller, u32 socket_handle, u32 level, u32 optname,
+                            mapped_void optval_ptr, mapped_u32 optlen_ptr) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
+    // WSAENOTSOCK
+    XThread::SetLastError(0x2736);
+    return -1;
+  }
+
+  uint32_t len = *optlen_ptr;
+  X_STATUS status = socket->GetOption(level, optname, optval_ptr, &len);
+  if (XFAILED(status)) {
+    return -1;
+  }
+  *optlen_ptr = len;
+  return 0;
 }
 
 u32 NetDll_ioctlsocket_entry(u32 caller, u32 socket_handle, u32 cmd, mapped_void arg_ptr) {
@@ -1151,6 +1226,10 @@ REX_EXPORT(__imp__NetDll_socket, rex::kernel::xam::NetDll_socket_entry)
 REX_EXPORT(__imp__NetDll_closesocket, rex::kernel::xam::NetDll_closesocket_entry)
 REX_EXPORT(__imp__NetDll_shutdown, rex::kernel::xam::NetDll_shutdown_entry)
 REX_EXPORT(__imp__NetDll_setsockopt, rex::kernel::xam::NetDll_setsockopt_entry)
+REX_EXPORT(__imp__NetDll_getsockname, rex::kernel::xam::NetDll_getsockname_entry)
+REX_EXPORT(__imp__NetDll_WSACancelOverlappedIO, rex::kernel::xam::NetDll_WSACancelOverlappedIO_entry)
+REX_EXPORT(__imp__NetDll_WSAGetOverlappedResult, rex::kernel::xam::NetDll_WSAGetOverlappedResult_entry)
+REX_EXPORT(__imp__NetDll_getsockopt, rex::kernel::xam::NetDll_getsockopt_entry)
 REX_EXPORT(__imp__NetDll_ioctlsocket, rex::kernel::xam::NetDll_ioctlsocket_entry)
 REX_EXPORT(__imp__NetDll_bind, rex::kernel::xam::NetDll_bind_entry)
 REX_EXPORT(__imp__NetDll_connect, rex::kernel::xam::NetDll_connect_entry)
@@ -1178,9 +1257,7 @@ REX_EXPORT_STUB(__imp__NetDll_UpnpEventUnsubscribe);
 REX_EXPORT_STUB(__imp__NetDll_UpnpSearchCreate);
 REX_EXPORT_STUB(__imp__NetDll_UpnpSearchGetDevices);
 REX_EXPORT_STUB(__imp__NetDll_UpnpStartup);
-REX_EXPORT_STUB(__imp__NetDll_WSACancelOverlappedIO);
 REX_EXPORT_STUB(__imp__NetDll_WSAEventSelect);
-REX_EXPORT_STUB(__imp__NetDll_WSAGetOverlappedResult);
 REX_EXPORT_STUB(__imp__NetDll_WSARecv);
 REX_EXPORT_STUB(__imp__NetDll_WSASend);
 REX_EXPORT_STUB(__imp__NetDll_WSAStartupEx);
@@ -1276,5 +1353,3 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
 REX_EXPORT_STUB(__imp__NetDll_XnpUnregisterKeyForCallerType);
 REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
 REX_EXPORT_STUB(__imp__NetDll_getpeername);
-REX_EXPORT_STUB(__imp__NetDll_getsockname);
-REX_EXPORT_STUB(__imp__NetDll_getsockopt);

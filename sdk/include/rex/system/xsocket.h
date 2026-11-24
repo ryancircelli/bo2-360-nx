@@ -121,6 +121,9 @@ class XSocket : public XObject {
   X_STATUS Initialize(AddressFamily af, Type type, Protocol proto);
   X_STATUS Close();
 
+  // The socket's local address as the guest sees it (its own bound port, not the remapped host port).
+  X_STATUS GetName(XSOCKADDR_IN* out_name);
+  X_STATUS GetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t* optlen);
   X_STATUS SetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t optlen);
   X_STATUS IOControl(uint32_t cmd, uint8_t* arg_ptr);
 
