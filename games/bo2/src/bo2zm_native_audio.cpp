@@ -815,8 +815,14 @@ Regions RegionsBiquadNative(const PPCContext& ctx, uint8_t*) {
   return rg;
 }
 
+// The recompiled vmsum4fp128 itself (exact products summed in double, rounded once), so the two cannot drift apart.
+// Its guest lane order is the reverse of these lanes; both pair sums commute, so the result is the same.
 inline F4 Dot(F4 c, F4 s) {
-  return simde_vdupq_n_f32(simde_vaddvq_f32(simde_vmulq_f32(c, s)));
+  alignas(16) float cv[4], sv[4], r[4];
+  simde_vst1q_f32(cv, c);
+  simde_vst1q_f32(sv, s);
+  simde_mm_store_ps(r, rex::ppc::VmxDot<4>(simde_mm_load_ps(cv), simde_mm_load_ps(sv)));
+  return simde_vld1q_f32(r);
 }
 template <int kLane>
 inline F4 State(F4 s, F4 u, F4 y) {
