@@ -16,6 +16,7 @@
 #include <rex/runtime.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
+#include <rex/thread/fiber.h>
 
 #if defined(__APPLE__)
 #include <pthread/qos.h>
@@ -118,5 +119,33 @@ TEST_CASE("Nested host suspends resume the thread after the matching resumes", "
   CHECK(ticks.load(std::memory_order_relaxed) != before);
   stop.store(true, std::memory_order_release);
   REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
+}
+#endif
+
+#if !defined(_WIN32)
+namespace {
+rex::thread::Fiber* g_test_main_fiber = nullptr;
+volatile uint8_t g_deep_sum = 0;
+
+void DeepStackFiber(void* done) {
+  volatile uint8_t big[4 * 1024 * 1024];  // more than the old 256 KB fiber stack
+  for (size_t i = 0; i < sizeof(big); i += 4096) big[i] = uint8_t(i >> 12);
+  g_deep_sum = big[sizeof(big) - 4096];
+  *static_cast<bool*>(done) = true;
+  rex::thread::Fiber::SwitchTo(g_test_main_fiber);
+}
+}  // namespace
+
+TEST_CASE("Fibers run code that needs megabytes of host stack", "[thread][fiber]") {
+  bool done = false;
+  std::thread([&]() {
+    g_test_main_fiber = rex::thread::Fiber::ConvertCurrentThread();
+    auto* fiber = rex::thread::Fiber::Create(16u * 1024u * 1024u, DeepStackFiber, &done);
+    if (!fiber) return;  // done stays false
+    rex::thread::Fiber::SwitchTo(fiber);
+    fiber->Destroy();
+    g_test_main_fiber->Destroy();
+  }).join();
+  CHECK(done);
 }
 #endif

@@ -15,6 +15,7 @@
 #include <cstring>
 #include <memory>
 
+#include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
@@ -25,6 +26,8 @@
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 #include <rex/thread/fiber.h>
+
+REXCVAR_DECLARE(int32_t, guest_thread_host_stack_mb);  // xthread.cpp
 
 namespace rex::kernel::crt {
 using namespace rex::system;
@@ -233,8 +236,13 @@ u32 CreateFiber_entry(u32 dwStackSize, u32 lpStartAddress, mapped_void lpParamet
   fiber->sp_save = initial_sp;
 
   // Create host fiber
+#if REX_PLATFORM_SWITCH
   size_t host_stack =
       std::max(static_cast<size_t>(guest_stack_size), static_cast<size_t>(256u * 1024u));
+#else
+  // The recompiled code needs the same host stack on a fiber as on a thread (pages commit on touch).
+  size_t host_stack = size_t(REXCVAR_GET(guest_thread_host_stack_mb)) * 1024u * 1024u;
+#endif
   auto args_owner = std::make_unique<FiberEntryArgs>(FiberEntryArgs{
       start_fn,
       buf_addr,
