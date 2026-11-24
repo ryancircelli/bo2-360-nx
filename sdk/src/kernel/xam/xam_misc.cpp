@@ -584,11 +584,10 @@ REX_EXPORT_STUB(__imp__XamLrcSetTitlePort);
 REX_EXPORT_STUB(__imp__XamLrcVerifyClientId);
 REX_EXPORT_STUB(__imp__XamMarkInternalAccountTrustedOnConsole);
 REX_EXPORT_STUB(__imp__XamMarketplaceAcquireFreeContent);
-REX_EXPORT_STUB(__imp__XamMediaVerificationClose);
-REX_EXPORT_STUB(__imp__XamMediaVerificationCreate);
+REX_EXPORT_STUB_RETURN(__imp__XamMediaVerificationClose, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamMediaVerificationCreate, 0);
 REX_EXPORT_STUB(__imp__XamMediaVerificationFailedBlocks);
 REX_EXPORT_STUB(__imp__XamMediaVerificationInject);
-REX_EXPORT_QUIET_PASSTHROUGH(__imp__XamMediaVerificationVerify)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XamMoveFile);
 REX_EXPORT_STUB(__imp__XamNetworkStatusAddAddress);
 REX_EXPORT_STUB(__imp__XamNetworkStatusGetInformation);
