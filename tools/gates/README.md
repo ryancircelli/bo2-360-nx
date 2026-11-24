@@ -12,8 +12,10 @@ $G guide nfsmw                    # Guide opens + closes ([guide] opened/closed,
 $G open  fh1                      # `open -n` Finder-style launch of a scratch clone, max fds < 256
 $G set                            # boot gate for bo2 nfsmw fh1 together (3 queue slots)
 $G speed bo2 --a OLD.app --b NEW.app            # town4 pairs, class perf solo, abverdict (max 3 pairs)
+$G speed bo2 --bench --a OLD.app --b NEW.app     # deterministic bench (apps built from deterministic-bench only; class bench solo, 2+ runs per side, use --pairs 3+)
 $G speed nfsmw --a OLD.app --b NEW.app          # same through the drive route's frame csv (perf.tsv built from it)
 $G install nfsmw --app NEW.app --repo ~/dev/bo2-360-nx-<topic> [--integration origin/nfs-tonight] [--dry-run]
+$G replay BUILD_DIR --repo ~/dev/bo2-360-nx-<topic> [--only a,b]   # picture-regression replay of the saved GPU traces (sdk/tools/gputest/replay-gate); run first for any sdk/src/graphics change
 ```
 GAME = `bo2 nfsmw fh1 nfshp bo1`. `--app` defaults to the installed app in ~/Games/Launchers (runq clones it; it is
 never touched). Everything but `install`/`set`/`speed` is a runq job (class harness, `--class proof|ship` to change), so
@@ -32,5 +34,4 @@ Evidence goes to `~/Games/Xbox360/bo2-build/runs/gates/<game>-<gate>-<time>/` (o
   or its bundle id differs from the installed one. It then clones a restore copy (`--restore-dir`, default inside the
   gate out dir), swaps in place with rsync --delete (no "(previous)" copy), and re-verifies codesign and identity.
   `--dest DIR` installs somewhere else (use it for proofs; never test into ~/Games/Launchers).
-* Per-game table (installed app name, drive route, scene time, profile folder) is `GAMES` in gate.py. nfshp and bo1
-  have no drive route yet: boot, guide, open work; pass `--route` for the rest.
+* Per-game table (installed app name, drive route, scene time, profile folder) is `GAMES` in gate.py. Drive routes exist for bo2, nfsmw, fh1, nfshp (Career to the first race), bo1 (Zombies Kino). Speed noise: `SPEED_SIGMA` in gate.py (nfsmw 2%); fh1 has none measured, so `speed fh1` returns RERUN until someone measures two valid same-build runs.
