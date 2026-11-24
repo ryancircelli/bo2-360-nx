@@ -901,7 +901,6 @@ void XThread::DeliverAPCs() {
     PERF_counter_inc(kApcQueueDepth);
     XAPC* apc = user_apc_queue.HeadObject(mem);
     uint32_t apc_ptr = mem->HostToGuestVirtual(apc);
-    bool needs_freeing = apc->kernel_routine != XAPC::kDummyKernelRoutine;
 
     util::XeRemoveEntryList(&apc->list_entry, mem);
     apc->enqueued = 0;
@@ -925,7 +924,6 @@ void XThread::DeliverAPCs() {
       }
     } else {
       mem->SystemHeapFree(apc_ptr);
-      needs_freeing = false;
     }
 
     uint32_t normal_routine = memory::load_and_swap<uint32_t>(scratch_ptr + 0);
@@ -946,10 +944,7 @@ void XThread::DeliverAPCs() {
     REXSYS_DEBUG("Completed delivery of APC to {:08X} ({:08X}, {:08X}, {:08X})", normal_routine,
                  normal_context, arg1, arg2);
 
-    if (needs_freeing) {
-      mem->SystemHeapFree(apc_ptr);
-    }
-
+    // A real kernel routine means the game owns the KAPC (and usually frees it in that routine).
     old_irql = kernel::xboxkrnl::xeKeKfAcquireSpinLock(ctx, &kthread->apc_lock);
   }
 
