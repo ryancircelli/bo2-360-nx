@@ -200,6 +200,14 @@ void Clock::set_guest_system_time_base(uint64_t time_base) {
   guest_system_time_base_ = time_base;
 }
 
+void Clock::RewindGuestTickCount(uint64_t guest_ticks) {
+  std::lock_guard<std::mutex> lock(tick_mutex_);
+  const GuestClockAnchor& anchor = CurrentGuestClockAnchor();
+  guest_clock_anchor_.store(
+      new GuestClockAnchor{Clock::QueryHostTickCount(), guest_ticks, anchor.numerator, anchor.denominator},
+      std::memory_order_release);
+}
+
 uint64_t Clock::QueryGuestTickCount() {
   auto guest_tick_count = UpdateGuestClock();
   return guest_tick_count;

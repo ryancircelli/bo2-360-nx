@@ -77,6 +77,10 @@ class Clock {
   // Queries the milliseconds since the guest began, accounting for scaling.
   static uint32_t QueryGuestUptimeMillis();
 
+  // Makes the guest tick count continue from guest_ticks now (savepoint rewind: the guest clock
+  // goes back to the capture's reading; guest system time and uptime follow it).
+  static void RewindGuestTickCount(uint64_t guest_ticks);
+
   // Sets the system time of the guest.
   static void SetGuestSystemTime(uint64_t system_time);
 
