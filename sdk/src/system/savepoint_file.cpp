@@ -36,6 +36,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/input/input_system.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 #include <rex/chrono/clock.h>
@@ -686,6 +687,7 @@ bool LoadSavepointFile(const std::string& path) {
     }
   }
   chrono::Clock::RestoreGuestClock(head[3], head[4]);
+  input::RebaseVirtualPadScripts();  // pad scripts count from the load, as they count from boot otherwise
 
   // Kernel objects, keeping the ones this boot already made (same handles: boot is deterministic).
   auto* ks = Runtime::instance()->kernel_state();
