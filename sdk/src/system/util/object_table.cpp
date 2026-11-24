@@ -142,7 +142,8 @@ std::shared_ptr<ObjectTable::RewindState> ObjectTable::CaptureRewindState() {
   return state;
 }
 
-void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
+void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state,
+                         const std::vector<object_ref<XObject>>& extra_refs) {
   auto global_lock = global_critical_region_.Acquire();
   if (table_capacity_ < state->entries.size() && !Resize(state->entries.size())) {
     return;
@@ -171,8 +172,11 @@ void ObjectTable::Rewind(const std::shared_ptr<RewindState>& state) {
   name_table_ = state->names;
   uint32_t refs_raised = 0;
   for (const auto& [object, object_state] : state->objects) {
-    // +1: the object_ref this RewindState holds was taken after the count was captured.
-    if (object->Rewind(object_state, 1)) {
+    // +1: the object_ref this RewindState holds was taken after the count was captured; plus any
+    // references the caller holds right now (otherwise they hide a deficit and a later release frees it).
+    const int32_t held = 1 + int32_t(std::count_if(extra_refs.begin(), extra_refs.end(),
+                                                   [&](const auto& r) { return r.get() == object.get(); }));
+    if (object->Rewind(object_state, held)) {
       ++refs_raised;
     }
   }

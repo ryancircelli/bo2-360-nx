@@ -44,7 +44,8 @@ class ObjectTable {
 
   struct RewindState;
   std::shared_ptr<RewindState> CaptureRewindState();
-  void Rewind(const std::shared_ptr<RewindState>& state);
+  // extra_refs: references the caller holds on table objects right now (counted as held, see Rewind).
+  void Rewind(const std::shared_ptr<RewindState>& state, const std::vector<object_ref<XObject>>& extra_refs = {});
 
   // Restores a XObject reference with a handle. Mainly for internal use - do
   // not use.

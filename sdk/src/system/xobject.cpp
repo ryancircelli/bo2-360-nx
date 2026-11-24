@@ -27,6 +27,7 @@
 #include <rex/system/xmutant.h>
 #include <rex/system/xnotifylistener.h>
 #include <rex/system/xsemaphore.h>
+#include <rex/system/xsocket.h>
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xtimer.h>
@@ -209,7 +210,7 @@ object_ref<XObject> XObject::Restore(KernelState* kernel_state, Type type,
     case Type::Session:
       break;
     case Type::Socket:
-      break;
+      return XSocket::Restore(kernel_state, stream);
     case Type::SymbolicLink:
       return XSymbolicLink::Restore(kernel_state, stream);
     case Type::Thread:

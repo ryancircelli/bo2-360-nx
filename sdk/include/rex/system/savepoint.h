@@ -65,5 +65,7 @@ std::string WriteSavepointFile(const std::string& path, int frame);
 bool LoadSavepointFile(const std::string& path);
 // --load_savepoint at launch: 0 not requested, 1 loaded, -1 failed.
 int LoadSavepointAtLaunch();
+// Called on each guest thread as it starts: records its executable thread-local block for file save points.
+void NoteGuestThreadStart(uint32_t handle);
 
 }  // namespace rex::system

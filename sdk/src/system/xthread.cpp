@@ -29,6 +29,7 @@
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/function_dispatcher.h>
+#include <rex/system/savepoint.h>
 #include <rex/system/thread_state.h>
 #include <rex/system/user_module.h>
 #include <rex/kernel/xboxkrnl/threading.h>
@@ -566,6 +567,7 @@ X_STATUS XThread::Create() {
   params.create_suspended = true;
   thread_ = rex::thread::Thread::Create(params, [this]() {
     rex::initialize_seh_thread();
+    if (guest_thread_) NoteGuestThreadStart(handle());
 #if !REX_PLATFORM_SWITCH
     if (guest_thread_ ? GuestAudioThread(thread_name_) : HostAudioThread(thread_name_)) {
       REXSYS_INFO("{}: {}", thread_name_, rex::thread::SetThreadAudioPriority());

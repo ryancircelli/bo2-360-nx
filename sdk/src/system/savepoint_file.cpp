@@ -63,7 +63,7 @@ void VisitInProcessSnapshot(
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr char kMagic[8] = {'R', 'E', 'X', 'S', 'P', '2', 0, 0};
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
 constexpr uint64_t kArenaSize = 0x120000000ull;  // virtual + physical guest views (xmemory.cpp)
 constexpr uint32_t kEnd = 0x21444E45;  // "END!"
 
@@ -163,8 +163,42 @@ struct ThreadRec {
   arm_thread_state64_t gp{};
   arm_neon_state64_t neon{};
   uint64_t band_lo = 0, band_top = 0, record = 0, ctx = 0;
+  uint64_t tls_lo = 0, tls_hi = 0;  // the executable's thread-local block on the saving thread
   std::vector<uint8_t> ctx_bytes, band;
 };
+
+// The executable's thread-local block for the calling thread, {lo, hi} (0, 0 when it has none). Native game
+// code keeps pointers into it in callee-saved registers, so moved stacks need it mapped old -> new.
+std::pair<uint64_t, uint64_t> ExeTlsBlock() {
+  struct Tlv {
+    void* (*thunk)(Tlv*);
+    unsigned long key, offset;
+  };
+  auto* h = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
+  const uint64_t slide = uint64_t(_dyld_get_image_vmaddr_slide(0));
+  Tlv* first = nullptr;
+  uint64_t size = 0;
+  auto* lc = reinterpret_cast<const load_command*>(h + 1);
+  for (uint32_t i = 0; i < h->ncmds; ++i) {
+    if (lc->cmd == LC_SEGMENT_64) {
+      auto* seg = reinterpret_cast<const segment_command_64*>(lc);
+      auto* sect = reinterpret_cast<const section_64*>(seg + 1);
+      for (uint32_t k = 0; k < seg->nsects; ++k) {
+        uint32_t type = sect[k].flags & SECTION_TYPE;
+        if (type == S_THREAD_LOCAL_VARIABLES && sect[k].size >= sizeof(Tlv) && !first)
+          first = reinterpret_cast<Tlv*>(sect[k].addr + slide);
+        if (type == S_THREAD_LOCAL_REGULAR || type == S_THREAD_LOCAL_ZEROFILL) size += sect[k].size;
+      }
+    }
+    lc = reinterpret_cast<const load_command*>(reinterpret_cast<const uint8_t*>(lc) + lc->cmdsize);
+  }
+  if (!first || !size) return {0, 0};
+  uint64_t lo = reinterpret_cast<uint64_t>(first->thunk(first)) - first->offset;
+  return {lo, lo + size};
+}
+
+std::mutex g_tls_m;
+std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>> g_tls;  // guest thread handle -> its block
 
 std::pair<uint64_t, uint64_t> ExeRange() {
   auto* h = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
@@ -197,6 +231,8 @@ bool InSystemLib(uint64_t pc) {
 std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_neon_state64_t& neon, void* ctx,
                           std::pair<uint64_t, uint64_t> exe, ThreadRec& rec) {
   auto in_exe = [&](uint64_t pc) { return pc >= exe.first && pc < exe.second; };
+  // Recompiled game code is extern "C"; C++ in the executable (a game's native hooks) is host code like the SDK.
+  auto game = [&](uint64_t pc) { return in_exe(pc) && Sym(pc).rfind("_Z", 0) != 0; };
   struct Frame {
     uint64_t pc, sp, fp;
   };
@@ -225,7 +261,7 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
       unw_word_t pc = 0, sp = 0, fp = 0;
       unw_get_reg(&c, UNW_REG_IP, &pc), unw_get_reg(&c, UNW_REG_SP, &sp), unw_get_reg(&c, UNW_ARM64_FP, &fp);
       f.push_back({pc, sp, fp});
-      if (i0 < 0 && in_exe(pc) && f.size() > 1) {  // the innermost game frame of a thread inside a call
+      if (i0 < 0 && game(pc) && f.size() > 1) {  // the innermost game frame of a thread inside a call
         i0 = int(f.size()) - 1;
         for (int r = 19; r <= 28; ++r) {
           unw_word_t v = 0;
@@ -241,15 +277,21 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
     } while (f.size() < 4096 && unw_step(&c) > 0);
   };
   walk(arm_thread_state64_get_pc(gp));
-  if (f.size() <= 1 && !in_exe(arm_thread_state64_get_pc(gp))) walk(arm_thread_state64_get_lr(gp));
+  if (f.size() <= 1 && !game(arm_thread_state64_get_pc(gp))) walk(arm_thread_state64_get_lr(gp));
   if (f.empty()) return "unwind failed";
-  if (in_exe(f[0].pc)) i0 = 0;
+  if (game(f[0].pc)) i0 = 0;
   if (i0 < 0) return "no game frames (pc in " + Sym(f[0].pc) + ")";
   bool leaf = true;
   for (int i = 0; i < i0; ++i) leaf = leaf && InSystemLib(f[i].pc);
   if (i0 > 0 && !leaf) {
     std::string callee = Sym(f[i0 - 1].pc - 1);
-    if (callee.find("HostToGuestFunction") == std::string::npos) return "inside SDK code " + callee;
+    // A native hook (C++ in the executable) is called like a guest function, (ctx, base); restarting it is
+    // only safe while it waits, so the thread must be stopped inside a system library.
+    // shortcut: assumes such hooks only wait and then do their work; a hook with effects before its wait
+    // would repeat them.
+    const bool hook = in_exe(f[i0 - 1].pc) && InSystemLib(f[0].pc);
+    if (callee.find("HostToGuestFunction") == std::string::npos && !hook)
+      return "inside SDK code " + callee + " (called from " + Sym(f[i0].pc) + ")";
     uint64_t bl = f[i0].pc - 4;
     if ((*reinterpret_cast<const uint32_t*>(bl) & 0xFC000000u) != 0x94000000u) return "import not called by bl";
     rec.blocked = 1;
@@ -270,7 +312,7 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
   if (i1 + 1 >= f.size() || Sym(f[i1 + 1].pc - 1).find("XThread7Execute") == std::string::npos)
     return "game frames not entered from XThread::Execute (" + Sym(f[std::min(i1 + 1, f.size() - 1)].pc - 1) + ")";
   for (size_t i = size_t(i0); i <= i1; ++i)
-    if (!in_exe(f[i].pc)) return "nested callback";
+    if (!game(f[i].pc)) return "host code between game frames (" + Sym(f[i].pc) + ")";
   rec.record = f[i1].fp;
   if (rec.record < (arm_thread_state64_get_sp(rec.gp) & ~15ull) || rec.record + 16 > f[i1 + 1].sp)
     return "oldest frame record outside the game frames";
@@ -288,6 +330,7 @@ struct Parked {
   std::atomic<bool> ready{false};
   mach_port_t port = 0;
   uint64_t fp = 0;
+  std::pair<uint64_t, uint64_t> tls{0, 0};
 };
 std::vector<std::unique_ptr<Parked>> g_parked;
 std::mutex g_parked_m;
@@ -381,6 +424,12 @@ void CompareHashes(const std::string& file, memory::Memory* mem) {
 }
 }  // namespace
 
+void NoteGuestThreadStart(uint32_t handle) {
+  auto block = ExeTlsBlock();
+  std::lock_guard<std::mutex> l(g_tls_m);
+  g_tls[handle] = block;
+}
+
 void SetGraphicsFileHook(IGraphicsSystem* graphics, GraphicsFileHook hook) {
   g_gfx_hook.store(hook, std::memory_order_release);
   g_gfx.store(graphics, std::memory_order_release);
@@ -414,6 +463,11 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
       if (!t->is_guest_thread() || !why.empty()) return;
       ThreadRec rec;
       std::string e = AnalyzeThread(t, gp, neon, ctx, exe, rec);
+      {
+        std::lock_guard<std::mutex> l(g_tls_m);
+        auto it = g_tls.find(t->handle());
+        if (it != g_tls.end()) rec.tls_lo = it->second.first, rec.tls_hi = it->second.second;
+      }
       if (!e.empty()) why = fmt::format("thread {:08X}: {}", t->handle(), e);
       threads.push_back(std::move(rec));
     });
@@ -521,7 +575,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   for (auto& t : threads) {
     out.U32(t.handle), out.U32(t.blocked);
     out.Put(&t.gp, sizeof t.gp), out.Put(&t.neon, sizeof t.neon);
-    uint64_t w[4] = {t.band_lo, t.band_top, t.record, t.ctx};
+    uint64_t w[6] = {t.band_lo, t.band_top, t.record, t.ctx, t.tls_lo, t.tls_hi};
     out.Put(w, sizeof w);
     out.U32(uint32_t(t.ctx_bytes.size())), out.Put(t.ctx_bytes.data(), t.ctx_bytes.size());
     out.U32(uint32_t(t.band.size())), out.Put(t.band.data(), t.band.size());
@@ -667,9 +721,9 @@ bool LoadSavepointFile(const std::string& path) {
     t.handle = in.U32(), t.blocked = in.U32();
     if (auto* g = in.Take(sizeof t.gp)) std::memcpy(&t.gp, g, sizeof t.gp);
     if (auto* n = in.Take(sizeof t.neon)) std::memcpy(&t.neon, n, sizeof t.neon);
-    uint64_t w[4] = {};
+    uint64_t w[6] = {};
     if (auto* x = in.Take(sizeof w)) std::memcpy(w, x, sizeof w);
-    t.band_lo = w[0], t.band_top = w[1], t.record = w[2], t.ctx = w[3];
+    t.band_lo = w[0], t.band_top = w[1], t.record = w[2], t.ctx = w[3], t.tls_lo = w[4], t.tls_hi = w[5];
     t.ctx_bytes.resize(in.U32());
     if (auto* c = in.Take(t.ctx_bytes.size())) std::memcpy(t.ctx_bytes.data(), c, t.ctx_bytes.size());
     t.band.resize(in.U32());
@@ -709,6 +763,7 @@ bool LoadSavepointFile(const std::string& path) {
     }
     if (!pk) return;
     pk->port = mach_thread_self();
+    pk->tls = ExeTlsBlock();
     pk->fp = reinterpret_cast<uint64_t>(__builtin_frame_address(0));
     pk->ready.store(true, std::memory_order_release);
     for (;;) __asm__ volatile("yield");  // user mode, no syscall: the loader replaces this state
@@ -772,7 +827,15 @@ bool LoadSavepointFile(const std::string& path) {
     const int64_t sd = int64_t(new_top - rec.band_top);
     // Not the executable range: guest 64-bit sums (sign-extended lis + zero-extended lwz) land at 0x1_0xxxxxxx,
     // right where the executable is mapped. Code addresses are moved only where they are known to be code.
+    const auto ntls = g_parked[i]->tls;
+    if (rec.tls_lo && rec.tls_hi - rec.tls_lo != ntls.second - ntls.first) {
+      REXSYS_ERROR("[savepoint] load: thread {:08X} thread-local block size differs", rec.handle);
+      return false;
+    }
+    // shortcut: the new thread's thread-locals start fresh (pointers into the block are moved, values not
+    // copied); copy the saved block too if a game keeps state there that matters across the load.
     Reloc rl{{{rec.band_lo, rec.band_top, sd},
+              {rec.tls_lo, rec.tls_hi, int64_t(ntls.first - rec.tls_lo)},
               {head[0], head[0] + kArenaSize, int64_t(membase - head[0])},
               {rec.ctx, rec.ctx + sizeof(::PPCContext), int64_t(reinterpret_cast<uint64_t>(ctx) - rec.ctx)}}};
     Reloc code{{{head[1], head[2], int64_t(exe.first - head[1])}}};
