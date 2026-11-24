@@ -275,8 +275,6 @@ void CommandProcessor::WorkerThreadMain() {
         rex::thread::MaybeYield();
         loop_count++;
 #endif
-        // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
-        system::ServiceSavepointRequest();
         if (std::getenv("REX_SAVEPOINT_DIAG")) {
           static auto last = std::chrono::steady_clock::now();
           auto now = std::chrono::steady_clock::now();
@@ -288,6 +286,8 @@ void CommandProcessor::WorkerThreadMain() {
                          (unsigned long long)swap_count_.load());
           }
         }
+        // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
+        system::ServiceSavepointRequest();
         write_ptr_index = write_ptr_index_.load();
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
