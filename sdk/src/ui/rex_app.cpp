@@ -37,6 +37,7 @@
 #include <rex/input/input_system.h>
 #include <rex/input/script/kbm_script.h>
 #include <rex/kernel/init.h>
+#include <rex/kernel/xam/module.h>
 #include <rex/kernel/xam/text_input.h>
 #include <rex/string/numeric.h>
 #include <rex/system.h>
@@ -406,6 +407,13 @@ bool ReXApp::SetupPresentation() {
       window_->SetFullscreen(rex::string::from_string<bool>(value, false));
     }
   });
+  // Game pages (a window mode item) read and set the window's real state through the Guide's window hooks.
+  rex::ui::guide::SetWindowHooks([this] { return window_ ? window_->IsFullscreen() : REXCVAR_GET(fullscreen); },
+                                 [this](bool on) {
+                                   app_context().CallInUIThreadDeferred([this, on] {
+                                     if (window_) window_->SetFullscreen(on);
+                                   });
+                                 });
   window_->Open();
 
   auto* graphics_system = config_.graphics.get();
@@ -628,9 +636,20 @@ void ReXApp::ToggleGuide(int user, std::string_view blade) {
   hooks.request_close = [this] {
     app_context().CallInUIThreadDeferred([this] { CloseGuide(); });
   };
-  // Opened from the keyboard: it holds player 1's pad, any pad drives it.
-  guide_gate_->SetHolder(user >= 0 ? user : 0);
+  hooks.take_over = [this](int new_user) {
+    if (guide_gate_) guide_gate_->SetHolder(new_user);
+  };
+  // Opened by a player's Xbox button: only that pad drives it and the game
+  // gets nothing from it; the other players keep playing (or not, as the game
+  // decides on XN_SYS_UI). Opened from the keyboard or mouse: every pad is
+  // held and any pad drives it.
+  guide_gate_->SetHolder(user >= 0 ? user : ui::GuideInputGate::kAllPads);
   guide_overlay_ = std::make_unique<ui::GuideDialog>(imgui_drawer_.get(), user, std::move(hooks));
+  // Tell the game the system UI is up, as the console does when its Guide opens.
+  if (runtime_ && runtime_->kernel_state()) {
+    rex::kernel::xam::xeXamSetGuideOpen(runtime_->kernel_state(), true);
+    REXLOG_INFO("[guide] XN_SYS_UI true sent (system UI open)");
+  }
   // The Guide is used with the mouse too: show the cursor (the keyboard and
   // mouse hold above has already asked the game's mouse capture to let go).
   if (window_) {
@@ -653,6 +672,10 @@ void ReXApp::CloseGuide() {
   }
   if (guide_gate_) {
     guide_gate_->SetHolder(-1);
+  }
+  if (runtime_ && runtime_->kernel_state()) {
+    rex::kernel::xam::xeXamSetGuideOpen(runtime_->kernel_state(), false);
+    REXLOG_INFO("[guide] XN_SYS_UI false sent (system UI closed)");
   }
 }
 
@@ -845,6 +868,7 @@ void ReXApp::OnDestroy() {
   rex::ui::UnregisterBind("bind_achievements");
   rex::ui::UnregisterBind("bind_guide");
   rex::ui::UnregisterBind("bind_guide_alt");
+  rex::ui::guide::SetWindowHooks({}, {});
 
   // ImGui cleanup (reverse of setup)
   if (achievement_notification_listener_ != 0) {

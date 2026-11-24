@@ -88,6 +88,10 @@ u32 XNotifyGetNext_entry(u32 handle, u32 match_id, mapped_u32 id_ptr, mapped_u32
     *param_ptr = dequeued ? param : 0;
   }
 
+  if (dequeued && id == 0x9) {
+    // XN_SYS_UI (the Guide or a system dialog): rare, and the proof a game saw it.
+    REXKRNL_INFO("XNotifyGetNext: game read XN_SYS_UI = {}", param);
+  }
   if (dequeued) {
     REXKRNL_NOISY_DEBUG("XNotifyGetNext({:08X}, {:08X}) -> id={:#x}, param={}", uint32_t(handle),
                         uint32_t(match_id), id, param);

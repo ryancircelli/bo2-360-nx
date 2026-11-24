@@ -1,0 +1,14 @@
+--- a/src/hidapi/SDL_hidapi.c	2026-11-23 12:39:00
++++ b/src/hidapi/SDL_hidapi.c	2026-11-23 12:39:01
+@@ -857,6 +857,11 @@
+     { USB_VENDOR_NINTENDO, USB_PRODUCT_NINTENDO_SWITCH2_JOYCON_LEFT },
+     { USB_VENDOR_NINTENDO, USB_PRODUCT_NINTENDO_SWITCH2_JOYCON_RIGHT },
+     { USB_VENDOR_NINTENDO, USB_PRODUCT_NINTENDO_SWITCH2_PRO },
++    // Xbox 360 wireless receivers: vendor-class interfaces that macOS's HID layer never exposes, so libusb is the
++    // only way to read them. Listing them lets the whitelist stay on, so libusb opens nothing else.
++    { USB_VENDOR_MICROSOFT, USB_PRODUCT_XBOX360_WIRELESS_RECEIVER },
++    { USB_VENDOR_MICROSOFT, USB_PRODUCT_XBOX360_WIRELESS_RECEIVER_THIRDPARTY1 },
++    { USB_VENDOR_MICROSOFT, USB_PRODUCT_XBOX360_WIRELESS_RECEIVER_THIRDPARTY2 },
+ };
+ 
+ static bool RequiresLibUSB(Uint16 vendor, Uint16 product)
