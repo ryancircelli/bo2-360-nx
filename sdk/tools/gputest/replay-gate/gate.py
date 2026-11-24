@@ -13,7 +13,7 @@ tolerance, hashes drifted), CHANGED (expected.tsv lists it: not a failure),
 FAIL (final image out of tolerance, draw/readback counts changed, crash, timeout).
 Exit 0 unless some trace is FAIL.
 """
-import shlex, argparse, json, os, shutil, subprocess, sys, time, concurrent.futures as cf
+import glob, shlex, argparse, json, os, shutil, subprocess, sys, time, concurrent.futures as cf
 import numpy as np
 from PIL import Image
 
@@ -34,6 +34,9 @@ def traces():
         if line.strip() and not line.startswith("#"):
             f = line.rstrip("\n").split("\t")
             out[f[0]] = (os.path.join(GATE, "traces", f[0] + ".xtr"), f[1] if len(f) > 1 else "", f[2] if len(f) > 2 else "")
+    # glitch-*.xtr dropped by add-glitches are picked up without editing traces.tsv (they have no golden until judged)
+    for p in sorted(glob.glob(os.path.join(GATE, "traces", "glitch-*.xtr"))):
+        out.setdefault(os.path.basename(p)[:-4], (p, "", ""))
     return out
 
 def expected():
@@ -164,6 +167,8 @@ def one(mode, build, name, spec, run, direct):
             if mode == "golden":
                 save_golden(gdir, recs, final, summ, build)
                 res.update(verdict="GOLDEN", why=[], info={"draws": len(recs)})
+            elif not os.path.exists(os.path.join(gdir, "golden.json")) and name.startswith("glitch-"):
+                res.update(verdict="NEW", why=["glitch trace, no golden: look at the picture, then `golden --only NAME` once fixed"], info={})
             elif not os.path.exists(os.path.join(gdir, "golden.json")):
                 res.update(verdict="FAIL", why=["no golden (run golden first)"], info={})
             else:

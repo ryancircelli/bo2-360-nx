@@ -18,3 +18,8 @@ CHANGED (listed in expected.tsv, not failing). FAIL prints the first diverging d
 Intended picture change: run `check`, look at the diff images, then `accept` that trace and say why in expected.tsv/commit.
 Not covered: CPU/PPC-side fixes (e.g. dot-product), flags that only act on the live path (constant-override file,
 FH1 blur threshold), anything the saved traces don't draw. BO1 traces replay slowly (per-draw readback, up to ~15 min under load), they do not deadlock.
+
+Glitch traces: `add-glitches [RUN_DIR...]` copies `logs/glitches/*/*.xtr` (glitch-capture branch) into the store as `glitch-*`; `check`
+replays them automatically and reports NEW (not a failure) until `golden --only NAME` is run after the fix.
+`sync-laptop` rsyncs bo2-*.xtr (<200 MB) to the laptop CI. New captures need a recorder-enabled plugin (REXGLUE_BUILD_GPUTEST) swapped
+into a scratch copy of the app (plugin + runtime for BO2), then REX_GPU_TRACE_FRAME/TRIGGER; see reports/replay-regression.md.
