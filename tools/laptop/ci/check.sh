@@ -22,7 +22,10 @@ rc=0
 
 # build: re-run cmake (sdk/ changes may add files), then incremental ninja
 t=$(date +%s)
-if cmake -S sdk -B "$CI/build" >"$out/build.log" 2>&1 && ninja -C "$CI/build" -j2 >>"$out/build.log" 2>&1; then
+# A system header update (apt) leaves every clang precompiled header stale and ninja does not notice: drop them, retry once.
+build() { cmake -S sdk -B "$CI/build" >"$out/build.log" 2>&1 && ninja -C "$CI/build" -j2 >>"$out/build.log" 2>&1; }
+build || { grep -q 'modified since the precompiled header' "$out/build.log" && find "$CI/build" -name '*.pch' -delete && build; }
+if [ $? = 0 ]; then
   rec build PASS "$(part_time $t)"
 else rec build FAIL "$(grep -m1 -E 'error:|FAILED' "$out/build.log") (see $out/build.log)"; rc=1; fi
 
