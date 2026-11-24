@@ -96,3 +96,6 @@ set_target_properties(xthread_tests PROPERTIES
 )
 
 add_test(NAME xthread_tests COMMAND xthread_tests)
+add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
+target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
+add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
