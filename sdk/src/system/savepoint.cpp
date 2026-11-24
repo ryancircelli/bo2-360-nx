@@ -290,9 +290,10 @@ void StartMallocProbe() {
   pthread_create(&t, nullptr, MallocProbeMain, nullptr);
   pthread_detach(t);
 }
+int g_lock_fail_gcr = 0, g_lock_fail_malloc = 0;
 bool ParkedLocksFree() {
   auto& m = rex::thread::global_critical_region::mutex();
-  if (!m.try_lock()) return false;
+  if (!m.try_lock()) { ++g_lock_fail_gcr; return false; }
   m.unlock();
   // Malloc: introspect->zone_locked traps on the xzone allocator (macOS 15+), so probe instead: a
   // persistent helper thread (started before any parking, see StartMallocProbe) mallocs and frees a
@@ -301,16 +302,24 @@ bool ParkedLocksFree() {
   uint64_t gen = ++g_probe_req;
   semaphore_signal(g_probe_sem);
   for (int i = 0; i < 25 && g_probe_done.load() < gen; ++i) usleep(1000);
-  if (g_probe_done.load() < gen) return false;
+  if (g_probe_done.load() < gen) { ++g_lock_fail_malloc; return false; }
   return true;
 }
 
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
   StartMallocProbe();
+  g_lock_fail_gcr = g_lock_fail_malloc = 0;
+  auto start = std::chrono::steady_clock::now();
   for (int attempt = 0;; ++attempt) {
     auto parked = ParkThreadsOnce(ks);
-    if (ParkedLocksFree() || attempt >= 2000) {
-      if (attempt) std::fprintf(stderr, "[savepoint-s3] park: locks free after %d retries\n", attempt);
+    bool free_now = ParkedLocksFree();
+    bool give_up = std::chrono::steady_clock::now() - start > std::chrono::seconds(3);
+    if (free_now || give_up) {
+      if (attempt)
+        std::fprintf(stderr, "[savepoint-s3] park: %s after %d retries (%.0f ms; busy: global region %d, malloc %d)\n",
+                     free_now ? "locks free" : "GAVE UP, locks still held", attempt,
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+                     g_lock_fail_gcr, g_lock_fail_malloc);
       return parked;
     }
     for (auto& t : parked) thread_resume(MachPort(t.get()));
