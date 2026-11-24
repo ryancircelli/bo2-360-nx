@@ -1,0 +1,51 @@
+# Builds the Metal plugin's private, patched copy of the SDK graphics sources.
+#   cmake -DROOT=<sdk> -DMETAL_DIR=<this dir> -DPRIVATE=<copy> -DPATCH=<patch> -DPATCHES=<a,b> [-DMODE=verify] -P sdk_private.cmake
+# sync (default): stage a fresh copy, apply the patches, then write only the files that differ into PRIVATE,
+#                 so ninja recompiles exactly what changed.
+# verify:         stage again and fail if PRIVATE differs (a stale copy fails the build instead of shipping).
+string(REPLACE "," ";" PATCHES "${PATCHES}")
+set(_stage ${PRIVATE}.stage)
+file(REMOVE_RECURSE ${_stage})
+file(MAKE_DIRECTORY ${_stage}/include/rex ${_stage}/src ${_stage}/thirdparty)
+file(COPY ${ROOT}/include/rex/graphics DESTINATION ${_stage}/include/rex)
+file(COPY ${ROOT}/src/graphics DESTINATION ${_stage}/src REGEX "/src/graphics/metal$" EXCLUDE)
+file(COPY ${ROOT}/thirdparty/dxbc DESTINATION ${_stage}/thirdparty)
+foreach(_p IN LISTS PATCHES)
+    execute_process(
+        COMMAND ${PATCH} --batch --no-backup-if-mismatch -p1 -i ${METAL_DIR}/patches/${_p}
+        WORKING_DIRECTORY ${_stage}
+        RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _out)
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR "rexgpu-metal: ${_p} does not apply to the SDK graphics sources:\n${_out}")
+    endif()
+endforeach()
+
+file(GLOB_RECURSE _new RELATIVE ${_stage} ${_stage}/*)
+set(_old "")
+if(EXISTS ${PRIVATE})
+    file(GLOB_RECURSE _old RELATIVE ${PRIVATE} ${PRIVATE}/*)
+endif()
+set(_bad "")
+foreach(_f IN LISTS _new)
+    if(MODE STREQUAL "verify")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E compare_files ${_stage}/${_f} ${PRIVATE}/${_f} RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            list(APPEND _bad ${_f})
+        endif()
+    else()
+        file(COPY_FILE ${_stage}/${_f} ${PRIVATE}/${_f} ONLY_IF_DIFFERENT)
+    endif()
+endforeach()
+list(REMOVE_ITEM _old ${_new})
+foreach(_f IN LISTS _old)
+    if(MODE STREQUAL "verify")
+        list(APPEND _bad ${_f})
+    else()
+        file(REMOVE ${PRIVATE}/${_f})
+    endif()
+endforeach()
+file(REMOVE_RECURSE ${_stage})
+if(_bad)
+    list(JOIN _bad "\n  " _bad)
+    message(FATAL_ERROR "rexgpu-metal: the private graphics copy ${PRIVATE} is stale:\n  ${_bad}")
+endif()

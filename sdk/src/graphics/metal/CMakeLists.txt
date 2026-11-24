@@ -97,53 +97,34 @@ set(_metal_patches
 )
 set(_sdk_private ${_metal_work}/sdk-private)
 
+# The copy is refreshed at build time whenever an SDK graphics source or a patch
+# changes (not only at configure), and the plugin link fails if it is stale.
 file(GLOB_RECURSE _sdk_graphics_inputs CONFIGURE_DEPENDS
     ${REXGLUE_ROOT}/include/rex/graphics/*
-    ${REXGLUE_ROOT}/src/graphics/**/*.cpp
-    ${REXGLUE_ROOT}/src/graphics/**/*.h
+    ${REXGLUE_ROOT}/src/graphics/*
     ${REXGLUE_ROOT}/thirdparty/dxbc/*)
 list(FILTER _sdk_graphics_inputs EXCLUDE REGEX "/src/graphics/metal/")
-set(_sdk_fingerprint "")
-foreach(_f IN LISTS _sdk_graphics_inputs)
-    file(SHA256 ${_f} _h)
-    string(APPEND _sdk_fingerprint "${_f}:${_h}\n")
-endforeach()
-# Edits to these sources must refresh the private copy, not only added or removed files.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_sdk_graphics_inputs})
-foreach(_p IN LISTS _metal_patches)
-    file(SHA256 ${_metal_dir}/patches/${_p} _h)
-    string(APPEND _sdk_fingerprint "${_p}:${_h}\n")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_metal_dir}/patches/${_p})
-endforeach()
-string(SHA256 _sdk_fingerprint "${_sdk_fingerprint}")
-
-set(_sdk_stamp ${_sdk_private}/.rexgpu-metal-fingerprint)
-set(_sdk_old "")
-if(EXISTS ${_sdk_stamp})
-    file(READ ${_sdk_stamp} _sdk_old)
+list(TRANSFORM _metal_patches PREPEND ${_metal_dir}/patches/ OUTPUT_VARIABLE _metal_patch_files)
+list(JOIN _metal_patches "," _metal_patch_arg)
+set(_sdk_private_args -DROOT=${REXGLUE_ROOT} -DMETAL_DIR=${_metal_dir}
+    -DPRIVATE=${_sdk_private} -DPATCH=${REXGPU_METAL_PATCH} -DPATCHES=${_metal_patch_arg})
+set(_sdk_private_cmd ${CMAKE_COMMAND} ${_sdk_private_args} -P ${_metal_dir}/sdk_private.cmake)
+# First sync at configure so the plugin's source list below exists.
+execute_process(COMMAND ${_sdk_private_cmd} RESULT_VARIABLE _rc)
+if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "rexgpu-metal: preparing the patched graphics sources failed")
 endif()
-if(NOT _sdk_old STREQUAL _sdk_fingerprint)
-    message(STATUS "rexgpu-metal: preparing patched graphics sources")
-    file(REMOVE_RECURSE ${_sdk_private})
-    file(MAKE_DIRECTORY ${_sdk_private}/include/rex ${_sdk_private}/src ${_sdk_private}/thirdparty)
-    file(COPY ${REXGLUE_ROOT}/include/rex/graphics DESTINATION ${_sdk_private}/include/rex)
-    file(COPY ${REXGLUE_ROOT}/src/graphics DESTINATION ${_sdk_private}/src
-        REGEX "/src/graphics/metal$" EXCLUDE)
-    file(COPY ${REXGLUE_ROOT}/thirdparty/dxbc DESTINATION ${_sdk_private}/thirdparty)
-    foreach(_p IN LISTS _metal_patches)
-        execute_process(
-            COMMAND ${REXGPU_METAL_PATCH} --batch --no-backup-if-mismatch -p1
-                    -i ${_metal_dir}/patches/${_p}
-            WORKING_DIRECTORY ${_sdk_private}
-            RESULT_VARIABLE _rc
-            OUTPUT_VARIABLE _out
-            ERROR_VARIABLE _out)
-        if(NOT _rc EQUAL 0)
-            message(FATAL_ERROR "rexgpu-metal: ${_p} does not apply to the SDK graphics sources:\n${_out}")
-        endif()
-    endforeach()
-    file(WRITE ${_sdk_stamp} "${_sdk_fingerprint}")
-endif()
+# Declared as byproducts so ninja re-checks the copied files after a sync.
+file(GLOB_RECURSE _sdk_private_files ${_sdk_private}/*)
+set(_sdk_stamp ${_metal_work}/sdk-private.stamp)
+add_custom_command(OUTPUT ${_sdk_stamp}
+    BYPRODUCTS ${_sdk_private_files}
+    COMMAND ${_sdk_private_cmd}
+    COMMAND ${CMAKE_COMMAND} -E touch ${_sdk_stamp}
+    DEPENDS ${_sdk_graphics_inputs} ${_metal_patch_files} ${_metal_dir}/sdk_private.cmake
+    COMMENT "rexgpu-metal: syncing patched graphics sources"
+    VERBATIM)
+add_custom_target(rexgpu-metal-sdk-private DEPENDS ${_sdk_stamp})
 
 # ---------------------------------------------------------------------------
 # 3. Built-in helper shaders (metallib headers)
@@ -175,7 +156,11 @@ add_library(rexgpu-metal SHARED
     metal_flags.cpp
 )
 add_library(rex::gpu-metal ALIAS rexgpu-metal)
-add_dependencies(rexgpu-metal rexgpu-metal-helpers)
+add_dependencies(rexgpu-metal rexgpu-metal-helpers rexgpu-metal-sdk-private)
+# Refuse to link a plugin built from a stale private copy.
+add_custom_command(TARGET rexgpu-metal PRE_LINK
+    COMMAND ${CMAKE_COMMAND} ${_sdk_private_args} -DMODE=verify -P ${_metal_dir}/sdk_private.cmake
+    VERBATIM)
 # Sources that embed helper bytecode headers: rebuild them when the helpers
 # are regenerated (depfiles miss the generated headers).
 foreach(_src
