@@ -674,6 +674,44 @@ void StartRewindWatchdog(std::atomic<bool>* done) {
   pthread_detach(watcher);
 }
 
+// Diagnostic, called from the unhandled guest access violation handler: what changed in guest memory
+// since the last rewind restored it. Prints changed words on the faulting allocator's pages, and a count
+// of changed pages overall. Runs once.
+void SavepointCrashDiff(uint32_t fault, uint32_t r3, uint32_t r4) {
+  static std::atomic<bool> done{false};
+  if (!g_snap.valid || done.exchange(true)) return;
+  auto* mem = kernel_state()->memory();
+  uint64_t changed_pages = 0;
+  for (auto& r : g_snap.regions) {
+    const uint8_t* base = r.space ? mem->physical_membase() : mem->virtual_membase();
+    for (uint32_t off = 0; off < r.size; off += 4096)
+      if (std::memcmp(base + r.base + off, r.data.data() + off,
+                      std::min<uint32_t>(4096, r.size - off)) != 0) ++changed_pages;
+  }
+  std::fprintf(stderr, "[savepoint-crashdiff] fault %08X r3 %08X r4 %08X: %llu guest pages changed since capture\n",
+               fault, r3, r4, (unsigned long long)changed_pages);
+  const uint32_t pages[] = {r3 & ~0xFFFu, (r3 & ~0xFFFu) + 0x1000, r4 & ~0xFFFu, (r4 - 0x20) & ~0xFFFu};
+  for (size_t i = 0; i < 4; ++i) {
+    if (i == 3 && pages[3] == pages[2]) break;
+    const uint32_t page = pages[i];
+    for (auto& r : g_snap.regions) {
+      if (r.space || page < r.base || page >= r.base + r.size) continue;
+      const uint32_t off = page - r.base;
+      const uint32_t len = std::min<uint32_t>(4096, r.size - off);
+      int shown = 0;
+      for (uint32_t w = 0; w + 4 <= len; w += 4) {
+        uint32_t now, then;
+        std::memcpy(&now, mem->virtual_membase() + page + w, 4);
+        std::memcpy(&then, r.data.data() + off + w, 4);
+        if (now != then && shown++ < 64)
+          std::fprintf(stderr, "[savepoint-crashdiff]   %08X: %08X -> %08X\n", page + w,
+                       rex::byte_swap(then), rex::byte_swap(now));
+      }
+      std::fprintf(stderr, "[savepoint-crashdiff] page %08X: %d words changed\n", page, shown);
+    }
+  }
+}
+
 SavepointStats RewindToInProcessSavepoint() {
   SavepointStats st;
   if (!g_snap.valid) {

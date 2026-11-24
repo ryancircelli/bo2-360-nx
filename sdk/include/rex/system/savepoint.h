@@ -40,6 +40,7 @@ void ServiceSavepointRequest();
 // RewindToInProcessSavepoint writes them all back while the threads are parked and resumes.
 SavepointStats CaptureInProcessSavepoint();
 SavepointStats RewindToInProcessSavepoint();
+void SavepointCrashDiff(uint32_t fault, uint32_t r3, uint32_t r4);
 
 // On-demand same-process save/load for tests ("savepoint save" / "savepoint load" in the test
 // control folder). Queues the op for the next command-processor safe point and waits for it.

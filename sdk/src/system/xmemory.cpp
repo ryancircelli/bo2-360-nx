@@ -14,6 +14,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cstdio>
+#include <rex/system/savepoint.h>
 #include <cstring>
 #include <utility>
 
@@ -596,6 +597,7 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
       const auto* ctx = thread_state->context();
       REXSYS_ERROR("  AV PPC r1={:08X} r3={:08X} r4={:08X} r5={:08X} lr={:08X}",
                    ctx->r1.u32, ctx->r3.u32, ctx->r4.u32, ctx->r5.u32, ctx->lr);
+      rex::system::SavepointCrashDiff(virtual_address, ctx->r3.u32, ctx->r4.u32);
     }
     return false;
   }
