@@ -113,7 +113,9 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
 
   // Initialize clock
   chrono::Clock::set_guest_tick_frequency(50000000);
-  chrono::Clock::set_guest_system_time_base(chrono::Clock::QueryHostSystemTime());
+  // Deterministic benchmark: the same wall date every run, so a game seeding its RNG from the date gets one seed.
+  chrono::Clock::set_guest_system_time_base(REXCVAR_GET(clock_frame_lock_hz) > 0.0 ? 134116992000000000ull  // 2026-01-01 FILETIME
+                                                                                   : chrono::Clock::QueryHostSystemTime());
   {
     // Test fast-forward setting (guest_time_scale, off = 1.0).
     double scale = REXCVAR_GET(guest_time_scale);

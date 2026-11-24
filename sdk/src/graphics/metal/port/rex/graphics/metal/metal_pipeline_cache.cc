@@ -20,6 +20,7 @@
 #include "rex/graphics/metal/metal_shader_bank.h"
 
 #include <dispatch/dispatch.h>
+#include <rex/thread.h>
 #include <sys/sysctl.h>
 #include <pthread/qos.h>
 #include <time.h>
@@ -2682,7 +2683,7 @@ void MetalPipelineCache::PrewarmStoredPipelines(
   if (blocking && !creation_threads_.empty()) {
     while (IsCreatingPipelines()) {
       creation_request_cond_.notify_one();
-      std::this_thread::yield();
+      rex::thread::MaybeYield();
     }
   }
   REXLOG_INFO("Metal shader storage: queued {} warm pipelines, skipped {}", queued,

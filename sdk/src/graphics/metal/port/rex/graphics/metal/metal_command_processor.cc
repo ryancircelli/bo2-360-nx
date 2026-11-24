@@ -19,6 +19,7 @@
 
 #include "rex/graphics/metal/metal_command_processor.h"
 #include <rex/graphics/metal_runtime.h>
+#include <rex/thread.h>
 #include "rex/graphics/metal/metal_emu_draw_stats.h"
 #include "rex/graphics/metal/metal_ref_tessellator.h"
 #include "rex/graphics/shaders/bytecode/metal/resolve_downscale_cs.h"
@@ -14448,7 +14449,7 @@ bool rex::graphics::metal::MetalCommandProcessor::ParkRingForReinit(uint32_t tim
     }
     if (std::chrono::steady_clock::now() >= until) break;
     if (++spins < 64) {
-      std::this_thread::yield();
+      rex::thread::MaybeYield();
     } else {
       std::this_thread::sleep_for(std::chrono::microseconds(50));
     }

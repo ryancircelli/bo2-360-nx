@@ -26,6 +26,8 @@
 #include <rex/cvar.h>
 #include <rex/graphics/metal_runtime.h>
 #include <rex/logging.h>
+#include <rex/chrono/clock.h>
+#include <rex/system/bench.h>
 #include <rex/system/xthread.h>
 
 #include "bo2zm_cheats.h"
@@ -253,6 +255,11 @@ Clock::time_point g_earlier{};
 bool g_summarized = false;
 
 int64_t Now() {
+  // Deterministic benchmark (clock_frame_lock_hz): the route follows guest time, so it is keyed to frames.
+  if (rex::chrono::Clock::frame_locked()) {
+    return int64_t(double(rex::chrono::Clock::QueryGuestTickCount()) * 1e9 /
+                   double(rex::chrono::Clock::guest_tick_frequency()));
+  }
   return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
 }
 
@@ -757,6 +764,8 @@ void AnnotatePlayer(bool present) {
   }
   g_start.store(Now() + int64_t(kWait * 1e9), std::memory_order_relaxed);
   REXLOG_INFO("[benchmark] player in a match: the {:.0f} s route starts in {:.0f} s", Duration(), kWait);
+  // bench_frames: the window starts at the spawn, standing still before zombies arrive (least random), then the route.
+  rex::bench::Arm("player in a match");
   if (ParsedSpot().valid) {
     bo2zm::cheats::SetStopSpawns(true);  // a still scene: the spot's burst compares frames
     REXLOG_INFO("[spot] the route is a test spot: {} (no zombie spawns from here)", REXCVAR_GET(bo2zm_test_spot));

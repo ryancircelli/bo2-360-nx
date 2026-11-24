@@ -8,6 +8,7 @@
 #include <rex/ppc/context.h>
 #include <rex/system/patch.h>
 #include <rex/system/savepoint.h>
+#include <rex/system/bench.h>
 
 // Diagnostic patch slot, called once per swap: proves live patch reload in a running game. The
 // original returns 0; a patch library may replace it (REX_PATCH(rex_diag_swap_probe, ...)) and set
@@ -34,10 +35,12 @@ PerfStats& GetPerfStats() {
 }
 void SetGpuJobHook(GpuJobHook hook) { g_job_hook.store(hook, std::memory_order_release); }
 void NotifyGpuJob(uint64_t order, uint64_t ns, bool measured) {
+  if (measured) rex::bench::AddGpuNs(ns);
   if (GpuJobHook hook = g_job_hook.load(std::memory_order_acquire)) hook(order, ns, measured);
 }
 
 void NotifySwap(uint32_t width, uint32_t height) {
+  rex::bench::OnFrame();  // frame-locked guest clock step + deterministic bench window
   // Frame boundary: bind a freshly prepared patch library (no-op unless one is pending).
   if (rex::patch::CommitPendingPatch()) {
     REXSYS_INFO("[patch-reload] version {} ok", rex::patch::CommittedPatchVersion());
