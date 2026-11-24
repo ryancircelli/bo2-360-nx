@@ -652,6 +652,19 @@ class PosixConditionBase {
 
   virtual void* native_handle() const { return const_cast<PosixConditionBase*>(this); }
 
+  bool CaptureRewindState(WaitHandleRewindState* state) {
+    state->word = word_.load(std::memory_order_acquire);
+    state->owner = owner_.load(std::memory_order_acquire);
+    state->blocks = blocks_;
+    return true;
+  }
+
+  void Rewind(const WaitHandleRewindState& state) {
+    word_.store(state.word, std::memory_order_release);
+    owner_.store(state.owner, std::memory_order_release);
+    blocks_ = static_cast<WaitBlock*>(state.blocks);
+  }
+
   // Threads registered as waiting (single-object waits, plus one if any multi-object or alertable wait).
   uint32_t waiters() const {
     const uint64_t state = word_.load(std::memory_order_acquire);
@@ -1245,12 +1258,12 @@ class PosixConditionBase {
     }
   }
 
-  static std::pair<WaitResult, size_t> WaitMultiple(std::vector<PosixConditionBase*>&& handles,
-                                                    bool wait_all,
+  static std::pair<WaitResult, size_t> WaitMultiple(PosixConditionBase* const* handles,
+                                                    size_t count, bool wait_all,
                                                     std::chrono::milliseconds timeout) {
-    assert_true(!handles.empty());
+    assert_true(count != 0);
 
-    if (handles.size() == 1) {
+    if (count == 1) {
       auto result = handles[0]->Wait(timeout);
       return std::make_pair(result, 0);
     }
@@ -1260,15 +1273,26 @@ class PosixConditionBase {
                         ? std::chrono::steady_clock::time_point::max()
                         : start_time + timeout;
 
-    // Reuse the allocation between polls; clear() releases the locks, not the memory.
-    std::vector<std::unique_lock<std::mutex>> locks;
-    locks.reserve(handles.size());
+    constexpr size_t kInlineLocks = 64;
+    std::unique_lock<std::mutex> inline_locks[kInlineLocks];
+    std::unique_ptr<std::unique_lock<std::mutex>[]> heap_locks;
+    auto* locks = inline_locks;
+    if (count > kInlineLocks) {
+      heap_locks = std::make_unique<std::unique_lock<std::mutex>[]>(count);
+      locks = heap_locks.get();
+    }
+    size_t lock_count = 0;
+    auto clear_locks = [&]() {
+      while (lock_count) {
+        locks[--lock_count] = std::unique_lock<std::mutex>();
+      }
+    };
     while (true) {
       size_t first_signaled = std::numeric_limits<size_t>::max();
       bool condition_met = false;
       bool all_locked = true;
 
-      for (size_t i = 0; i < handles.size(); ++i) {
+      for (size_t i = 0; i < count; ++i) {
 #if REX_PLATFORM_LINUX
         auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
         int result = pthread_mutex_trylock(native_mutex);
@@ -1276,14 +1300,14 @@ class PosixConditionBase {
           if (result == EOWNERDEAD) {
             pthread_mutex_consistent(native_mutex);
           }
-          locks.emplace_back(handles[i]->mutex_, std::adopt_lock);
+          locks[lock_count++] = std::unique_lock<std::mutex>(handles[i]->mutex_, std::adopt_lock);
         } else {
           all_locked = false;
           break;
         }
 #else
-        locks.emplace_back(handles[i]->mutex_, std::try_to_lock);
-        if (!locks.back().owns_lock()) {
+        locks[lock_count] = std::unique_lock<std::mutex>(handles[i]->mutex_, std::try_to_lock);
+        if (!locks[lock_count++].owns_lock()) {
           all_locked = false;
           break;
         }
@@ -1291,7 +1315,7 @@ class PosixConditionBase {
       }
 
       if (!all_locked) {
-        locks.clear();
+        clear_locks();
         // The timeout also expires when an object cannot be inspected.
         // The earlier continue skipped the only timeout check.
         const auto now = std::chrono::steady_clock::now();
@@ -1316,7 +1340,7 @@ class PosixConditionBase {
 
       if (wait_all) {
         bool all_signaled = true;
-        for (size_t i = 0; i < handles.size(); ++i) {
+        for (size_t i = 0; i < count; ++i) {
           if (!handles[i]->signaled()) {
             all_signaled = false;
             break;
@@ -1327,7 +1351,7 @@ class PosixConditionBase {
         }
         condition_met = all_signaled;
       } else {
-        for (size_t i = 0; i < handles.size(); ++i) {
+        for (size_t i = 0; i < count; ++i) {
           if (handles[i]->signaled()) {
             first_signaled = i;
             condition_met = true;
@@ -1338,7 +1362,7 @@ class PosixConditionBase {
 
       if (condition_met) {
         if (wait_all) {
-          for (size_t i = 0; i < handles.size(); ++i) {
+          for (size_t i = 0; i < count; ++i) {
             handles[i]->post_execution();
           }
         } else {
@@ -1347,7 +1371,7 @@ class PosixConditionBase {
         return std::make_pair(WaitResult::kSuccess, first_signaled);
       }
 
-      locks.clear();
+      clear_locks();
 
       auto now = std::chrono::steady_clock::now();
       if (now >= end_time) {
@@ -1372,7 +1396,28 @@ class PosixConditionBase {
     return const_cast<std::condition_variable&>(cond_).native_handle();
   }
 
+  bool CaptureRewindState(WaitHandleRewindState* state) {
+    state->word = CaptureRewindValue();
+    state->auxiliary = CaptureRewindAuxiliary();
+    state->owner = CaptureRewindOwner();
+    state->waiters = waiters_;
+    return true;
+  }
+  void Rewind(const WaitHandleRewindState& state) {
+    RestoreRewindValue(state.word);
+    RestoreRewindAuxiliary(state.auxiliary);
+    RestoreRewindOwner(state.owner);
+    waiters_ = state.waiters;
+  }
+
  protected:
+  virtual uint64_t CaptureRewindValue() const = 0;
+  virtual void RestoreRewindValue(uint64_t value) = 0;
+  virtual uint64_t CaptureRewindAuxiliary() const { return 0; }
+  virtual void RestoreRewindAuxiliary(uint64_t) {}
+  virtual uintptr_t CaptureRewindOwner() const { return 0; }
+  virtual void RestoreRewindOwner(uintptr_t) {}
+
   inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
   // How many PulseEvents so far (events only), and how many threads are inside Wait's condition
@@ -1435,6 +1480,10 @@ class PosixCondition<Event> : public PosixConditionBase {
     }
   }
   inline uint64_t pulses() const override { return pulse_count_; }
+  uint64_t CaptureRewindValue() const override { return signal_; }
+  void RestoreRewindValue(uint64_t value) override { signal_ = value != 0; }
+  uint64_t CaptureRewindAuxiliary() const override { return pulse_count_; }
+  void RestoreRewindAuxiliary(uint64_t value) override { pulse_count_ = value; }
   bool signal_;
   const bool manual_reset_;
   uint64_t pulse_count_ = 0;
@@ -1467,6 +1516,8 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
     count_--;
     cond_.notify_all();
   }
+  uint64_t CaptureRewindValue() const override { return count_; }
+  void RestoreRewindValue(uint64_t value) override { count_ = uint32_t(value); }
   uint32_t count_;
   const uint32_t maximum_count_;
 };
@@ -1505,6 +1556,18 @@ class PosixCondition<Mutant> : public PosixConditionBase {
   inline void post_execution() override {
     count_++;
     owner_ = std::this_thread::get_id();
+  }
+  uint64_t CaptureRewindValue() const override { return count_; }
+  void RestoreRewindValue(uint64_t value) override { count_ = uint32_t(value); }
+  uintptr_t CaptureRewindOwner() const override {
+    uintptr_t value = 0;
+    static_assert(sizeof(owner_) <= sizeof(value));
+    std::memcpy(&value, &owner_, sizeof(owner_));
+    return value;
+  }
+  void RestoreRewindOwner(uintptr_t value) override {
+    static_assert(sizeof(owner_) <= sizeof(value));
+    std::memcpy(&owner_, &value, sizeof(owner_));
   }
   uint32_t count_;
   std::thread::id owner_;
@@ -1580,6 +1643,8 @@ class PosixCondition<Timer> : public PosixConditionBase {
       signal_ = false;
     }
   }
+  uint64_t CaptureRewindValue() const override { return signal_; }
+  void RestoreRewindValue(uint64_t value) override { signal_ = value != 0; }
   std::weak_ptr<TimerQueueWaitItem> wait_item_;
   std::function<void()> callback_;
   bool signal_;  // Protected by mutex_
@@ -2060,6 +2125,8 @@ class PosixCondition<Thread> : public PosixConditionBase {
       return;
     }
 #else
+  uint64_t CaptureRewindValue() const override { return signaled_; }
+  void RestoreRewindValue(uint64_t value) override { signaled_ = value != 0; }
   inline bool signaled() const override { return signaled_; }
   inline void post_execution() override {
 #endif
@@ -2254,6 +2321,17 @@ PosixConditionHandle<Event>::PosixConditionHandle(bool manual_reset, bool initia
 template <>
 PosixConditionHandle<Thread>::PosixConditionHandle(pthread_t thread) : handle_(thread) {}
 
+bool CaptureWaitHandleRewindState(WaitHandle* handle, WaitHandleRewindState* state) {
+  auto* posix_handle = dynamic_cast<PosixWaitHandle*>(handle);
+  return posix_handle && posix_handle->condition().CaptureRewindState(state);
+}
+
+void RewindWaitHandle(WaitHandle* handle, const WaitHandleRewindState& state) {
+  if (auto* posix_handle = dynamic_cast<PosixWaitHandle*>(handle)) {
+    posix_handle->condition().Rewind(state);
+  }
+}
+
 #if REX_FAST_WAITS
 WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
@@ -2377,17 +2455,23 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
 std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wait_handle_count,
                                            bool wait_all, bool is_alertable,
                                            std::chrono::milliseconds timeout) {
-  std::vector<PosixConditionBase*> conditions;
-  conditions.reserve(wait_handle_count);
+  constexpr size_t kInlineConditions = 64;
+  PosixConditionBase* inline_conditions[kInlineConditions];
+  std::unique_ptr<PosixConditionBase*[]> heap_conditions;
+  auto** conditions = inline_conditions;
+  if (wait_handle_count > kInlineConditions) {
+    heap_conditions = std::make_unique<PosixConditionBase*[]>(wait_handle_count);
+    conditions = heap_conditions.get();
+  }
   for (size_t i = 0u; i < wait_handle_count; ++i) {
     auto handle = dynamic_cast<PosixWaitHandle*>(wait_handles[i]);
     if (handle == nullptr) {
       return std::make_pair(WaitResult::kFailed, 0);
     }
-    conditions.push_back(&handle->condition());
+    conditions[i] = &handle->condition();
   }
   if (!is_alertable) {
-    return PosixConditionBase::WaitMultiple(std::move(conditions), wait_all, timeout);
+    return PosixConditionBase::WaitMultiple(conditions, wait_handle_count, wait_all, timeout);
   }
 
   ScopedAlertableState alertable_state_guard(true);
@@ -2396,8 +2480,8 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
     if (DispatchCurrentThreadUserCallback()) {
       return std::make_pair(WaitResult::kUserCallback, 0);
     }
-    auto result = PosixConditionBase::WaitMultiple(std::vector<PosixConditionBase*>(conditions),
-                                                   wait_all, ComputeAlertableWaitTimeout(deadline));
+    auto result = PosixConditionBase::WaitMultiple(conditions, wait_handle_count, wait_all,
+                                                   ComputeAlertableWaitTimeout(deadline));
     if (result.first != WaitResult::kTimeout) {
       return result;
     }

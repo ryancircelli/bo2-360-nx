@@ -11,6 +11,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <vector>
+
 #include <atomic>
 #include <mutex>
 #include <queue>
@@ -48,6 +51,32 @@ class XmaDecoder {
 
   uint32_t ReadRegister(uint32_t addr);
   void WriteRegister(uint32_t addr, uint32_t value);
+
+  // Savepoint (same-process save/load): register file, context allocation bitmap and the
+  // per-context host decode state. Only while every other thread is parked.
+  struct SavepointState {
+    std::vector<uint32_t> registers;
+    std::vector<uint64_t> bitmap;
+    std::vector<XmaContext::SavepointState> contexts;
+  };
+  void CaptureSavepoint(SavepointState& s) const {
+    s.registers.assign(register_file_.values, register_file_.values + XmaRegisterFile::kRegisterCount);
+    s.bitmap = context_bitmap_.data();
+    s.contexts.resize(kContextCount);
+    for (uint32_t i = 0; i < kContextCount; ++i) contexts_[i].CaptureSavepoint(s.contexts[i]);
+  }
+  // Returns the number of contexts whose allocation differed from the savepoint.
+  uint32_t RewindSavepoint(const SavepointState& s) {
+    std::copy(s.registers.begin(), s.registers.end(), register_file_.values);
+    auto& bits = context_bitmap_.data();
+    std::copy(s.bitmap.begin(), s.bitmap.end(), bits.begin());
+    uint32_t changed = 0;
+    for (uint32_t i = 0; i < kContextCount; ++i) {
+      if (contexts_[i].is_allocated() != s.contexts[i].allocated) ++changed;
+      contexts_[i].RewindSavepoint(s.contexts[i]);
+    }
+    return changed;
+  }
 
   bool is_paused() const { return paused_; }
   void Pause();

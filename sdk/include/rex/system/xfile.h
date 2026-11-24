@@ -82,6 +82,12 @@ class XFile : public XObject {
   const std::string& name() const { return file_->entry()->name(); }
 
   uint64_t position() const;
+  // Savepoint parking: a parked thread must not hold this lock (a rewind would leave it held).
+  bool lock_held() const {
+    if (!file_lock_.try_lock()) return true;
+    file_lock_.unlock();
+    return false;
+  }
   void set_position(uint64_t value);
 
   X_STATUS QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info, size_t length,

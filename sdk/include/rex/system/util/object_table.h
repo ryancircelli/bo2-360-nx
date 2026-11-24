@@ -10,6 +10,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -40,6 +41,10 @@ class ObjectTable {
 
   bool Save(stream::ByteStream* stream);
   bool Restore(stream::ByteStream* stream);
+
+  struct RewindState;
+  std::shared_ptr<RewindState> CaptureRewindState();
+  void Rewind(const std::shared_ptr<RewindState>& state);
 
   // Restores a XObject reference with a handle. Mainly for internal use - do
   // not use.

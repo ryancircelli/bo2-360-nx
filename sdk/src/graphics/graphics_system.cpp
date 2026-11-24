@@ -72,9 +72,18 @@ __declspec(dllexport) uint32_t AmdPowerXpressRequestHighPerformance = 1;
 }  // extern "C"
 #endif  // REX_PLATFORM_WIN32
 
-GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {
+  system::SetGraphicsSavepointHooks(
+      this, [](system::IGraphicsSystem* system) {
+        static_cast<GraphicsSystem*>(system)->CaptureSavepoint();
+      }, [](system::IGraphicsSystem* system) {
+        static_cast<GraphicsSystem*>(system)->RewindSavepoint();
+      });
+}
 
-GraphicsSystem::~GraphicsSystem() = default;
+GraphicsSystem::~GraphicsSystem() {
+  system::ClearGraphicsSavepointHooks(this);
+}
 
 X_STATUS GraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
   if (presenter_) {
@@ -290,6 +299,14 @@ void GraphicsSystem::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
 
 void GraphicsSystem::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {
   command_processor_->EnableReadPointerWriteBack(ptr, block_size_log2);
+}
+
+void GraphicsSystem::CaptureSavepoint() {
+  command_processor_->StoreRewindState();
+}
+
+void GraphicsSystem::RewindSavepoint() {
+  command_processor_->RewindStoredState();
 }
 
 void GraphicsSystem::SetInterruptCallback(uint32_t callback, uint32_t user_data) {

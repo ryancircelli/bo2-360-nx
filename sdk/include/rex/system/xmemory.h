@@ -225,6 +225,13 @@ class BaseHeap {
   bool Save(stream::ByteStream* stream);
   bool Restore(stream::ByteStream* stream);
 
+  struct RewindState {
+    std::vector<uint64_t> pages;
+    uint32_t unreserved_page_count = 0;
+  };
+  RewindState CaptureRewindState();
+  void Rewind(const RewindState& state);
+
   void Reset();
 
  protected:
