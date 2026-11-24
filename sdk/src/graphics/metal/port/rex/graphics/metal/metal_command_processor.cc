@@ -1236,13 +1236,16 @@ bool CollectMetalVertexFetchSharedMemoryRanges(const RegisterFile& regs,
                 "type. Use --gpu_allow_invalid_fetch_constants to bypass.",
                 vfetch_index, vfetch.dword_0, vfetch.dword_1);
           }
-          return false;
+          // Skip the slot, don't drop the draw: shaders often declare fetch
+          // slots on paths they don't take (FH1 drive VS D34A83D9E6B3A399
+          // slot 90 is all zero), and the hardware draws them.
+          continue;
         default:
           if (strict_logging) {
             REXLOG_WARN("Vertex fetch constant {} ({:08X} {:08X}) is invalid.",
                    vfetch_index, vfetch.dword_0, vfetch.dword_1);
           }
-          return false;
+          continue;
       }
       uint32_t buffer_offset = vfetch.address << 2;
       uint32_t buffer_length = vfetch.size << 2;
