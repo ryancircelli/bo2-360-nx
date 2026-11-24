@@ -29,6 +29,7 @@
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
+#include <rex/system/xtimer.h>
 
 namespace rex::system {
 
@@ -214,7 +215,7 @@ object_ref<XObject> XObject::Restore(KernelState* kernel_state, Type type,
     case Type::Thread:
       return XThread::Restore(kernel_state, stream);
     case Type::Timer:
-      break;
+      return XTimer::Restore(kernel_state, stream);
     case Type::Undefined:
       break;
   }

@@ -94,20 +94,30 @@ bool FileHook(rex::system::IGraphicsSystem* interface, int op, std::vector<uint8
     return true;
   }
   if (op == 1) {
-    // shortcut: stage 1 restores the register file and presents the saved frame only; the ring
-    // and interrupt state (the first gs_len bytes) are applied once guest threads resume (stage 2).
+    // Fresh process, before guest threads run: ring + interrupt state, register file, then show the saved frame.
     uint32_t gs_len = 0;
     if (state.size() < 4) return false;
     std::memcpy(&gs_len, state.data(), 4);
     if (state.size() != 4 + gs_len + sizeof(regs) + sizeof(g_last_swap)) return false;
+    if (!cp->PauseForCheckpoint()) return false;
+    rex::stream::ByteStream gss(state.data() + 4, gs_len);
+    bool ok = graphics->Restore(&gss);
     std::memcpy(regs, state.data() + 4 + gs_len, sizeof(regs));
+    cp->ResumeFromCheckpoint();
+    graphics->InvalidateGpuMemory();
     uint32_t swap[9];
     std::memcpy(swap, state.data() + 4 + gs_len + sizeof(regs), sizeof(swap));
-    std::memcpy(&regs[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], &swap[3], 6 * sizeof(uint32_t));
-    graphics->InvalidateGpuMemory();
     CommandProcessor* base_cp = cp;  // IssueSwap is public on the base class only
-    if (swap[0]) cp->CallInThread([base_cp, swap] { base_cp->IssueSwap(swap[0], swap[1], swap[2]); });
-    return true;
+    // The swap reads fetch constant 0 as it was at that swap; later draws in the saved frame changed it.
+    if (swap[0])
+      cp->CallInThread([base_cp, swap, rv = &regs[0]] {
+        uint32_t now[6];
+        std::memcpy(now, &rv[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], sizeof now);
+        std::memcpy(&rv[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], &swap[3], sizeof now);
+        base_cp->IssueSwap(swap[0], swap[1], swap[2]);
+        std::memcpy(&rv[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], now, sizeof now);
+      });
+    return ok;
   }
   return false;
 }

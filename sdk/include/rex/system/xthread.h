@@ -344,6 +344,8 @@ class XThread : public XObject {
   virtual void Execute();
 
   rex::thread::Fiber* main_fiber() const { return main_fiber_; }
+  // Save points: Save takes running guest threads and Restore runs this in place of guest code.
+  static inline std::function<void(XThread*)> restore_body_;
   void set_main_fiber(rex::thread::Fiber* fiber) { main_fiber_ = fiber; }
 
   void EnterCriticalRegion();

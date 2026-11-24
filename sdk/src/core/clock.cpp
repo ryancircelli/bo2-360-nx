@@ -230,6 +230,15 @@ void Clock::SetGuestSystemTime(uint64_t system_time) {
   guest_system_time_base_ = system_time - guest_system_time_offset;
 }
 
+void Clock::RestoreGuestClock(uint64_t guest_tick_count, uint64_t system_time_base) {
+  std::lock_guard<std::mutex> lock(tick_mutex_);
+  const GuestClockAnchor& anchor = CurrentGuestClockAnchor();
+  guest_clock_anchor_.store(
+      new GuestClockAnchor{Clock::QueryHostTickCount(), guest_tick_count, anchor.numerator, anchor.denominator},
+      std::memory_order_release);
+  guest_system_time_base_ = system_time_base;
+}
+
 uint32_t Clock::ScaleGuestDurationMillis(uint32_t guest_ms) {
   if (REXCVAR_GET(clock_no_scaling)) {
     return guest_ms;

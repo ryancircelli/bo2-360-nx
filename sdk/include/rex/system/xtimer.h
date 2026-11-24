@@ -42,6 +42,9 @@ class XTimer : public XObject {
                     bool resume);
   X_STATUS Cancel();
 
+  bool Save(stream::ByteStream* stream) override;
+  static object_ref<XTimer> Restore(KernelState* kernel_state, stream::ByteStream* stream);
+
  protected:
   rex::thread::WaitHandle* GetWaitHandle() override { return timer_.get(); }
 

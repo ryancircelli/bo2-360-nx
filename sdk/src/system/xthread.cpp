@@ -1526,14 +1526,8 @@ bool XThread::Save(stream::ByteStream* stream) {
 
   REXSYS_DEBUG("XThread {:08X} serializing...", handle());
 
+  // Running threads are saved too: save points carry their host state (stack, registers) separately.
   uint32_t pc = 0;
-  if (running_) {
-    // TODO(tomc): do we need rexglue-compatible thread serialization?
-    //             ideally any previous use for this (multi-dvds) are reworked in recomp to be
-    //             single xex
-    REXSYS_WARN("XThread {:08X} serialization not implemented", handle());
-    return false;
-  }
 
   if (!SaveObject(stream)) {
     return false;
@@ -1599,6 +1593,7 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state, stream::ByteStre
   thread->stack_limit_ = state.stack_limit;
   thread->stack_alloc_base_ = state.stack_alloc_base;
   thread->stack_alloc_size_ = state.stack_alloc_size;
+  thread->guest_thread_ = true;  // only guest threads are saved
 
   // Register now that we know our thread ID.
   kernel_state->RegisterThread(thread);
@@ -1640,9 +1635,13 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state, stream::ByteStre
       // Execute user code.
       thread->running_ = true;
 
-      // TODO(tomc): do we need this? threads would need different restoration approach
-      //             see XThread::Save
-      REXSYS_ERROR("Thread restore not implemented");
+      if (restore_body_) {
+        rex::initialize_seh_thread();
+        thread->main_fiber_ = rex::thread::Fiber::ConvertCurrentThread();
+        restore_body_(thread);  // save points: does not return while the guest runs
+      } else {
+        REXSYS_ERROR("Thread restore not implemented");
+      }
       (void)state;
 
       current_xthread_tls_ = nullptr;

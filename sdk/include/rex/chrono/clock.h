@@ -79,6 +79,8 @@ class Clock {
 
   // Sets the system time of the guest.
   static void SetGuestSystemTime(uint64_t system_time);
+  // Save points: guest ticks continue from guest_tick_count (now), with this system time base.
+  static void RestoreGuestClock(uint64_t guest_tick_count, uint64_t system_time_base);
 
   // Scales a time duration in milliseconds, from guest time.
   static uint32_t ScaleGuestDurationMillis(uint32_t guest_ms);

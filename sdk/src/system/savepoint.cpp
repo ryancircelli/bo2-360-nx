@@ -481,6 +481,8 @@ void Install() {
 std::vector<XThread*> g_held;
 Clock::time_point g_capture_time;
 
+std::function<void()> g_capture_parked_hook;
+
 SavepointStats CaptureInProcessSavepoint() {
   std::set_terminate(SavepointTerminate);
   ::signal(SIGABRT, SavepointAbortSignal);
@@ -598,6 +600,7 @@ SavepointStats CaptureInProcessSavepoint() {
       defer_free::g_active.store(true);
     }
   }
+  if (g_capture_parked_hook) g_capture_parked_hook();  // fresh-load file save: threads still parked
   auto t2 = Clock::now();
   // Bisect switch REX_SAVEPOINT_HOLD=guest|host: keep guest threads (or host XHostThreads) suspended
   // from capture to rewind, so only the other side can change state in between.
@@ -925,6 +928,11 @@ void VisitInProcessSnapshot(
                              const uint8_t* data)>& region) {
   for (auto& h : g_snap.heaps) heap(h.first, h.second);
   for (auto& r : g_snap.regions) region(r.space, r.base, r.size, r.protect, r.data.data());
+}
+
+void VisitInProcessThreads(const std::function<void(XThread*, const arm_thread_state64_t&,
+                                                    const arm_neon_state64_t&, void* ctx)>& fn) {
+  for (auto& t : g_snap.threads) fn(t.thread.get(), t.gp, t.neon, t.ctx);
 }
 
 std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms) {
