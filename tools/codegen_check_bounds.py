@@ -144,7 +144,8 @@ def parse_gen(gen):
                 m = GOTO_RE.match(line)
                 if m:
                     sw[2].append(int(m.group(1), 16))
-    return funcs, errors
+    native = {a for n, a in names.items() if a not in funcs}
+    return funcs, errors, native
 
 
 def regs(ops):
@@ -293,14 +294,14 @@ def decode_targets(img, t, count, func_start):
 
 def check(gen, image, summary, max_show):
     img = Image(image, summary)
-    funcs, errors = parse_gen(gen)
+    funcs, errors, native = parse_gen(gen)
     starts = sorted(funcs)
     ext = {s: (max(funcs[s]["addrs"]) + 4 if funcs[s]["addrs"] else s) for s in starts}
     find = defaultdict(list)
     stats = Counter()
 
     # alignment: every direct branch comment must match the image word
-    bad_align = set()
+    bad_align = {}
     for s in starts:
         for n, (mn, ops) in enumerate(funcs[s]["insns"]):
             if mn.startswith("b") and "0x" in ops:
@@ -309,10 +310,10 @@ def check(gen, image, summary, max_show):
                 want = int(ops.rsplit(",", 1)[-1].strip(), 16)
                 stats["branches"] += 1
                 if w is None or branch_target(w, a) != want:
-                    bad_align.add(s)
+                    bad_align[s] = f"'{mn} {ops}' counted at {a:08X}"
                     break
-    for s in bad_align:
-        find["alignment"].append(f"{s:08X} {funcs[s]['name']}: instruction comments do not line up with the image")
+    for s, why in bad_align.items():
+        find["alignment"].append(f"{s:08X} {funcs[s]['name']}: instruction comments do not line up with the image ({why})")
 
     pd = img.pdata()
     pranges = sorted(pd)
@@ -337,7 +338,7 @@ def check(gen, image, summary, max_show):
         pr = pdata_of(ext[s] - 4)
         if pr and pr[0] + pr[1] == ext[s]:
             continue
-        if mn not in EXITS and not (mn == "tw" and ins[-1][1].startswith("31,")):
+        if mn not in EXITS and not (mn in ("tw", "twi") and ins[-1][1].startswith("31,")):
             find["fall-off"].append(f"{s:08X}-{ext[s]:08X} ends with '{ins[-1][0]} {ins[-1][1]}'")
 
     # .pdata vs generated extents
@@ -362,7 +363,8 @@ def check(gen, image, summary, max_show):
                 i += 1
                 continue
             stop = min(b, nxt)
-            miss += sum(1 for y in range(x, stop, 4) if img.u32(y))
+            # words pointing back into [a, b) are an inline lwzx jump table, not code
+            miss += sum(1 for y in range(x, stop, 4) if img.u32(y) and not a <= img.u32(y) < b)
             x = stop
         return miss
 
@@ -370,7 +372,9 @@ def check(gen, image, summary, max_show):
     pstarts = sorted(set(p[0] for p in pd))
     for begin, size in pd:
         end = begin + size
-        if begin not in funcs:
+        if begin in native:
+            stats["native"] += 1
+        elif begin not in funcs:
             inside = bisect.bisect_right(starts, begin) - 1
             host = starts[inside] if inside >= 0 and ext[starts[inside]] > begin else None
             find["no-func"].append(f"{begin:08X} (+{size:#x})" + (f" inside {host:08X}-{ext[host]:08X}" if host else " uncovered"))
