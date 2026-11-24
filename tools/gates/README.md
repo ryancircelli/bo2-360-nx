@@ -15,6 +15,7 @@ $G speed bo2 --a OLD.app --b NEW.app            # town4 pairs, class perf solo, 
 $G speed bo2 --bench --a OLD.app --b NEW.app     # deterministic bench (apps built from deterministic-bench only; class bench solo, 2+ runs per side, use --pairs 3+)
 $G speed nfsmw --a OLD.app --b NEW.app          # same through the drive route's frame csv (perf.tsv built from it)
 $G install nfsmw --app NEW.app --repo ~/dev/bo2-360-nx-<topic> [--integration origin/nfs-tonight] [--dry-run]
+$G replay BUILD_DIR --repo ~/dev/bo2-360-nx-<topic> [--only a,b]   # picture-regression replay of the saved GPU traces (sdk/tools/gputest/replay-gate); run first for any sdk/src/graphics change
 ```
 GAME = `bo2 nfsmw fh1 nfshp bo1`. `--app` defaults to the installed app in ~/Games/Launchers (runq clones it; it is
 never touched). Everything but `install`/`set`/`speed` is a runq job (class harness, `--class proof|ship` to change), so
