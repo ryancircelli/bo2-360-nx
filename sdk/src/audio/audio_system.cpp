@@ -407,8 +407,6 @@ bool AudioSystem::Restore(stream::ByteStream* stream) {
     client.in_use = true;
 
     auto client_semaphore = client_semaphores_[id].get();
-    auto ret = client_semaphore->Release(queued_frames_, nullptr);
-    assert_true(ret);
 
     AudioDriver* driver = nullptr;
     auto status = CreateDriver(id, client_semaphore, &driver);
@@ -422,6 +420,9 @@ bool AudioSystem::Restore(stream::ByteStream* stream) {
 
     assert_not_null(driver);
     client.driver = driver;
+    // Wake the worker only once the driver exists: it calls the game's callback, which submits to it.
+    auto ret = client_semaphore->Release(queued_frames_, nullptr);
+    assert_true(ret);
   }
 
   return true;

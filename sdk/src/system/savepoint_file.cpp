@@ -20,11 +20,13 @@
 #include <mutex>
 #include <algorithm>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <libunwind.h>
 #include <mach/mach.h>
 #include <pthread.h>
@@ -36,6 +38,7 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/audio/audio_system.h>
 #include <rex/input/input_system.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
@@ -44,10 +47,13 @@
 #include <rex/system/thread_state.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xmemory.h>
+#include <rex/system/xevent.h>
 #include <rex/system/xobject.h>
 
 REXCVAR_DEFINE_STRING(load_savepoint, "", "Test",
                       "Start from this save point file (written by 'savepoint file PATH') instead of booting");
+
+extern "C" uintptr_t __stack_chk_guard;  // libsystem_c, shared by every image in the process
 
 namespace rex::system {
 
@@ -63,7 +69,7 @@ void VisitInProcessSnapshot(
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr char kMagic[8] = {'R', 'E', 'X', 'S', 'P', '2', 0, 0};
-constexpr uint32_t kVersion = 3;
+constexpr uint32_t kVersion = 7;
 constexpr uint64_t kArenaSize = 0x120000000ull;  // virtual + physical guest views (xmemory.cpp)
 constexpr uint32_t kEnd = 0x21444E45;  // "END!"
 
@@ -193,7 +199,10 @@ std::pair<uint64_t, uint64_t> ExeTlsBlock() {
     lc = reinterpret_cast<const load_command*>(reinterpret_cast<const uint8_t*>(lc) + lc->cmdsize);
   }
   if (!first || !size) return {0, 0};
-  uint64_t lo = reinterpret_cast<uint64_t>(first->thunk(first)) - first->offset;
+  // dyld4 keeps other bits above the offset (seen: 0x1170'0000'07C8); the offset itself is the low 32.
+  const uint64_t offset = first->offset & 0xFFFFFFFFull;
+  if (offset >= size) return {0, 0};
+  uint64_t lo = reinterpret_cast<uint64_t>(first->thunk(first)) - offset;
   return {lo, lo + size};
 }
 
@@ -225,6 +234,25 @@ bool InSystemLib(uint64_t pc) {
   Dl_info info{};
   return dladdr(reinterpret_cast<void*>(pc), &info) && info.dli_fname &&
          std::strncmp(info.dli_fname, "/usr/lib/system/", 16) == 0;
+}
+
+// A wait parked between its wake-up and its return may already have taken the object's signal (an auto-reset
+// event resets as the waiter leaves): re-issuing it in the new process would lose that wake. Only a thread still
+// in the kernel wait, or in a yield/sleep where nothing is taken, is safe to re-issue.
+bool StillWaiting(XThread* t, const arm_thread_state64_t& gp) {
+  const uint64_t pc = arm_thread_state64_get_pc(gp);
+  uint32_t insn = 0;
+  if (pc < 4) return false;
+  std::memcpy(&insn, reinterpret_cast<const void*>(pc - 4), 4);
+  if (insn != 0xD4001001u) return false;  // svc #0x80: parked at a syscall
+  const std::string leaf = Sym(pc);
+  if (leaf == "__semwait_signal" || leaf == "mach_wait_until" || leaf == "swtch_pri") return true;
+  if (leaf != "__psynch_cvwait") return false;  // e.g. __psynch_mutexwait after a cond wake: in transit
+  thread_basic_info_data_t info{};
+  mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT;
+  mach_port_t port = pthread_mach_thread_np(reinterpret_cast<pthread_t>(t->thread()->native_handle()));
+  return thread_info(port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &n) == KERN_SUCCESS &&
+         info.run_state == TH_STATE_WAITING;
 }
 
 // Runs with every thread parked. Empty string = ok.
@@ -289,19 +317,32 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
     // only safe while it waits, so the thread must be stopped inside a system library.
     // shortcut: assumes such hooks only wait and then do their work; a hook with effects before its wait
     // would repeat them.
-    const bool hook = in_exe(f[i0 - 1].pc) && InSystemLib(f[0].pc);
-    if (callee.find("HostToGuestFunction") == std::string::npos && !hook)
+    const bool native = in_exe(f[i0 - 1].pc) && InSystemLib(f[0].pc);
+    // C++ (not a (ctx, base) hook) that the game's own native code calls with C++ arguments, e.g. BO2's job waits.
+    const bool cxx_wait = native && callee.rfind("_Z", 0) == 0;
+    if (callee.find("HostToGuestFunction") == std::string::npos && !native)
       return "inside SDK code " + callee + " (called from " + Sym(f[i0].pc) + ")";
     uint64_t bl = f[i0].pc - 4;
     if ((*reinterpret_cast<const uint32_t*>(bl) & 0xFC000000u) != 0x94000000u) return "import not called by bl";
+    if (!cxx_wait && !StillWaiting(t, gp)) return "wait in transit at " + Sym(arm_thread_state64_get_pc(gp));
     rec.blocked = 1;
     rec.gp = at_i0;
     rec.neon = neon_i0;
-    rec.gp.__x[0] = reinterpret_cast<uint64_t>(ctx);
-    rec.gp.__x[1] = reinterpret_cast<uint64_t>(Runtime::instance()->memory()->virtual_membase());
     arm_thread_state64_set_fp(rec.gp, f[i0].fp);
     arm_thread_state64_set_sp(rec.gp, f[i0].sp);
-    arm_thread_state64_set_pc_fptr(rec.gp, reinterpret_cast<void*>(bl));
+    if (cxx_wait) {
+      // Its arguments are gone (caller-saved), so resume just after the call as if the wait returned true:
+      // a spurious wake, which a condition wait's callers re-check.
+      // shortcut: assumes native waits return bool/int "woken" and tolerate spurious wakes (true for BO2's
+      // bo2zm waits); a native call that is not such a wait needs its own rule.
+      rec.blocked = 2;
+      rec.gp.__x[0] = 1;
+      arm_thread_state64_set_pc_fptr(rec.gp, reinterpret_cast<void*>(f[i0].pc));
+    } else {
+      rec.gp.__x[0] = reinterpret_cast<uint64_t>(ctx);
+      rec.gp.__x[1] = reinterpret_cast<uint64_t>(Runtime::instance()->memory()->virtual_membase());
+      arm_thread_state64_set_pc_fptr(rec.gp, reinterpret_cast<void*>(bl));
+    }
     rec.gp.__cpsr = gp.__cpsr;
   } else {
     rec.gp = gp;  // running game code (or a system leaf it called): the exact state
@@ -350,7 +391,9 @@ struct Reloc {
     int64_t delta;
   };
   std::vector<R> r;
+  uint64_t guard_old = 0, guard_new = 0;  // stack-protector canary: random per process, saved in every guarded frame
   uint64_t operator()(uint64_t v) const {
+    if (guard_old && v == guard_old) return guard_new;
     for (auto& x : r)
       if (v >= x.lo && v < x.hi) return uint64_t(int64_t(v) + x.delta);
     return v;
@@ -359,6 +402,37 @@ struct Reloc {
 }  // namespace
 
 namespace {
+// DIAG: what a blocked thread waits on (r3 = the handle or KEVENT the wait import got) and its state.
+void DiagWaitObject(const char* when, uint32_t thread, const ::PPCContext* ctx) {
+  if (!std::getenv("REX_SAVEPOINT_DIAG")) return;
+  const uint32_t h = ctx->r3.u32;
+  auto obj = kernel_state()->object_table()->LookupObject<XObject>(h);
+  uint32_t type = 0xFF, state = 0xFF;
+  if (obj && obj->type() == XObject::Type::Event) static_cast<XEvent*>(obj.get())->Query(&type, &state);
+  std::fprintf(stderr,
+               "[savepoint] %s wait thread %08X r3=%08X r4=%08X r5=%08X obj=%d event type %u state %u primary %08X "
+               "body %08X lr %08X\n",
+               when, thread, h, ctx->r4.u32, ctx->r5.u32, obj ? int(obj->type()) : -1, type, state,
+               obj ? obj->handle() : 0u, obj ? obj->guest_object() : 0u, uint32_t(ctx->lr));
+  // Guest call chain: each frame's back chain at [r1], the caller's saved LR at [back chain - 8].
+  auto* mem = kernel_state()->memory();
+  std::string chain;
+  uint32_t sp = ctx->r1.u32;
+  auto readable = [&](uint32_t a) {
+    auto* heap = mem->LookupHeap(a);
+    memory::HeapAllocationInfo info{};
+    return heap && heap->QueryRegionInfo(a & ~0xFFFu, &info) && (info.state & memory::kMemoryAllocationCommit) &&
+           (info.protect & memory::kMemoryProtectRead);
+  };
+  for (int i = 0; i < 10 && readable(sp); ++i) {
+    uint32_t back = memory::load_and_swap<uint32_t>(mem->TranslateVirtual(sp));
+    if (back <= sp || !readable(back - 8)) break;
+    chain += fmt::format(" {:08X}", memory::load_and_swap<uint32_t>(mem->TranslateVirtual(back - 8)));
+    sp = back;
+  }
+  std::fprintf(stderr, "[savepoint]   chain %08X:%s\n", thread, chain.c_str());
+}
+
 // REX_SAVEPOINT_VERIFY=1: page hashes of live guest memory, written beside the file at save and compared
 // at load just before the threads resume. Finds memory a fresh process does not get back.
 std::vector<std::pair<uint64_t, uint64_t>> PageHashes(memory::Memory* mem) {
@@ -463,6 +537,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
       if (!t->is_guest_thread() || !why.empty()) return;
       ThreadRec rec;
       std::string e = AnalyzeThread(t, gp, neon, ctx, exe, rec);
+      if (e.empty() && rec.blocked == 1) DiagWaitObject("save", t->handle(), static_cast<const ::PPCContext*>(ctx));
       {
         std::lock_guard<std::mutex> l(g_tls_m);
         auto it = g_tls.find(t->handle());
@@ -487,11 +562,15 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
       uint32_t len = uint32_t(bs.offset() - len_at - 4);
       std::memcpy(kernel.data() + len_at, &len, 4);
     }
+    // Audio render clients (host state): their worker calls the game's audio callback every frame.
+    auto* audio = dynamic_cast<rex::audio::AudioSystem*>(Runtime::instance()->audio_system());
+    bs.Write<uint32_t>(audio ? 1 : 0);
+    if (audio) audio->Save(&bs);
     kernel_len = bs.offset();
   };
   SavepointStats st;
   int tries = 0;
-  for (; tries < 8; ++tries) {
+  for (; tries < 40; ++tries) {
     st = CaptureInProcessSavepoint();
     if (!st.ok || why.empty()) break;
     REXSYS_INFO("[savepoint] file save retry: {}", why);
@@ -567,7 +646,10 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   }
   out.U32(uint32_t(gpu_state.size()));
   out.Put(gpu_state.data(), gpu_state.size());
-  uint64_t head[5] = {reinterpret_cast<uint64_t>(mem->virtual_membase()), exe.first, exe.second, ticks, time_base};
+  // head[6]: queued DPCs (the list head is host state, the entries guest memory; a DPC marked queued but not
+  // on the list is never inserted again).
+  uint64_t head[7] = {reinterpret_cast<uint64_t>(mem->virtual_membase()), exe.first, exe.second, ticks, time_base,
+                      uint64_t(__stack_chk_guard), kernel_state()->dpc_list()->head()};
   out.Put(head, sizeof head);
   out.U32(uint32_t(kernel_len));
   out.Put(kernel.data(), kernel_len);
@@ -596,6 +678,67 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   REXSYS_INFO("[savepoint] wrote {}: {}", path, buf);
   return buf;
 }
+
+namespace {
+// REX_SAVEPOINT_DIAG: report host faults outside the guest arena (the SDK's handler owns the arena) with the
+// faulting thread's frames, then hand the signal on. Crash reports are throttled after many crashes.
+struct sigaction g_old_segv, g_old_bus, g_old_abrt;
+uint64_t g_arena_lo = 0, g_arena_hi = 0;
+void DiagPrint(int sig, uint64_t addr, ucontext_t* uc) {
+  auto& ss = uc->uc_mcontext->__ss;
+  std::fprintf(stderr, "[savepoint] FAULT sig %d addr %llx thread %08X pc %llx lr %llx sp %llx fp %llx\n", sig,
+               (unsigned long long)addr, XThread::IsInThread() ? XThread::GetCurrentThreadHandle() : 0u,
+               (unsigned long long)arm_thread_state64_get_pc(ss), (unsigned long long)arm_thread_state64_get_lr(ss),
+               (unsigned long long)arm_thread_state64_get_sp(ss), (unsigned long long)arm_thread_state64_get_fp(ss));
+  for (int r = 19; r <= 28; ++r) std::fprintf(stderr, " x%d=%llx", r, (unsigned long long)ss.__x[r]);
+  std::fprintf(stderr, "\n");
+  std::fflush(stderr);
+  // Walk only inside this thread's own stack: a bad fp must not fault again in here (that kills silently).
+  const uint64_t hi = uint64_t(pthread_get_stackaddr_np(pthread_self()));
+  const uint64_t lo = hi - pthread_get_stacksize_np(pthread_self());
+  uint64_t pcs[24] = {arm_thread_state64_get_pc(ss), arm_thread_state64_get_lr(ss)};
+  int n = 2;
+  for (uint64_t fp = arm_thread_state64_get_fp(ss); n < 24 && fp >= lo && fp + 16 <= hi && !(fp & 7);
+       fp = *reinterpret_cast<uint64_t*>(fp))
+    pcs[n++] = reinterpret_cast<uint64_t*>(fp)[1];
+  for (int i = 0; i < n; ++i) {
+    Dl_info di{};
+    dladdr(reinterpret_cast<void*>(pcs[i]), &di);
+    std::fprintf(stderr, "[savepoint]   %d %llx %s+%llx\n", i, (unsigned long long)pcs[i],
+                 di.dli_sname ? di.dli_sname : "?",
+                 (unsigned long long)(pcs[i] - uint64_t(di.dli_saddr ? di.dli_saddr : 0)));
+  }
+  std::fflush(stderr);
+}
+void DiagFault(int sig, siginfo_t* si, void* uc_v) {
+  auto* uc = static_cast<ucontext_t*>(uc_v);
+  uint64_t addr = uint64_t(si->si_addr);
+  const bool arena = addr >= g_arena_lo && addr < g_arena_hi;
+  if (!arena) DiagPrint(sig, addr, uc);
+  auto& old = sig == SIGBUS ? g_old_bus : sig == SIGABRT ? g_old_abrt : g_old_segv;
+  if (old.sa_flags & SA_SIGINFO) old.sa_sigaction(sig, si, uc_v);
+  else if (old.sa_handler != SIG_DFL && old.sa_handler != SIG_IGN) old.sa_handler(sig);
+  else {
+    signal(sig, SIG_DFL);
+    raise(sig);
+    return;
+  }
+  // The SDK handler resets the signal to the default when it could not resolve the fault (the retry then dies).
+  struct sigaction now{};
+  sigaction(sig, nullptr, &now);
+  if (arena && !(now.sa_flags & SA_SIGINFO) && now.sa_handler == SIG_DFL) DiagPrint(sig, addr, uc);
+}
+void InstallDiagFaultHandler(memory::Memory* mem) {
+  g_arena_lo = uint64_t(mem->virtual_membase());
+  g_arena_hi = g_arena_lo + 0x200000000ull;
+  struct sigaction sa{};
+  sa.sa_sigaction = DiagFault;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigaction(SIGSEGV, &sa, &g_old_segv);
+  sigaction(SIGBUS, &sa, &g_old_bus);
+  sigaction(SIGABRT, &sa, &g_old_abrt);
+}
+}  // namespace
 
 bool LoadSavepointFile(const std::string& path) {
   auto t0 = Clock::now();
@@ -633,6 +776,7 @@ bool LoadSavepointFile(const std::string& path) {
 
   if (std::getenv("REX_SAVEPOINT_OBJS")) LogObjects("load-boot");
   auto* mem = Runtime::instance()->memory();
+  if (std::getenv("REX_SAVEPOINT_DIAG")) InstallDiagFaultHandler(mem);
   // This process's function tables hold its own host pointers; keep them over the restored bytes.
   std::vector<std::pair<uint32_t, std::vector<uint8_t>>> tables;
   for (auto [base, size] : mem->FunctionTableRanges()) {
@@ -712,7 +856,7 @@ bool LoadSavepointFile(const std::string& path) {
 
   std::vector<uint8_t> gpu_state(in.U32()), unused;
   if (auto* s = in.Take(gpu_state.size())) std::memcpy(gpu_state.data(), s, gpu_state.size());
-  uint64_t head[5] = {};
+  uint64_t head[7] = {};
   if (auto* h = in.Take(sizeof head)) std::memcpy(head, h, sizeof head);
   std::vector<uint8_t> kernel(in.U32());
   if (auto* k = in.Take(kernel.size())) std::memcpy(kernel.data(), k, kernel.size());
@@ -741,6 +885,8 @@ bool LoadSavepointFile(const std::string& path) {
     }
   }
   chrono::Clock::RestoreGuestClock(head[3], head[4]);
+  kernel_state()->dpc_list()->set_head(uint32_t(head[6]));
+  if (std::getenv("REX_SAVEPOINT_DIAG")) std::fprintf(stderr, "[savepoint] dpc list head %08X\n", uint32_t(head[6]));
   input::RebaseVirtualPadScripts();  // pad scripts count from the load, as they count from boot otherwise
 
   // Kernel objects, keeping the ones this boot already made (same handles: boot is deterministic).
@@ -762,6 +908,10 @@ bool LoadSavepointFile(const std::string& path) {
         if (threads_handles[i] == t->handle()) pk = g_parked[i].get();
     }
     if (!pk) return;
+    if (std::getenv("REX_SAVEPOINT_DIAG")) {  // fault reports even when the restored sp is bad
+      stack_t alt{std::malloc(1 << 16), 1 << 16, 0};
+      sigaltstack(&alt, nullptr);
+    }
     pk->port = mach_thread_self();
     pk->tls = ExeTlsBlock();
     pk->fp = reinterpret_cast<uint64_t>(__builtin_frame_address(0));
@@ -791,6 +941,13 @@ bool LoadSavepointFile(const std::string& path) {
     }
     kbs.set_offset(start + len);
     ++restored_objects;
+  }
+  if (kbs.Read<uint32_t>()) {
+    auto* audio = dynamic_cast<rex::audio::AudioSystem*>(Runtime::instance()->audio_system());
+    if (!audio || !audio->Restore(&kbs)) {
+      REXSYS_ERROR("[savepoint] load: audio clients restore failed");
+      return false;
+    }
   }
 
   verify_words("after objects");
@@ -823,6 +980,7 @@ bool LoadSavepointFile(const std::string& path) {
     }
     auto* ctx = t->thread_state()->context();
     std::memcpy(ctx, rec.ctx_bytes.data(), sizeof(::PPCContext));
+    if (rec.blocked == 1) DiagWaitObject("load", rec.handle, ctx);
     const uint64_t new_top = (g_parked[i]->fp - 65536) & ~15ull;
     const int64_t sd = int64_t(new_top - rec.band_top);
     // Not the executable range: guest 64-bit sums (sign-extended lis + zero-extended lwz) land at 0x1_0xxxxxxx,
@@ -838,6 +996,7 @@ bool LoadSavepointFile(const std::string& path) {
               {rec.tls_lo, rec.tls_hi, int64_t(ntls.first - rec.tls_lo)},
               {head[0], head[0] + kArenaSize, int64_t(membase - head[0])},
               {rec.ctx, rec.ctx + sizeof(::PPCContext), int64_t(reinterpret_cast<uint64_t>(ctx) - rec.ctx)}}};
+    rl.guard_old = head[5], rl.guard_new = uint64_t(__stack_chk_guard);
     Reloc code{{{head[1], head[2], int64_t(exe.first - head[1])}}};
     mach_port_t port = g_parked[i]->port;
     if (thread_suspend(port) != KERN_SUCCESS) return false;
@@ -865,6 +1024,11 @@ bool LoadSavepointFile(const std::string& path) {
     record[1] = reinterpret_cast<uint64_t>(&rex_sp_landing);
     arm_thread_state64_t gp = rec.gp;
     for (int r = 0; r < 29; ++r) gp.__x[r] = rl(gp.__x[r]);
+    // Resumed inside native C++ (blocked 2): its callee-saved registers hold pointers to the executable's globals.
+    // shortcut: only x19-x28 are moved, not exe pointers the native frame spilled to its stack; recompiled
+    // frames never get this (their 64-bit guest sums share the 0x1_0xxxxxxx range).
+    if (rec.blocked == 2)
+      for (int r = 19; r <= 28; ++r) gp.__x[r] = code(gp.__x[r]);
     arm_thread_state64_set_fp(gp, rl(arm_thread_state64_get_fp(rec.gp)));
     arm_thread_state64_set_sp(gp, rl(arm_thread_state64_get_sp(rec.gp)));
     arm_thread_state64_set_lr_fptr(gp, reinterpret_cast<void*>(code(arm_thread_state64_get_lr(rec.gp))));
@@ -878,8 +1042,13 @@ bool LoadSavepointFile(const std::string& path) {
       Dl_info di{};
       dladdr(reinterpret_cast<void*>(arm_thread_state64_get_pc(gp)), &di);
       std::fprintf(stderr, "[savepoint] thread %s %s pc %llx (%s) band %zu KB, %u return addresses moved%s\n", hex,
-                   rec.blocked ? "blocked" : "running", (unsigned long long)arm_thread_state64_get_pc(gp),
+                   rec.blocked == 2 ? "woken" : rec.blocked ? "blocked" : "running", (unsigned long long)arm_thread_state64_get_pc(gp),
                    di.dli_sname ? di.dli_sname : "?", rec.band.size() >> 10, moved_returns, resume ? "" : ", left parked");
+      std::fprintf(stderr, "[savepoint]   tls old %llx-%llx new %llx-%llx; x19-x28 old/new:", (unsigned long long)rec.tls_lo,
+                   (unsigned long long)rec.tls_hi, (unsigned long long)ntls.first, (unsigned long long)ntls.second);
+      for (int r = 19; r <= 28; ++r)
+        std::fprintf(stderr, " %llx/%llx", (unsigned long long)rec.gp.__x[r], (unsigned long long)gp.__x[r]);
+      std::fprintf(stderr, "\n");
     }
     if (!resume) continue;  // still suspended, spinning in its park frame when resumed
     if (thread_set_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&gp), ARM_THREAD_STATE64_COUNT) !=
@@ -895,6 +1064,18 @@ bool LoadSavepointFile(const std::string& path) {
               "{:.1f} ms, total {:.1f} ms",
               path, frame, bytes >> 20, region_count, restored_objects, threads.size(), Ms(t0, t1),
               Ms(t0, Clock::now()));
+  if (std::getenv("REX_SAVEPOINT_DIAG")) {
+    // What every guest thread is doing 15 s on: a blocked import keeps its arguments in the context.
+    std::thread([] {
+      std::this_thread::sleep_for(std::chrono::seconds(15));
+      for (auto& o : kernel_state()->object_table()->GetAllObjects()) {
+        if (o->type() != XObject::Type::Thread) continue;
+        auto* t = static_cast<XThread*>(o.get());
+        if (!t->is_guest_thread() || !t->thread_state()) continue;
+        DiagWaitObject("after 15 s", t->handle(), t->thread_state()->context());
+      }
+    }).detach();
+  }
   return true;
 }
 

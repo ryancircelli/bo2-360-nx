@@ -11,6 +11,9 @@
 
 #include <rex/graphics/graphics_system.h>
 
+#include <atomic>
+#include <cstdlib>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -312,6 +315,11 @@ void GraphicsSystem::SetInterruptCallback(uint32_t callback, uint32_t user_data)
 }
 
 void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
+  static std::atomic<uint32_t> traced{0};  // REX_TRACE_EVENT diagnosis: the first few interrupts
+  if (std::getenv("REX_TRACE_EVENT") && traced.fetch_add(1) < 3) {
+    REXGPU_INFO("[trace-event] interrupt source {} callback {:08X} data {:08X}", source, interrupt_callback_,
+                interrupt_callback_data_);
+  }
   if (!interrupt_callback_) {
     return;
   }

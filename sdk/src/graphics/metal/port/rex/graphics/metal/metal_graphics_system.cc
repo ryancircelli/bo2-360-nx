@@ -209,6 +209,13 @@ void MetalGraphicsSystem::StartPhaseLockedVblankWorker() {
           }
           const int64_t interval_ticks = vsync ? vsync_interval_ticks : no_vsync_interval_ticks;
           int64_t current_time = int64_t(chrono::Clock::QueryGuestTickCount());
+          // The guest clock moved under the schedule (a save point load restores it): start again from now
+          // rather than stall until it catches up or fire every vblank of the gap at once.
+          if (current_time < last_frame_time || current_time - last_frame_time > int64_t(ticks_per_second)) {
+            REXLOG_INFO("[vsync-lock] guest clock jumped {} ticks; vblank schedule restarted",
+                        current_time - last_frame_time);
+            last_frame_time = current_time - interval_ticks;
+          }
           while (current_time - last_frame_time >= interval_ticks) {
             const double before = vsync_lock::NowSeconds();
             MarkVblank();

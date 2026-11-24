@@ -12,6 +12,19 @@
 #include <rex/logging.h>
 #include <rex/stream.h>
 #include <rex/system/xevent.h>
+#include <rex/system/xthread.h>
+#include <rex/system/thread_state.h>
+
+#include <chrono>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <cstdio>
+#include <map>
+#include <tuple>
+#include <mutex>
+#include <string>
+#include <cstdlib>
+#include <cstring>
 
 namespace rex::system {
 
@@ -73,12 +86,70 @@ void XEvent::Query(uint32_t* out_type, uint32_t* out_state) {
   }
 }
 
+namespace {
+// REX_TRACE_EVENT=F8000058: log who sets or pulses that event (thread handle, guest lr). Diagnosis only.
+void TraceEvent(const XEvent* e, const char* what) {
+  static const char* list = std::getenv("REX_TRACE_EVENT");  // comma-separated hex handles, or * for counts
+  if (!list) return;
+  if (list[0] == '*') {  // count sets per (event, guest caller); dump every 10 s
+    static std::mutex m;
+    static std::map<std::string, uint32_t> counts;
+    static std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::string> callers;  // backtrace once per key
+    static auto last = std::chrono::steady_clock::now();
+    auto* t = XThread::IsInThread() ? XThread::GetCurrentThread() : nullptr;
+    const auto key = std::make_tuple(e->handle(), t ? t->handle() : 0u,
+                                     t ? uint32_t(t->thread_state()->context()->lr) : 0u);
+    std::string caller;
+    {
+      std::lock_guard<std::mutex> l(m);
+      auto it = callers.find(key);
+      if (it != callers.end()) caller = it->second;
+    }
+    if (caller.empty()) {
+      // The second recompiled game function up the host stack (the first is the game's NtSetEvent wrapper).
+      void* frames[24];
+      int n = ::backtrace(frames, 24), games = 0;
+      caller = "?";
+      for (int i = 0; i < n; ++i) {
+        Dl_info di{};
+        if (!dladdr(frames[i], &di) || !di.dli_sname || std::strncmp(di.dli_sname, "__imp__sub_", 11) != 0) continue;
+        if (++games == 2) {
+          caller = di.dli_sname + 7;
+          break;
+        }
+      }
+      std::lock_guard<std::mutex> l(m);
+      callers[key] = caller;
+    }
+    std::lock_guard<std::mutex> l(m);
+    ++counts[fmt::format("{:08X}/{:08X}/{}", e->handle(), t ? t->handle() : 0u, caller)];
+    auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::seconds(10)) return;
+    last = now;
+    std::string line;
+    for (auto& [k, n] : counts) line += fmt::format(" {}x{}", k, n);
+    REXSYS_INFO("[trace-event] counts{}", line);
+    counts.clear();
+    return;
+  }
+  char hex[16];
+  std::snprintf(hex, sizeof hex, "%08X", e->handle());
+  if (!std::strstr(list, hex)) return;
+  const uint32_t traced = e->handle();
+  auto* t = XThread::IsInThread() ? XThread::GetCurrentThread() : nullptr;
+  REXSYS_INFO("[trace-event] {} {:08X} by thread {:08X} lr {:08X}", what, traced, t ? t->handle() : 0u,
+              t ? uint32_t(t->thread_state()->context()->lr) : 0u);
+}
+}  // namespace
+
 int32_t XEvent::Set(uint32_t priority_increment, bool wait) {
+  TraceEvent(this, "set");
   event_->Set();
   return 1;
 }
 
 int32_t XEvent::Pulse(uint32_t priority_increment, bool wait) {
+  TraceEvent(this, "pulse");
   event_->Pulse();
   return 1;
 }
