@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <rex/thread.h>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -293,7 +294,7 @@ void SDLAudioDriver::Pump() {
 #if defined(__APPLE__)
       std::this_thread::sleep_until(deadline);
 #else
-      std::this_thread::yield();  // no sleep: on Windows it can overshoot by several ms
+      rex::thread::MaybeYield();  // no sleep: on Windows it can overshoot by several ms
 #endif
       continue;
     }

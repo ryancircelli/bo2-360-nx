@@ -55,3 +55,8 @@ add_executable(log_sink_tests logging/log_sink_test.cpp)
 target_include_directories(log_sink_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(log_sink_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME log_sink_tests COMMAND log_sink_tests)
+
+add_executable(bench_clock_tests core/bench_clock_test.cpp)
+target_include_directories(bench_clock_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(bench_clock_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME bench_clock_tests COMMAND bench_clock_tests)

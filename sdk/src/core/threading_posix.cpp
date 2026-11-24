@@ -292,6 +292,7 @@ uint32_t current_thread_system_id() {
 }
 
 void MaybeYield() {
+  SpinScope spin;
   sched_yield();
   __sync_synchronize();
 }
@@ -360,6 +361,7 @@ bool CriticalSleepUntil(std::chrono::steady_clock::time_point deadline) {
 #endif
 
 void Sleep(std::chrono::microseconds duration) {
+  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
 #if defined(__APPLE__)
   if (duration.count() > 0 && PreciseSleepEnabled() &&
       CriticalSleepUntil(std::chrono::steady_clock::now() + duration)) {
@@ -1309,7 +1311,7 @@ class PosixConditionBase {
                                           std::chrono::microseconds(100));
         std::this_thread::sleep_for(pause);
 #else
-        std::this_thread::yield();
+        MaybeYield();
 #endif
         continue;
       }
@@ -2256,6 +2258,7 @@ PosixConditionHandle<Thread>::PosixConditionHandle(pthread_t thread) : handle_(t
 
 #if REX_FAST_WAITS
 WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
+  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
@@ -2289,6 +2292,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
 std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wait_handle_count,
                                            bool wait_all, bool is_alertable,
                                            std::chrono::milliseconds timeout) {
+  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
   if (wait_handle_count == 0) {
     return std::make_pair(WaitResult::kFailed, 0);
   }
@@ -2316,6 +2320,7 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
 }
 #else  // !REX_FAST_WAITS
 WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
+  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
@@ -2377,6 +2382,7 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
 std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wait_handle_count,
                                            bool wait_all, bool is_alertable,
                                            std::chrono::milliseconds timeout) {
+  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
   std::vector<PosixConditionBase*> conditions;
   conditions.reserve(wait_handle_count);
   for (size_t i = 0u; i < wait_handle_count; ++i) {

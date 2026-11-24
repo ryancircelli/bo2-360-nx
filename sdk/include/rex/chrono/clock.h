@@ -20,6 +20,7 @@
 REXCVAR_DECLARE(bool, clock_no_scaling);
 REXCVAR_DECLARE(double, guest_time_scale);
 REXCVAR_DECLARE(bool, clock_source_raw);
+REXCVAR_DECLARE(double, clock_frame_lock_hz);
 
 #if REX_ARCH_AMD64
 // Raw clock source requires platform-specific implementation
@@ -76,6 +77,14 @@ class Clock {
   static uint64_t QueryGuestSystemTime();
   // Queries the milliseconds since the guest began, accounting for scaling.
   static uint32_t QueryGuestUptimeMillis();
+
+  // Deterministic benchmark (clock_frame_lock_hz): the guest presented a frame; guest time steps one frame.
+  // A no-op with the lock off. Call from one thread only (the swap).
+  static void OnGuestFrame();
+  static bool frame_locked();
+  static uint64_t frame_lock_frames();
+  // Frames that took longer than clock_frame_lock_stall_ms (guest time ran with wall time in them).
+  static uint64_t frame_lock_stalls();
 
   // Sets the system time of the guest.
   static void SetGuestSystemTime(uint64_t system_time);

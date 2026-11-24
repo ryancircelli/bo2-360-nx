@@ -26,6 +26,8 @@
 #include <rex/cvar.h>
 #include <rex/graphics/metal_runtime.h>
 #include <rex/logging.h>
+#include <rex/chrono/clock.h>
+#include <rex/system/bench.h>
 #include <rex/system/xthread.h>
 
 #include "bo2zm_cheats.h"
@@ -253,6 +255,11 @@ Clock::time_point g_earlier{};
 bool g_summarized = false;
 
 int64_t Now() {
+  // Deterministic benchmark (clock_frame_lock_hz): the route follows guest time, so it is keyed to frames.
+  if (rex::chrono::Clock::frame_locked()) {
+    return int64_t(double(rex::chrono::Clock::QueryGuestTickCount()) * 1e9 /
+                   double(rex::chrono::Clock::guest_tick_frequency()));
+  }
   return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
 }
 
@@ -885,6 +892,7 @@ void AnnotateFrame() {
     g_earlier = now;
     return;
   }
+  rex::bench::Arm("benchmark route start");  // bench_frames: the window starts with the route (first call only)
   if (t >= Duration()) {
     g_summarized = true;
     bo2zm::perf_log::Event("route_end");  // the end of perf_summary.py's window

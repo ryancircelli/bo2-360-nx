@@ -1,0 +1,138 @@
+--- runq.bak-detbench-11231945	2026-11-23 19:45:02
++++ runq	2026-11-23 19:45:02
+@@ -409,6 +409,31 @@
+     except Exception:
+         return out
+     return out
++
++
++def read_bench(run_dir):
++    """The deterministic bench's result (SDK bench_frames): the last '[bench] json' line of the game log, per frame.
++    work = instructions minus spin (yields, sleeps, waits, critical-section spin), the figure that compares builds."""
++    try:
++        line = None
++        with open(os.path.join(run_dir, 'game.log'), errors='replace') as f:
++            for l in f:
++                if '[bench] json ' in l:
++                    line = l
++        if not line:
++            return None
++        j = json.loads(line.split('[bench] json ', 1)[1])
++        n = j['frames']
++        spin = j.get('spin_instr', 0)
++        th = sorted(j.get('threads', []), key=lambda t: -(t['instr'] - t.get('spin_instr', 0)))
++        return {'frames': n, 'fps': j['fps'], 'stall_frames': j.get('stall_frames'), 'frame_lock_hz': j.get('frame_lock_hz'),
++                'instr_m_per_frame': round(j['instr'] / n / 1e6, 3), 'spin_m_per_frame': round(spin / n / 1e6, 3),
++                'work_m_per_frame': round((j['instr'] - spin) / n / 1e6, 3),
++                'cpu_ms_per_frame': round(j['cpu_ms'] / n, 3), 'gpu_ms_per_frame': round(j['gpu_ms'] / n, 4),
++                'threads': [{'name': t['name'], 'work_m': round((t['instr'] - t.get('spin_instr', 0)) / n / 1e6, 3),
++                             'spin_m': round(t.get('spin_instr', 0) / n / 1e6, 3)} for t in th[:16]]}
++    except (OSError, ValueError, KeyError, ZeroDivisionError):
++        return None
+ 
+ 
+ def read_perf_frames(run_dir):
+@@ -2099,6 +2124,9 @@
+                     res['work'] = wpf
+             except Exception as e:
+                 res['work_error'] = repr(e) + ' ' + traceback.format_exc().strip().splitlines()[-2].strip()
++        bench = read_bench(run)
++        if bench:
++            res['bench'] = bench
+         gauges = None
+         if meter:
+             res['outside'] = meter['obj'].summary()
+@@ -2167,6 +2195,8 @@
+                    f'hot {int(res["outside"]["hot_s"])} s)' if res.get('outside') and res['outside'].get('mean_cores') is not None else '')
+                 + (f' work {res["work"]["instr_m_per_frame"]} Minstr/frame {res["work"]["cpu_ms_per_frame"]} cpu-ms/frame '
+                    f'P {res["work"]["p_time_share"]} gpu {res["work"].get("gpu_ms_per_frame")} ms/frame' if res.get('work') else '')
++                + (f' bench {res["bench"]["work_m_per_frame"]} Mwork/frame (spin {res["bench"]["spin_m_per_frame"]}) '
++                   f'gpu {res["bench"]["gpu_ms_per_frame"]} ms/frame stalls {res["bench"]["stall_frames"]}' if res.get('bench') else '')
+                 + (f' scene {extra.get("verdict")}' if extra else '') + (f' ({note})' if note else ''))
+         with open(os.path.join(out, 'result.txt'), 'w') as f:
+             f.write(line + '\n')
+@@ -2490,7 +2520,7 @@
+ 
+ 
+ # ------------------------------------------------------------------ scheduling
+-CLASSES = {'ship': 0, 'harness': 1, 'proof': 2, 'sweep': 3, 'perf': 4}
++CLASSES = {'ship': 0, 'harness': 1, 'proof': 2, 'sweep': 3, 'perf': 4, 'bench': 5}
+ CLASS_NAMES = {v: k for k, v in CLASSES.items()}
+ 
+ 
+@@ -2699,6 +2729,8 @@
+     benchmarks (BENCHMARK true in the route or scene), or --measured. Other games only need builds kept at run_cap."""
+     if j.get('measured') is not None:
+         return bool(j['measured'])
++    if job_class(j) == CLASSES['bench'] and not j.get('solo'):
++        return False   # deterministic bench (frame-locked clock): its result does not depend on load, builds keep running
+     if is_solo(j):
+         return True
+     try:
+@@ -2815,7 +2847,7 @@
+     ap.add_argument('--name')
+     ap.add_argument('--out')
+     ap.add_argument('--priority', action='store_true', help='= --class ship')
+-    ap.add_argument('--class', dest='klass', help='ship, harness, proof, sweep (default), perf, or a number')
++    ap.add_argument('--class', dest='klass', help='ship, harness, proof, sweep (default), perf, bench (deterministic bench, runs beside games and builds), or a number')
+     ap.add_argument('--owner', help='fair-share owner (default $RUNQ_OWNER, else the name up to its first -)')
+     ap.add_argument('--solo', action='store_true', default=None,
+                     help='run with no other game on the machine (default for class perf); for FPS numbers and '
+--- abverdict.py.bak-detbench-11231945	2026-11-23 19:45:02
++++ abverdict.py	2026-11-23 19:45:27
+@@ -4,7 +4,10 @@
+ Each OUT is a runq --out dir (reads OUT/run/perf.tsv). Runs whose 60 s bins collapse
+ (min bin < 60% of run median) or that runq marked invalid in result.json (contention, throttling, game stopped) must be rerun.
+ Verdict after each pair: FASTER/SLOWER when |delta| > z*se, SAME when the 95% CI sits
+-inside +-min-effect, else MORE (run another pair, up to --max-pairs)."""
++inside +-min-effect, else MORE (run another pair, up to --max-pairs).
++--bench: deterministic bench runs (runq class bench, SDK bench_frames + clock_frame_lock_hz; may run concurrently and
++beside builds). Compares result.json bench.work_m_per_frame (CPU instructions minus spin per frame, lower = faster) and
++bench.gpu_ms_per_frame, each with Welch statistics over the N runs per side (>= 2 each; noise comes from the runs)."""
+ import argparse,json,os,statistics as st,math,sys
+ SIGMA={'town4':0.004,'splitscreen4':0.0075,'splitscreen4-long':0.01}  # same-build run-to-run CV measured 11-10..11-15
+ def route_of(out):
+@@ -47,11 +50,43 @@
+     if abs(d)>z*se: return ('FASTER' if d>0 else 'SLOWER'),d,se
+     if abs(d)+1.96*se<eff: return 'SAME',d,se
+     return 'MORE',d,se
++def bench_of(out):
++    try: j=json.load(open(os.path.join(out,'result.json')))
++    except (OSError,ValueError): return None,'no result.json'
++    b=j.get('bench')
++    if not b: return None,'no bench result (window not reached?)'
++    if j.get('status') not in ('done',None): return None,'runq status '+str(j.get('status'))
++    if b.get('stall_frames') and b['stall_frames']>0.01*b['frames']: return None,'%d stall frames (guest clock ran on wall time)'%b['stall_frames']
++    return b,None
++def bench_verdict(a,b,eff,z=2.5):
++    """a, b: per-run costs (lower = faster). Welch se of the relative difference; FASTER/SLOWER/SAME/MORE."""
++    ma,mb=st.mean(a),st.mean(b); d=ma/mb-1   # >0: B costs less = faster
++    se=math.sqrt(st.variance(a)/len(a)+st.variance(b)/len(b))/mb
++    if abs(d)>z*se and abs(d)>0.002: return ('FASTER' if d>0 else 'SLOWER'),d,se
++    if abs(d)+1.96*se<eff: return 'SAME',d,se
++    return 'MORE',d,se
++def main_bench(o):
++    S={'A':[],'B':[]}
++    for side,lst in (('A',o.a),('B',o.b)):
++        for out in lst:
++            b,bad=bench_of(out)
++            print(side,out,('work %.1f M/frame spin %.1f gpu %.3f ms/frame fps %.1f'%(b['work_m_per_frame'],b['spin_m_per_frame'],b['gpu_ms_per_frame'],b['fps'])) if b else '-',('INVALID: '+bad) if bad else 'ok')
++            if b: S[side].append(b)
++    if len(S['A'])<2 or len(S['B'])<2: print('VERDICT RERUN (need >= 2 valid bench runs per side)'); return 2
++    worst=0
++    for key,lab in (('work_m_per_frame','CPU work'),('gpu_ms_per_frame','GPU time')):
++        a=[x[key] for x in S['A']]; b=[x[key] for x in S['B']]
++        v,d,se=bench_verdict(a,b,o.min_effect)
++        print('%s: A %.2f (cv %.2f%%) B %.2f (cv %.2f%%) -> %s delta %+.2f%% se %.2f%%'%(lab,st.mean(a),100*st.stdev(a)/st.mean(a),st.mean(b),100*st.stdev(b)/st.mean(b),v,100*d,100*se))
++        worst=max(worst,3 if v=='MORE' else 0)
++    return worst
+ if __name__=='__main__':
+     ap=argparse.ArgumentParser(); ap.add_argument('--a',nargs='+',required=True); ap.add_argument('--b',nargs='+',required=True)
+     ap.add_argument('--sigma',type=float,default=None); ap.add_argument('--min-effect',type=float,default=0.015)
+     ap.add_argument('--max-pairs',type=int,default=3); ap.add_argument('--skip',type=float,default=60)
++    ap.add_argument('--bench',action='store_true',help='deterministic bench runs: CPU work and GPU time, statistics over N runs')
+     o=ap.parse_args(); A=[];B=[]
++    if o.bench: sys.exit(main_bench(o))
+     for side,lst,acc in (('A',o.a,A),('B',o.b,B)):
+         for out in lst:
+             f,bad=load(out,o.skip); print(side,out,'%.2f'%f if f else '-',('INVALID: '+bad) if bad else 'ok')

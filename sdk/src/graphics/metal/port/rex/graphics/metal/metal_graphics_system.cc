@@ -134,7 +134,7 @@ void MetalGraphicsSystem::StartPhaseLockedVblankWorker() {
         while (vsync_worker_running_) {
           const bool vsync = REXCVAR_GET(vsync);
           const double scalar = chrono::Clock::guest_time_scalar();
-          const bool scaled = std::fabs(scalar - 1.0) > 1e-6;
+          const bool scaled = std::fabs(scalar - 1.0) > 1e-6 || chrono::Clock::frame_locked();  // no display phase lock
           vsync_lock::SetSuspended(scaled || !vsync);
           const double ticks_per_second = double(guest_tick_frequency) * scalar;
           const int64_t correction_ns = vsync_lock::TakeCorrectionNs();
