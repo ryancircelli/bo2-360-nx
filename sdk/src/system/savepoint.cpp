@@ -780,7 +780,8 @@ SavepointStats RewindToInProcessSavepoint() {
   uint32_t restored = 0, not_parked = 0, detach_failed = 0, in_syscall = 0;
   const bool two_phase = std::getenv("REX_SAVEPOINT_ONE_PHASE") == nullptr;
   const char* sysmode = std::getenv("REX_SAVEPOINT_SYSCALL");
-  const bool syscall_eintr = sysmode && std::strcmp(sysmode, "eintr") == 0;
+  // Default EINTR: restarting a captured cv wait reuses a stale sequence and fails with EINVAL (r19).
+  const bool syscall_eintr = !(sysmode && std::strcmp(sysmode, "restart") == 0);
   for (auto& ts : g_snap.threads) {
     if (std::find(parked.begin(), parked.end(), ts.thread.get()) == parked.end()) {
       ++not_parked;
