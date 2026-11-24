@@ -692,6 +692,16 @@ u32 XeKeysConsolePrivateKeySign_entry(mapped_void hash, mapped_void signature) {
   return 0;  // Success
 }
 
+// Fixed fake console id (same values as xenia-canary); we have no key vault.
+u32 XeKeysGetConsoleID_entry(mapped_void raw_bytes, mapped_void hex_string) {
+  if (raw_bytes) {
+    static const uint8_t kId[5] = {0x93, 0x01, 0x64, 0xE6, 0x07};
+    std::memcpy(raw_bytes.as<uint8_t*>(), kId, sizeof(kId));
+  }
+  if (hex_string) std::memcpy(hex_string.as<char*>(), "245149100000", 12);
+  return X_STATUS_SUCCESS;
+}
+
 u32 XeKeysConsoleSignatureVerification_entry(mapped_void hash, mapped_void signature,
                                              mapped_void pubkey) {
   REXKRNL_DEBUG("XeKeysConsoleSignatureVerification - stub");
@@ -754,7 +764,7 @@ REX_EXPORT_STUB(__imp__XeKeysSetKey);
 REX_EXPORT_STUB(__imp__XeKeysGenerateRandomKey);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysGetKey, 0xC0000001);
 REX_EXPORT_STUB(__imp__XeKeysGetDigest);
-REX_EXPORT_STUB_RETURN(__imp__XeKeysGetConsoleID, 0xC0000001);
+REX_EXPORT(__imp__XeKeysGetConsoleID, rex::kernel::xboxkrnl::XeKeysGetConsoleID_entry)
 REX_EXPORT_STUB(__imp__XeKeysGetConsoleType);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysQwNeRsaPrvCrypt, 0);
 REX_EXPORT_STUB(__imp__XeKeysAesCbc);
