@@ -14,6 +14,7 @@ set(CODEGEN_CORE_SOURCES
     function_graph.cpp
     function_scanner.cpp
     sig_scanner.cpp
+    xdk_signatures.cpp
     vtable_scanner.cpp
     binary_view.cpp
     instruction_dispatch.cpp
