@@ -3719,7 +3719,7 @@ def ccache_configure(cmd):
     1. /tmp/ paths become /private/tmp/: ninja runs in the physical dir and ccache's base_dir rewrite only gives the same relative
        paths in every worktree when no /tmp spelling appears anywhere. 2. the ccache launcher goes in as the compiler launcher.
     Skipped for --build, -E, -P, build dirs that already have a CMakeCache.txt (adding a launcher would rebuild them from scratch),
-    explicit launchers, and BUILDQ_NO_CCACHE=1. Stats: ~/Games/Xbox360/bo2-build/ccache/stats"""
+    explicit launchers, and BUILDQ_NO_CCACHE=1. BUILDQ_CCACHE_REPOINT=1 lifts the existing-dir skip. Stats: ~/Games/Xbox360/bo2-build/ccache/stats"""
     if '--build' in cmd or '-E' in cmd or '-P' in cmd or '--install' in cmd or os.environ.get('BUILDQ_NO_CCACHE'):
         return cmd
     if not (os.path.exists(CCACHE_LAUNCHER) and any(a in ('-S', '-B') or a.startswith(('-S', '-B')) for a in cmd[1:])):
@@ -3733,8 +3733,8 @@ def ccache_configure(cmd):
             bdir = out[i + 1]
         elif a.startswith('-B') and len(a) > 2:
             bdir = a[2:]
-    if bdir is None or os.path.exists(os.path.join(os.path.abspath(bdir), 'CMakeCache.txt')):
-        return cmd
+    if bdir is None or (os.path.exists(os.path.join(os.path.abspath(bdir), 'CMakeCache.txt')) and not os.environ.get('BUILDQ_CCACHE_REPOINT')):
+        return cmd  # BUILDQ_CCACHE_REPOINT=1 (owner request only): re-point an existing dir at the cache; it rebuilds once
     return out + [f'-DCMAKE_{l}_COMPILER_LAUNCHER={CCACHE_LAUNCHER}' for l in ('C', 'CXX', 'OBJC', 'OBJCXX')]
 
 
