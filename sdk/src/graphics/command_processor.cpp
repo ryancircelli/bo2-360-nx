@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdio>
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -276,6 +277,17 @@ void CommandProcessor::WorkerThreadMain() {
 #endif
         // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
         system::ServiceSavepointRequest();
+        if (std::getenv("REX_SAVEPOINT_DIAG")) {
+          static auto last = std::chrono::steady_clock::now();
+          auto now = std::chrono::steady_clock::now();
+          if (now - last > std::chrono::seconds(2)) {
+            last = now;
+            std::fprintf(stderr, "[savepoint-cp] stalled: read %u write %u wb %u swaps %llu\n", read_ptr_index_,
+                         write_ptr_index_.load(),
+                         read_ptr_writeback_ptr_ ? memory::load_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_)) : 0u,
+                         (unsigned long long)swap_count_.load());
+          }
+        }
         write_ptr_index = write_ptr_index_.load();
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
@@ -398,6 +410,10 @@ void CommandProcessor::Rewind(const RewindState& state) {
   std::copy(state.registers.begin(), state.registers.end(), register_file_->values);
   ClearCaches();
   InvalidateGpuMemory();
+  std::fprintf(stderr, "[savepoint-cp] rewind: read %u write %u wb_ptr %08X wb %u primary %08X size %u swaps %llu\n",
+               read_ptr_index_, write_ptr_index_.load(), read_ptr_writeback_ptr_,
+               read_ptr_writeback_ptr_ ? memory::load_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_)) : 0u,
+               primary_buffer_ptr_, primary_buffer_size_, (unsigned long long)swap_count_.load());
 }
 
 void CommandProcessor::StoreRewindState() {
