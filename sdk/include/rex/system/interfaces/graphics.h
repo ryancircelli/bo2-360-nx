@@ -57,6 +57,9 @@ class IGraphicsSystem {
   virtual ui::GraphicsProvider* provider() const { return nullptr; }
   virtual ui::Presenter* presenter() const { return nullptr; }
 
+  // Frames the guest has swapped so far (0 when the system does not count them).
+  virtual uint64_t swap_count() const { return 0; }
+
   // Guest GPU services reached from the xboxkrnl Vd* exports.
   virtual void SetInterruptCallback(uint32_t callback, uint32_t user_data) {
     (void)callback;
@@ -70,6 +73,9 @@ class IGraphicsSystem {
     (void)ptr;
     (void)block_size_log2;
   }
+
+  void CaptureSavepoint();
+  void RewindSavepoint();
 
   // Persistent shader/pipeline storage under the cache root. Default: none.
   virtual void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
@@ -98,5 +104,9 @@ class IGraphicsSystem {
   // frames a frame dump already captured. Called on the UI thread after the title is terminated.
   virtual void PrepareForHardExit() {}
 };
+
+void SetGraphicsSavepointHooks(IGraphicsSystem* graphics, void (*capture)(IGraphicsSystem*),
+                               void (*rewind)(IGraphicsSystem*));
+void ClearGraphicsSavepointHooks(IGraphicsSystem* graphics);
 
 }  // namespace rex::system

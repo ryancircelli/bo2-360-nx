@@ -1,4 +1,6 @@
 #import <AppKit/AppKit.h>
+#include <rex/system/savepoint.h>
+#include <thread>
 #include <SDL3/SDL.h>
 #include "rex/ui/metal/metal_test_control.h"
 #include "rex/ui/windowed_app_context.h"
@@ -328,6 +330,15 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
               }).detach();
               continue;
             } else result = "error invalid key or hold duration (20..10000ms)";
+          } else if (command == "savepoint" && (argument == "save" || argument == "load") && rest.empty()) {
+            // savepoint save | savepoint load (no path): same-process save/load at the next CP safe point.
+            // "savepoint save PATH" (file savepoint) is left to LiveControlCommand.
+            // Runs on its own thread so captures and input keep working while it waits.
+            std::filesystem::remove(entry.path());
+            std::thread([response, argument] {
+              Write(response, rex::system::ControlInProcessSavepoint(argument, 20000));
+            }).detach();
+            continue;
           } else if (command == "capture" && argument == "at") {
             // capture at <frame> [timeout_ms] [count] [step]: the guest output of guest frames <frame>,
             // <frame>+step, ... exactly (frame-matched parity, docs/readiness.md). Non-blocking like press: it waits

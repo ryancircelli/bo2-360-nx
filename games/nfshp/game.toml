@@ -1,0 +1,11 @@
+# Need for Speed: Hot Pursuit (Xbox 360, USA, 2010, Criterion) title manifest (rex/game_info.h, LoadGameManifest).
+# Compiled into the executable by rexglue_game_manifest() (games/nfshp/CMakeLists.txt).
+
+[game]
+name = "nfshp"
+title_ids = ["45410903"]
+executable = "game:\\Default.XEX"     # the disc's launcher; it loads the recompiled game module ALASKA.XEX.DLL
+local_data_root = "~/Games/Xbox360/nfshp/disc"  # read-only extracted disc; --game_data_root wins
+
+[defaults]
+gpu_plugin = "metal"

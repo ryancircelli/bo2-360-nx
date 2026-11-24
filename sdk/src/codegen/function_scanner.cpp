@@ -1381,6 +1381,9 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
   bool hasPendingTableLo = false, hasPendingTableHi = false;
   bool hasPendingBaseLo = false, hasPendingBaseHi = false;
   bool pendingTableLoIsAddi = false, pendingBaseLoIsAddi = false;
+  // The lis consumed its own addi/ori (lis+addi pair already complete): a later (earlier in program order) addi that
+  // only happens to follow, e.g. the index computation `addi r11, r27, -1`, must not be folded into the address.
+  bool tableLoConsumed = false, baseLoConsumed = false;
 
   // Helper to combine lis high bits with addi/ori low bits
   auto combineHiLo = [](uint32_t hi, uint32_t lo, bool isAddi) -> uint32_t {
@@ -1587,6 +1590,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
           if (tableAddr == 0) {
             tableAddr =
                 hasPendingTableLo ? combineHiLo(hi, pendingTableLo, pendingTableLoIsAddi) : hi;
+            tableLoConsumed = hasPendingTableLo;
             hasPendingTableLo = false;
             REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} set tableAddr=0x{:08X}", bctrAddr,
                              tableAddr);
@@ -1596,6 +1600,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
           // Before load (between mtctr and load): this is baseAddr
           if (baseAddr == 0) {
             baseAddr = hasPendingBaseLo ? combineHiLo(hi, pendingBaseLo, pendingBaseLoIsAddi) : hi;
+            baseLoConsumed = hasPendingBaseLo;
             hasPendingBaseLo = false;
             REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} set baseAddr=0x{:08X}", bctrAddr,
                              baseAddr);
@@ -1626,7 +1631,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
               REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} pending tableLo=0x{:04X}", bctrAddr,
                                lo);
             }
-          } else if ((tableAddr & 0xFFFF) == 0) {
+          } else if ((tableAddr & 0xFFFF) == 0 && !tableLoConsumed) {
             // tableAddr has only high bits, add low bits
             tableAddr = combineHiLo(tableAddr, lo, isAddi);
             REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} combined tableAddr=0x{:08X}", bctrAddr,
@@ -1648,7 +1653,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
               REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} pending baseLo=0x{:04X}", bctrAddr,
                                lo);
             }
-          } else if ((baseAddr & 0xFFFF) == 0) {
+          } else if ((baseAddr & 0xFFFF) == 0 && !baseLoConsumed) {
             baseAddr = combineHiLo(baseAddr, lo, isAddi);
             REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} combined baseAddr=0x{:08X}", bctrAddr,
                              baseAddr);

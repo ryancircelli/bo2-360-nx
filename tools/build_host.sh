@@ -13,7 +13,6 @@ SDK="$ROOT/sdk"
 if [ ! -d "$SDK/thirdparty/cli11/include" ]; then
   (cd "$ROOT" && python tools/fetch_thirdparty.py)
 fi
-"$ROOT/tools/apply_thirdparty_patches.sh"
 
 # 2. The SDK refuses to configure unless each vendored submodule has a .git
 #    entry; the fetch script strips them. An empty .git directory satisfies

@@ -149,4 +149,13 @@ std::vector<Page> Pages();
 // tests can see what the Guide did.
 void LogChange(std::string_view label, std::string_view value);
 
+// The game window's real full-screen state, for pages that show a window mode
+// item. The app sets the window hooks once its window exists; before that (or
+// without a window) WindowFullscreen() returns `fallback` and
+// SetWindowFullscreen() returns false so the caller can fall back to the
+// `fullscreen` setting.
+void SetWindowHooks(std::function<bool()> is_fullscreen, std::function<void(bool)> set_fullscreen);
+bool WindowFullscreen(bool fallback);
+bool SetWindowFullscreen(bool on);
+
 }  // namespace rex::ui::guide

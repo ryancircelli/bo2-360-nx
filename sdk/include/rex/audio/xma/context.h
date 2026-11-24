@@ -224,6 +224,47 @@ class XmaContext {
   void Disable();
   void Release();
 
+  // Savepoint (same-process save/load): the host-side decode state that the guest context data
+  // does not hold. Called only while every other thread is parked, so no lock is taken.
+  struct SavepointState {
+    bool allocated = false, enabled = false, in_silence = false, decoder_behind = false;
+    bool loop_start_skip_pending = false;
+    uint8_t current_frame_remaining_subframes = 0, loop_frame_output_limit = 0;
+    int32_t remaining_subframe_blocks_in_output_buffer = 0;
+    uint64_t previous_frame_hash = 0;
+    std::array<uint8_t, kBytesPerPacketData * 2> input_buffer;
+    std::array<uint8_t, 1 + 4096> xma_frame;
+    std::array<uint8_t, kBytesPerFrameChannel * 2> raw_frame;
+  };
+  void CaptureSavepoint(SavepointState& s) const {
+    s.allocated = is_allocated_.load();
+    s.enabled = is_enabled_.load();
+    s.in_silence = in_silence_;
+    s.decoder_behind = decoder_behind_;
+    s.loop_start_skip_pending = loop_start_skip_pending_;
+    s.current_frame_remaining_subframes = current_frame_remaining_subframes_;
+    s.loop_frame_output_limit = loop_frame_output_limit_;
+    s.remaining_subframe_blocks_in_output_buffer = remaining_subframe_blocks_in_output_buffer_;
+    s.previous_frame_hash = previous_frame_hash_;
+    s.input_buffer = input_buffer_;
+    s.xma_frame = xma_frame_;
+    s.raw_frame = raw_frame_;
+  }
+  void RewindSavepoint(const SavepointState& s) {
+    is_allocated_.store(s.allocated);
+    is_enabled_.store(s.enabled);
+    in_silence_ = s.in_silence;
+    decoder_behind_ = s.decoder_behind;
+    loop_start_skip_pending_ = s.loop_start_skip_pending;
+    current_frame_remaining_subframes_ = s.current_frame_remaining_subframes;
+    loop_frame_output_limit_ = s.loop_frame_output_limit;
+    remaining_subframe_blocks_in_output_buffer_ = s.remaining_subframe_blocks_in_output_buffer;
+    previous_frame_hash_ = s.previous_frame_hash;
+    input_buffer_ = s.input_buffer;
+    xma_frame_ = s.xma_frame;
+    raw_frame_ = s.raw_frame;
+  }
+
   memory::Memory* memory() const { return memory_; }
 
   uint32_t id() { return id_; }

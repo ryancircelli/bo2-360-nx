@@ -83,7 +83,6 @@ echo "$DATA" > "$ROOT/bo2_data.txt"
 if want host; then
   echo "== host tools"
   [ -d "$ROOT/sdk/thirdparty/cli11/include" ] || "$PY" "$ROOT/tools/fetch_thirdparty.py"
-  "$ROOT/tools/apply_thirdparty_patches.sh"
   # The SDK's version script expects a .git in each third-party folder.
   for d in "$ROOT"/sdk/thirdparty/*/; do
     [ -e "$d/.git" ] || mkdir -p "$d/.git"

@@ -29,6 +29,22 @@ bool xeXamIsUIActive() {
   return xam_dialogs_shown_ > 0;
 }
 
+void xeXamSetGuideOpen(KernelState* kernel_state, bool open) {
+  static std::atomic<bool> guide_open{false};
+  if (guide_open.exchange(open) == open) {
+    return;
+  }
+  if (open) {
+    ++xam_dialogs_shown_;
+  } else {
+    --xam_dialogs_shown_;
+  }
+  if (kernel_state) {
+    // XN_SYS_UI (0x9): the same notification the XAM dialogs send.
+    kernel_state->BroadcastNotification(0x9, open ? 1 : 0);
+  }
+}
+
 XamModule::XamModule(Runtime* emulator, KernelState* kernel_state)
     : KernelModule(kernel_state, "xe:\\xam.xex"), loader_data_() {
   RegisterExportTable(export_resolver_);

@@ -37,6 +37,26 @@ class XIOCompletion : public XObject {
   // Returns true if the wait ended because a notification was received.
   bool WaitForNotification(uint64_t wait_ticks, IONotification* notify);
 
+  // Savepoint rewind: the queue and its semaphore count are host-side, outside guest memory.
+  struct QueueRewindState {
+    std::queue<IONotification> notifications;
+    rex::thread::WaitHandleRewindState semaphore;
+    bool has_semaphore = false;
+  };
+  void CaptureQueueRewindState(QueueRewindState* state) {
+    std::lock_guard<std::mutex> lock(notification_lock_);
+    state->notifications = notifications_;
+    state->has_semaphore =
+        rex::thread::CaptureWaitHandleRewindState(notification_semaphore_.get(), &state->semaphore);
+  }
+  size_t RewindQueue(const QueueRewindState& state) {
+    std::lock_guard<std::mutex> lock(notification_lock_);
+    size_t before = notifications_.size();
+    notifications_ = state.notifications;
+    if (state.has_semaphore) rex::thread::RewindWaitHandle(notification_semaphore_.get(), state.semaphore);
+    return before;
+  }
+
  private:
   static const uint32_t kMaxNotifications = 1024;
 

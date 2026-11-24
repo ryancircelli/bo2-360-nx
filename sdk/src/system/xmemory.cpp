@@ -30,6 +30,7 @@
 #include <rex/stream.h>
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/mmio_handler.h>
+#include <rex/system/thread_state.h>
 #include <rex/system/xmemory.h>
 #include <rex/thread.h>
 
@@ -590,6 +591,11 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
         "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
         is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),
         rex::thread::current_thread_id());
+    if (auto* thread_state = runtime::ThreadState::Get()) {
+      const auto* ctx = thread_state->context();
+      REXSYS_ERROR("  AV PPC r1={:08X} r3={:08X} r4={:08X} r5={:08X} lr={:08X}",
+                   ctx->r1.u32, ctx->r3.u32, ctx->r4.u32, ctx->r5.u32, ctx->lr);
+    }
     return false;
   }
 
@@ -1200,6 +1206,26 @@ uint32_t BaseHeap::GetUnreservedPageCount() {
     count += size - empty_span_start;
   }
   return count;
+}
+
+BaseHeap::RewindState BaseHeap::CaptureRewindState() {
+  std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
+  RewindState state;
+  state.unreserved_page_count = unreserved_page_count_;
+  state.pages.reserve(page_table_.size());
+  for (const auto& page : page_table_) {
+    state.pages.push_back(page.qword);
+  }
+  return state;
+}
+
+void BaseHeap::Rewind(const RewindState& state) {
+  std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
+  assert_true(state.pages.size() == page_table_.size());
+  for (size_t i = 0; i < page_table_.size(); ++i) {
+    page_table_[i].qword = state.pages[i];
+  }
+  unreserved_page_count_ = state.unreserved_page_count;
 }
 
 bool BaseHeap::Save(stream::ByteStream* stream) {

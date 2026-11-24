@@ -70,9 +70,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
 
   RegisterFile* register_file() { return &register_file_; }
   CommandProcessor* command_processor() const { return command_processor_.get(); }
+  uint64_t swap_count() const override;
 
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) override;
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) override;
+  void CaptureSavepoint();
+  void RewindSavepoint();
 
   void SetInterruptCallback(uint32_t callback, uint32_t user_data) override;
   void DispatchInterruptCallback(uint32_t source, uint32_t cpu);
