@@ -35,6 +35,8 @@
 #include <unistd.h>
 
 #include <rex/cvar.h>
+#include <rex/audio/audio_system.h>
+#include <rex/audio/xma/decoder.h>
 #include <rex/runtime.h>
 #include <rex/thread.h>
 #include <rex/logging.h>
@@ -188,6 +190,8 @@ struct InProcess {
   std::vector<std::pair<memory::BaseHeap*, memory::BaseHeap::RewindState>> heaps;
   std::vector<object_ref<XObject>> objects_at_rewind;
   IGraphicsSystem* graphics = nullptr;
+  rex::audio::XmaDecoder* xma = nullptr;
+  std::unique_ptr<rex::audio::XmaDecoder::SavepointState> xma_state;
 } g_snap;
 
 bool CollectRegions(memory::BaseHeap* heap, uint32_t space, const uint8_t* membase,
@@ -488,6 +492,15 @@ SavepointStats CaptureInProcessSavepoint() {
   if (auto* runtime = rex::Runtime::instance()) {
     g_snap.graphics = runtime->graphics_system();
     if (g_snap.graphics) g_snap.graphics->CaptureSavepoint();
+    if (!std::getenv("REX_SAVEPOINT_SKIP_XMA")) {
+      if (auto* audio = dynamic_cast<rex::audio::AudioSystem*>(runtime->audio_system())) {
+        g_snap.xma = audio->xma_decoder();
+        if (g_snap.xma) {
+          g_snap.xma_state = std::make_unique<rex::audio::XmaDecoder::SavepointState>();
+          g_snap.xma->CaptureSavepoint(*g_snap.xma_state);
+        }
+      }
+    }
   }
   const uint32_t bases[] = {0x00000000, 0x40000000, 0x80000000, 0x90000000};
   for (uint32_t b : bases) {
@@ -670,6 +683,10 @@ SavepointStats RewindToInProcessSavepoint() {
     ks->object_table()->Rewind(g_snap.object_table);
     size_t queued = ks->RewindDispatchQueue(g_snap.dispatch_queue);
     std::fprintf(stderr, "[savepoint-s3] kernel dispatch queue: %zu -> %zu\n", queued, g_snap.dispatch_queue.size());
+    if (g_snap.xma && g_snap.xma_state) {
+      uint32_t changed = g_snap.xma->RewindSavepoint(*g_snap.xma_state);
+      std::fprintf(stderr, "[savepoint-s3] xma decoder: %u context allocations differed\n", changed);
+    }
     std::fprintf(stderr, "[savepoint-s3] dpc list head: %08X -> %08X\n", ks->dpc_list()->head(), g_snap.dpc_head);
     ks->dpc_list()->set_head(g_snap.dpc_head);
     g_rewind_phase = 4;
