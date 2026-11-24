@@ -412,8 +412,10 @@ void GuideInputGate::Filter(uint32_t user, in::X_INPUT_STATE& state) {
   }
 
   if (draining_.load(std::memory_order_acquire) & (1u << user)) {
-    if (buttons != 0 || state.gamepad.left_trigger > 30 || state.gamepad.right_trigger > 30) {
-      state.gamepad = {};
+    // The press that closed the Guide must not reach the game as a fresh press, so buttons stay stripped until
+    // they are all let go. Triggers and sticks pass at once: a held accelerator keeps working after the close.
+    if (buttons != 0) {
+      state.gamepad.buttons = 0;
       return;
     }
     draining_.fetch_and(~(1u << user), std::memory_order_acq_rel);
