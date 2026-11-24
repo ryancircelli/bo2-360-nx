@@ -48,7 +48,9 @@ struct FPSCRPlatform {
 
   static inline void setcsr(u32 csr) noexcept { simde_mm_setcsr(csr); }
 
-  static inline void InitHostExceptions(u32& csr) noexcept {
+  static constexpr u32 kExceptionsMasked = ExceptionMask;
+
+  static constexpr void InitHostExceptions(u32& csr) noexcept {
     csr |= ExceptionMask;  // Set mask bits to disable exceptions
   }
 };
@@ -86,7 +88,9 @@ struct FPSCRPlatform {
     __asm__ __volatile__("msr fpcr, %0" : : "r"(static_cast<u64>(csr)));
   }
 
-  static inline void InitHostExceptions(u32& csr) noexcept {
+  static constexpr u32 kExceptionsMasked = 0;
+
+  static constexpr void InitHostExceptions(u32& csr) noexcept {
     csr &= ~ExceptionMask;  // Clear enable bits to disable exceptions
   }
 };

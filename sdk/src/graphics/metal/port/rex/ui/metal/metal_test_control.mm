@@ -10,6 +10,7 @@
 #include <time.h>
 #include "rex/logging.h"
 #include "rex/cvar.h"
+#include "rex/system/live_control.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -487,6 +488,11 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
               std::filesystem::remove(entry.path()); continue;
             } else result = "error usage: physical key <name> | physical pad share|view|ls|rs | physical close-window|quit";
           } else if (command == "ping") result = "ok ready";
+          else if (std::string live = rex::system::LiveControlCommand(
+                       command, rest.empty() ? argument : argument + " " + rest);
+                   !live.empty()) {
+            result = live;  // cvar, cmd, patch, slots, timescale, savepoint (rex/system/live_control.h)
+          }
           Write(response, result);
           std::filesystem::remove(entry.path());
         }

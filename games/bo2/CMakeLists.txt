@@ -180,6 +180,7 @@ option(BO2ZM_GUEST_MEMORY_PLAIN "Generated code: plain guest loads and stores, w
        OFF)
 if(TARGET bo2zm_recomp)
   target_precompile_headers(bo2zm_recomp PRIVATE "${BO2ZM_ROOT}/../../core/bo2zm_guest_memory.h")
+  rexglue_patchable_all(bo2zm_recomp)   # test builds: -DREXGLUE_PATCHABLE_ALL=ON (default OFF)
   if(BO2ZM_GUEST_MEMORY_PLAIN)
     target_compile_definitions(bo2zm_recomp PRIVATE BO2ZM_GUEST_MEMORY_PLAIN=1)
   endif()

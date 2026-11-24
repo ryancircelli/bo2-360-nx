@@ -20,6 +20,25 @@ says so in its header. The upstream code in this repository keeps its own licens
 portions and the Switch layer in `sdk/` under BSD-3-Clause (`sdk/LICENSE`), the translator under MIT
 (`tools/xenosrecomp/translator/LICENSE.md`), and Mesa with the changes to it under its per-file licenses (MIT).
 
+## Later upstream ports (hand-ported, BSD-3-Clause)
+
+Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD-3-Clause, `sdk/LICENSE`) and Xenia Canary
+(BSD-3-Clause). Each commit message names the upstream commit.
+
+| Upstream commit | Change | Where |
+|---|---|---|
+| ReXGlue SDK `c901aa7` (Tom Clay) | `vmaxuw` code generator builder | `sdk/src/codegen/` |
+| ReXGlue SDK `d631595` (Tom Clay, Tiago Lima) | log an exception that `RtlRaiseException` does not handle | `sdk/src/kernel/xboxkrnl/xboxkrnl_debug.cpp` |
+| ReXGlue SDK `f05a125` (Tom Clay) | SPIR-V fetch lerp starts from the first sample | `sdk/src/graphics/pipeline/shader/spirv_translator_fetch.cpp` |
+| ReXGlue SDK `bc84579` (Tom Clay, WizardOfWor1969) | publish the GPU read pointer when write back is enabled | `sdk/src/graphics/command_processor.cpp` |
+| ReXGlue SDK `6937495` (Tom Clay) | `Fiber::Destroy` only clears the current fiber if it is itself | `sdk/src/core/fiber_posix.cpp` |
+| ReXGlue SDK `d8a93be` (Tom Clay) | a new FPSCR register starts with host FP exceptions masked | `sdk/include/rex/ppc/context.h`, `sdk/include/rex/platform/fpscr.h` |
+| Xenia Canary `c0ea2c443` (Adrian Cassar) | `vpkd3d128` packs a NaN as the field minimum | `sdk/src/codegen/builders/vector.cpp` |
+| Xenia Canary `28c265ed7` (Adrian Cassar) | handle `PM4_EVENT_WRITE_CFL` as a fence write | `sdk/src/graphics/command_processor.cpp`, `sdk/src/graphics/packet_disassembler.cpp` |
+| ReXGlue SDK `a04d6fc` (Tom Clay) | critical section `lock_count` kept as a big endian guest word | `sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp` |
+| Xenia Canary `a4ef31cdf` (Adrian Cassar) | XMA drops a decode position's start subframes | `sdk/src/audio/xma_context.cpp`, `sdk/include/rex/audio/xma/context.h` |
+| ReXGlue SDK PR 628 (open upstream) | `dcbz` clears the full 128-byte cache line | `sdk/src/codegen/builders/system.cpp` |
+
 ## Libraries
 
 Libraries used by the SDK, the NRO and the code generator, fetched from the submodules of ReXGlue SDK v0.10.0

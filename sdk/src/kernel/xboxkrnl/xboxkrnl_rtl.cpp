@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 
 #include <rex/chrono/chrono_steady_cast.h>
@@ -331,12 +332,36 @@ u32 RtlImageXexHeaderField_entry(ppc_ptr_t<xex2_header> xex_header, u32 field_dw
 #pragma pack(push, 1)
 struct X_RTL_CRITICAL_SECTION {
   X_DISPATCH_HEADER header;
-  int32_t lock_count;                // 0x10 -1 -> 0 on first lock
+  rex::be<int32_t> lock_count;       // 0x10 -1 -> 0 on first lock, big endian like the guest reads it
   rex::be<int32_t> recursion_count;  // 0x14  0 -> 1 on first lock
   rex::be<uint32_t> owning_thread;   // 0x18 PKTHREAD 0 unless locked
 };
 #pragma pack(pop)
 static_assert_size(X_RTL_CRITICAL_SECTION, 28);
+
+namespace {
+// lock_count lives in guest memory as a big endian word, so the atomics work on the swapped value
+// (rexglue-sdk a04d6fc). -1 and 0 are byte-order symmetric, 1 and up are not.
+std::atomic_ref<uint32_t> LockCountRaw(X_RTL_CRITICAL_SECTION* cs) {
+  return std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(&cs->lock_count));
+}
+
+bool TryAcquireLockCount(X_RTL_CRITICAL_SECTION* cs) {
+  uint32_t expected = rex::byte_swap(uint32_t(-1));
+  return LockCountRaw(cs).compare_exchange_strong(expected, 0);
+}
+
+// Adds delta to the big endian lock count and returns the new host-order value.
+int32_t AddLockCount(X_RTL_CRITICAL_SECTION* cs, int32_t delta) {
+  auto raw = LockCountRaw(cs);
+  uint32_t current = raw.load(std::memory_order_relaxed);
+  uint32_t next;
+  do {
+    next = rex::byte_swap(uint32_t(int32_t(rex::byte_swap(current)) + delta));
+  } while (!raw.compare_exchange_weak(current, next));
+  return int32_t(rex::byte_swap(next));
+}
+}  // namespace
 
 void xeRtlInitializeCriticalSection(X_RTL_CRITICAL_SECTION* cs, uint32_t cs_ptr) {
   cs->header.type = 1;      // EventSynchronizationObject (auto reset)
@@ -382,13 +407,13 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
 
   if (cs->owning_thread == cur_thread) {
     // We already own the lock.
-    rex::thread::atomic_inc(&cs->lock_count);
+    AddLockCount(cs, 1);
     cs->recursion_count++;
     return;
   }
 
   // Spin loop (counted as spin from the first failed try, rex::thread::SpinScope)
-  if (spin_count && rex::thread::atomic_cas(-1, 0, &cs->lock_count)) {
+  if (spin_count && TryAcquireLockCount(cs)) {
     cs->owning_thread = cur_thread;
     cs->recursion_count = 1;
     return;
@@ -396,7 +421,7 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
   if (spin_count) {
     rex::thread::SpinScope spin;
     while (--spin_count) {
-      if (rex::thread::atomic_cas(-1, 0, &cs->lock_count)) {
+      if (TryAcquireLockCount(cs)) {
         // Acquired.
         cs->owning_thread = cur_thread;
         cs->recursion_count = 1;
@@ -405,7 +430,7 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
     }
   }
 
-  if (rex::thread::atomic_inc(&cs->lock_count) != 0) {
+  if (AddLockCount(cs, 1) != 0) {
     // Create a full waiter.
     xeKeWaitForSingleObject(reinterpret_cast<void*>(cs.host_address()), 8, 0, 0, nullptr);
   }
@@ -418,14 +443,14 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
 u32 RtlTryEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
   uint32_t thread = XThread::GetCurrentThread()->guest_object();
 
-  if (rex::thread::atomic_cas(-1, 0, &cs->lock_count)) {
+  if (TryAcquireLockCount(cs)) {
     // Able to steal the lock right away.
     cs->owning_thread = thread;
     cs->recursion_count = 1;
     return 1;
   } else if (cs->owning_thread == thread) {
     // Already own the lock.
-    rex::thread::atomic_inc(&cs->lock_count);
+    AddLockCount(cs, 1);
     ++cs->recursion_count;
     return 1;
   }
@@ -442,13 +467,13 @@ void RtlLeaveCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
   if (--cs->recursion_count != 0) {
     assert_true(cs->recursion_count >= 0);
 
-    rex::thread::atomic_dec(&cs->lock_count);
+    AddLockCount(cs, -1);
     return;
   }
 
   // Not owned - unlock!
   cs->owning_thread = 0;
-  if (rex::thread::atomic_dec(&cs->lock_count) != -1) {
+  if (AddLockCount(cs, -1) != -1) {
     // There were waiters - wake one of them.
     xeKeSetEvent(reinterpret_cast<X_KEVENT*>(cs.host_address()), 1, 0);
   }

@@ -395,6 +395,11 @@ bool build_vmaxuh(BuilderContext& ctx) {
   return true;
 }
 
+bool build_vmaxuw(BuilderContext& ctx) {
+  ctx.emit_vec_int_binary("max_epu32", "u32");
+  return true;
+}
+
 bool build_vminuh(BuilderContext& ctx) {
   ctx.emit_vec_int_binary("min_epu16", "u16");
   return true;
@@ -1218,11 +1223,17 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       ctx.println("\t{}.s32 = {}.s32[3] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
                   ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
+      // A NaN packs as 0x8000, the minimum that unpacks back to a NaN, not the clamped
+      // 0x8001 (xenia-canary c0ea2c443).
+      ctx.println("\t{0}.s32 = ({1}.f32[3] != {1}.f32[3]) ? -32768 : {0}.s32;", ctx.temp(),
+                  ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] = uint32_t(uint16_t({}.s32)) << 16;", ctx.v_temp(),
                   ctx.temp());  // element 0 to high word
       ctx.println("\t{}.s32 = {}.s32[2] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
                   ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
+      ctx.println("\t{0}.s32 = ({1}.f32[2] != {1}.f32[2]) ? -32768 : {0}.s32;", ctx.temp(),
+                  ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] |= uint16_t({}.s32);", ctx.v_temp(),
                   ctx.temp());  // element 1 to low word
       ctx.println("\t{}.u32[{}] = {}.u32[0];", ctx.v(ctx.insn.operands[0]), ctx.insn.operands[4],
@@ -1244,6 +1255,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
           "kPack2101010_Max10 ? kPack2101010_Max10 : {}.f32[3]);",
           ctx.temp(), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[1]),
           ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.u32 = ({1}.f32[3] != {1}.f32[3]) ? 0x403FFE00u : {0}.u32;", ctx.temp(),
+                  ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] = {}.u32 & 0x3FF;", ctx.v_temp(), ctx.temp());
 
       // Pack y (10 bits, position 10-19) - Guest element 1 is at index 2
@@ -1252,6 +1265,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
           "kPack2101010_Max10 ? kPack2101010_Max10 : {}.f32[2]);",
           ctx.temp(), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[1]),
           ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.u32 = ({1}.f32[2] != {1}.f32[2]) ? 0x403FFE00u : {0}.u32;", ctx.temp(),
+                  ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] |= ({}.u32 & 0x3FF) << 10;", ctx.v_temp(), ctx.temp());
 
       // Pack z (10 bits, position 20-29) - Guest element 2 is at index 1
@@ -1260,6 +1275,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
           "kPack2101010_Max10 ? kPack2101010_Max10 : {}.f32[1]);",
           ctx.temp(), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[1]),
           ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.u32 = ({1}.f32[1] != {1}.f32[1]) ? 0x403FFE00u : {0}.u32;", ctx.temp(),
+                  ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] |= ({}.u32 & 0x3FF) << 20;", ctx.v_temp(), ctx.temp());
 
       // Pack w (2 bits, position 30-31) - Guest element 3 is at index 0
@@ -1268,6 +1285,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
           "kPack2101010_Max2 ? kPack2101010_Max2 : {}.f32[0]);",
           ctx.temp(), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[1]),
           ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.u32 = ({1}.f32[0] != {1}.f32[0]) ? 0x40400000u : {0}.u32;", ctx.temp(),
+                  ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] |= ({}.u32 & 0x3) << 30;", ctx.v_temp(), ctx.temp());
 
       ctx.println("\t{}.u32[{}] = {}.u32[0];", ctx.v(ctx.insn.operands[0]), ctx.insn.operands[4],
@@ -1315,6 +1334,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
                     srcIdx);
         ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
                     ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
+        ctx.println("\t{0}.s32 = ({1}.f32[{2}] != {1}.f32[{2}]) ? -32768 : {0}.s32;", ctx.temp(),
+                    ctx.v(ctx.insn.operands[1]), srcIdx);
         ctx.println("\t{}.u16[{}] = uint16_t({}.s32);", ctx.v(ctx.insn.operands[0]), dstIdx,
                     ctx.temp());
       }
@@ -1356,16 +1377,20 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       // Format: 4 bits for w, 20 bits each for x, y, z (packed into 64 bits)
       ctx.println("\t{}.u64[0] = 0;", ctx.v_temp());
       // Pack x (20 bits, position 0-19)
-      ctx.println("\t{}.s32 = int32_t({}.f32[0]);", ctx.temp(), ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.s32 = ({1}.f32[0] != {1}.f32[0]) ? 524288 : int32_t({1}.f32[0]);",
+                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u64[0] = uint64_t({}.s32 & 0xFFFFF);", ctx.v_temp(), ctx.temp());
       // Pack y (20 bits, position 20-39)
-      ctx.println("\t{}.s32 = int32_t({}.f32[1]);", ctx.temp(), ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.s32 = ({1}.f32[1] != {1}.f32[1]) ? 524288 : int32_t({1}.f32[1]);",
+                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u64[0] |= uint64_t({}.s32 & 0xFFFFF) << 20;", ctx.v_temp(), ctx.temp());
       // Pack z (20 bits, position 40-59)
-      ctx.println("\t{}.s32 = int32_t({}.f32[2]);", ctx.temp(), ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.s32 = ({1}.f32[2] != {1}.f32[2]) ? 524288 : int32_t({1}.f32[2]);",
+                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u64[0] |= uint64_t({}.s32 & 0xFFFFF) << 40;", ctx.v_temp(), ctx.temp());
       // Pack w (4 bits, position 60-63)
-      ctx.println("\t{}.s32 = int32_t({}.f32[3]);", ctx.temp(), ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{0}.s32 = ({1}.f32[3] != {1}.f32[3]) ? 0 : int32_t({1}.f32[3]);",
+                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u64[0] |= uint64_t({}.s32 & 0xF) << 60;", ctx.v_temp(), ctx.temp());
       ctx.println("\t{}.u64[{}] = {}.u64[0];", ctx.v(ctx.insn.operands[0]),
                   ctx.insn.operands[4] >> 1, ctx.v_temp());

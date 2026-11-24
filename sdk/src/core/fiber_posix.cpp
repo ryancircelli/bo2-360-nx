@@ -71,7 +71,10 @@ void Fiber::SwitchTo(Fiber* target) {
 void Fiber::Destroy() {
   // Thread fibers are destroyed from the owning thread itself.
   if (is_thread_fiber_) {
-    tls_current_ = nullptr;
+    // Only clear the current fiber if it is this one (rexglue-sdk 6937495).
+    if (tls_current_ == this) {
+      tls_current_ = nullptr;
+    }
   } else {
     assert(this != tls_current_ && "Destroy called on the currently running fiber");
   }

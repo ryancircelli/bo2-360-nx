@@ -928,10 +928,10 @@ u32 NtRemoveIoCompletion_entry(u32 handle, mapped_u32 key_context, mapped_u32 ap
 
   auto port = REX_KERNEL_OBJECTS()->LookupObject<XIOCompletion>(handle);
   if (!port) {
-    status = X_STATUS_INVALID_HANDLE;
+    return X_STATUS_INVALID_HANDLE;
   }
 
-  uint64_t timeout_ticks = timeout ? static_cast<uint32_t>(*timeout)
+  uint64_t timeout_ticks = timeout ? static_cast<uint64_t>(*timeout)
                                    : static_cast<uint64_t>(std::numeric_limits<int64_t>::min());
   XIOCompletion::IONotification notification;
   if (port->WaitForNotification(timeout_ticks, &notification)) {
@@ -1252,14 +1252,14 @@ REX_EXPORT_STUB(__imp__IoBuildAsynchronousFsdRequest);
 REX_EXPORT_STUB(__imp__IoBuildDeviceIoControlRequest);
 REX_EXPORT_STUB(__imp__IoBuildSynchronousFsdRequest);
 REX_EXPORT_STUB(__imp__IoCallDriver);
-REX_EXPORT_STUB(__imp__IoCheckShareAccess);
+REX_EXPORT_STUB_RETURN(__imp__IoCheckShareAccess, 0);
 REX_EXPORT_STUB(__imp__IoCompleteRequest);
 REX_EXPORT_STUB(__imp__IoCreateFile);
 REX_EXPORT_STUB(__imp__IoDeleteDevice);
-REX_EXPORT_STUB(__imp__IoDismountVolume);
+REX_EXPORT_STUB_RETURN(__imp__IoDismountVolume, 0);
 REX_EXPORT_STUB(__imp__IoFreeIrp);
 REX_EXPORT_STUB(__imp__IoInitializeIrp);
-REX_EXPORT_STUB(__imp__IoInvalidDeviceRequest);
+REX_EXPORT_STUB_RETURN(__imp__IoInvalidDeviceRequest, 0xC0000010);
 REX_EXPORT_STUB(__imp__IoQueueThreadIrp);
 REX_EXPORT_STUB(__imp__IoReleaseDeviceObjectLock);
 REX_EXPORT_STUB(__imp__IoRemoveShareAccess);
@@ -1271,10 +1271,10 @@ REX_EXPORT_STUB(__imp__IoStartPacket);
 REX_EXPORT_STUB(__imp__IoSynchronousFsdRequest);
 REX_EXPORT_STUB(__imp__NtDeleteFile);
 REX_EXPORT_STUB(__imp__NtSetSystemTime);
-REX_EXPORT_STUB(__imp__NtWriteFileGather);
+REX_EXPORT_STUB_RETURN(__imp__NtWriteFileGather, 0xC0000002);
 REX_EXPORT_STUB(__imp__IoAcquireCancelSpinLock);
 REX_EXPORT_STUB(__imp__IoReleaseCancelSpinLock);
-REX_EXPORT_STUB(__imp__NtCancelIoFile);
+REX_EXPORT_STUB_RETURN(__imp__NtCancelIoFile, 0);
 REX_EXPORT_STUB(__imp__NtCancelIoFileEx);
 REX_EXPORT_STUB(__imp__SvodCreateDevice);
 

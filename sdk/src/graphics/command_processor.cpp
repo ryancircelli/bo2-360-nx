@@ -357,6 +357,12 @@ void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_s
   // block_size = RB_BLKSZ, log2 of number of quadwords read between updates of
   //              the read pointer.
   read_ptr_update_freq_ = uint32_t(1) << block_size_log2 >> 2;
+  // Publish the current read pointer as soon as write back is enabled
+  // (rexglue-sdk bc84579).
+  if (read_ptr_writeback_ptr_) {
+    memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
+                                     read_ptr_index_);
+  }
 }
 
 void CommandProcessor::UpdateWritePointer(uint32_t value) {
@@ -906,6 +912,9 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
       result = ExecutePacketType3_EVENT_WRITE(reader, packet, count);
       break;
     case PM4_EVENT_WRITE_SHD:
+    // Cache flush done event: same initiator/address/value layout as SHD
+    // (xenia-canary 28c265ed7).
+    case PM4_EVENT_WRITE_CFL:
       result = ExecutePacketType3_EVENT_WRITE_SHD(reader, packet, count);
       break;
     case PM4_EVENT_WRITE_EXT:
