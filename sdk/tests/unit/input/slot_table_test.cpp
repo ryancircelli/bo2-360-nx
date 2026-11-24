@@ -85,3 +85,14 @@ TEST_CASE("Model fallback never takes another serial's reservation", "[input][sl
   CHECK(t.Connect(Pad(2, "bluetooth-guid", "serial-b")) == 1);
   CHECK(t.Connect(Pad(3, "usb-guid", "serial-a")) == 0);
 }
+
+TEST_CASE("A replayed pad shares player 1 with a route pad", "[input][slots]") {
+  Table t;
+  DeviceInfo route = Pad(1, "route-guid", "script-pad-1");
+  route.fixed_user = 0;
+  DeviceInfo replay = Pad(2, "replay-guid", "recorded-pad-1");
+  replay.fixed_user = 0;
+  CHECK(t.Connect(route) == 0);
+  CHECK(t.Connect(replay) == 0);
+  CHECK(t.Connect(Pad(3, "real-guid", "real-serial")) == 1);
+}
