@@ -407,8 +407,8 @@ void CommandProcessor::StoreRewindState() {
 void CommandProcessor::RewindStoredState() {
   auto it = rewind_states.find(this);
   if (it != rewind_states.end()) {
+    // Keep the stored state: a savepoint can be loaded any number of times.
     Rewind(*it->second);
-    rewind_states.erase(it);
   }
 }
 
