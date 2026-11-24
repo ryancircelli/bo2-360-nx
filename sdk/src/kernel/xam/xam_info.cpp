@@ -333,9 +333,22 @@ u32 XamSwapDisc_entry(u32 disc_number) {
   return X_STATUS_SUCCESS;
 }
 
+// Xenia's behaviour: report the disc verified and fire the completion callback. As a stub,
+// r3 kept the first argument, so BO2 saw a failure and re-ran the check every 2 s.
+u32 XamMediaVerificationVerify_entry(u32 unk, mapped_void overlapped, u32 callback) {
+  (void)unk;
+  (void)overlapped;
+  if (callback) {
+    XThread::GetCurrentThread()->EnqueueApc(callback & ~1u, 0, 0, 0);
+  }
+  return X_ERROR_SUCCESS;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
+
+REX_EXPORT(__imp__XamMediaVerificationVerify, rex::kernel::xam::XamMediaVerificationVerify_entry)
 
 REX_EXPORT(__imp__XamFeatureEnabled, rex::kernel::xam::XamFeatureEnabled_entry)
 REX_EXPORT(__imp__XamGetOnlineSchema, rex::kernel::xam::XamGetOnlineSchema_entry)
