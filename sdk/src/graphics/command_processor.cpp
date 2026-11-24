@@ -837,7 +837,8 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
-  if (trace_hooks_ && trace_hooks_->is_recording()) [[unlikely]] {
+  // Local copy: a swap inside this packet can end the recording and unhook trace_hooks_ before OnPacketEnd.
+  if (auto* hooks = trace_hooks_; hooks && hooks->is_recording()) [[unlikely]] {
     // Report the whole packet (header + payload) before it executes.
     uint32_t header =
         memory::load_and_swap<uint32_t>(reinterpret_cast<const void*>(reader->read_ptr()));
@@ -856,10 +857,10 @@ bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
     // read_count() is 0 for a completely full buffer (ExecutePacket(ptr, count)).
     size_t available = reader->read_count() ? reader->read_count() : reader->capacity();
     dword_count = std::min<uint32_t>(dword_count, uint32_t(available / sizeof(uint32_t)));
-    trace_hooks_->OnPacketStart(reader->buffer(), uint32_t(reader->capacity()),
-                                uint32_t(reader->read_offset()), dword_count);
+    hooks->OnPacketStart(reader->buffer(), uint32_t(reader->capacity()),
+                         uint32_t(reader->read_offset()), dword_count);
     bool result = ExecutePacketUntraced(reader);
-    trace_hooks_->OnPacketEnd();
+    hooks->OnPacketEnd();
     return result;
   }
   return ExecutePacketUntraced(reader);
