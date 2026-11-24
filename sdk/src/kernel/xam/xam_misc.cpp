@@ -11,6 +11,7 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 
 // kinda gross but oh well
 REX_EXPORT_STUB(__imp__CancelWaitableTimer);
@@ -243,7 +244,7 @@ REX_EXPORT_STUB(__imp__XNetLogonGetServiceInfo);
 REX_EXPORT_STUB(__imp__XNetLogonGetServiceNetworkID);
 REX_EXPORT_STUB(__imp__XNetLogonGetState);
 REX_EXPORT_STUB(__imp__XNetLogonGetTicketOpt);
-REX_EXPORT_STUB(__imp__XNetLogonGetTitleID);
+REX_EXPORT_QUIET_RETURN(__imp__XNetLogonGetTitleID, 0)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XNetLogonGetTitleVersion);
 REX_EXPORT_STUB(__imp__XNetLogonGetUserPrivileges);
 REX_EXPORT_STUB(__imp__XNetLogonInitOverrideInfo);
@@ -334,7 +335,7 @@ REX_EXPORT_STUB(__imp__XamBackgroundDownloadNetworkStorageOnContentChange);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadNetworkStorageRegisterChangeCallback);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSelectDevice);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetForegroundPriority);
-REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetMode);
+REX_EXPORT_QUIET_RETURN(__imp__XamBackgroundDownloadSetMode, 0)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetPollingActive);
 REX_EXPORT_STUB(__imp__XamBase64Decode);
 REX_EXPORT_STUB(__imp__XamBeginDemand);
@@ -568,7 +569,7 @@ REX_EXPORT_STUB(__imp__XamMediaVerificationClose);
 REX_EXPORT_STUB(__imp__XamMediaVerificationCreate);
 REX_EXPORT_STUB(__imp__XamMediaVerificationFailedBlocks);
 REX_EXPORT_STUB(__imp__XamMediaVerificationInject);
-REX_EXPORT_STUB(__imp__XamMediaVerificationVerify);
+REX_EXPORT_QUIET_RETURN(__imp__XamMediaVerificationVerify, 0)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XamMoveFile);
 REX_EXPORT_STUB(__imp__XamNetworkStatusAddAddress);
 REX_EXPORT_STUB(__imp__XamNetworkStatusGetInformation);
@@ -767,7 +768,7 @@ REX_EXPORT_STUB(__imp__XamWebInstrumentationSetUserVarNoEscape);
 REX_EXPORT_STUB(__imp__XamWriteBiometricData);
 REX_EXPORT_STUB(__imp__XamWriteGamerTileEx);
 REX_EXPORT_STUB(__imp__XamWriteTile);
-REX_EXPORT_STUB(__imp__XamXStudioRequest);
+REX_EXPORT_QUIET_RETURN(__imp__XamXStudioRequest, 0)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__XamXgiBlobTrackerSetMockInfo);
 REX_EXPORT_STUB(__imp__XamXlfsInitializeUploadQueue);
 REX_EXPORT_STUB(__imp__XamXlfsInitializeUploadQueueWithTestHooks);

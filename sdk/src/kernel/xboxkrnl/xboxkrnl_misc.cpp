@@ -15,6 +15,7 @@
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xthread.h>
@@ -43,7 +44,7 @@ REX_EXPORT_STUB(__imp__EtxConsumerRegister);
 REX_EXPORT_STUB(__imp__EtxConsumerUnregister);
 REX_EXPORT_STUB(__imp__EtxProducerLog);
 REX_EXPORT_STUB(__imp__EtxProducerLogV);
-REX_EXPORT_STUB(__imp__EtxProducerRegister);
+REX_EXPORT_QUIET_RETURN(__imp__EtxProducerRegister, 0)  // no reference implementation; success, no log
 REX_EXPORT_STUB(__imp__EtxProducerUnregister);
 REX_EXPORT_STUB(__imp__EtxConsumerFlushBuffers);
 REX_EXPORT_STUB(__imp__EtxProducerLogXwpp);
