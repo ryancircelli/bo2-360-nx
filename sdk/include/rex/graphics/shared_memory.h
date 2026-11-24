@@ -52,6 +52,8 @@ class SharedMemory {
                                 void* context, void* data, uint64_t argument,
                                 bool invalidated_by_gpu);
   typedef void* WatchHandle;
+  // {physical address, size} of every page whose current data only the GPU copy holds (fresh-load save points).
+  std::vector<std::pair<uint32_t, uint32_t>> GpuWrittenRanges();
   // Registers a callback invoked when the specified memory range is invalidated
   // in the GPU memory copy by the CPU or (if triggered explicitly - such as by
   // a resolve) by the GPU. It will be fired for writes to pages previously

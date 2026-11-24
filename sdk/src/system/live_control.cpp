@@ -109,13 +109,8 @@ std::string Timescale(const std::string& args) {
 }
 
 std::string Savepoint(const std::string& args) {
-  auto [verb, path] = Split(args);
-  if (verb == "save" && !path.empty()) {
-    RequestSavepoint(path);
-    return "ok savepoint requested at the next frame: " + path;
-  }
-  if (verb == "load") return "error savepoint load is not available yet (savepoint-rewind work)";
-  return "error usage: savepoint save PATH | savepoint load PATH";
+  // Same entry as the Metal test control: save | load | save PATH | file PATH.
+  return ControlInProcessSavepoint(args, 20000);
 }
 
 }  // namespace

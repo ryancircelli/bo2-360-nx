@@ -865,6 +865,13 @@ bool Memory::InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uin
   return true;
 }
 
+std::vector<std::pair<uint32_t, uint32_t>> Memory::FunctionTableRanges() const {
+  std::lock_guard lock(function_tables_mutex_);
+  std::vector<std::pair<uint32_t, uint32_t>> out;
+  for (auto& t : function_tables_) out.push_back({t.table_base, (t.code_size + t.thunk_reserve) * 2});
+  return out;
+}
+
 bool Memory::DestroyFunctionTable(uint32_t code_base) {
   uint32_t table_base = 0;
   uint32_t table_size = 0;

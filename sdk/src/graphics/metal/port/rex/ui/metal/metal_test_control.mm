@@ -330,13 +330,15 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
               }).detach();
               continue;
             } else result = "error invalid key or hold duration (20..10000ms)";
-          } else if (command == "savepoint" && (argument == "save" || argument == "load") && rest.empty()) {
+          } else if (command == "savepoint" &&
+                     (argument == "save" || argument == "load" || (argument == "file" && !rest.empty()))) {
             // savepoint save | savepoint load (no path): same-process save/load at the next CP safe point.
-            // "savepoint save PATH" (file savepoint) is left to LiveControlCommand.
+            // savepoint file PATH / save PATH (runq live save NAME SP): the same capture written to a file a fresh
+            // process loads with REX_LOAD_SAVEPOINT=PATH. savepoint load PATH: refused with that hint.
             // Runs on its own thread so captures and input keep working while it waits.
             std::filesystem::remove(entry.path());
-            std::thread([response, argument] {
-              Write(response, rex::system::ControlInProcessSavepoint(argument, 20000));
+            std::thread([response, op = rest.empty() ? argument : argument + " " + rest] {  // "file PATH"
+              Write(response, rex::system::ControlInProcessSavepoint(op, 20000));
             }).detach();
             continue;
           } else if (command == "capture" && argument == "at") {

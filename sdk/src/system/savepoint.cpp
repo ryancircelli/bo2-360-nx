@@ -315,7 +315,9 @@ bool ParkedLocksFree(KernelState* ks) {
   return true;
 }
 
-std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
+// Empty result + *busy: a parked thread kept holding a host lock for 3 s; every thread is running again.
+std::vector<object_ref<XThread>> ParkThreads(KernelState* ks, bool* busy) {
+  *busy = false;
   StartMallocProbe();
   g_lock_fail_gcr = g_lock_fail_malloc = g_lock_fail_file = 0;
   auto start = std::chrono::steady_clock::now();
@@ -329,7 +331,10 @@ std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
                      free_now ? "locks free" : "GAVE UP, locks still held", attempt,
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
                      g_lock_fail_gcr, g_lock_fail_malloc, g_lock_fail_file);
-      return parked;
+      if (free_now) return parked;
+      for (auto& t : parked) thread_resume(MachPort(t.get()));
+      *busy = true;
+      return {};
     }
     for (auto& t : parked) thread_resume(MachPort(t.get()));
     std::this_thread::sleep_for(std::chrono::microseconds(200));
@@ -379,10 +384,13 @@ ZoneHooks* Find(malloc_zone_t* z) {
 // so the deferral is bounded and can stay on across any number of loads. Mode "all": every free
 // between capture and rewind (unbounded; old behaviour). REX_SAVEPOINT_DEFER=all|stack|none.
 bool g_all = false;
-std::vector<uintptr_t> g_keep;  // sorted; immutable while g_active
+// Sorted, immutable once published. A new capture publishes a new set and leaks the old one: a free
+// hook on another thread may still be searching it (one set per capture, so the leak is bounded).
+std::atomic<const std::vector<uintptr_t>*> g_keep{new std::vector<uintptr_t>()};
 inline bool Wanted(void* p) {
   if (g_all) return true;
-  return std::binary_search(g_keep.begin(), g_keep.end(), reinterpret_cast<uintptr_t>(p));
+  auto* keep = g_keep.load(std::memory_order_acquire);
+  return std::binary_search(keep->begin(), keep->end(), reinterpret_cast<uintptr_t>(p));
 }
 inline bool Defer(void* p) {
   if (!p || !g_active.load(std::memory_order_relaxed)) return false;
@@ -447,7 +455,7 @@ void BuildKeepSet(const std::vector<std::pair<const uint8_t*, const uint8_t*>>& 
     all.swap(merged);
     level.swap(fresh);
   }
-  g_keep.swap(all);
+  g_keep.store(new std::vector<uintptr_t>(std::move(all)), std::memory_order_release);
 }
 void Install() {
   static bool installed = false;
@@ -481,6 +489,8 @@ void Install() {
 std::vector<XThread*> g_held;
 Clock::time_point g_capture_time;
 
+std::function<void()> g_capture_parked_hook;
+
 SavepointStats CaptureInProcessSavepoint() {
   std::set_terminate(SavepointTerminate);
   ::signal(SIGABRT, SavepointAbortSignal);
@@ -488,7 +498,12 @@ SavepointStats CaptureInProcessSavepoint() {
   auto* ks = kernel_state();
   auto* mem = ks->memory();
   auto t0 = Clock::now();
-  auto parked = ParkThreads(ks);
+  bool busy = false;
+  auto parked = ParkThreads(ks, &busy);
+  if (busy) {
+    st.error = "busy (a game thread kept holding a host lock; try again)";
+    return st;  // the previous snapshot stays valid
+  }
   auto t1 = Clock::now();
   g_snap = InProcess{};
   g_snap.object_table = ks->object_table()->CaptureRewindState();
@@ -593,11 +608,12 @@ SavepointStats CaptureInProcessSavepoint() {
           stacks.push_back({ts.stack.data(), ts.stack.data() + ts.stack.size()});
         defer_free::BuildKeepSet(stacks);
         std::fprintf(stderr, "[savepoint-s3] free deferral (stack mode): %zu blocks reachable from captured stacks\n",
-                     defer_free::g_keep.size());
+                     defer_free::g_keep.load()->size());
       }
       defer_free::g_active.store(true);
     }
   }
+  if (g_capture_parked_hook) g_capture_parked_hook();  // fresh-load file save: threads still parked
   auto t2 = Clock::now();
   // Bisect switch REX_SAVEPOINT_HOLD=guest|host: keep guest threads (or host XHostThreads) suspended
   // from capture to rewind, so only the other side can change state in between.
@@ -672,9 +688,15 @@ SavepointStats RewindToInProcessSavepoint() {
   auto* mem = ks->memory();
   auto t0 = Clock::now();
   static std::atomic<bool> rewind_done{false};
+  bool busy = false;
+  auto parked = ParkThreads(ks, &busy);
+  if (busy) {
+    st.error = "busy (a game thread kept holding a host lock; try again)";
+    return st;
+  }
+  rewind_done = false;  // static: each load gets its own watchdog
   g_rewind_phase = 1;
   StartRewindWatchdog(&rewind_done);
-  auto parked = ParkThreads(ks);
   for (auto* t : g_held) thread_resume(MachPort(t));  // ParkThreads suspended them a second time
   if (!g_held.empty()) std::fprintf(stderr, "[savepoint-s3] released hold on %zu threads\n", g_held.size());
   g_held.clear();
@@ -685,7 +707,7 @@ SavepointStats RewindToInProcessSavepoint() {
   if (restore_objects) {
     g_snap.objects_at_rewind = ks->object_table()->GetAllObjects();
     g_rewind_phase = 3;
-    ks->object_table()->Rewind(g_snap.object_table);
+    ks->object_table()->Rewind(g_snap.object_table, g_snap.objects_at_rewind);
     size_t queued = ks->RewindDispatchQueue(g_snap.dispatch_queue);
     std::fprintf(stderr, "[savepoint-s3] kernel dispatch queue: %zu -> %zu\n", queued, g_snap.dispatch_queue.size());
     if (g_snap.xma && g_snap.xma_state) {
@@ -915,17 +937,37 @@ std::atomic<int> g_op{0};  // 1 save, 2 load; atomic so the command-processor st
 uint64_t g_seq = 0, g_done = 0;
 std::string g_result;
 int g_loads = 0;
+std::string g_path;  // op 3
 }  // namespace control
 
+// savepoint_file.cpp writes the capture out through this.
+void VisitInProcessSnapshot(
+    const std::function<void(memory::BaseHeap*, const memory::BaseHeap::RewindState&)>& heap,
+    const std::function<void(uint32_t space, uint32_t base, uint32_t size, uint32_t protect,
+                             const uint8_t* data)>& region) {
+  for (auto& h : g_snap.heaps) heap(h.first, h.second);
+  for (auto& r : g_snap.regions) region(r.space, r.base, r.size, r.protect, r.data.data());
+}
+
+void VisitInProcessThreads(const std::function<void(XThread*, const arm_thread_state64_t&,
+                                                    const arm_neon_state64_t&, void* ctx)>& fn) {
+  for (auto& t : g_snap.threads) fn(t.thread.get(), t.gp, t.neon, t.ctx);
+}
+
 std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms) {
-  int code = op == "save" ? 1 : op == "load" ? 2 : 0;
-  if (!code) return "error usage: savepoint save|load";
+  // "save PATH" (runq live save NAME SP) = "file PATH": the file save keeps the in-memory one too.
+  if (op.rfind("load ", 0) == 0)
+    return "error a running game loads only its in-memory save point; start a new game with REX_LOAD_SAVEPOINT=" +
+           op.substr(5);
+  int code = op == "save" ? 1 : op == "load" ? 2 : op.rfind("file ", 0) == 0 || op.rfind("save ", 0) == 0 ? 3 : 0;
+  if (!code) return "error usage: savepoint save|load|file PATH";
   std::unique_lock<std::mutex> l(control::g_m);
   if (control::g_op) return "error busy";
   control::g_op = code;
+  if (code == 3) control::g_path = op.substr(5);
   uint64_t seq = ++control::g_seq;
   if (!control::g_cv.wait_for(l, std::chrono::milliseconds(timeout_ms), [&] { return control::g_done >= seq; })) {
-    control::g_op = 0;
+    if (control::g_seq == seq) control::g_op = 0;  // never clear a newer request
     return "error timeout (no command-processor safe point; is the game rendering?)";
   }
   return control::g_result;
@@ -941,25 +983,28 @@ void ServiceControlRequest(int frame) {
     seq = control::g_seq;
   }
   if (!op) return;
-  char buf[200];
-  if (op == 1) {
+  char buf[1024];
+  if (op == 3) {
+    std::snprintf(buf, sizeof buf, "%s", WriteSavepointFile(control::g_path, frame).c_str());
+  } else if (op == 1) {
     auto st = CaptureInProcessSavepoint();
     control::g_loads = 0;
-    std::snprintf(buf, sizeof buf, "ok save frame=%d mb=%llu ms=%.1f threads=%u", frame,
+    if (!st.ok) std::snprintf(buf, sizeof buf, "error %s", st.error.c_str());
+    else std::snprintf(buf, sizeof buf, "ok save frame=%d mb=%llu ms=%.1f threads=%u", frame,
                   (unsigned long long)(st.bytes >> 20), st.park_ms + st.write_ms, st.threads_parked);
   } else if (!g_snap.valid) {
     std::snprintf(buf, sizeof buf, "error no savepoint (send savepoint save first)");
   } else {
     auto st = RewindToInProcessSavepoint();
-    ++control::g_loads;
-    std::snprintf(buf, sizeof buf, "ok load frame=%d ms=%.1f threads=%u loads=%d", frame,
+    if (!st.ok) std::snprintf(buf, sizeof buf, "error %s", st.error.c_str());
+    else ++control::g_loads, std::snprintf(buf, sizeof buf, "ok load frame=%d ms=%.1f threads=%u loads=%d", frame,
                   st.park_ms + st.write_ms, st.threads_parked, control::g_loads);
   }
   REXSYS_INFO("[savepoint-s3] control: {}", buf);
   std::lock_guard<std::mutex> l(control::g_m);
   control::g_result = buf;
   control::g_done = seq;
-  control::g_op = 0;
+  if (control::g_seq == seq) control::g_op = 0;  // a request that timed out may have been replaced
   control::g_cv.notify_all();
 }
 

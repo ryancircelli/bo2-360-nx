@@ -10,6 +10,7 @@
  */
 
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -27,8 +28,10 @@
 #include <rex/system/xmutant.h>
 #include <rex/system/xnotifylistener.h>
 #include <rex/system/xsemaphore.h>
+#include <rex/system/xsocket.h>
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
+#include <rex/system/xtimer.h>
 
 namespace rex::system {
 
@@ -164,6 +167,7 @@ X_STATUS XObject::Delete() {
 bool XObject::SaveObject(stream::ByteStream* stream) {
   stream->Write<uint32_t>(allocated_guest_object_);
   stream->Write<uint32_t>(guest_object_ptr_);
+  stream->Write<uint32_t>(wrapped_native_ptr_);  // else GetNativeObject no longer trusts the stash after a restore
 
   stream->Write(uint32_t(handles_.size()));
   stream->Write(&handles_[0], handles_.size() * sizeof(X_HANDLE));
@@ -174,6 +178,11 @@ bool XObject::SaveObject(stream::ByteStream* stream) {
 bool XObject::RestoreObject(stream::ByteStream* stream) {
   allocated_guest_object_ = stream->Read<uint32_t>() > 0;
   guest_object_ptr_ = stream->Read<uint32_t>();
+  wrapped_native_ptr_ = stream->Read<uint32_t>();
+  if (allocated_guest_object_ && guest_object_ptr_) {
+    std::lock_guard<std::mutex> lock(g_created_bodies_mutex);
+    g_created_bodies[guest_object_ptr_] = this;
+  }
 
   handles_.resize(stream->Read<uint32_t>());
   stream->Read(&handles_[0], handles_.size() * sizeof(X_HANDLE));
@@ -208,13 +217,13 @@ object_ref<XObject> XObject::Restore(KernelState* kernel_state, Type type,
     case Type::Session:
       break;
     case Type::Socket:
-      break;
+      return XSocket::Restore(kernel_state, stream);
     case Type::SymbolicLink:
       return XSymbolicLink::Restore(kernel_state, stream);
     case Type::Thread:
       return XThread::Restore(kernel_state, stream);
     case Type::Timer:
-      break;
+      return XTimer::Restore(kernel_state, stream);
     case Type::Undefined:
       break;
   }
@@ -543,6 +552,10 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
         return NULL;
     }
 
+    if (std::getenv("REX_TRACE_EVENT")) {  // diagnosis: a stash that did not match makes a second object
+      REXSYS_INFO("[trace-event] new native object type {} body {:08X} stash {:08X} stashed body {:08X}", as_type,
+                  body, handle, stashed ? stashed->native_body() : 0u);
+    }
     // Stash pointer in struct. Bodies without a dispatch header are SDK-allocated and were returned above.
     object->wrapped_native_ptr_ = body;
     PublishStash(header, object->handle());

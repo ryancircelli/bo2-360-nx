@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -673,6 +674,11 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
   return any_connected ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
 }
 
+// Guest tick when the virtual pad scripts' clock reads 0. A save point load moves it to the load.
+static std::atomic<uint64_t> g_pad_script_start{0};
+
+void RebaseVirtualPadScripts() { g_pad_script_start.store(chrono::Clock::QueryGuestTickCount()); }
+
 std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
 #if REX_PLATFORM_SWITCH
   // Switch layer: scripted pads and Steam detection are desktop tools; the Switch build leaves them out.
@@ -714,9 +720,9 @@ std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
   }
   script::ScriptInputDriver::Clock clock;
   if (REXCVAR_GET(hid_virtual_pad_guest_time)) {
-    const uint64_t start = chrono::Clock::QueryGuestTickCount();
-    clock = [start]() {
-      return static_cast<double>(chrono::Clock::QueryGuestTickCount() - start) /
+    g_pad_script_start.store(chrono::Clock::QueryGuestTickCount());
+    clock = []() {
+      return static_cast<double>(chrono::Clock::QueryGuestTickCount() - g_pad_script_start.load()) /
              static_cast<double>(chrono::Clock::guest_tick_frequency());
     };
   }
