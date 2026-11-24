@@ -71,6 +71,9 @@ class IGraphicsSystem {
     (void)block_size_log2;
   }
 
+  void CaptureSavepoint();
+  void RewindSavepoint();
+
   // Persistent shader/pipeline storage under the cache root. Default: none.
   virtual void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                        bool blocking) {
@@ -98,5 +101,9 @@ class IGraphicsSystem {
   // frames a frame dump already captured. Called on the UI thread after the title is terminated.
   virtual void PrepareForHardExit() {}
 };
+
+void SetGraphicsSavepointHooks(IGraphicsSystem* graphics, void (*capture)(IGraphicsSystem*),
+                               void (*rewind)(IGraphicsSystem*));
+void ClearGraphicsSavepointHooks(IGraphicsSystem* graphics);
 
 }  // namespace rex::system
