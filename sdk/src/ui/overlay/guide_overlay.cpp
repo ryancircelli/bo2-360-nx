@@ -384,7 +384,8 @@ void GuideInputGate::SetHolder(int user) {
     REXLOG_INFO("[guide] game input now held from {} pad (was {})", HolderName(user), HolderName(prev));
   }
   if (user < 0 && prev >= 0) {
-    draining_.store(prev == kAllPads ? 0xFu : (1u << prev), std::memory_order_release);
+    // Or, not store: pads still draining from a take-over keep their bit until their buttons are up.
+    draining_.fetch_or(prev == kAllPads ? 0xFu : (1u << prev), std::memory_order_acq_rel);
     in::mnk::SetOverlayHold(false);
     REXLOG_INFO("[guide] {} pad held while open: {} game polls, {} with input held back, 0 passed",
                 HolderName(prev), held_polls_.load(), held_input_polls_.load());
