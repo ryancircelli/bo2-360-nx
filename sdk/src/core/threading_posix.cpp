@@ -309,19 +309,30 @@ void Sleep(std::chrono::microseconds duration) {
   } while (ret == -1 && errno == EINTR);
 }
 
+// Savepoint rewind moves this clock back by the time between capture and rewind, so a timed wait
+// that was in progress at the capture resumes with the time it had left instead of timing out.
+std::atomic<int64_t> g_wait_clock_shift_ns{0};
+std::chrono::steady_clock::time_point WaitNow() {
+  return std::chrono::steady_clock::now() -
+         std::chrono::nanoseconds(g_wait_clock_shift_ns.load(std::memory_order_relaxed));
+}
+void ShiftWaitClock(std::chrono::nanoseconds back) {
+  g_wait_clock_shift_ns.fetch_add(back.count(), std::memory_order_relaxed);
+}
+
 // TODO(bwrsandman) Implement by allowing alert interrupts from IO operations
 thread_local bool alertable_state_ = false;
 bool DispatchCurrentThreadUserCallback();
 #if !REX_FAST_WAITS  // the REX_FAST_WAITS version sleeps on the thread's wake word; it is further down
 SleepResult AlertableSleep(std::chrono::microseconds duration) {
   alertable_state_ = true;
-  auto deadline = std::chrono::steady_clock::now() + duration;
+  auto deadline = WaitNow() + duration;
   while (true) {
     if (DispatchCurrentThreadUserCallback()) {
       alertable_state_ = false;
       return SleepResult::kAlerted;
     }
-    auto now = std::chrono::steady_clock::now();
+    auto now = WaitNow();
     if (now >= deadline) {
       alertable_state_ = false;
       return SleepResult::kSuccess;
@@ -1175,7 +1186,19 @@ class PosixConditionBase {
         // Do not start another full timeout after acquiring the lock.
         executed = cond_.wait_until(lock, deadline, predicate);
 #else
-        executed = cond_.wait_for(lock, timeout, predicate);
+        // Not wait_for: its deadline is on the plain steady clock, which a savepoint rewind can't move back.
+        const auto now = WaitNow();
+        const auto deadline = timeout > std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::time_point::max() - now)
+                                  ? std::chrono::steady_clock::time_point::max()
+                                  : now + timeout;
+        for (;;) {
+          if (predicate()) break;
+          const auto left = deadline - WaitNow();
+          if (left <= std::chrono::steady_clock::duration::zero()) break;
+          cond_.wait_for(lock, left);
+        }
+        executed = predicate();
 #endif
       }
       --waiters_;
@@ -1198,7 +1221,7 @@ class PosixConditionBase {
       return std::make_pair(result, 0);
     }
 
-    auto start_time = std::chrono::steady_clock::now();
+    auto start_time = WaitNow();
     auto end_time = (timeout == std::chrono::milliseconds::max())
                         ? std::chrono::steady_clock::time_point::max()
                         : start_time + timeout;
@@ -1248,7 +1271,7 @@ class PosixConditionBase {
         clear_locks();
         // The timeout also expires when an object cannot be inspected.
         // The earlier continue skipped the only timeout check.
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = WaitNow();
         if (now >= end_time) {
           return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
         }
@@ -1303,7 +1326,7 @@ class PosixConditionBase {
 
       clear_locks();
 
-      auto now = std::chrono::steady_clock::now();
+      auto now = WaitNow();
       if (now >= end_time) {
         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
       }

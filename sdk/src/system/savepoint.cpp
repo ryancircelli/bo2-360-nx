@@ -494,6 +494,7 @@ void Install() {
 
 std::vector<XThread*> g_held;
 Clock::time_point g_capture_time;
+Clock::time_point g_capture_park_time;  // when the captured threads stopped
 uint64_t g_capture_guest_ticks = 0;
 
 namespace cs_trace { void SetPhase(uint32_t p); }
@@ -506,6 +507,8 @@ SavepointStats CaptureInProcessSavepoint() {
   auto* mem = ks->memory();
   auto t0 = Clock::now();
   auto parked = ParkThreads(ks);
+  g_capture_park_time = Clock::now();
+  g_capture_guest_ticks = rex::chrono::Clock::QueryGuestTickCount();
   auto t1 = Clock::now();
   g_snap = InProcess{};
   g_snap.object_table = ks->object_table()->CaptureRewindState();
@@ -605,7 +608,6 @@ SavepointStats CaptureInProcessSavepoint() {
     g_snap.threads.push_back(std::move(ts));
   }
   g_snap.valid = true;
-  g_capture_guest_ticks = rex::chrono::Clock::QueryGuestTickCount();
   cs_trace::SetPhase(1);
   {
     const char* mode = std::getenv("REX_SAVEPOINT_DEFER");
@@ -823,10 +825,6 @@ SavepointStats RewindToInProcessSavepoint() {
   auto parked = ParkThreads(ks);
   for (auto* t : g_held) thread_resume(MachPort(t));  // ParkThreads suspended them a second time
   cs_trace::SetPhase(2);  // threads parked: later entries belong to the rewound timeline
-  if (!std::getenv("REX_SAVEPOINT_NO_CLOCK")) {
-    // Guest time is guest state: without this the rewound frame sees the whole save-to-rewind gap as elapsed.
-    rex::chrono::Clock::RewindGuestTickCount(g_capture_guest_ticks);
-  }
   if (!g_held.empty()) std::fprintf(stderr, "[savepoint-s3] released hold on %zu threads\n", g_held.size());
   g_held.clear();
   g_rewind_phase = 2;
@@ -985,6 +983,15 @@ SavepointStats RewindToInProcessSavepoint() {
   // Mode "all": revived frames free their blocks for real from here; the deferred ones stay leaked.
   // Mode "stack": stays on, so a second load of the same savepoint still finds those blocks intact.
   if (defer_free::g_all) defer_free::g_active.store(false);
+  // Time stands still from the capture's park to here, for the guest clock and for restored timed waits.
+  if (!std::getenv("REX_SAVEPOINT_NO_CLOCK")) {
+    // Guest time is guest state: without this the rewound frame sees the whole save-to-rewind gap as elapsed.
+    rex::chrono::Clock::RewindGuestTickCount(g_capture_guest_ticks);
+  }
+  if (!std::getenv("REX_SAVEPOINT_NO_WAIT_SHIFT")) {
+    // Waits restored mid-flight keep their captured deadlines; without this they all time out at once.
+    rex::thread::ShiftWaitClock(Clock::now() - g_capture_park_time);
+  }
   auto t2 = Clock::now();
   uint32_t left_parked = 0;
   for (auto& t : parked) {
