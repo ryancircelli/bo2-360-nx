@@ -18,6 +18,8 @@
 #include <cstdlib>
 #include <iterator>
 #include <condition_variable>
+#include <memory>
+#include <mach/semaphore.h>
 #include <list>
 #include <functional>
 #include <mutex>
@@ -265,22 +267,46 @@ std::vector<object_ref<XThread>> ParkThreadsOnce(KernelState* ks);
 // A thread suspended while it holds the global critical region (object table, kernel lists) or a
 // malloc zone lock deadlocks the capture/rewind that follows (seen in NFSMW: rewind stuck in
 // ObjectTable::GetAllObjects). Park, check those locks are free, otherwise resume and retry.
+semaphore_t g_probe_sem;
+std::atomic<uint64_t> g_probe_req{0}, g_probe_done{0};
+void* MallocProbeMain(void*) {
+  while (true) {
+    semaphore_wait(g_probe_sem);
+    uint64_t gen = g_probe_req.load();
+    for (size_t n : {16u, 96u, 1024u, 16384u, 200000u, 3u << 20}) {
+      void* volatile p = std::malloc(n);
+      std::free(p);
+    }
+    g_probe_done.store(gen);
+  }
+  return nullptr;
+}
+void StartMallocProbe() {
+  static bool started = false;
+  if (started) return;
+  started = true;
+  semaphore_create(mach_task_self(), &g_probe_sem, SYNC_POLICY_FIFO, 0);
+  pthread_t t;
+  pthread_create(&t, nullptr, MallocProbeMain, nullptr);
+  pthread_detach(t);
+}
 bool ParkedLocksFree() {
   auto& m = rex::thread::global_critical_region::mutex();
   if (!m.try_lock()) return false;
   m.unlock();
-  vm_address_t* zones = nullptr; unsigned count = 0;
-  if (malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count) == KERN_SUCCESS) {
-    for (unsigned i = 0; i < count; ++i) {
-      auto* z = reinterpret_cast<malloc_zone_t*>(zones[i]);
-      if (z && z->introspect && z->version >= 5 && z->introspect->zone_locked && z->introspect->zone_locked(z))
-        return false;
-    }
-  }
+  // Malloc: introspect->zone_locked traps on the xzone allocator (macOS 15+), so probe instead: a
+  // persistent helper thread (started before any parking, see StartMallocProbe) mallocs and frees a
+  // spread of sizes on request. If it cannot finish in 25 ms a parked thread holds an allocator lock;
+  // a stuck probe completes once the threads are resumed for the retry. No allocation on this side.
+  uint64_t gen = ++g_probe_req;
+  semaphore_signal(g_probe_sem);
+  for (int i = 0; i < 25 && g_probe_done.load() < gen; ++i) usleep(1000);
+  if (g_probe_done.load() < gen) return false;
   return true;
 }
 
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
+  StartMallocProbe();
   for (int attempt = 0;; ++attempt) {
     auto parked = ParkThreadsOnce(ks);
     if (ParkedLocksFree() || attempt >= 2000) {
