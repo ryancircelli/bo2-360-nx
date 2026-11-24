@@ -397,6 +397,12 @@ bool XmaContext::Work() {
   XMA_CONTEXT_DATA data(context_ptr);
   const XMA_CONTEXT_DATA initial_data = data;
 
+  // A read offset this decoder did not store means the game set a decode position, so drop what
+  // is left of the frame it was decoding (xenia-canary a4ef31cdf).
+  if (data.input_buffer_read_offset != last_stored_read_offset_) {
+    current_frame_remaining_subframes_ = 0;
+  }
+
   if (!data.output_buffer_valid) {
     return true;
   }
@@ -440,17 +446,20 @@ bool XmaContext::Work() {
   // Minimum free blocks needed before attempting a decode.
   // Use subframe_decode_count (clamped to 1) instead of full frame size.
   const uint32_t effective_sdc = std::max(static_cast<uint32_t>(1), data.subframe_decode_count);
-  const int32_t minimum_subframe_decode_count =
-      static_cast<int32_t>(effective_sdc) + data.output_buffer_padding;
+  // Re-read each pass: Decode() clears output_buffer_padding once it has skipped a decode
+  // position's leading subframes.
+  const auto minimum_subframe_decode_count = [&]() {
+    return static_cast<int32_t>(effective_sdc) + static_cast<int32_t>(data.output_buffer_padding);
+  };
 
-  if (minimum_subframe_decode_count > remaining_subframe_blocks_in_output_buffer_) {
+  if (minimum_subframe_decode_count() > remaining_subframe_blocks_in_output_buffer_) {
     StoreContextMerged(data, initial_data, context_ptr);
     AnnotateProduction(true, 0, data);  // output full, not silence
     return true;
   }
 
   uint8_t silence_reason = 0;  // Measurement only
-  while (remaining_subframe_blocks_in_output_buffer_ >= minimum_subframe_decode_count) {
+  while (remaining_subframe_blocks_in_output_buffer_ >= minimum_subframe_decode_count()) {
     const uint32_t previous_offset = data.input_buffer_read_offset;
     const uint32_t previous_buffer = data.current_buffer;
     const auto previous_valid = data.input_buffer_0_valid | (data.input_buffer_1_valid << 1);
@@ -755,6 +764,7 @@ void XmaContext::ResetDecoderState() {
   current_frame_remaining_subframes_ = 0;
   loop_frame_output_limit_ = 0;
   loop_start_skip_pending_ = false;
+  last_stored_read_offset_ = UINT32_MAX;
 }
 
 void XmaContext::Disable() {
@@ -1002,6 +1012,10 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
   if (initial_data.output_buffer_valid && !data.output_buffer_valid) {
     fresh.output_buffer_valid = 0;
   }
+  // The decoder clears the decode position's start subframe once it has skipped them.
+  if (initial_data.output_buffer_padding && !data.output_buffer_padding) {
+    fresh.output_buffer_padding = 0;
+  }
 
   fresh.input_buffer_read_offset = data.input_buffer_read_offset;
   fresh.error_status = data.error_status;
@@ -1009,6 +1023,7 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
   fresh.output_buffer_read_offset = data.output_buffer_read_offset;
 
   fresh.Store(context_ptr);
+  last_stored_read_offset_ = fresh.input_buffer_read_offset;
 }
 
 uint32_t XmaContext::Consume(memory::RingBuffer* output_rb, const XMA_CONTEXT_DATA* data) {
@@ -1306,6 +1321,16 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
     loop_start_skip_pending_ = false;
     current_frame_remaining_subframes_ -=
         std::min(decoded_start_skip, current_frame_remaining_subframes_);
+
+    // Decode position start: skip the leading subframes the game asked for, then clear the count.
+    if (data->output_buffer_padding) {
+      const uint8_t skip = data->output_buffer_padding << data->is_stereo;
+      if (skip < current_frame_remaining_subframes_) {
+        REXAPU_INFO("XmaContext {}: decode position, skipping {} leading subframes", id(), skip);
+        current_frame_remaining_subframes_ -= skip;
+      }
+      data->output_buffer_padding = 0;
+    }
   }
 
   // Compute where to go next.
