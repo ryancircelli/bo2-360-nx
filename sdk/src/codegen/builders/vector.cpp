@@ -1196,8 +1196,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       // We need to saturate to signed 16-bit range [-32767, 32767] (NOT -32768, based on tests)
       // NOTE: Guest element 0 is at array index 3, element 1 is at index 2 (reversed for host)
       // Element 0 (index 3) goes to HIGH word, element 1 (index 2) goes to LOW word
-      ctx.println("\t{}.s32 = {}.s32[3] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]));
-      ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
+      ctx.println("\t{}.s64 = int64_t({}.s32[3]) - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{}.s32 = {}.s64 > 32767 ? 32767 : ({}.s64 < -32767 ? -32767 : int32_t({}.s64));",
                   ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
       // A NaN packs as 0x8000, the minimum that unpacks back to a NaN, not the clamped
       // 0x8001 (xenia-canary c0ea2c443).
@@ -1205,8 +1205,8 @@ bool build_vpkd3d128(BuilderContext& ctx) {
                   ctx.v(ctx.insn.operands[1]));
       ctx.println("\t{}.u32[0] = uint32_t(uint16_t({}.s32)) << 16;", ctx.v_temp(),
                   ctx.temp());  // element 0 to high word
-      ctx.println("\t{}.s32 = {}.s32[2] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]));
-      ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
+      ctx.println("\t{}.s64 = int64_t({}.s32[2]) - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]));
+      ctx.println("\t{}.s32 = {}.s64 > 32767 ? 32767 : ({}.s64 < -32767 ? -32767 : int32_t({}.s64));",
                   ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
       ctx.println("\t{0}.s32 = ({1}.f32[2] != {1}.f32[2]) ? -32768 : {0}.s32;", ctx.temp(),
                   ctx.v(ctx.insn.operands[1]));
@@ -1282,7 +1282,7 @@ bool build_vpkd3d128(BuilderContext& ctx) {
         ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
                     srcIdx);
         ctx.println(
-            "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : "
+            "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 131008.0f) ? 0xFF : "
             "(({2}.u32[{3}]&0x7f800000)>>23);",
             ctx.v_temp(), ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
         ctx.println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", ctx.temp(),
@@ -1306,9 +1306,11 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       for (size_t i = 0; i < 4; i++) {
         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
         size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
-        ctx.println("\t{}.s32 = {}.s32[{}] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        if (dstIdx > 7)
+          continue;  // shift 3 keeps only the low word; x and y would land past the register
+        ctx.println("\t{}.s64 = int64_t({}.s32[{}]) - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]),
                     srcIdx);
-        ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
+        ctx.println("\t{}.s32 = {}.s64 > 32767 ? 32767 : ({}.s64 < -32767 ? -32767 : int32_t({}.s64));",
                     ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
         ctx.println("\t{0}.s32 = ({1}.f32[{2}] != {1}.f32[{2}]) ? -32768 : {0}.s32;", ctx.temp(),
                     ctx.v(ctx.insn.operands[1]), srcIdx);
@@ -1329,10 +1331,12 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       for (size_t i = 0; i < 4; i++) {
         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
         size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
+        if (dstIdx > 7)
+          continue;  // shift 3 keeps only the low word; x and y would land past the register
         ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
                     srcIdx);
         ctx.println(
-            "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : "
+            "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 131008.0f) ? 0xFF : "
             "(({2}.u32[{3}]&0x7f800000)>>23);",
             ctx.v_temp(), ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
         ctx.println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", ctx.temp(),
@@ -1348,28 +1352,27 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       break;
     }
 
-    case 6:  // NORMPACKED64 - pack 4 floats to 4:20:20:20 format
+    case 6:  // NORMPACKED64 - pack 4 floats (3.0+X form) to w(4):z(20):y(20):x(20), Xenia ULONG_4202020
     {
-      // Format: 4 bits for w, 20 bits each for x, y, z (packed into 64 bits)
+      // Same scheme as NORMPACKED32: clamp in float space, NaN packs as the minimum, keep the
+      // low bits. Guest element i is host index 3-i; the 64 bits land like NORMSHORT4's.
       ctx.println("\t{}.u64[0] = 0;", ctx.v_temp());
-      // Pack x (20 bits, position 0-19)
-      ctx.println("\t{0}.s32 = ({1}.f32[0] != {1}.f32[0]) ? 524288 : int32_t({1}.f32[0]);",
-                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
-      ctx.println("\t{}.u64[0] = uint64_t({}.s32 & 0xFFFFF);", ctx.v_temp(), ctx.temp());
-      // Pack y (20 bits, position 20-39)
-      ctx.println("\t{0}.s32 = ({1}.f32[1] != {1}.f32[1]) ? 524288 : int32_t({1}.f32[1]);",
-                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
-      ctx.println("\t{}.u64[0] |= uint64_t({}.s32 & 0xFFFFF) << 20;", ctx.v_temp(), ctx.temp());
-      // Pack z (20 bits, position 40-59)
-      ctx.println("\t{0}.s32 = ({1}.f32[2] != {1}.f32[2]) ? 524288 : int32_t({1}.f32[2]);",
-                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
-      ctx.println("\t{}.u64[0] |= uint64_t({}.s32 & 0xFFFFF) << 40;", ctx.v_temp(), ctx.temp());
-      // Pack w (4 bits, position 60-63)
-      ctx.println("\t{0}.s32 = ({1}.f32[3] != {1}.f32[3]) ? 0 : int32_t({1}.f32[3]);",
-                  ctx.temp(), ctx.v(ctx.insn.operands[1]));
-      ctx.println("\t{}.u64[0] |= uint64_t({}.s32 & 0xF) << 60;", ctx.v_temp(), ctx.temp());
-      ctx.println("\t{}.u64[{}] = {}.u64[0];", ctx.v(ctx.insn.operands[0]),
-                  ctx.insn.operands[4] >> 1, ctx.v_temp());
+      for (size_t i = 0; i < 4; i++) {
+        const bool w = i == 3;
+        ctx.println("\t{0}.f32 = {1}.f32[{2}] < {3} ? {3} : ({1}.f32[{2}] > {4} ? {4} : {1}.f32[{2}]);",
+                    ctx.temp(), ctx.v(ctx.insn.operands[1]), 3 - i,
+                    w ? "kPack4202020_Min4" : "kPack4202020_Min20",
+                    w ? "kPack4202020_Max4" : "kPack4202020_Max20");
+        ctx.println("\t{0}.u32 = ({1}.f32[{2}] != {1}.f32[{2}]) ? {3} : {0}.u32;", ctx.temp(),
+                    ctx.v(ctx.insn.operands[1]), 3 - i, w ? "0x40400000u" : "0x40380000u");
+        ctx.println("\t{}.u64[0] |= uint64_t({}.u32 & {}) << {};", ctx.v_temp(), ctx.temp(),
+                    w ? "0xFu" : "0xFFFFFu", i * 20);
+      }
+      ctx.println("\t{}.u32[{}] = {}.u32[0];", ctx.v(ctx.insn.operands[0]), ctx.insn.operands[4],
+                  ctx.v_temp());
+      if (ctx.insn.operands[4] < 3)  // shift 3 keeps only the low word (Xenia pack 2 table)
+        ctx.println("\t{}.u32[{}] = {}.u32[1];", ctx.v(ctx.insn.operands[0]),
+                    ctx.insn.operands[4] + 1, ctx.v_temp());
       break;
     }
 
@@ -1401,7 +1404,9 @@ bool build_vupkd3d128(BuilderContext& ctx) {
       for (size_t i = 0; i < 2; i++) {
         ctx.println("\t{}.f32 = 3.0f;", ctx.temp());
         ctx.println("\t{}.s32 += {}.s16[{}];", ctx.temp(), ctx.v(ctx.insn.operands[1]), 1 - i);
-        ctx.println("\t{}.f32[{}] = {}.f32;", ctx.v_temp(), 3 - i, ctx.temp());
+        // -32768 unpacks as a quiet NaN (Xenia XMMUnpackSHORT_Overflow).
+        ctx.println("\t{0}.u32[{1}] = {2}.u32 == 0x403F8000u ? 0x7FC00000u : {2}.u32;", ctx.v_temp(),
+                    3 - i, ctx.temp());
       }
       ctx.println("\t{}.f32[1] = 0.0f;", ctx.v_temp());
       ctx.println("\t{}.f32[0] = 1.0f;", ctx.v_temp());
@@ -1423,11 +1428,13 @@ bool build_vupkd3d128(BuilderContext& ctx) {
       ctx.println("\t{}.u32[3] = {}.u32[0];", vDst, ctx.v_temp());
       // y (bits 10-19) - sign extend from 10 bits --> Guest element 1 (host u32[2])
       ctx.println("\t{}.s32 = ({}.s32[0] << 12) >> 22;", ctx.temp(), vSrc);
-      ctx.println("\t{}.s32[0] = {}.s32 + 0x40400000;", ctx.v_temp(), ctx.temp());
+      ctx.println("\t{}.s32[0] = {}.s32 == -512 ? 0x7FC00000 : ({}.s32 + 0x40400000);",
+                  ctx.v_temp(), ctx.temp(), ctx.temp());
       ctx.println("\t{}.u32[2] = {}.u32[0];", vDst, ctx.v_temp());
       // z (bits 20-29) - sign extend from 10 bits --> Guest element 2 (host u32[1])
       ctx.println("\t{}.s32 = ({}.s32[0] << 2) >> 22;", ctx.temp(), vSrc);
-      ctx.println("\t{}.s32[0] = {}.s32 + 0x40400000;", ctx.v_temp(), ctx.temp());
+      ctx.println("\t{}.s32[0] = {}.s32 == -512 ? 0x7FC00000 : ({}.s32 + 0x40400000);",
+                  ctx.v_temp(), ctx.temp(), ctx.temp());
       ctx.println("\t{}.u32[1] = {}.u32[0];", vDst, ctx.v_temp());
       // w (bits 30-31) - 2 bits, convert to 1.0+w form --> Guest element 3 (host u32[0])
       ctx.println("\t{}.u32[0] = ({}.u32[0] >> 30) | 0x3F800000;", ctx.v_temp(), vSrc);
@@ -1469,7 +1476,8 @@ bool build_vupkd3d128(BuilderContext& ctx) {
         size_t dstIdx = 3 - i;  // Write to f32 indices 3, 2, 1, 0 (Guest elements 0, 1, 2, 3)
         ctx.println("\t{}.f32 = 3.0f;", ctx.temp());
         ctx.println("\t{}.s32 += {}.s16[{}];", ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
-        ctx.println("\t{}.f32[{}] = {}.f32;", ctx.v(ctx.insn.operands[0]), dstIdx, ctx.temp());
+        ctx.println("\t{0}.u32[{1}] = {2}.u32 == 0x403F8000u ? 0x7FC00000u : {2}.u32;",
+                    ctx.v(ctx.insn.operands[0]), dstIdx, ctx.temp());
       }
       break;
     }
@@ -1497,24 +1505,19 @@ bool build_vupkd3d128(BuilderContext& ctx) {
       break;
     }
 
-    case 6:  // NORMPACKED64 - unpack 4:20:20:20 to floats
+    case 6:  // NORMPACKED64 - unpack w(4):z(20):y(20):x(20) to 3.0+X floats (w to 1.0+w)
     {
+      // Source is guest elements 2-3 (host u64[0]), as for NORMSHORT4. -524288 unpacks as NaN.
       auto vSrc = ctx.v(ctx.insn.operands[1]);
       auto vDst = ctx.v(ctx.insn.operands[0]);
-      // Format: w(4 bits):z(20 bits):y(20 bits):x(20 bits) in 64 bits
-      // x, y, z --> floats, w --> float
-      ctx.println("\t{}.u64[0] = {}.u64[1];", ctx.v_temp(), vSrc);
-      // x (bits 0-19) - sign extend from 20 bits
-      ctx.println("\t{}.s32 = (int32_t({}.u64[0] << 44) >> 44);", ctx.temp(), ctx.v_temp());
-      ctx.println("\t{}.f32[0] = float({}.s32);", vDst, ctx.temp());
-      // y (bits 20-39) - sign extend from 20 bits
-      ctx.println("\t{}.s32 = (int32_t({}.u64[0] << 24) >> 44);", ctx.temp(), ctx.v_temp());
-      ctx.println("\t{}.f32[1] = float({}.s32);", vDst, ctx.temp());
-      // z (bits 40-59) - sign extend from 20 bits
-      ctx.println("\t{}.s32 = (int32_t({}.u64[0] << 4) >> 44);", ctx.temp(), ctx.v_temp());
-      ctx.println("\t{}.f32[2] = float({}.s32);", vDst, ctx.temp());
-      // w (bits 60-63) - 4 bits
-      ctx.println("\t{}.f32[3] = float({}.u64[0] >> 60);", vDst, ctx.v_temp());
+      ctx.println("\t{}.u64[0] = {}.u64[0];", ctx.v_temp(), vSrc);
+      for (size_t i = 0; i < 3; i++) {
+        ctx.println("\t{}.s32 = int32_t(uint32_t({}.u64[0] >> {}) << 12) >> 12;", ctx.temp(),
+                    ctx.v_temp(), i * 20);
+        ctx.println("\t{0}.u32[{1}] = {2}.s32 == -524288 ? 0x7FC00000u : uint32_t({2}.s32 + 0x40400000);",
+                    vDst, 3 - i, ctx.temp());
+      }
+      ctx.println("\t{}.u32[0] = uint32_t({}.u64[0] >> 60) | 0x3F800000u;", vDst, ctx.v_temp());
       break;
     }
 
