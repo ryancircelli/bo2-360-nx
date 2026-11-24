@@ -310,12 +310,34 @@ bool ParkedLocksFree() {
   return true;
 }
 
+// REX_SAVEPOINT_PARK_WAITING=1: only accept a park where every guest thread is blocked in the kernel,
+// so none is captured part-way through guest code. Diagnostic for Forza (threads parked mid-allocator).
+bool AllGuestThreadsWaiting(const std::vector<object_ref<XThread>>& parked) {
+  static const bool on = std::getenv("REX_SAVEPOINT_PARK_WAITING") != nullptr;
+  if (!on) return true;
+  for (auto& t : parked) {
+    if (!t->is_guest_thread()) continue;
+    arm_thread_state64_t gp{};
+    mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+    const mach_port_t port = MachPort(t.get());
+    if (thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&gp), &n) != KERN_SUCCESS ||
+        !AtSyscall(port, gp))
+      return false;
+  }
+  return true;
+}
+
 std::vector<object_ref<XThread>> ParkThreads(KernelState* ks) {
   StartMallocProbe();
   for (int attempt = 0;; ++attempt) {
     auto parked = ParkThreadsOnce(ks);
+    if (attempt < 2000 && ParkedLocksFree() && !AllGuestThreadsWaiting(parked)) {
+      for (auto& t : parked) thread_resume(MachPort(t.get()));
+      std::this_thread::sleep_for(std::chrono::microseconds(200));
+      continue;
+    }
     if (ParkedLocksFree() || attempt >= 2000) {
-      if (attempt) std::fprintf(stderr, "[savepoint-s3] park: locks free after %d retries\n", attempt);
+      if (attempt) std::fprintf(stderr, "[savepoint-s3] park: accepted after %d retries (all guest threads waiting: %d)\n", attempt, int(AllGuestThreadsWaiting(parked)));
       return parked;
     }
     for (auto& t : parked) thread_resume(MachPort(t.get()));
