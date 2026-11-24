@@ -218,7 +218,7 @@ bool build_mcrf(BuilderContext& ctx) {
 //=============================================================================
 
 bool build_mfxer(BuilderContext& ctx) {
-  ctx.println("\t{}.u64 = ({}.so << 31) | ({}.ov << 30) | ({}.ca << 29);",
+  ctx.println("\t{}.u64 = uint32_t(({}.so << 31) | ({}.ov << 30) | ({}.ca << 29));",
               ctx.r(ctx.insn.operands[0]), ctx.xer(), ctx.xer(), ctx.xer());
   return true;
 }
@@ -248,7 +248,9 @@ bool build_mfocrf(BuilderContext& ctx) {
     }
   }
   uint32_t baseShift = 28 - 4 * crField;
-  ctx.println("\t{}.u64 = ({}.lt << {}) | ({}.gt << {}) | ({}.eq << {}) | ({}.so << {});",
+  // uint32_t: CR0.lt lands in bit 31 and must not sign-extend into the upper word.
+  ctx.println("\t{}.u64 = uint32_t(({}.lt << {}) | ({}.gt << {}) | ({}.eq << {}) | "
+              "({}.so << {}));",
               ctx.r(ctx.insn.operands[0]), ctx.cr(crField), baseShift + 3, ctx.cr(crField),
               baseShift + 2, ctx.cr(crField), baseShift + 1, ctx.cr(crField), baseShift);
   return true;
