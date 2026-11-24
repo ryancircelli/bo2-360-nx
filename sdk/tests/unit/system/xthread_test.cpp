@@ -4,6 +4,8 @@
  */
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cstdint>
 #include <filesystem>
 #include <utility>
@@ -90,5 +92,31 @@ TEST_CASE("Thread priority changes keep the user-interactive QoS class on macOS"
   priority_set.store(true, std::memory_order_release);
   REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
   CHECK(qos.load(std::memory_order_acquire) == QOS_CLASS_USER_INTERACTIVE);
+}
+#endif
+
+#if !defined(_WIN32)
+TEST_CASE("Nested host suspends resume the thread after the matching resumes", "[thread][suspend]") {
+  std::atomic<uint64_t> ticks{0};
+  std::atomic<bool> stop{false};
+  auto thread = rex::thread::Thread::Create({}, [&]() {
+    while (!stop.load(std::memory_order_acquire)) {
+      ticks.fetch_add(1, std::memory_order_relaxed);
+    }
+  });
+  REQUIRE(thread);
+  REQUIRE(thread->Suspend());
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let the first suspend park it
+  REQUIRE(thread->Suspend());
+  REQUIRE(thread->Resume());
+  REQUIRE(thread->Resume());
+  uint64_t before = ticks.load(std::memory_order_relaxed);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (ticks.load(std::memory_order_relaxed) == before && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  CHECK(ticks.load(std::memory_order_relaxed) != before);
+  stop.store(true, std::memory_order_release);
+  REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
 }
 #endif

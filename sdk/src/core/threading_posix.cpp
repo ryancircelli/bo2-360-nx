@@ -2145,13 +2145,20 @@ class PosixCondition<Thread> : public PosixConditionBase {
     }
     WaitStarted();
     bool is_current_thread = pthread_self() == thread_;
+    bool already_suspended;
     {
       std::unique_lock<std::mutex> lock(state_mutex_);
       if (out_previous_suspend_count) {
         *out_previous_suspend_count = suspend_count_;
       }
+      already_suspended = suspend_count_ > 0;
       state_ = State::kSuspended;
       ++suspend_count_;
+    }
+    // Nested suspend: the thread is already parked (or its signal is pending). A second signal would stay
+    // pending and park it again right after the matching Resume, with nobody left to wake it.
+    if (already_suspended) {
+      return true;
     }
 
     if (is_current_thread) {
