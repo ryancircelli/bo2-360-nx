@@ -18,6 +18,16 @@ namespace rex::system {
 
 class XThread;
 
+struct X_KMUTANT {
+  X_DISPATCH_HEADER header;
+  rex::be<uint32_t> unk_10;  // kernel mutant list entry, unused here
+  rex::be<uint32_t> unk_14;
+  rex::be<uint32_t> owner_thread;
+  uint8_t abandoned;
+  uint8_t unk_1D[3];
+};
+static_assert_size(X_KMUTANT, 0x20);
+
 class XMutant : public XObject {
  public:
   static const XObject::Type kObjectType = XObject::Type::Mutant;
