@@ -1,0 +1,9 @@
+#!/bin/sh
+# add-glitches [RUN_DIR...]: copy every logs/glitches/*/*.xtr (written by the glitch-capture branch) from the given
+# run dirs (default: all of ~/Games/Xbox360/bo2-build/runs/*/*/) into the replay-gate trace store as glitch-<run>-<file>.xtr.
+# `check` then replays them; no golden yet -> verdict NEW (not a failure). After the fix, `golden --only NAME`.
+S=${REPLAY_GATE_DIR:-$HOME/Games/Xbox360/bo2-build/replay-gate}/traces; mkdir -p "$S"
+[ $# -gt 0 ] || set -- "$HOME"/Games/Xbox360/bo2-build/runs/*/*
+for r in "$@"; do for f in "$r"/logs/glitches/*/*.xtr; do [ -f "$f" ] || continue
+  n=glitch-$(basename "$r")-$(basename "$(dirname "$f")")-$(basename "$f" .xtr); [ -e "$S/$n.xtr" ] || { cp "$f" "$S/$n.xtr" && echo "added $n"; }
+done; done

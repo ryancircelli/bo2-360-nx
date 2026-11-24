@@ -1,0 +1,7 @@
+#!/bin/sh
+# Copy the saved BO2 traces to the laptop CI, whose `replay` part (refxenos CPU replay vs goldens) replays every
+# ~/bo2-worker/ci/traces/*.xtr. The laptop has no Metal, so the Metal picture gate itself runs only on the Mac;
+# other games' traces are not copied (refxenos is BO2-only). Then `laptop-check BRANCH --bless` seeds their goldens.
+H=ryanr@100.73.92.76
+T=${REPLAY_GATE_DIR:-$HOME/Games/Xbox360/bo2-build/replay-gate}/traces
+exec rsync -av --ignore-existing --max-size=200m "$T"/bo2-*.xtr "$H:bo2-worker/ci/traces/"
