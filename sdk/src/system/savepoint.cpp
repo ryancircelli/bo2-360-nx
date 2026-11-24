@@ -4,6 +4,8 @@
  */
 
 #include <rex/system/savepoint.h>
+#include <rex/audio/audio_system.h>
+#include <rex/audio/xma/decoder.h>
 
 #include <algorithm>
 #include <atomic>
@@ -186,7 +188,9 @@ struct InProcess {
   std::unordered_map<uint32_t, FiberInfo> fiber_map;
   struct FiberSnap { rex::thread::Fiber* fiber; std::vector<uint8_t> object, stack; };
   std::vector<FiberSnap> fibers;
-  std::vector<XThread*> all_parked;  // every thread parked at capture, snapshotted or not
+  std::vector<XThread*> all_parked;
+  audio::XmaDecoder* xma_decoder = nullptr;
+  std::shared_ptr<audio::XmaDecoder::RewindState> xma;  // every thread parked at capture, snapshotted or not
   std::shared_ptr<util::ObjectTable::RewindState> object_table;
   std::list<std::function<void()>> dispatch_queue;
   uint32_t dpc_head = 0;
@@ -506,6 +510,14 @@ SavepointStats CaptureInProcessSavepoint() {
   if (auto* runtime = rex::Runtime::instance()) {
     g_snap.graphics = runtime->graphics_system();
     if (g_snap.graphics) g_snap.graphics->CaptureSavepoint();
+    // XMA contexts are allocated and kicked host-side; without this a voice the game created or freed
+    // after the capture leaves two voices sharing one context after the rewind (REX_SAVEPOINT_NO_XMA=1 off).
+    auto* audio = dynamic_cast<audio::AudioSystem*>(runtime->audio_system());
+    if (audio && audio->xma_decoder() && !std::getenv("REX_SAVEPOINT_NO_XMA")) {
+      g_snap.xma_decoder = audio->xma_decoder();
+      g_snap.xma = std::make_shared<audio::XmaDecoder::RewindState>();
+      g_snap.xma_decoder->CaptureRewindState(g_snap.xma.get());
+    }
   }
   const uint32_t bases[] = {0x00000000, 0x40000000, 0x80000000, 0x90000000};
   for (uint32_t b : bases) {
@@ -813,6 +825,10 @@ SavepointStats RewindToInProcessSavepoint() {
     }
     g_rewind_phase = 5;
     if (g_snap.graphics) g_snap.graphics->RewindSavepoint();
+    if (g_snap.xma) {
+      std::fprintf(stderr, "[savepoint-xma] rewound XMA: %u contexts changed allocation/enable since capture\n",
+                   g_snap.xma_decoder->Rewind(*g_snap.xma));
+    }
     g_rewind_phase = 6;
     // Check that every captured byte really is back after the heap and graphics rewinds ran.
     uint64_t bad_pages = 0; uint32_t bad_regions = 0;

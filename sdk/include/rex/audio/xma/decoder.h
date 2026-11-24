@@ -49,6 +49,15 @@ class XmaDecoder {
   uint32_t ReadRegister(uint32_t addr);
   void WriteRegister(uint32_t addr, uint32_t value);
 
+  // Savepoint rewind: context allocation bitmap, registers and per-context host state.
+  struct RewindState {
+    std::vector<uint64_t> bitmap;
+    std::vector<uint32_t> registers;
+    std::vector<XmaContext::RewindState> contexts;
+  };
+  void CaptureRewindState(RewindState* state);
+  uint32_t Rewind(const RewindState& state);  // returns contexts whose allocated/enabled state changed
+
   bool is_paused() const { return paused_; }
   void Pause();
   void Resume();

@@ -1400,3 +1400,38 @@ void XmaContext::ConvertFrame(const uint8_t** samples, bool is_two_channel,
 }
 
 }  // namespace rex::audio
+
+namespace rex::audio {
+// Runs with every thread parked (savepoint), so no lock: the decode worker may be parked holding lock_.
+void XmaContext::CaptureRewindState(RewindState* s) {
+  s->allocated = is_allocated();
+  s->enabled = is_enabled();
+  s->decoder_behind = decoder_behind_;
+  s->loop_start_skip_pending = loop_start_skip_pending_;
+  s->remaining_subframe_blocks = remaining_subframe_blocks_in_output_buffer_;
+  s->current_frame_remaining_subframes = current_frame_remaining_subframes_;
+  s->loop_frame_output_limit = loop_frame_output_limit_;
+  s->previous_frame_hash = previous_frame_hash_;
+  s->catch_up_size = catch_up_size_;
+  s->input_buffer.assign(input_buffer_.begin(), input_buffer_.end());
+  s->xma_frame.assign(xma_frame_.begin(), xma_frame_.end());
+  s->catch_up_frame.assign(catch_up_frame_.begin(), catch_up_frame_.end());
+}
+
+bool XmaContext::Rewind(const RewindState& s) {
+  const bool changed = is_allocated() != s.allocated || is_enabled() != s.enabled;
+  set_is_allocated(s.allocated);
+  set_is_enabled(s.enabled);
+  decoder_behind_ = s.decoder_behind;
+  loop_start_skip_pending_ = s.loop_start_skip_pending;
+  remaining_subframe_blocks_in_output_buffer_ = s.remaining_subframe_blocks;
+  current_frame_remaining_subframes_ = s.current_frame_remaining_subframes;
+  loop_frame_output_limit_ = s.loop_frame_output_limit;
+  previous_frame_hash_ = s.previous_frame_hash;
+  catch_up_size_ = s.catch_up_size;
+  std::copy(s.input_buffer.begin(), s.input_buffer.end(), input_buffer_.begin());
+  std::copy(s.xma_frame.begin(), s.xma_frame.end(), xma_frame_.begin());
+  std::copy(s.catch_up_frame.begin(), s.catch_up_frame.end(), catch_up_frame_.begin());
+  return changed;
+}
+}  // namespace rex::audio

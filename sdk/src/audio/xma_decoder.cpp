@@ -639,3 +639,21 @@ void XmaDecoder::Resume() {
 }
 
 }  // namespace rex::audio
+
+namespace rex::audio {
+void XmaDecoder::CaptureRewindState(RewindState* s) {
+  s->bitmap = context_bitmap_.data();
+  s->registers.assign(register_file_.values, register_file_.values + XmaRegisterFile::kRegisterCount);
+  s->contexts.resize(kContextCount);
+  for (uint32_t i = 0; i < kContextCount; ++i) contexts_[i].CaptureRewindState(&s->contexts[i]);
+}
+
+uint32_t XmaDecoder::Rewind(const RewindState& s) {
+  context_bitmap_.data() = s.bitmap;
+  std::copy(s.registers.begin(), s.registers.end(), register_file_.values);
+  uint32_t changed = 0;
+  for (uint32_t i = 0; i < kContextCount; ++i) changed += contexts_[i].Rewind(s.contexts[i]);
+  if (work_event_) work_event_->Set();
+  return changed;
+}
+}  // namespace rex::audio

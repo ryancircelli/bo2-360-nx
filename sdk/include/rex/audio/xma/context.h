@@ -12,6 +12,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -223,6 +224,18 @@ class XmaContext {
   void Clear();
   void Disable();
   void Release();
+
+  // Savepoint rewind: host-side allocation and decode state (no layout change; methods only).
+  struct RewindState {
+    bool allocated = false, enabled = false, decoder_behind = false, loop_start_skip_pending = false;
+    int32_t remaining_subframe_blocks = 0;
+    uint8_t current_frame_remaining_subframes = 0, loop_frame_output_limit = 0;
+    uint64_t previous_frame_hash = 0;
+    uint32_t catch_up_size = 0;
+    std::vector<uint8_t> input_buffer, xma_frame, catch_up_frame;
+  };
+  void CaptureRewindState(RewindState* state);
+  bool Rewind(const RewindState& state);  // true if allocated/enabled changed
 
   memory::Memory* memory() const { return memory_; }
 
