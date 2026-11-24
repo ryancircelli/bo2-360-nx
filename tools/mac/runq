@@ -34,7 +34,7 @@
                             (runq live help)
   runq install              copy runq, buildq and the boot_test tools to the spool's bin/ (a path that outlives worktrees)
 
-  buildq [-t N] [--ship] [--] CMD ARGS...
+  buildq [-t N] [--ship] [-p] [--] CMD ARGS...   (-p / build_patch_lib.sh: priority lane, no token, still frozen in solo runs)
       Runs a build under the shared token pool. ninja and `cmake --build` (Ninja generator) take tokens job by job
       through the GNU make jobserver protocol (a fifo); their -j/--parallel is removed so the pool decides. Any other
       command takes N tokens (-t, default 1) for its whole run. The command runs at nice 15 (--ship: normal priority,
@@ -2323,9 +2323,11 @@ def timeline(text, launch=None):
 
 # ------------------------------------------------------------------ buildq
 def buildq(argv):
-    tokens, ship, i = 1, False, 0
+    tokens, ship, prio, i = 1, False, False, 0
     while i < len(argv):
-        if argv[i] == '-t':
+        if argv[i] in ('-p', '--priority'):
+            prio, i = True, i + 1
+        elif argv[i] == '-t':
             tokens, i = int(argv[i + 1]), i + 2
         elif argv[i] == '--ship':
             ship, i = True, i + 1
@@ -2339,7 +2341,7 @@ def buildq(argv):
             break
     cmd = argv[i:]
     if not cmd:
-        sys.exit('usage: buildq [-t N] [--ship] [--] CMD ARGS...')
+        sys.exit('usage: buildq [-t N] [--ship] [-p] [--] CMD ARGS...')
     ensure_daemon()
     base = os.path.basename(cmd[0])
     jobserver = base == 'ninja' or (base == 'cmake' and '--build' in cmd)
@@ -2348,6 +2350,11 @@ def buildq(argv):
         tokens = 1   # the build's own first job; ninja reads the rest from the pool job by job
     c = cfg()
     tokens = max(1, min(tokens, c['game_cap']))
+    # Priority lane: one tiny command (a patch dylib, ~1 s) takes no token, so it is not queued behind big builds that
+    # hold every token (one waited 1,511 s). It still waits out solo/quiet runs below and is frozen like any build.
+    # Automatic for build_patch_lib.sh; never for a jobserver build (ninja, cmake --build).
+    if (prio or base == 'build_patch_lib.sh') and not jobserver:
+        tokens = 0
     rec = os.path.join(D['builds'], f'{os.getpid()}.json')
     registered = now_s()
     wjson(rec, {'pid': os.getpid(), 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens, 'jobserver': jobserver,
@@ -2360,7 +2367,7 @@ def buildq(argv):
     waited = time.time()
     try:
         while True:
-            while got < tokens:
+            while got < tokens:   # (priority lane: tokens 0, loop skipped)
                 fcntl.flock(lk, fcntl.LOCK_SH)   # token reads serialize with pool repair
                 try:
                     b = os.read(fifo, tokens - got)
