@@ -17,8 +17,10 @@ SavepointStats Unsupported() {
 
 SavepointStats SaveGuestMemory(const std::string&) { return Unsupported(); }
 void RequestSavepoint(const std::string&) {}
+void NoteSavepointSwap() {}
 void ServiceSavepointRequest() {}
 SavepointStats CaptureInProcessSavepoint() { return Unsupported(); }
 SavepointStats RewindToInProcessSavepoint() { return Unsupported(); }
+std::string ControlInProcessSavepoint(const std::string&, int) { return "error savepoints are only supported on macOS"; }
 
 }  // namespace rex::system
