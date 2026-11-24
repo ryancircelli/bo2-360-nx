@@ -63,6 +63,11 @@ std::string DeviceModelKey(const DeviceInfo& info) {
 namespace {
 
 std::string ReservationModelKey(const DeviceInfo& info) {
+  // Vendor and name, not product id: Xbox pads change product id with transport (Series 0b12 USB, 0b13 Bluetooth)
+  // while SDL names the model the same either way.
+  if (info.vendor_id && !info.name.empty()) {
+    return fmt::format("{:04x}:", info.vendor_id) + Lower(info.name);
+  }
   if (info.vendor_id || info.product_id) {
     return fmt::format("{:04x}:{:04x}", info.vendor_id, info.product_id);
   }

@@ -64,6 +64,19 @@ TEST_CASE("A controller changing from USB to Bluetooth reclaims its player", "[i
   CHECK(t.table.Reservations().empty());
 }
 
+TEST_CASE("An Xbox pad whose product id changes with the transport reclaims its player", "[input][slots]") {
+  Table t;
+  DeviceInfo wired = Pad(1, "usb-guid");
+  wired.product_id = 0x0b12;
+  wired.location = "14200000";
+  CHECK(t.Connect(wired) == 0);
+  t.Disconnect(1);
+
+  DeviceInfo bluetooth = Pad(2, "bluetooth-guid");
+  bluetooth.bt_address = "a0:b1:c2:d3:e4:f5";
+  CHECK(t.Connect(bluetooth) == 0);
+}
+
 TEST_CASE("Model fallback never takes another serial's reservation", "[input][slots]") {
   Table t;
   CHECK(t.Connect(Pad(1, "usb-guid", "serial-a")) == 0);
