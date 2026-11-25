@@ -30,6 +30,7 @@ RUNS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'runs', 'gates')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
+    'gears': dict(app='Gears of War.app', drive='gears-boot', scene_s=90, settle_s=60, seed='gears-360'),
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
     'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
