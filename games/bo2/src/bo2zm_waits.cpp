@@ -83,6 +83,7 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
+#include <rex/thread.h>
 
 #include "bo2zm_benchmark.h"
 #include "bo2zm_waits.h"
@@ -453,6 +454,7 @@ bool Sleep(tr::Room room, const Seen& seen, uint32_t interests, uint32_t key,
   if (!(rooms & (1u << room))) {
     return true;
   }
+  rex::thread::SpinScope spin;  // a wait, not frame work: the bench leaves it out
   thread_local Sleeper yo;
   const bool report = tr::ReportActive();
   const uint64_t t0 = report ? NowNs() : 0;
@@ -597,8 +599,37 @@ struct ThreadStatus {
   uint32_t slot_worker = 0;  // a JQ worker's slot (seen in its wait, sub_8284A088); 0 on every other thread
   int misses_section = 0;     // tries of critical section 6 that failed in a row (sub_828EFC68)
   int putbacks_row = 0;       // jobs this thread put back in a row (sub_8284C3B8)
+  // Bench: from its last pick. A job put back unrun makes pick to put-back spin; a job run to its end is work.
+  rex::thread::SpinMark pick;
+  bool job_open = false;  // pick holds a taken job not yet over
+  uint64_t job_work = 0;  // instructions of jobs run to their end (for the waits around them)
 };
 thread_local ThreadStatus t;
+
+// Bench: the taken job is over (the next pick, or the end of the wait that ran it).
+void CloseJob() {
+  if (t.job_open) {
+    t.job_work += rex::thread::NotSpinSince(t.pick);
+    t.job_open = false;
+  }
+}
+
+// Bench: a game wait is spin, except the jobs it ran to their end (they are work wherever they run). Its polls,
+// picks, put-backs and the game's own spin loops (db16cyc) between them count as spin, whatever the machine's load.
+template <typename F>
+void WaitSpin(F&& wait) {
+  const auto mark = rex::thread::MarkSpin();
+  const auto outer_pick = t.pick;
+  const bool outer_open = t.job_open;
+  const uint64_t work0 = t.job_work;
+  t.job_open = false;
+  wait();
+  CloseJob();
+  rex::thread::CountSpinSince(mark, t.job_work - work0);
+  t.pick = outer_pick;
+  t.job_open = outer_open;
+  if (outer_open) t.job_work = work0;  // inside a running job: that job's span already holds these jobs
+}
 
 // A job this thread took is over (or was put back in its queue): tell whoever waits for its type or a job.
 void WarnYesEnded() {
@@ -616,12 +647,12 @@ void WarnYesEnded() {
 template <typename F>
 void Measure(uint32_t who, PPCContext& ctx, uint8_t* base, F original) {
   if (!tr::ReportActive()) [[likely]] {
-    original(ctx, base);
+    WaitSpin([&] { original(ctx, base); });
     return;
   }
   const uint32_t lr = uint32_t(ctx.lr);
   const uint64_t t0 = NowNs();
-  original(ctx, base);
+  WaitSpin([&] { original(ctx, base); });
   tr::AnnotateWait(who, lr, NowNs() - t0);
 }
 
@@ -629,6 +660,7 @@ void Measure(uint32_t who, PPCContext& ctx, uint8_t* base, F original) {
 // events this poll checks or a job may have changed, then poll again (the loop goes on from that answer).
 template <typename F>
 void PollBlocking(tr::Room room, PPCContext& ctx, uint8_t* base, F original, uint32_t interests) {
+  rex::thread::SpinScope spin;  // a wait's poll, not frame work: the bench leaves it out
   const uint32_t r3 = ctx.r3.u32;
   const Seen seen = Look();
   original(ctx, base);
@@ -685,6 +717,8 @@ REX_HOOK_RAW(sub_8284AED8) {
   const uint32_t slot = ctx.r3.u32, filter = ctx.r4.u32, reg_index = ctx.r5.u32, lr = uint32_t(ctx.lr);
   WarnYesEnded();
   t.seen_choice = Look();
+  CloseJob();
+  const auto pick = rex::thread::MarkSpin();
   __imp__sub_8284AED8(ctx, base);
   const bool with_job = ctx.r3.u32 & 0xFF;
   t.last_empty = !with_job;
@@ -698,6 +732,10 @@ REX_HOOK_RAW(sub_8284AED8) {
     t.type_key = tr::Read32(base, reg_index + tr::kJobType) + 16;
     t.key = group ? group : t.type_key;
   }
+  // Bench: an empty pick or one whose dependency is not met is the game's spinning; a taken job may be put back.
+  if (!with_job || no_dependency) rex::thread::CountSpinSince(pick);
+  t.job_open = with_job && !no_dependency;
+  t.pick = t.job_open ? pick : rex::thread::MarkSpin();
   if (tr::ReportActive()) {
     tr::Boot(base);
     auto& h = tr::JobThread();
@@ -803,6 +841,11 @@ REX_HOOK_RAW(sub_8284C3B8) {
     tr::JobThread().returned.fetch_add(1, std::memory_order_relaxed);
     tr::AnnotateReturned(tr::Read32(base, ctx.r4.u32 + tr::kJobType));
   }
+  if (put_back) {  // picked, ran, "again": the game's spinning
+    rex::thread::CountSpinSince(t.pick);
+    t.pick = {};
+    t.job_open = false;
+  }
   __imp__sub_8284C3B8(ctx, base);
   if (!put_back) {
     return;
@@ -896,7 +939,7 @@ REX_HOOK_RAW(sub_8284B730) {
   const bool report = tr::ReportActive();
   const uint32_t lr = uint32_t(ctx.lr);
   const uint64_t t0 = report ? NowNs() : 0;
-  __imp__sub_8284B730(ctx, base);
+  WaitSpin([&] { __imp__sub_8284B730(ctx, base); });
   WarnYesEnded();
   if (report) {
     auto& h = tr::JobThread();
@@ -966,6 +1009,7 @@ REX_HOOK_RAW(sub_82428ED8) {
     PollBlocking(tr::kRoomPollFrame, ctx, base, __imp__sub_82428ED8,
                      kInterestsHelp | Bit(tr::kWarningEvent));
   } else {
+    rex::thread::SpinScope spin;
     __imp__sub_82428ED8(ctx, base);
   }
   if (tr::ReportActive() && poll) {
@@ -988,6 +1032,7 @@ REX_HOOK_RAW(sub_828DA6F0) {
     PollBlocking(tr::kRoomPollRing, ctx, base, __imp__sub_828DA6F0,
                      kInterestsHelp | Bit(tr::kWarningRing));
   } else {
+    rex::thread::SpinScope spin;  // the Backend's GPU wait polls here (Metal renderer): the bench leaves it out
     __imp__sub_828DA6F0(ctx, base);
   }
 }
