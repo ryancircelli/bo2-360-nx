@@ -2454,6 +2454,23 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     release_buffer_immediate(dest_buffer, size_t(dest_buffer_size));
     return false;
   }
+  // Detached uploads have no main-submission retirement index. Hold their
+  // destination and its compute view on the actual command buffer, including
+  // when a cached texture is evicted or renamed before the next main buffer.
+  // The shared owner also releases if an uncommitted buffer is abandoned.
+  if (!cmd->retainedReferences() &&
+      (upload_command_buffer_mode == UploadCommandBufferMode::kStandalone ||
+       upload_command_buffer_mode == UploadCommandBufferMode::kUploadBatch)) {
+    auto keep_alive = [cmd](MTL::Texture* texture) {
+      if (!texture) return;
+      texture->retain();
+      auto owner = std::shared_ptr<MTL::Texture>(
+          texture, [](MTL::Texture* t) { t->release(); });
+      cmd->addCompletedHandler([owner](MTL::CommandBuffer*) {});
+    };
+    keep_alive(metal_texture->metal_texture());
+    keep_alive(direct_view);
+  }
   bool command_buffer_has_work = false;
   auto is_current_submission = [&]() {
     return upload_command_buffer_mode ==
@@ -6312,7 +6329,7 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateDirectWriteView(
     default: direct_write_view_failed_ = true; return nullptr;
   }
   if (direct_write_view_) {
-    direct_write_view_->release();
+    texture_cache_.command_processor_->DeferRelease(direct_write_view_);
     direct_write_view_ = nullptr;
   }
   direct_write_view_ = metal_texture_->newTextureView(

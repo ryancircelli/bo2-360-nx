@@ -4286,7 +4286,8 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
     depth_attachment->setTexture(fallback_depth_texture);
     SetAttachmentLoadStoreActions(depth_attachment,
                                   GetTransientAttachmentLoadStoreActions());
-    fallback_depth_texture->release();
+    // The descriptor may be replaced before this submission completes.
+    command_processor_.DeferRelease(fallback_depth_texture);
   }
 
   return cached_render_pass_descriptor_;

@@ -292,7 +292,7 @@ namespace metal {
 // interval from guest swap F to swap F+1.
 namespace {
 MTL::CommandBuffer* NewCommandBuffer(MTL::CommandQueue* queue) {
-  static const bool unretained = REXCVAR_GET(metal_unretained_cmdbuf);
+  const bool unretained = REXCVAR_GET(metal_unretained_cmdbuf);
   return unretained ? queue->commandBufferWithUnretainedReferences()
                     : queue->commandBuffer();
 }
@@ -1528,7 +1528,7 @@ uint64_t MetalCommandProcessor::GetCurrentSubmission() const {
 }
 
 uint64_t MetalCommandProcessor::GetCompletedSubmission() const {
-  return completed_command_buffers_.load(std::memory_order_relaxed);
+  return completed_command_buffers_.load(std::memory_order_acquire);
 }
 
 // [upload-precommit] causes of render-pass ends made by staged uploads.
@@ -2605,7 +2605,7 @@ uint32_t MetalCommandProcessor::AllocateViewBindlessIndex() {
     }
     if (!view_bindless_heap_exhausted_logged_) {
       uint64_t completed =
-          completed_command_buffers_.load(std::memory_order_relaxed);
+          completed_command_buffers_.load(std::memory_order_acquire);
       uint64_t texture_count =
           texture_cache_ ? texture_cache_->GetTotalTextureCount() : 0;
       REXLOG_ERROR(
@@ -11502,7 +11502,7 @@ MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
 
 void MetalCommandProcessor::ProcessCompletedSubmissions() {
   const uint64_t completed =
-      completed_command_buffers_.load(std::memory_order_relaxed);
+      completed_command_buffers_.load(std::memory_order_acquire);
   if (completed <= submission_completed_processed_) {
     return;
   }

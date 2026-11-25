@@ -984,7 +984,8 @@ void TileResolveVerifyFinish(MTL::Device* device, MTL::CommandBuffer* cmd,
       device->newBuffer(g_verify.total, MTL::ResourceStorageModeShared);
   MTL::Buffer* b = g_verify.snapshot_b;
   if (!a) {
-    b->release();
+    // The earlier snapshot still writes b even if this allocation fails.
+    cmd->addCompletedHandler([b](MTL::CommandBuffer*) { b->release(); });
     g_verify = {};
     return;
   }
