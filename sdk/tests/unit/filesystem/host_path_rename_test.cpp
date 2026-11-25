@@ -11,6 +11,7 @@
 #include <rex/filesystem/vfs.h>
 #include <rex/system/xtypes.h>
 
+using rex::X_STATUS;
 using rex::filesystem::HostPathDevice;
 
 namespace {
@@ -116,4 +117,34 @@ TEST_CASE("Open-if of a host file missing from the tree opens it instead of trun
   CHECK(Read(dir / "late.sav") == "progress");
   file->Destroy();
   std::filesystem::remove_all(dir);
+}
+
+#include <rex/system/xam/content_manager.h>
+
+TEST_CASE("atomic save: kill mid-write keeps the old save, commit swaps the new one in") {
+  using rex::system::xam::ContentManager;
+  auto dir = MakeDir();
+  auto pkg = dir / "SAVE";
+  std::filesystem::create_directories(pkg);
+  Write(pkg / "a.dat", "old");
+  auto staging = ContentManager::StagingPathFor(pkg);
+
+  // Game dies halfway through writing the clone.
+  std::filesystem::create_directories(staging);
+  Write(staging / "a.dat", "ne");
+  ContentManager::RecoverStaging(pkg);
+  REQUIRE(Read(pkg / "a.dat") == "old");
+  REQUIRE_FALSE(std::filesystem::exists(staging));
+
+  // Normal close.
+  std::filesystem::create_directories(staging);
+  Write(staging / "a.dat", "new");
+  REQUIRE(ContentManager::CommitStaging(staging, pkg));
+  REQUIRE(Read(pkg / "a.dat") == "new");
+  REQUIRE_FALSE(std::filesystem::exists(staging));
+
+  // Died between the two swap renames: old save is under .old and must come back.
+  std::filesystem::rename(pkg, pkg.string() + ".old");
+  ContentManager::RecoverStaging(pkg);
+  REQUIRE(Read(pkg / "a.dat") == "new");
 }
