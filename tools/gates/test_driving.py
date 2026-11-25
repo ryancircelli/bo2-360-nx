@@ -24,7 +24,8 @@ class GameplayProof(unittest.TestCase):
                 # Detailed frames with a large change, like an animated menu background.
                 data = bytes((x + i * 50 * moving) % 256 for x in range(120 * 100 * 3))
                 (shots / f'drive{i:02d}.ppm').write_bytes(b'P6\n120 100\n255\n' + data)
-            with patch.object(driving, 'recognize', return_value=words):
+            ocr = {'side_effect': words} if isinstance(words, tuple) else {'return_value': words}
+            with patch.object(driving, 'recognize', **ocr):
                 proof = driving.verify(game, root, log)
             self.assertEqual(proof, json.loads(Path(root, 'driving.json').read_text()))
             return proof['passed']
@@ -40,11 +41,31 @@ class GameplayProof(unittest.TestCase):
                                        {'text': '180', 'x': .2, 'y': .25}]))
 
     def test_stationary_or_frozen_game_cannot_pass(self):
-        self.assertFalse(self.exercise(hud(0)))
+        self.assertFalse(self.exercise(hud(0), moving=False))
         self.assertFalse(self.exercise(hud(60), moving=False))
 
     def test_driving_hud_and_moving_world_pass(self):
         self.assertTrue(self.exercise(hud(60)))
+        self.assertTrue(self.exercise([{'text': 'MPH', 'x': .85, 'y': .85}]))
+
+    def test_hot_pursuit_requires_decreasing_race_distance(self):
+        def progress(distance, clock):
+            return [{'text': distance + ' Miles', 'x': .85, 'y': .2},
+                    {'text': clock, 'x': .8, 'y': .15}]
+        a = progress('8.4', '1:00.00')
+        b = progress('7.9', '2:00.00')
+        self.assertTrue(self.exercise((a, b), game='nfshp'))
+        self.assertFalse(self.exercise((a, a), game='nfshp'))
+        self.assertFalse(self.exercise((b, a), game='nfshp'))
+        self.assertFalse(self.exercise((a, b), moving=False, game='nfshp'))
+
+    def test_bo1_requires_zombies_zone_and_ammo_hud(self):
+        words = [{'text': '8/32', 'x': .78, 'y': .85}]
+        log = r'[zone] open D:\zombie_theater.ff'
+        self.assertTrue(self.exercise(words, game='bo1', log=log))
+        self.assertFalse(self.exercise(words, game='bo1'))
+        self.assertFalse(self.exercise([], game='bo1', log=log))
+        self.assertFalse(self.exercise(words, moving=False, game='bo1', log=log))
 
     def test_shooter_menu_after_match_cannot_pass(self):
         self.assertFalse(self.exercise([{'text': 'Resume Game', 'x': .3, 'y': .3}],
@@ -52,6 +73,7 @@ class GameplayProof(unittest.TestCase):
 
     def test_shooter_requires_match_and_moving_world(self):
         self.assertFalse(self.exercise([], game='bo2'))
+        self.assertFalse(self.exercise([], game='bo2', log="waiting for a log line with the game's client is in a match"))
         self.assertTrue(self.exercise([], game='bo2', log="the game's client is in a match"))
         self.assertFalse(self.exercise([], moving=False, game='bo2', log="the game's client is in a match"))
 

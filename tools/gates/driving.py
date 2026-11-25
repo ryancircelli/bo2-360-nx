@@ -18,6 +18,13 @@ def recognize(path):
     return json.loads(result.stdout)
 
 
+def hud_present(words):
+    if MENU.search(' '.join(w['text'] for w in words)):
+        return False
+    return any(re.search(r'\b(?:MPH|KM/?H)\b', w['text'], re.I)
+               and w['x'] > .55 and w['y'] > .5 for w in words)
+
+
 def hud_speed(words):
     """Only accept a speed reading beside a lower-right HUD unit, never a car specification."""
     if MENU.search(' '.join(w['text'] for w in words)):
@@ -33,6 +40,23 @@ def hud_speed(words):
                 if 5 <= speed <= 400:
                     return speed
     return None
+
+
+def race_progress(words):
+    """Hot Pursuit's HUD has no speed unit: use its timer and distance remaining."""
+    if MENU.search(' '.join(w['text'] for w in words)):
+        return None
+    distance = elapsed = None
+    for word in words:
+        if word['x'] < .7 or word['y'] > .3:
+            continue
+        m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*Miles', word['text'], re.I)
+        if m:
+            distance = float(m[1])
+        m = re.fullmatch(r'(\d+):(\d{2})[.:](\d{2})', word['text'])
+        if m and int(m[2]) < 60:
+            elapsed = int(m[1]) * 60 + int(m[2]) + int(m[3]) / 100
+    return {'miles': distance, 'elapsed_s': elapsed} if distance is not None and elapsed is not None else None
 
 
 def scene_pixels(path):
@@ -66,17 +90,23 @@ def scene_change(before, after):
 
 def verify(game, out, log):
     proof = {'game': game, 'passed': False, 'samples': [], 'pairs': [], 'errors': []}
-    paths = sorted(glob.glob(os.path.join(out, 'shots', 'drive*.ppm')))
+    paths = sorted(glob.glob(os.path.join(out, 'shots', 'drive*.ppm')), key=os.path.getmtime)
     shooter = game in ('bo2', 'bo1')
-    # BO1 has no confirmed marker yet: unsupported state must fail until verified.
-    in_match = game == 'bo2' and "the game's client is in a match" in log
+    in_match = game == 'bo2' and any("the game's client is in a match" in line
+                  and not re.search(r"waiting|timed out|wait_log", line, re.I) for line in log.splitlines())
+    bo1_loaded = bool(re.search(r'\[zone\] open .*zombie_theater\.ff', log, re.I))
     for path in paths:
-        sample = {'path': path, 'speed': None}
+        sample = {'path': path, 'speed': None, 'hud_present': False, 'race_progress': None}
         sample['valid_scene'] = False
         try:
             sample['words'] = recognize(path)
             sample['valid_scene'] = not bool(MENU.search(' '.join(w['text'] for w in sample['words'])))
+            sample['bo1_hud'] = any(re.fullmatch(r'\d{1,3}\s*/\s*\d{1,3}', w['text'])
+                                     and w['x'] > .65 and w['y'] > .7 for w in sample['words'])
             sample['speed'] = hud_speed(sample['words'])
+            sample['hud_present'] = hud_present(sample['words'])
+            if game == 'nfshp':
+                sample['race_progress'] = race_progress(sample['words'])
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             proof['errors'].append(str(error))
         proof['samples'].append(sample)
@@ -87,7 +117,13 @@ def verify(game, out, log):
             proof['errors'].append(str(error))
             continue
         moving = delta is not None and delta >= 8
-        state = (in_match and a['valid_scene'] and b['valid_scene']) if shooter else a['speed'] is not None and b['speed'] is not None
+        state = (in_match and a['valid_scene'] and b['valid_scene']) if shooter else a['hud_present'] and b['hud_present']
+        if game == 'bo1':
+            state = (bo1_loaded and a['valid_scene'] and b['valid_scene']
+                     and a.get('bo1_hud', False) and b.get('bo1_hud', False))
+        if game == 'nfshp' and a['race_progress'] and b['race_progress']:
+            state = (a['race_progress']['miles'] - b['race_progress']['miles'] >= .05
+                     and b['race_progress']['elapsed_s'] > a['race_progress']['elapsed_s'])
         proof['pairs'].append({'before': a['path'], 'after': b['path'], 'mean_delta': delta,
                                'gameplay_state': state, 'passed': bool(moving and state)})
     proof['passed'] = any(pair['passed'] for pair in proof['pairs'])

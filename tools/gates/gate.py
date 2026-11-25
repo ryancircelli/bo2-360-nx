@@ -187,6 +187,7 @@ class Game:
             'SDL_HIDAPI_LIBUSB': '0', 'SDL_JOYSTICK_HIDAPI': '0',   # never open the owner's real pads
             'SDL_WINDOW_ACTIVATE_WHEN_SHOWN': '0', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED': '0', 'SDL_HINT_MAC_BACKGROUND_APP': '1',
             f'{prefix}_SUPPORT_DIR': self.support, f'{prefix}_LOG_DIR': self.logs, f'{prefix}_NO_DIALOG': '1', 'BO2_NO_DIALOG': '1',
+            'METAL360_SUPPORT_DIR': self.support, 'METAL360_LOG_DIR': self.logs, 'METAL360_NO_DIALOG': '1',
             'REX_LOG_LEVEL': 'info', 'REX_INPUT_LOG_STATE': 'true', 'MVK_CONFIG_FAST_MATH_ENABLED': '0',
             'REX_NET_SYSTEM_PORT_OFFSET': os.environ.get('REX_NET_SYSTEM_PORT_OFFSET') or str(free_port_offset()),
         })
@@ -388,13 +389,18 @@ def g_drive(a, G):
     t_end = G.t0 + (length + 20) / (a.ff or 1) + 30
     nxt, n = time.monotonic() + 60, 0
     died = None
+    burst_until = None
     while time.monotonic() < t_end:
         if not G.alive():
             died = G.exit_code()
             break
-        if time.monotonic() >= nxt:
+        now = time.monotonic()
+        if burst_until is None and ((a.game == 'nfsmw' and 'INGAMEB.LZC' in G.log_text())
+                                   or (a.game == 'bo1' and 'zombie_theater.ff' in G.log_text())):
+            burst_until, nxt = now + 60, now
+        if now >= nxt:
             G.shot(f'drive{n:02d}')
-            n, nxt = n + 1, nxt + 60
+            n, nxt = n + 1, now + (2 if burst_until and now < burst_until else 60)
         time.sleep(1)
     alive = G.alive()
     if alive:

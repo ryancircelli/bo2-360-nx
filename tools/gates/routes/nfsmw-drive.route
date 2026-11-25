@@ -1,2 +1,7 @@
+# Current career save: title -> Career -> Resume Career -> Safe House -> free roam.
+# Stop front-end input as soon as the safe-house package loads. Repeated accepts
+# past that point cancel the default-No confirmation instead of leaving the garage.
+# Sequence verified with runq live screenshots: A, Left to Yes, A.
+duration_s = 560
 players = 1
-pad1 = 115-117:start, 135-137:a, 143-144:down, 147-149:a, 160-161:a, 168-169:a, 176-177:a, 180-181:start, 188-189:down, 192-193:a, 202-203:a, 208-209:a, 214-215:a, 220-221:a, 226-227:a, 232-233:a, 238-239:a, 244-245:a, 250-251:a, 256-257:a, 262-263:a, 268-269:a, 274-275:a, 280-281:a, 286-287:a, 292-293:a, 298-299:a, 304-305:a, 310-311:a, 316-317:a, 322-323:a, 328-329:a, 330-560:rt
+pad1 = 115-116:start, 135-136:start, 147-148:a, 160-161:a, 0:until_log "CAREER_SAFEHOUSE.LZC" 240, 3-3.5:a, 5-5.5:left, 7-7.5:a, 0:until_log "INGAMEB.LZC" 120, 0-200:rt
