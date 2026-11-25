@@ -7,6 +7,11 @@
 void RegisterRecompiledModules(rex::system::KernelState*);
 {% endif %}
 
+{% for imp in guest_imports %}
+DEFINE_REX_FUNC({{ imp.name }}) {
+    REX_CALL_INDIRECT_FUNC({{ imp.address }});
+}
+{% endfor %}
 const rex::PPCImageInfo PPCImageConfig = {
     .code_base = REX_CODE_BASE,
     .code_size = REX_CODE_SIZE,

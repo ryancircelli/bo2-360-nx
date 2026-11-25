@@ -28,6 +28,8 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/export_resolver.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmodule.h>
 
 #include "codegen_logging.h"
 #include "file_io.h"
@@ -290,6 +292,33 @@ bool CodegenWriter::write(bool force) {
     registry.loadOverrides(config().templateDir);
 
   auto tmplData = buildTemplateData(ctx_, functions, rexcrtByAddr);
+  // Guest DLL ordinals are absent from the kernel export resolver. Bind their
+  // local import thunks through guest dispatch rather than a host symbol from
+  // another shared library (whose recompiled functions have hidden visibility).
+  tmplData["guest_imports"] = nlohmann::json::array();
+  if (runtime_) {
+    for (const auto& sym : binary().importSymbols()) {
+      const auto* node = graph().getFunction(sym.address);
+      if (!node || node->authority() != FunctionAuthority::IMPORT ||
+          !node->name().starts_with("sub_"))
+        continue;
+      auto at = sym.name.find('@');
+      if (at == std::string::npos)
+        continue;
+      auto library = sym.name.substr(0, at);
+      auto module = runtime_->kernel_state()->GetModule(library, true);
+      if (!module)
+        module = runtime_->kernel_state()->GetModule(library + ".dll", true);
+      if (!module)
+        continue;
+      auto address = module->GetProcAddressByOrdinal(
+          static_cast<uint16_t>(std::stoul(sym.name.substr(at + 1))));
+      if (address)
+        tmplData["guest_imports"].push_back({{"name", node->name()},
+                                            {"address", fmt::format("0x{:08X}", address)}});
+    }
+  }
+
 
   // Generate {project}_pch.h (config + macros, stable enough to precompile)
   REXCODEGEN_TRACE("Recompile: generating {}_pch.h", projectName);
