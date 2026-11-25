@@ -678,14 +678,14 @@ bool TextInputOpen() {
          SteadyMs() - text_input_closed_ms_.load(std::memory_order_relaxed) < kTextInputQuietMs;
 }
 
-uint32_t XamShowMessageBoxUIEx_entry() {
-  // TODO(tomc): implement properly
-  static bool warned = false;
-  if (!warned) {
-    REXKRNL_WARN("[STUB] XamShowMessageBoxUIEx - not implemented");
-    warned = true;
-  }
-  return 0;
+// Delegations from xenia-canary 445ce54 xam_ui.cc (BSD-3-Clause); rewritten. We have no Kinect, so the
+// Nui variants skip NuiHudCheck(tracking_id) and run the plain dialog.
+u32 XamShowMessageBoxUIEx_entry(u32 user_index, mapped_wstring title_ptr, mapped_wstring text_ptr,
+                                u32 button_count, mapped_u32 button_ptrs, u32 active_button,
+                                u32 flags, u32 unused, mapped_u32 result_ptr,
+                                mapped_void overlapped) {
+  return XamShowMessageBoxUI_entry(user_index, title_ptr, text_ptr, button_count, button_ptrs,
+                                   active_button, flags, result_ptr, overlapped);
 }
 
 }  // namespace xam
