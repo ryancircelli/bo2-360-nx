@@ -1,7 +1,7 @@
 [game]
 name = "gears"
 title_ids = ["4D5307D5"]
-executable = "game:\default.xex"
+executable = 'game:\default.xex'
 local_data_root = "~/Games/Xbox360/gears/disc"
 
 [defaults]
