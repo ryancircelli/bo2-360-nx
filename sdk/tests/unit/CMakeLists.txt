@@ -40,6 +40,11 @@ target_include_directories(metal_constant_overrides_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
 add_test(NAME metal_constant_overrides_tests COMMAND metal_constant_overrides_tests)
 
+add_executable(metal_readback_merge_tests graphics/metal_readback_merge_test.cpp)
+target_include_directories(metal_readback_merge_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
+add_test(NAME metal_readback_merge_tests COMMAND metal_readback_merge_tests)
+
 add_executable(patch_loader_tests patch/patch_loader_test.cpp)
 target_include_directories(patch_loader_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(patch_loader_tests PRIVATE rexruntime)
