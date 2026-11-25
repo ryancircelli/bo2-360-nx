@@ -1088,15 +1088,21 @@ bool LoadSavepointFile(const std::string& path) {
               path, frame, bytes >> 20, region_count, restored_objects, threads.size(), Ms(t0, t1),
               Ms(t0, Clock::now()));
   if (std::getenv("REX_SAVEPOINT_DIAG")) {
-    // What every guest thread is doing 15 s on: a blocked import keeps its arguments in the context.
+    // What every guest thread is doing every 15 s for 90 s: a blocked import keeps its arguments in the context.
     std::thread([] {
-      std::this_thread::sleep_for(std::chrono::seconds(15));
-      DiagPeek("after 15 s");
-      for (auto& o : kernel_state()->object_table()->GetAllObjects()) {
-        if (o->type() != XObject::Type::Thread) continue;
-        auto* t = static_cast<XThread*>(o.get());
-        if (!t->is_guest_thread() || !t->thread_state()) continue;
-        DiagWaitObject("after 15 s", t->handle(), t->thread_state()->context());
+      for (int s = 15; s <= 90; s += 15) {
+        std::this_thread::sleep_for(std::chrono::seconds(15));
+        const std::string when = fmt::format("after {} s", s);
+        DiagPeek(when.c_str());
+        // REX_SAVEPOINT_SAMPLE_DIR: host stacks of every thread (recompiled guest code is symbolized), 1 s sample.
+        if (const char* dir = std::getenv("REX_SAVEPOINT_SAMPLE_DIR"))
+          std::system(fmt::format("sample {} 1 -mayDie -file '{}/sample_{:02}.txt' >/dev/null 2>&1", getpid(), dir, s).c_str());
+        for (auto& o : kernel_state()->object_table()->GetAllObjects()) {
+          if (o->type() != XObject::Type::Thread) continue;
+          auto* t = static_cast<XThread*>(o.get());
+          if (!t->is_guest_thread() || !t->thread_state()) continue;
+          DiagWaitObject(when.c_str(), t->handle(), t->thread_state()->context());
+        }
       }
     }).detach();
   }
