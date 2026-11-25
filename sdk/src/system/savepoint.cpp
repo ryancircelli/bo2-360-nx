@@ -779,6 +779,11 @@ std::atomic<bool> g_import_trace{false};
 void TraceImport(const void* fn, PPCContext& ctx) {
   const uint32_t phase = cs_trace::g_phase.load(std::memory_order_relaxed);
   if (!phase || !XThread::IsInThread()) return;
+  // Spin loops (NtYieldExecution) filled the buffer before the rewind: record a repeat only once per phase.
+  thread_local const void* last_fn = nullptr;
+  thread_local uint32_t last_lr = 0, last_phase = 0;
+  if (fn == last_fn && uint32_t(ctx.lr) == last_lr && phase == last_phase) return;
+  last_fn = fn, last_lr = uint32_t(ctx.lr), last_phase = phase;
   const uint32_t i = cs_trace::g_next.fetch_add(1, std::memory_order_relaxed);
   if (i >= cs_trace::kSize) return;
   auto& e = cs_trace::g_ring[i];
