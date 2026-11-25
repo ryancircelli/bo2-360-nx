@@ -3,6 +3,7 @@
  * @brief       Savepoints need Mach thread suspend; every other platform gets no-ops
  */
 
+#include <rex/system/interfaces/graphics.h>
 #include <rex/system/savepoint.h>
 
 namespace rex::system {
@@ -18,6 +19,8 @@ SavepointStats Unsupported() {
 SavepointStats SaveGuestMemory(const std::string&) { return Unsupported(); }
 void RequestSavepoint(const std::string&) {}
 void NoteSavepointSwap() {}
+void SetGraphicsSavepointHooks(IGraphicsSystem*, void (*)(IGraphicsSystem*), void (*)(IGraphicsSystem*)) {}
+void ClearGraphicsSavepointHooks(IGraphicsSystem*) {}
 void ServiceSavepointRequest() {}
 SavepointStats CaptureInProcessSavepoint() { return Unsupported(); }
 SavepointStats RewindToInProcessSavepoint() { return Unsupported(); }
