@@ -82,6 +82,12 @@ bool XModule::Save(stream::ByteStream* stream) {
   return true;
 }
 
+bool XModule::RestoreLoaded(stream::ByteStream* stream) {
+  hmodule_ptr_ = stream->Read<uint32_t>();
+  for (auto h : std::vector<X_HANDLE>(handles())) kernel_state()->object_table()->RemoveHandle(h);
+  return RestoreObject(stream);
+}
+
 object_ref<XModule> XModule::Restore(KernelState* kernel_state, stream::ByteStream* stream) {
   if (stream->Read<uint32_t>() != kModuleSaveSignature) {
     return nullptr;

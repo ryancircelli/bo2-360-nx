@@ -48,7 +48,10 @@
 #include <rex/system/thread_state.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xmemory.h>
+#include <rex/system/xam/content_manager.h>
 #include <rex/system/xevent.h>
+#include <rex/system/user_module.h>
+#include <rex/system/xmodule.h>
 #include <rex/system/xobject.h>
 
 REXCVAR_DEFINE_STRING(load_savepoint, "", "Test",
@@ -67,10 +70,18 @@ void VisitInProcessSnapshot(
     const std::function<void(uint32_t space, uint32_t base, uint32_t size, uint32_t protect,
                              const uint8_t* data)>& region);
 
+// Load errors also go to stderr: a bad save point often dies before the log is flushed.
+#define SPLOAD_ERR(...)                                  \
+  do {                                                   \
+    const std::string sp_msg_ = fmt::format(__VA_ARGS__); \
+    REXSYS_ERROR("{}", sp_msg_);                         \
+    std::fprintf(stderr, "%s\n", sp_msg_.c_str());       \
+  } while (0)
+
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr char kMagic[8] = {'R', 'E', 'X', 'S', 'P', '2', 0, 0};
-constexpr uint32_t kVersion = 7;
+constexpr uint32_t kVersion = 9;
 constexpr uint64_t kArenaSize = 0x120000000ull;  // virtual + physical guest views (xmemory.cpp)
 constexpr uint32_t kEnd = 0x21444E45;  // "END!"
 
@@ -126,6 +137,7 @@ struct Out {
     }
   }
   void U32(uint32_t v) { Put(&v, 4); }
+  void Str(const std::string& v) { U32(uint32_t(v.size())), Put(v.data(), v.size()); }
 };
 
 struct In {
@@ -145,6 +157,11 @@ struct In {
     uint32_t v = 0;
     if (auto* r = Take(4)) std::memcpy(&v, r, 4);
     return v;
+  }
+  std::string Str() {
+    uint32_t n = U32();
+    auto* r = Take(n);
+    return r ? std::string(reinterpret_cast<const char*>(r), n) : std::string();
   }
 };
 
@@ -557,6 +574,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   const auto exe = ExeRange();
   std::vector<ThreadRec> threads;
   std::vector<uint8_t> kernel(32u << 20);
+  std::vector<std::string> module_paths;
   size_t kernel_len = 0;
   uint64_t ticks = 0, time_base = 0;
   std::string why;
@@ -586,7 +604,10 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
     // Kernel objects: the table's handle counts, then guest threads, then the rest (type, length, Save bytes).
     stream::ByteStream bs(kernel.data(), kernel.size());
     DiagPeek("save");
+    ks->content_manager()->SaveOpenContent(&bs);  // before objects: restored files reopen on these devices
     ks->object_table()->Save(&bs);
+    for (auto& m : ks->object_table()->GetObjectsByType<XModule>(XObject::Type::Module))
+      if (!m->is_host_object()) module_paths.push_back(m->path());
     std::vector<object_ref<XObject>> order;
     for (int pass = 0; pass < 2; ++pass)
       for (auto& o : ks->object_table()->GetAllObjects())
@@ -646,6 +667,9 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   out.U32(kVersion);
   out.Put(uuid, 16);
   out.U32(uint32_t(frame));
+  // Module paths before memory: the loader loads the DLLs its boot lacks first (heap + function tables).
+  out.U32(uint32_t(module_paths.size()));
+  for (auto& m : module_paths) out.Str(m);
   auto* mem = Runtime::instance()->memory();
   std::vector<std::pair<memory::BaseHeap*, const memory::BaseHeap::RewindState*>> heaps;
   struct Region {
@@ -722,7 +746,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
 namespace {
 // REX_SAVEPOINT_DIAG: report host faults outside the guest arena (the SDK's handler owns the arena) with the
 // faulting thread's frames, then hand the signal on. Crash reports are throttled after many crashes.
-struct sigaction g_old_segv, g_old_bus, g_old_abrt;
+struct sigaction g_old_segv, g_old_bus, g_old_abrt, g_old_trap, g_old_ill;
 uint64_t g_arena_lo = 0, g_arena_hi = 0;
 void DiagPrint(int sig, uint64_t addr, ucontext_t* uc) {
   auto& ss = uc->uc_mcontext->__ss;
@@ -755,7 +779,11 @@ void DiagFault(int sig, siginfo_t* si, void* uc_v) {
   uint64_t addr = uint64_t(si->si_addr);
   const bool arena = addr >= g_arena_lo && addr < g_arena_hi;
   if (!arena) DiagPrint(sig, addr, uc);
-  auto& old = sig == SIGBUS ? g_old_bus : sig == SIGABRT ? g_old_abrt : g_old_segv;
+  auto& old = sig == SIGBUS    ? g_old_bus
+              : sig == SIGABRT ? g_old_abrt
+              : sig == SIGTRAP ? g_old_trap
+              : sig == SIGILL  ? g_old_ill
+                               : g_old_segv;
   if (old.sa_flags & SA_SIGINFO) old.sa_sigaction(sig, si, uc_v);
   else if (old.sa_handler != SIG_DFL && old.sa_handler != SIG_IGN) old.sa_handler(sig);
   else {
@@ -777,6 +805,8 @@ void InstallDiagFaultHandler(memory::Memory* mem) {
   sigaction(SIGSEGV, &sa, &g_old_segv);
   sigaction(SIGBUS, &sa, &g_old_bus);
   sigaction(SIGABRT, &sa, &g_old_abrt);
+  sigaction(SIGTRAP, &sa, &g_old_trap);  // guest breakpoints / bad restored code
+  sigaction(SIGILL, &sa, &g_old_ill);
 }
 }  // namespace
 
@@ -785,14 +815,14 @@ bool LoadSavepointFile(const std::string& path) {
   int fd = ::open(path.c_str(), O_RDONLY);
   struct stat sb{};
   if (fd < 0 || ::fstat(fd, &sb) != 0) {
-    REXSYS_ERROR("[savepoint] load: cannot open {}", path);
+    SPLOAD_ERR("[savepoint] load: cannot open {}", path);
     if (fd >= 0) ::close(fd);
     return false;
   }
   void* map = ::mmap(nullptr, size_t(sb.st_size), PROT_READ, MAP_PRIVATE, fd, 0);
   ::close(fd);
   if (map == MAP_FAILED) {
-    REXSYS_ERROR("[savepoint] load: mmap failed for {}", path);
+    SPLOAD_ERR("[savepoint] load: mmap failed for {}", path);
     return false;
   }
   struct Unmap {
@@ -803,16 +833,28 @@ bool LoadSavepointFile(const std::string& path) {
   In in{static_cast<const uint8_t*>(map), static_cast<const uint8_t*>(map) + sb.st_size};
   auto* magic = in.Take(8);
   if (!magic || std::memcmp(magic, kMagic, 8) != 0 || in.U32() != kVersion) {
-    REXSYS_ERROR("[savepoint] load: {} is not a version {} save point file", path, kVersion);
+    SPLOAD_ERR("[savepoint] load: {} is not a version {} save point file", path, kVersion);
     return false;
   }
   uint8_t uuid[16];
   auto* file_uuid = in.Take(16);
   if (!MainUuid(uuid) || !file_uuid || std::memcmp(uuid, file_uuid, 16) != 0) {
-    REXSYS_ERROR("[savepoint] load: {} was saved by a different executable build; refusing", path);
+    SPLOAD_ERR("[savepoint] load: {} was saved by a different executable build; refusing", path);
     return false;
   }
   uint32_t frame = in.U32();
+  std::vector<std::string> loaded_dlls;  // loaded here; their saved records fix handles, not reload
+  for (uint32_t n = in.U32(); n && in.ok; --n) {
+    auto m = in.Str();
+    auto* kst = Runtime::instance()->kernel_state();
+    if (kst->GetModule(m, true)) continue;
+    if (!kst->LoadUserModule(m, false)) {
+      SPLOAD_ERR("[savepoint] load: module {} did not load", m);
+      return false;
+    }
+    REXSYS_INFO("[savepoint] loaded module {} (a DLL the game had loaded)", m);
+    loaded_dlls.push_back(m);
+  }
 
   if (std::getenv("REX_SAVEPOINT_OBJS")) LogObjects("load-boot");
   auto* mem = Runtime::instance()->memory();
@@ -835,7 +877,7 @@ bool LoadSavepointFile(const std::string& path) {
     auto* heap = HeapFor(mem, base, physical != 0);
     if (!pages || !heap || heap->heap_base() != base ||
         heap->CaptureRewindState().pages.size() != n) {
-      REXSYS_ERROR("[savepoint] load: heap {:08X} layout differs from this process", base);
+      SPLOAD_ERR("[savepoint] load: heap {:08X} layout differs from this process", base);
       return false;
     }
     state.pages.resize(n);
@@ -879,7 +921,7 @@ bool LoadSavepointFile(const std::string& path) {
     auto* data = in.Take(size);
     auto* heap = space == 0 ? mem->LookupHeap(base) : mem->GetPhysicalHeap();
     if (!data || !heap || !heap->Protect(base, size, rw)) {
-      REXSYS_ERROR("[savepoint] load: region {}:{:08X} +{:X} cannot be restored", space, base, size);
+      SPLOAD_ERR("[savepoint] load: region {}:{:08X} +{:X} cannot be restored", space, base, size);
       return false;
     }
     uint8_t* host = (space == 0 ? mem->virtual_membase() : mem->physical_membase()) + base;
@@ -915,12 +957,12 @@ bool LoadSavepointFile(const std::string& path) {
     if (!in.ok) break;
   }
   if (!in.ok || in.U32() != kEnd) {
-    REXSYS_ERROR("[savepoint] load: {} is truncated", path);
+    SPLOAD_ERR("[savepoint] load: {} is truncated", path);
     return false;
   }
   for (auto& t : threads) {
     if (t.ctx_bytes.size() != sizeof(::PPCContext)) {
-      REXSYS_ERROR("[savepoint] load: thread {:08X} context size differs", t.handle);
+      SPLOAD_ERR("[savepoint] load: thread {:08X} context size differs", t.handle);
       return false;
     }
   }
@@ -959,6 +1001,7 @@ bool LoadSavepointFile(const std::string& path) {
     for (;;) __asm__ volatile("yield");  // user mode, no syscall: the loader replaces this state
   };
   stream::ByteStream kbs(kernel.data(), kernel.size());
+  ks->content_manager()->RestoreOpenContent(&kbs);
   ks->object_table()->Restore(&kbs);
   uint32_t objects = kbs.Read<uint32_t>(), restored_objects = 0;
   for (uint32_t i = 0; i < objects; ++i) {
@@ -967,16 +1010,28 @@ bool LoadSavepointFile(const std::string& path) {
     size_t start = kbs.offset();
     uint32_t handle = 0;
     std::memcpy(&handle, kernel.data() + start + 12, 4);  // SaveObject: alloc flag, guest ptr, count, handles
-    // Modules come from this process's boot (same executable, checked above); their records start with the
-    // module signature, not the handle, and restoring one reloads the XEX over the restored image data.
-    // shortcut: modules loaded after boot (DLLs) are not restored; add when a game needs it.
-    if (type == XObject::Type::Module ||
+    // Modules: boot ones are this process's already (same executable, checked above); DLLs loaded above take
+    // the saved handles. Records start with the module signature and path, not the handle.
+    if (type == XObject::Type::Module) {
+      kbs.Read<uint32_t>();
+      auto m = kbs.Read<std::string>();
+      if (std::find(loaded_dlls.begin(), loaded_dlls.end(), m) != loaded_dlls.end()) {
+        auto mod = ks->GetModule(m, true);
+        if (!mod || !mod->RestoreLoaded(&kbs)) {
+          SPLOAD_ERR("[savepoint] load: module {} did not take its saved handles", m);
+          return false;
+        }
+      }
+      kbs.set_offset(start + len);
+      continue;
+    }
+    if (
         (type != XObject::Type::Thread && ks->object_table()->LookupObject<XObject>(handle))) {
       kbs.set_offset(start + len);
       continue;
     }
     if (!XObject::Restore(ks, type, &kbs)) {
-      REXSYS_ERROR("[savepoint] load: object {:08X} type {} did not restore", handle, int(type));
+      SPLOAD_ERR("[savepoint] load: object {:08X} type {} did not restore", handle, int(type));
       return false;
     }
     kbs.set_offset(start + len);
@@ -985,7 +1040,7 @@ bool LoadSavepointFile(const std::string& path) {
   if (kbs.Read<uint32_t>()) {
     auto* audio = dynamic_cast<rex::audio::AudioSystem*>(Runtime::instance()->audio_system());
     if (!audio || !audio->Restore(&kbs)) {
-      REXSYS_ERROR("[savepoint] load: audio clients restore failed");
+      SPLOAD_ERR("[savepoint] load: audio clients restore failed");
       return false;
     }
   }
@@ -995,7 +1050,7 @@ bool LoadSavepointFile(const std::string& path) {
   auto* gfx = g_gfx.load(std::memory_order_acquire);
   auto hook = g_gfx_hook.load(std::memory_order_acquire);
   if (!gfx || !hook || !hook(gfx, 1, gpu_state, unused)) {
-    REXSYS_ERROR("[savepoint] load: GPU state restore failed");
+    SPLOAD_ERR("[savepoint] load: GPU state restore failed");
     return false;
   }
 
@@ -1008,14 +1063,14 @@ bool LoadSavepointFile(const std::string& path) {
     auto& rec = threads[i];
     auto t = ks->object_table()->LookupObject<XThread>(rec.handle);
     if (!t || !t->thread()) {
-      REXSYS_ERROR("[savepoint] load: thread {:08X} was not recreated", rec.handle);
+      SPLOAD_ERR("[savepoint] load: thread {:08X} was not recreated", rec.handle);
       return false;
     }
     t->thread()->Resume();
     auto until = Clock::now() + std::chrono::seconds(5);
     while (!g_parked[i]->ready.load(std::memory_order_acquire) && Clock::now() < until) ::usleep(200);
     if (!g_parked[i]->ready.load(std::memory_order_acquire)) {
-      REXSYS_ERROR("[savepoint] load: thread {:08X} did not park", rec.handle);
+      SPLOAD_ERR("[savepoint] load: thread {:08X} did not park", rec.handle);
       return false;
     }
     auto* ctx = t->thread_state()->context();
@@ -1027,7 +1082,7 @@ bool LoadSavepointFile(const std::string& path) {
     // right where the executable is mapped. Code addresses are moved only where they are known to be code.
     const auto ntls = g_parked[i]->tls;
     if (rec.tls_lo && rec.tls_hi - rec.tls_lo != ntls.second - ntls.first) {
-      REXSYS_ERROR("[savepoint] load: thread {:08X} thread-local block size differs", rec.handle);
+      SPLOAD_ERR("[savepoint] load: thread {:08X} thread-local block size differs", rec.handle);
       return false;
     }
     // shortcut: the new thread's thread-locals start fresh (pointers into the block are moved, values not
@@ -1052,7 +1107,7 @@ bool LoadSavepointFile(const std::string& path) {
     uint32_t moved_returns = 0;
     for (uint64_t r = rl(arm_thread_state64_get_fp(rec.gp)); r && r != rec.record + sd;) {
       if (r < new_top - rec.band.size() || r + 16 > new_top) {
-        REXSYS_ERROR("[savepoint] load: thread {:08X} frame record {:X} outside its band", rec.handle, r);
+        SPLOAD_ERR("[savepoint] load: thread {:08X} frame record {:X} outside its band", rec.handle, r);
         return false;
       }
       auto* fr = reinterpret_cast<uint64_t*>(r);
@@ -1095,7 +1150,7 @@ bool LoadSavepointFile(const std::string& path) {
             KERN_SUCCESS ||
         thread_set_state(port, ARM_NEON_STATE64, reinterpret_cast<thread_state_t>(&rec.neon),
                          ARM_NEON_STATE64_COUNT) != KERN_SUCCESS) {
-      REXSYS_ERROR("[savepoint] load: thread {:08X} state not set", rec.handle);
+      SPLOAD_ERR("[savepoint] load: thread {:08X} state not set", rec.handle);
       return false;
     }
     thread_resume(port);
