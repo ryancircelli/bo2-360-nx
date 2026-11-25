@@ -43,6 +43,10 @@ REXCVAR_DEFINE_BOOL(protect_zero, true, "Memory", "Protect the zero page from re
 REXCVAR_DEFINE_BOOL(protect_on_release, false, "Memory",
                     "Protect released memory to prevent accesses");
 
+REXCVAR_DEFINE_BOOL(memory_watch_rule_diag, false, "Memory",
+                    "Diagnostic: count host pages where the old (first guest page only) write-watch "
+                    "rule and the all-guest-pages rule disagree");
+
 REXCVAR_DEFINE_BOOL(scribble_heap, false, "Memory", "Scribble 0xCD into all allocated heap memory");
 
 namespace rex::memory {
@@ -2242,6 +2246,29 @@ void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t len
     // One host page can hold several guest pages; judge it by all of them, not
     // just the first, or a texture after a free/read-only page is never watched.
     rex::memory::PageAccess current_page_access = GuestAccessOfHostPage(i);
+    if (REXCVAR_GET(memory_watch_rule_diag)) {
+      static std::atomic<uint64_t> total_pages, differing, unwatched_before, watched_before_only;
+      const uint32_t first_guest =
+          rex::sat_sub(i * system_page_size_, host_address_offset()) >> page_size_shift_;
+      if (first_guest < page_table_.size()) {
+        const auto old_access = ToPageAccess(page_table_[first_guest].current_protect);
+        ++total_pages;
+        if (old_access != current_page_access) {
+          const uint64_t n = ++differing;
+          // Old rule would have skipped the watch (not writable) where the new rule watches.
+          const bool miss = current_page_access == rex::memory::PageAccess::kReadWrite &&
+                            old_access != rex::memory::PageAccess::kReadWrite;
+          if (miss) ++unwatched_before; else ++watched_before_only;
+          if (n <= 200 || (n & 1023) == 0) {
+            REXSYS_WARN(
+                "watch-rule-diag: host_page={} heap_base=0x{:08X} old={} new={} unwatched_before={} "
+                "other_diff={} differing={} total_pages={}",
+                i, heap_base_, int(old_access), int(current_page_access), unwatched_before.load(),
+                watched_before_only.load(), n, total_pages.load());
+          }
+        }
+      }
+    }
     bool protect_system_page = false;
     // Don't do anything with inaccessible pages - don't protect, don't enable
     // callbacks - because real access violations are needed there. And don't
