@@ -880,6 +880,10 @@ SavepointStats RewindToInProcessSavepoint() {
   g_held.clear();
   g_rewind_phase = 2;
   std::fprintf(stderr, "[savepoint-s3] rewind start, %zu parked\n", parked.size());
+  // Bisect: let in-flight GPU work (completion handlers, readbacks) land before memory is restored.
+  if (const char* ms = std::getenv("REX_SAVEPOINT_PRE_RESTORE_SLEEP_MS")) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(ms)));
+  }
   auto t1 = Clock::now();
   const bool restore_objects = std::getenv("REX_SAVEPOINT_SKIP_OBJECTS") == nullptr;
   if (restore_objects) {
