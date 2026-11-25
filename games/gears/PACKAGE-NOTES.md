@@ -29,6 +29,6 @@ A future `packages/gears` manifest needs:
   muted audio, hidden/minimized windows and physical HID access disabled.
 
 Bring-up currently verifies a clean build and the PRESS START title screen.
-Main-menu navigation, gameplay, audio, save persistence, title updates, other
+Main-menu navigation is verified. Gameplay, audio, save persistence, title updates, other
 disc editions, and metal360's newer package API remain unverified. This note
 describes requirements; it does not claim a working metal360 package.
