@@ -2,8 +2,6 @@
 # Stop front-end input as soon as the safe-house package loads. Repeated accepts
 # past that point cancel the default-No confirmation instead of leaving the garage.
 # Sequence verified with runq live screenshots: A, Left to Yes, A.
-# The load marker precedes menu readiness on older metal360 engines; allow
-# 20 seconds for that load before sending the verified confirmation sequence.
 duration_s = 560
 players = 1
-pad1 = 115-116:start, 135-136:start, 147-148:a, 160-161:a, 0:until_log "CAREER_SAFEHOUSE.LZC" 240, 20-21:a, 23-24:left, 26-27:a, 0:until_log "INGAMEB.LZC" 120, 0-200:rt
+pad1 = 115-116:start, 135-136:start, 147-148:a, 160-161:a, 0:until_log "CAREER_SAFEHOUSE.LZC" 240, 3-3.5:a, 5-5.5:left, 7-7.5:a, 0:until_log "INGAMEB.LZC" 120, 0-200:rt
