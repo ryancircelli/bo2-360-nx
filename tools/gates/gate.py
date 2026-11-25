@@ -10,7 +10,7 @@
   gate.py speed   GAME --a APP --b APP [--pairs 3]        A/B speed pair(s) through runq perf class + abverdict
   gate.py install GAME --app NEW --repo WORKTREE          base rule, codesign, restore copy, refuses while the owner plays
 
-GAME = bo2 | nfsmw | fh1 | nfshp | bo1.  APP defaults to the installed app in ~/Games/Launchers (it is cloned by runq, never
+GAME = bo2 | nfsmw | fh1 | nfshp | bo1 | gears.  APP defaults to the installed app in ~/Games/Launchers (it is cloned by runq, never
 changed). Every gate but install/set/speed is queued as a runq job (class harness; --class to change, --now runs it
 inline, for debugging only), so it is muted, minimized, on its own UDP ports and never opens a real pad. Output goes to
 --out (default ~/Games/Xbox360/bo2-build/runs/gates/<game>-<gate>-<time>/). Exit 0 = PASS, 1 = FAIL, 2 = setup error.
@@ -30,7 +30,7 @@ RUNS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'runs', 'gates')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
-    'gears': dict(app='Gears of War.app', drive='gears-boot', scene_s=90, settle_s=60, seed='gears-360'),
+    'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
     'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
@@ -789,7 +789,7 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli

@@ -15,7 +15,7 @@ A future `packages/gears` manifest needs:
   and the `.embsec_` sections, when checking coverage.
 - The generic manifest registration used by `src/main.cpp`, adapted to
   metal360's package API and pinned SDK version. No native gameplay patch has
-  been necessary to reach the title screen.
+  been necessary to reach and run the opening prison campaign scene.
 - Metal as the default GPU plugin, with the shared renderer/runtime dependencies.
   No precompiled Vulkan shader pack is required for the tested Metal path.
 - Read-only extracted disc data, separate writable profile/cache storage,
@@ -28,7 +28,11 @@ A future `packages/gears` manifest needs:
 - The gate-kit menu route and future gameplay route. Test with a script pad,
   muted audio, hidden/minimized windows and physical HID access disabled.
 
-Bring-up currently verifies a clean build and the PRESS START title screen.
-Main-menu navigation is verified. Gameplay, audio, save persistence, title updates, other
-disc editions, and metal360's newer package API remain unverified. This note
-describes requirements; it does not claim a working metal360 package.
+Bring-up verifies a clean build, title screen, main menu, opening cinematic,
+and over two minutes of third-person play in the opening prison scene. Scripted
+movement and look inputs reach the guest; capture comparison shows the camera
+changed. The packed app passes the campaign route. Guide and Finder-launch
+checks are recorded in the stream report. Audio, save persistence, later levels,
+multiplayer, title updates, other disc editions, and metal360's newer package API
+remain unverified. This note describes requirements; it does not claim a working
+metal360 package.
