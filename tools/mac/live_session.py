@@ -146,6 +146,8 @@ def main():
         'SDL_HIDAPI_LIBUSB': '0', 'SDL_JOYSTICK_HIDAPI': '0',               # never open the owner's real devices
         'SDL_WINDOW_ACTIVATE_WHEN_SHOWN': '0', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED': '0', 'SDL_HINT_MAC_BACKGROUND_APP': '1',
         f'{prefix}_SUPPORT_DIR': support, f'{prefix}_LOG_DIR': logs, f'{prefix}_NO_DIALOG': '1', 'BO2_NO_DIALOG': '1',
+        # Legacy and metal360 launchers need the same private save/log roots.
+        'METAL360_SUPPORT_DIR': support, 'METAL360_LOG_DIR': logs, 'METAL360_NO_DIALOG': '1',
         'REX_LOG_LEVEL': env.get('REX_LOG_LEVEL', 'info'),
     })
     env['MVK_CONFIG_FAST_MATH_ENABLED'] = '0'
