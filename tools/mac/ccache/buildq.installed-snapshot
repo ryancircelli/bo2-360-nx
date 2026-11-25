@@ -50,7 +50,7 @@ result.json records the slot count, solo, and the games running during the job (
 games_max, full_speed = no other game at any sample), so a 3-game run is never read as a full-speed one.
 """
 import traceback
-import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, tempfile, time
+import errno, fcntl, json, os, re, resource, select, shlex, shutil, signal, subprocess, sys, tempfile, time
 
 SPOOL = os.path.expanduser(os.environ.get('RUNQ_SPOOL', '~/Games/Xbox360/bo2-build/runq'))
 D = {k: os.path.join(SPOOL, k) for k in ('queue', 'running', 'done', 'jobs', 'builds', 'bin', 'remote')}
@@ -3681,17 +3681,24 @@ def buildq(argv):
                   file=sys.stderr)
         env = dict(os.environ)
         env.pop('CMAKE_BUILD_PARALLEL_LEVEL', None)
+        slog = os.path.join(D['builds'], f'{os.getpid()}.ccache-stats')
+        env['CCACHE_STATSLOG'] = slog   # per-build hit/miss lines for build-history.tsv (one line per ccache call)
+        t_run, ru0 = time.time(), resource.getrusage(resource.RUSAGE_CHILDREN)
+        repointed = ccache_repoint(cmd, rec, env) if jobserver else None
         if jobserver:
             env['MAKEFLAGS'] = f'-j --jobserver-auth=fifo:{FIFO}'
         pre = None if ship else (lambda: os.nice(15))
         p = subprocess.Popen(cmd, env=env, preexec_fn=pre, start_new_session=True)
+        history_ctx = (t_run, ru0, slog, tokens, repointed)
         wjson(rec, {'pid': os.getpid(), 'child_pid': p.pid, 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens,
                     'jobserver': jobserver, 'registered': registered, 'started': now_s()})
         fcntl.flock(exec_lk, fcntl.LOCK_UN)
         exec_locked = False
         while True:
             try:
-                return p.wait()
+                rc = p.wait()
+                build_history(cmd, history_ctx, rc)
+                return rc
             except KeyboardInterrupt:
                 p.send_signal(signal.SIGINT)
     finally:
@@ -3705,10 +3712,11 @@ def buildq(argv):
         fcntl.flock(lk, fcntl.LOCK_UN)
         os.close(lk)
         os.close(fifo)
-        try:
-            os.unlink(rec)
-        except OSError:
-            pass
+        for f in (rec, os.path.join(D['builds'], f'{os.getpid()}.ccache-stats')):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
 
 
 CCACHE_LAUNCHER = os.path.expanduser('~/Games/Xbox360/bo2-build/ccache/launcher')
@@ -3736,6 +3744,101 @@ def ccache_configure(cmd):
     if bdir is None or (os.path.exists(os.path.join(os.path.abspath(bdir), 'CMakeCache.txt')) and not os.environ.get('BUILDQ_CCACHE_REPOINT')):
         return cmd  # BUILDQ_CCACHE_REPOINT=1 (owner request only): re-point an existing dir at the cache; it rebuilds once
     return out + [f'-DCMAKE_{l}_COMPILER_LAUNCHER={CCACHE_LAUNCHER}' for l in ('C', 'CXX', 'OBJC', 'OBJCXX')]
+
+
+CCACHE_HISTORY = os.path.expanduser('~/Games/Xbox360/bo2-build/ccache/build-history.tsv')
+CCACHE_REPOINT_LOG = os.path.expanduser('~/Games/Xbox360/bo2-build/ccache/repoint.log')
+REPOINT_MAX = 2   # repoints (= one-time cold rebuilds) in flight at once; a slot is held until that build ends
+
+
+def build_dir_of(cmd):
+    """Build dir of `cmake --build DIR` / `ninja -C DIR` / plain ninja (cwd), absolute and physical, else None."""
+    base = os.path.basename(cmd[0])
+    d = None
+    if base == 'cmake' and '--build' in cmd and cmd.index('--build') + 1 < len(cmd):
+        d = cmd[cmd.index('--build') + 1]
+    elif base == 'ninja':
+        d = cmd[cmd.index('-C') + 1] if '-C' in cmd and cmd.index('-C') + 1 < len(cmd) else os.getcwd()
+    return os.path.realpath(d) if d else None
+
+
+def ccache_repoint(cmd, rec, env):
+    """Adopt the shared compile cache for ANY build dir at its next build (build-cache-adopt, 2026-11-24): if the dir's CMakeCache has no
+    ccache launcher and no compiler of any kind runs in it, reconfigure with the launcher. The first build afterwards is cold, so at most
+    REPOINT_MAX dirs repoint at once (a slot lasts until that buildq exits; other dirs repoint at a later build). Never touches dirs with a
+    foreign launcher, BUILDQ_NO_CCACHE=1, or a failing configure (the build then runs as before). Every action is logged to repoint.log."""
+    if os.environ.get('BUILDQ_NO_CCACHE') or not os.path.exists(CCACHE_LAUNCHER):
+        return None
+    bdir = build_dir_of(cmd)
+    cc = os.path.join(bdir or '', 'CMakeCache.txt')
+    if not bdir or not os.path.exists(cc):
+        return None
+    vals = {}
+    for line in open(cc, errors='replace'):
+        m = re.match(r'(CMAKE_(?:C|CXX|OBJC|OBJCXX)_COMPILER_LAUNCHER|CMAKE_HOME_DIRECTORY):[A-Z]+=(.*)', line)
+        if m:
+            vals[m.group(1)] = m.group(2).strip()
+    cur = {v for k, v in vals.items() if k.endswith('LAUNCHER') and v}
+    src = vals.get('CMAKE_HOME_DIRECTORY')
+    if cur == {CCACHE_LAUNCHER} or (cur and CCACHE_LAUNCHER not in cur) or not src:
+        return None
+    def log(msg):
+        with open(CCACHE_REPOINT_LOG, 'a') as f:
+            f.write(f'{time.strftime("%F %T")} {bdir} {msg}\n')
+    ps = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True).stdout.splitlines()
+    busy = [l for l in ps if bdir in l and re.search(r'(^|/)(clang(\+\+)?|ninja|cc1|ld|metal\w*)$', l.split(None, 2)[1] if len(l.split(None, 2)) > 1 else '')
+            and l.split()[0] != str(os.getpid())]
+    if busy:
+        log('skip: compiler/ninja running in dir')
+        return None
+    lock = os.path.join(D['builds'], f'repoint-{os.getpid()}.slot')
+    live = 0
+    for f in os.listdir(D['builds']):
+        if f.startswith('repoint-') and f.endswith('.slot'):
+            pid = int(f.split('-')[1].split('.')[0])
+            if alive(pid) and pid != os.getpid():
+                live += 1
+            elif not alive(pid):
+                try:
+                    os.unlink(os.path.join(D['builds'], f))
+                except OSError:
+                    pass
+    if live >= REPOINT_MAX:
+        log(f'defer: {live} repoints in flight')
+        return None
+    open(lock, 'w').close()
+    args = ['cmake', '-S', src, '-B', bdir] + [f'-DCMAKE_{l}_COMPILER_LAUNCHER={CCACHE_LAUNCHER}' for l in ('C', 'CXX', 'OBJC', 'OBJCXX')]
+    r = subprocess.run(args, env=env, capture_output=True, text=True, preexec_fn=lambda: os.nice(15))
+    log(f'repointed rc={r.returncode}' + ('' if r.returncode == 0 else ' ' + (r.stderr or r.stdout)[-300:].replace('\n', ' | ')))
+    if r.returncode != 0:
+        os.unlink(lock)
+        return None
+    return 'repointed'
+
+
+def build_history(cmd, ctx, rc):
+    """One tsv line per finished buildq build: time, dir, tokens, wall, CPU (children user+sys), cache hits/misses from this build's own ccache stats log."""
+    t_run, ru0, slog, tokens, repointed = ctx
+    ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+    hits = misses = other = 0
+    try:
+        for line in open(slog, errors='replace'):
+            r = line.split('\t')[-1].strip() if '\t' in line else line.strip()
+            if 'hit' in r:
+                hits += 1
+            elif 'cache_miss' in r or r.endswith('miss'):
+                misses += 1
+            else:
+                other += 1
+    except OSError:
+        pass
+    row = [time.strftime('%F %T'), build_dir_of(cmd) or os.getcwd(), ' '.join(cmd[:3])[:60], tokens, round(time.time() - t_run),
+           round(ru.ru_utime + ru.ru_stime - ru0.ru_utime - ru0.ru_stime), hits, misses, other, repointed or '', rc]
+    new = not os.path.exists(CCACHE_HISTORY)
+    with open(CCACHE_HISTORY, 'a') as f:
+        if new:
+            f.write('time\tdir\tcmd\ttokens\twall_s\tcpu_s\thits\tmisses\tother\trepointed\trc\n')
+        f.write('\t'.join(map(str, row)) + '\n')
 
 
 def strip_jobs(cmd):

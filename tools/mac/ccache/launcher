@@ -24,9 +24,19 @@ root=$(git -C "$(dirname "$src")" rev-parse --show-toplevel 2>/dev/null)
 # macOS: /tmp is /private/tmp, git reports the real path but cmake spells /tmp: map both spellings.
 export BO2CC_INC=$inc BO2CC_ROOT=$root
 export BO2CC_MAP="${root:+-ffile-prefix-map=$root=/bo2src -ffile-prefix-map=${root#/private}=/bo2src} -ffile-prefix-map=$PWD=/bo2build -ffile-prefix-map=${PWD#/private}=/bo2build"
-if [ -n "$pch" ]; then
-  export BO2CC_REAL=$comp BO2CC_PCH=$pch
-  exec ccache "$D/shim/clang++" "${args[@]}"
+export BO2CC_REAL=$comp BO2CC_PCH=$pch
+# Three lookups, cheapest first. Depend mode keys on the dependency file (no preprocessing, ~0.05 s) but also on the build dir's
+# relative layout; preprocessor mode (~0.6 s) matches across layouts. A hit or compile in preprocessor mode is then stored under the
+# depend key too (reuse: shim exits 0, the object and .d already exist). BO2CC_MODE=probe makes a miss exit 99 instead of compiling.
+DEP=$D/ccache-depend.conf
+[ -z "$BO2CC_NODEPEND" ] && [ -f "$DEP" ] && { BO2CC_MODE=probe CCACHE_CONFIGPATH=$DEP ccache "$D/shim/clang++" "${args[@]}" 2>/dev/null; rc=$?; [ $rc = 0 ] && exit 0; }
+if [ -z "$BO2CC_NODEPEND" ] && [ -f "$DEP" ]; then
+  if BO2CC_MODE=probe ccache "$D/shim/clang++" "${args[@]}" 2>/dev/null; then
+    BO2CC_MODE=deps "$D/shim/clang++" "${args[@]}" || exit $?
+  else
+    ccache "$D/shim/clang++" "${args[@]}" || exit $?
+  fi
+  BO2CC_MODE=reuse CCACHE_CONFIGPATH=$DEP ccache "$D/shim/clang++" "${args[@]}" >/dev/null 2>&1
+  exit 0
 fi
-export BO2CC_REAL=$comp
 exec ccache "$D/shim/clang++" "${args[@]}"

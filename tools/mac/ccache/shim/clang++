@@ -2,6 +2,15 @@
 # ccache sees this as "the compiler". -E (hash) runs: textual -include header, -P (no path line markers), and a prefix map for the
 # relative spelling ccache base_dir rewrote paths to, so keys do not depend on where the build dir sits relative to the source.
 real=$BO2CC_REAL
+# probe: ccache lookup only, never compile (launcher reads exit 99 as a miss). reuse: outputs already exist, let ccache store them.
+for a in "$@"; do [ "$a" = -E ] && e=1; done
+[ -z "$e" ] && case $BO2CC_MODE in probe) exit 99;; reuse) exit 0;; esac
+# deps: a cache hit restores a .d whose relative paths belong to the layout that stored it; rebuild it for this one (preprocess only).
+if [ "$BO2CC_MODE" = deps ]; then
+  a2=(); while [ $# -gt 0 ]; do case $1 in -c) ;; -o) shift; a2+=(-o /dev/null) ;; *) a2+=("$1") ;; esac; shift; done
+  inc=(); [ -n "$BO2CC_INC" ] && inc=(-Xclang -include -Xclang "$BO2CC_INC")
+  exec "$real" $BO2CC_MAP "${inc[@]}" -E "${a2[@]}" >/dev/null
+fi
 inc=(); [ -n "$BO2CC_INC" ] && inc=(-Xclang -include -Xclang "$BO2CC_INC")
 for a in "$@"; do if [ "$a" = -E ]; then
   [ -z "$BO2CC_ROOT" ] && exec "$real" $BO2CC_MAP "$@"
