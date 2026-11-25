@@ -7,7 +7,7 @@ line to `<out>/gate.txt` and `gate.json`, and exits 0 / 1 (2 = setup error). Do 
 G="python3 ~/dev/bo2-360-nx/tools/gates/gate.py"       # or the copy in your worktree
 $G boot  nfsmw                    # control channel up, frames drawn, alive 45 s, screenshot, crash patterns
 $G shot  fh1 --ff 2               # route to a scene at 2x guest time, 3 screenshots, non-black check
-$G drive nfsmw                    # whole drive route, alive to the end, shots every 60 s, new warning/error kinds
+$G drive nfsmw                    # whole route, verified gameplay movement, screenshots, new warning/error kinds
 $G guide nfsmw                    # Guide opens + closes ([guide] opened/closed, XN_SYS_UI 1 then 0), overlay shots
 $G open  fh1                      # `open -n` Finder-style launch of a scratch clone, max fds < 256
 $G set                            # boot gate for bo2 nfsmw fh1 together (3 queue slots)
@@ -35,3 +35,5 @@ Evidence goes to `~/Games/Xbox360/bo2-build/runs/gates/<game>-<gate>-<time>/` (o
   gate out dir), swaps in place with rsync --delete (no "(previous)" copy), and re-verifies codesign and identity.
   `--dest DIR` installs somewhere else (use it for proofs; never test into ~/Games/Launchers).
 * Per-game table (installed app name, drive route, scene time, profile folder) is `GAMES` in gate.py. Drive routes exist for bo2, nfsmw, fh1, nfshp (Career to the first race), bo1 (Zombies Kino). Speed noise: `SPEED_SIGMA` in gate.py (nfsmw 2%); fh1 has none measured, so `speed fh1` returns RERUN until someone measures two valid same-build runs.
+
+Drive fails unless `driving.json` records gameplay and scene movement in a pair of detailed captures. Racing games need a nonzero speed (at least 5 MPH/KM/H) beside the lower-right HUD unit in both frames. Menu text, static scenes, loading frames, missing OCR, and unknown gameplay state fail closed. BO2 additionally requires its in-match log marker; BO1 remains unsupported until a reliable gameplay marker is verified. Text recognition uses macOS Vision via `osascript`; no extra Python packages are needed. Regression check: `python3 -I tools/gates/test_driving.py`.

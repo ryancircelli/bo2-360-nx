@@ -17,6 +17,11 @@ inline, for debugging only), so it is muted, minimized, on its own UDP ports and
 Docs: tools/gates/README.md, WORKFLOW.md "Standard gates".
 """
 import argparse, glob, hashlib, json, math, os, plistlib, re, shutil, signal, subprocess, sys, time, uuid
+import importlib.util
+_driving_spec = importlib.util.spec_from_file_location("gate_driving", os.path.join(os.path.dirname(os.path.abspath(__file__)), "driving.py"))
+_driving = importlib.util.module_from_spec(_driving_spec)
+_driving_spec.loader.exec_module(_driving)
+verify_driving = _driving.verify
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -398,8 +403,9 @@ def g_drive(a, G):
     crash = CRASH.search(text)
     G.stop()
     new = baseline_diff(G, a.kinds_from, a.out)
-    ok = alive and not crash
-    facts = f'route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
+    proof = verify_driving(a.game, a.out, text)
+    ok = alive and not crash and proof["passed"]
+    facts = f'gameplay {proof["passed"]} route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
     if died is not None:
         facts += f' exited {died}'
     if crash:
