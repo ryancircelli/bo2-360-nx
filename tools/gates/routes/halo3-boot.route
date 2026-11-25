@@ -1,0 +1,5 @@
+# First Halo 3 boot: capture startup before attempting navigation.
+duration_s = 90
+players = 1
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_BUTTONS =
