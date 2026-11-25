@@ -653,6 +653,11 @@ SavepointStats CaptureInProcessSavepoint() {
                          (std::strcmp(hold, "host") == 0 && !t->is_guest_thread()) ||
                          (std::strncmp(hold, "guest-but:", 10) == 0 && t->is_guest_thread() && !listed(hold + 10)) ||
                          (std::strncmp(hold, "ids:", 4) == 0 && listed(hold + 4)));
+    if (t->is_guest_thread()) {
+      std::fprintf(stderr, "[savepoint-roster] id %X obj %08X start %08X ctx %08X%s %s\n", t->thread_id(),
+                   t->guest_object(), t->creation_params()->start_address,
+                   t->creation_params()->start_context, held ? " held" : "", t->name().c_str());
+    }
     if (held) {
       g_held.push_back(t.get());
       continue;
