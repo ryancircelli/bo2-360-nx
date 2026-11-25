@@ -1,0 +1,32 @@
+[project]
+name = "halo3"
+sdk_version = "0.10.0"
+
+[entrypoint]
+file_path = "work/default.xex"
+out_directory_path = "generated/default"
+includes = ["overrides.toml", "gaps.toml"]
+
+[[modules]]
+guest_path = "WaveShell-Xbox.dll"
+file_path = "work/WaveShell-Xbox.dll"
+out_directory_path = "generated/waveshell"
+includes = ["overrides-waveshell.toml", "gaps-waveshell.toml"]
+
+[[modules]]
+guest_path = "WavesLibDLL.dll"
+file_path = "work/WavesLibDLL.dll"
+out_directory_path = "generated/waveslib"
+includes = ["overrides-waveslib.toml", "gaps-waveslib.toml"]
+
+[[modules]]
+guest_path = "waves/L360.dll"
+file_path = "work/L360.dll"
+out_directory_path = "generated/l360"
+includes = ["overrides-l360.toml", "gaps-l360.toml"]
+
+[[modules]]
+guest_path = "waves/Q10.dll"
+file_path = "work/Q10.dll"
+out_directory_path = "generated/q10"
+includes = ["overrides-q10.toml", "gaps-q10.toml"]

@@ -147,7 +147,7 @@ def measure():
 
 
 def referenced_entries(starts, ends):
-    """Code addresses the program takes as function pointers that fall inside a generated function body.
+    """Referenced entry addresses that fall inside a generated function body.
 
     The body walk in measure() counts a call's return address as part of the function, so a function that follows a
     call to a never-returning function (exit, ExTerminateThread) is swallowed: nothing else marks where it starts. A
@@ -166,6 +166,17 @@ def referenced_entries(starts, ends):
         if not (is_exit(prev) or ((prev >> 26) == 18 and (prev & 1) == 1)) or decode(t) is None or IMAGE_RANGE[0] <= word(t) < IMAGE_RANGE[1]:
             return   # (a word that is itself an image address is table data, not code)
         found[t] = how
+    # A branch-only thunk is also an explicit reference to an entry point. The
+    # scanner may have swallowed its target after a non-returning call in another
+    # function; ordinary branches inside that function are not evidence of an entry.
+    for source in starts:
+        if ends[source] != source + 4 or not (text_lo <= source < text_hi):
+            continue
+        instruction = word(source)
+        if instruction >> 26 == 18 and not instruction & 1:
+            target = branch_target(source, instruction)
+            if target is not None and not (source <= target < ends[source]):
+                consider(target, "tail thunk")
     n = len(data) // 4
     for k in range(n):
         w = struct.unpack_from(">I", data, 4 * k)[0]
@@ -234,7 +245,7 @@ def main():
             continue
         counts["referenced"] += 1
         first = decode(t)
-        toml.append(f'"0x{t:08X}" = {{ }}   # referenced as a function pointer ({how}), inside the body walk of an earlier function: {first.mnemonic} {first.op_str}'.rstrip())
+        toml.append(f'"0x{t:08X}" = {{ }}   # referenced as an entry ({how}), inside the body walk of an earlier function: {first.mnemonic} {first.op_str}'.rstrip())
         report.append(f"referenced  0x{t:08X}  {how}")
 
     for i, s in enumerate(starts[:-1]):
