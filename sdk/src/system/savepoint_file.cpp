@@ -2,7 +2,7 @@
  * @file        system/savepoint_file.cpp
  * @brief       Fresh-process save points: the in-process capture written to a file, loaded at launch
  *
- * File (little endian): "REXSP2\0\0", u32 version, u8 uuid[16] (main executable LC_UUID), u32 frame,
+ * File (little endian): "REXSP2\0\0", u32 version, u8 uuid[16] (main executable LC_UUID ^ librexruntime LC_UUID), u32 frame,
  *   u32 heap count, per heap {u32 base, u32 physical, u32 unreserved pages, u32 n, u64 page entries[n]},
  *   u32 region count, per region {u32 space (0 virtual, 1 physical), u32 base, u32 size, u32 protect,
  *   bytes}, u32 GPU state size, GPU state bytes (GraphicsFileHook), u32 'END!'.
@@ -81,8 +81,7 @@ double Ms(Clock::time_point a, Clock::time_point b) {
   return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
-bool MainUuid(uint8_t out[16]) {
-  auto* h = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
+bool ImageUuid(const mach_header_64* h, uint8_t out[16]) {
   if (!h) return false;
   auto* lc = reinterpret_cast<const load_command*>(h + 1);
   for (uint32_t i = 0; i < h->ncmds; ++i) {
@@ -93,6 +92,22 @@ bool MainUuid(uint8_t out[16]) {
     lc = reinterpret_cast<const load_command*>(reinterpret_cast<const uint8_t*>(lc) + lc->cmdsize);
   }
   return false;
+}
+
+// Build fingerprint: the executable's LC_UUID mixed with librexruntime's, since the runtime is a separate dylib
+// that can be rebuilt (struct layouts in the saved objects change) while the executable stays the same.
+bool MainUuid(uint8_t out[16]) {
+  if (!ImageUuid(reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0)), out)) return false;
+  for (uint32_t i = 1; i < _dyld_image_count(); ++i) {
+    const char* name = _dyld_get_image_name(i);
+    uint8_t lib[16];
+    if (name && std::strstr(name, "librexruntime") &&
+        ImageUuid(reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(i)), lib)) {
+      for (int k = 0; k < 16; ++k) out[k] ^= lib[k];
+      break;
+    }
+  }
+  return true;
 }
 
 struct Out {
@@ -248,7 +263,10 @@ bool StillWaiting(XThread* t, const arm_thread_state64_t& gp) {
   if (insn != 0xD4001001u) return false;  // svc #0x80: parked at a syscall
   const std::string leaf = Sym(pc);
   if (leaf == "__semwait_signal" || leaf == "mach_wait_until" || leaf == "swtch_pri") return true;
-  if (leaf != "__psynch_cvwait") return false;  // e.g. __psynch_mutexwait after a cond wake: in transit
+  // Condition waits, and socket waits of networked games (kevent64/select/poll): still blocked if the thread is.
+  // e.g. __psynch_mutexwait after a cond wake is in transit.
+  if (leaf != "__psynch_cvwait" && leaf != "kevent64" && leaf != "kevent" && leaf != "__select" && leaf != "poll")
+    return false;
   thread_basic_info_data_t info{};
   mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT;
   mach_port_t port = pthread_mach_thread_np(reinterpret_cast<pthread_t>(t->thread()->native_handle()));
