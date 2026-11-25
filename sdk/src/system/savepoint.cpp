@@ -877,6 +877,9 @@ SavepointStats RewindToInProcessSavepoint() {
   for (auto* t : g_held) thread_resume(MachPort(t));  // ParkThreads suspended them a second time
   cs_trace::SetPhase(2);  // threads parked: later entries belong to the rewound timeline
   if (!g_held.empty()) std::fprintf(stderr, "[savepoint-s3] released hold on %zu threads\n", g_held.size());
+  // Bisect: keep the held threads held for N ms after the rewind too, so the free threads replay the gap alone.
+  const char* hold_after = std::getenv("REX_SAVEPOINT_HOLD_AFTER_MS");
+  std::vector<XThread*> held_after = hold_after ? g_held : std::vector<XThread*>{};
   g_held.clear();
   g_rewind_phase = 2;
   std::fprintf(stderr, "[savepoint-s3] rewind start, %zu parked\n", parked.size());
@@ -1058,7 +1061,16 @@ SavepointStats RewindToInProcessSavepoint() {
       ++left_parked;
       continue;
     }
+    if (std::find(held_after.begin(), held_after.end(), t.get()) != held_after.end()) continue;
     thread_resume(MachPort(t.get()));
+  }
+  if (!held_after.empty()) {
+    std::fprintf(stderr, "[savepoint-s3] keeping %zu threads held %s ms after the rewind\n", held_after.size(), hold_after);
+    std::thread([held_after, ms = std::atoi(hold_after)] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+      for (auto* t : held_after) thread_resume(MachPort(t));
+      std::fprintf(stderr, "[savepoint-s3] released post-rewind hold\n");
+    }).detach();
   }
   rewind_done = true;
   std::fprintf(stderr, "[savepoint-s3] rewind done, %u threads left parked\n", left_parked);
