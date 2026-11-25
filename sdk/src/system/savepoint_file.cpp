@@ -403,6 +403,24 @@ struct Reloc {
 }  // namespace
 
 namespace {
+// DIAG: REX_SAVEPOINT_PEEK=83AF71D4,...: the handle stored at each guest address and, for an event, its state.
+void DiagPeek(const char* when) {
+  const char* list = std::getenv("REX_SAVEPOINT_PEEK");
+  if (!list) return;
+  for (const char* p = list; *p;) {
+    char* end = nullptr;
+    const uint32_t a = uint32_t(std::strtoul(p, &end, 16));
+    if (end == p) break;
+    p = *end ? end + 1 : end;
+    const uint32_t h = memory::load_and_swap<uint32_t>(kernel_state()->memory()->TranslateVirtual(a));
+    auto obj = kernel_state()->object_table()->LookupObject<XObject>(h);
+    uint32_t type = 0xFF, state = 0xFF;
+    if (obj && obj->type() == XObject::Type::Event) static_cast<XEvent*>(obj.get())->Query(&type, &state);
+    std::fprintf(stderr, "[savepoint] %s peek %08X = %08X obj=%d event type %u state %u\n", when, a, h,
+                 obj ? int(obj->type()) : -1, type, state);
+  }
+}
+
 // DIAG: what a blocked thread waits on (r3 = the handle or KEVENT the wait import got) and its state.
 void DiagWaitObject(const char* when, uint32_t thread, const ::PPCContext* ctx) {
   if (!std::getenv("REX_SAVEPOINT_DIAG")) return;
@@ -549,6 +567,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
     });
     // Kernel objects: the table's handle counts, then guest threads, then the rest (type, length, Save bytes).
     stream::ByteStream bs(kernel.data(), kernel.size());
+    DiagPeek("save");
     ks->object_table()->Save(&bs);
     std::vector<object_ref<XObject>> order;
     for (int pass = 0; pass < 2; ++pass)
@@ -1063,6 +1082,7 @@ bool LoadSavepointFile(const std::string& path) {
     }
     thread_resume(port);
   }
+  DiagPeek("load");
   REXSYS_INFO("[savepoint] restored {}: frame {}, {} MB in {} regions, {} objects, {} threads, memory+kernel "
               "{:.1f} ms, total {:.1f} ms",
               path, frame, bytes >> 20, region_count, restored_objects, threads.size(), Ms(t0, t1),
@@ -1071,6 +1091,7 @@ bool LoadSavepointFile(const std::string& path) {
     // What every guest thread is doing 15 s on: a blocked import keeps its arguments in the context.
     std::thread([] {
       std::this_thread::sleep_for(std::chrono::seconds(15));
+      DiagPeek("after 15 s");
       for (auto& o : kernel_state()->object_table()->GetAllObjects()) {
         if (o->type() != XObject::Type::Thread) continue;
         auto* t = static_cast<XThread*>(o.get());

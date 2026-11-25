@@ -37,6 +37,7 @@ void XEvent::Initialize(bool manual_reset, bool initial_state) {
 
   this->CreateNative<X_KEVENT>();
 
+  manual_reset_ = manual_reset;  // Save writes it: a restored manual-reset event must not come back auto-reset
   if (manual_reset) {
     event_ = rex::thread::Event::CreateManualResetEvent(initial_state);
   } else {
