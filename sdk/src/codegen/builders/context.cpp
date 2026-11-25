@@ -322,8 +322,10 @@ void BuilderContext::emit_function_call(uint32_t address) {
       // A reference copy (lockstep verify) inlines the helpers as they are,
       // so their stack stores go through the logged macros and the copy can
       // be rolled back; a call would write the frame behind the log's back.
+      // inline_save_restore_helpers does the same for speed: identical guest
+      // stores, minus the call through the weak thunk.
       // A tail branch's return; comes from the caller (build_b).
-      if (isReferenceCopy() && isSaveRestoreHelper(name)) {
+      if ((isReferenceCopy() || cfg.inlineSaveRestoreHelpers) && isSaveRestoreHelper(name)) {
         inlineSaveRestoreHelper(*targetFn, "\t", false);
         return;
       }

@@ -114,6 +114,8 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
             hasBool("non_argument_as_local"), "non_argument_as_local");
   MergeBool(cfg.nonVolatileRegistersAsLocalVariables, toml["non_volatile_as_local"].value_or(false),
             hasBool("non_volatile_as_local"), "non_volatile_as_local");
+  MergeBool(cfg.inlineSaveRestoreHelpers, toml["inline_save_restore_helpers"].value_or(false),
+            hasBool("inline_save_restore_helpers"), "inline_save_restore_helpers");
   MergeBool(cfg.vectorScratchRegistersAsLocalVariables, toml["vector_scratch_as_local"].value_or(false),
             hasBool("vector_scratch_as_local"), "vector_scratch_as_local");
   MergeBool(cfg.generateExceptionHandlers, toml["generate_exception_handlers"].value_or(false),

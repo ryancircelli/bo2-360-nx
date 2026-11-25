@@ -96,6 +96,9 @@ struct RecompilerConfig {
   bool crRegistersAsLocalVariables = false;
   bool nonArgumentRegistersAsLocalVariables = false;
   bool nonVolatileRegistersAsLocalVariables = false;
+  /// Emit the __save*/__rest* helper bodies at each call site instead of calling them: the same
+  /// frame stores and loads, without the call through the weak hookable thunk.
+  bool inlineSaveRestoreHelpers = false;
   /// The scratch vector registers as locals: v0 and v32-v63 (volatile, never an argument or a
   /// return value; BO2 passes vectors in v1, so v1 is not one), without nonArgumentRegistersAsLocalVariables'
   /// r0/r2/r11/r12 and f0 (r12 is __savevmx_N's base).

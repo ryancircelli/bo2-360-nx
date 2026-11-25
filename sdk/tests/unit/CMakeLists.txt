@@ -2,6 +2,7 @@
 
 add_executable(codegen_branch_tests
     codegen/conditional_branch_test.cpp
+    codegen/save_restore_inline_test.cpp
 )
 
 target_include_directories(codegen_branch_tests PRIVATE
