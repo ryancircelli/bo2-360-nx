@@ -59,6 +59,14 @@ class GameplayProof(unittest.TestCase):
         self.assertFalse(self.exercise((b, a), game='nfshp'))
         self.assertFalse(self.exercise((a, b), moving=False, game='nfshp'))
 
+    def test_forza_speed_hud_is_distinct_from_menu_or_zero_speed(self):
+        def speed(value):
+            return [{'text': value, 'x': .845, 'y': .79, 'w': .065, 'h': .045}]
+        self.assertTrue(self.exercise((speed('059'), speed('053')), game='fh1'))
+        self.assertFalse(self.exercise(speed('000'), game='fh1'))
+        self.assertFalse(self.exercise(speed('059'), game='fh1', moving=False))
+        self.assertIsNone(driving.forza_speed([{'text': '059', 'x': .1, 'y': .2, 'w': .06, 'h': .04}]))
+
     def test_bo1_requires_zombies_zone_and_ammo_hud(self):
         words = [{'text': '8/32', 'x': .78, 'y': .85}]
         log = r'[zone] open D:\zombie_theater.ff'

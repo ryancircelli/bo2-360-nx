@@ -42,6 +42,20 @@ def hud_speed(words):
     return None
 
 
+def forza_speed(words):
+    """FH1's large three-digit speed, including leading zeroes, in the driving HUD."""
+    if MENU.search(' '.join(w['text'] for w in words)):
+        return None
+    for word in words:
+        if (.80 <= word['x'] <= .91 and .75 <= word['y'] <= .84
+                and .04 <= word.get('w', 0) <= .1 and .03 <= word.get('h', 0) <= .08
+                and re.fullmatch(r'\d{3}', word['text'])):
+            speed = int(word['text'])
+            if 5 <= speed <= 400:
+                return speed
+    return None
+
+
 def race_progress(words):
     """Hot Pursuit's HUD has no speed unit: use its timer and distance remaining."""
     if MENU.search(' '.join(w['text'] for w in words)):
@@ -105,12 +119,27 @@ def verify(game, out, log):
                                      and w['x'] > .65 and w['y'] > .7 for w in sample['words'])
             sample['speed'] = hud_speed(sample['words'])
             sample['hud_present'] = hud_present(sample['words'])
+            if game == 'fh1':
+                sample['speed'] = forza_speed(sample['words'])
+                sample['hud_present'] = sample['speed'] is not None
             if game == 'nfshp':
                 sample['race_progress'] = race_progress(sample['words'])
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             proof['errors'].append(str(error))
         proof['samples'].append(sample)
-    for a, b in zip(proof['samples'], proof['samples'][1:]):
+    # OCR may miss the unit during a single frame. Compare consecutive positively
+    # identified gameplay captures as well as immediate neighbors; never substitute
+    # a menu or a loading capture for either endpoint.
+    eligible = [s for s in proof['samples'] if s['hud_present'] or s.get('bo1_hud')
+                or (game == 'nfshp' and s['race_progress'])]
+    candidates = list(zip(proof['samples'], proof['samples'][1:]))
+    candidates += list(zip(eligible, eligible[1:]))
+    seen = set()
+    for a, b in candidates:
+        key = (a['path'], b['path'])
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             delta = scene_change(a['path'], b['path'])
         except (ValueError, OSError) as error:
