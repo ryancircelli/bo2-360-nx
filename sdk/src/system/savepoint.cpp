@@ -497,6 +497,33 @@ void Install() {
 
 std::vector<XThread*> g_held;
 Clock::time_point g_capture_time;
+// Compares live guest memory with the snapshot; with every guest thread parked, any difference is a
+// writer the park does not stop (host threads, GPU completions, timers).
+void VerifySnapshot(memory::Memory* mem, const char* when) {
+  uint64_t bad_pages = 0; uint32_t bad_regions = 0;
+  for (auto& r : g_snap.regions) {
+    uint8_t* base = r.space ? mem->physical_membase() : mem->virtual_membase();
+    uint32_t bad = 0, first = 0;
+    for (uint32_t off = 0; off < r.size; off += 4096) {
+      uint32_t len = std::min<uint32_t>(4096, r.size - off);
+      if (std::memcmp(base + r.base + off, r.data.data() + off, len) != 0) { if (!bad) first = r.base + off; ++bad; }
+    }
+    if (bad) {
+      ++bad_regions; bad_pages += bad;
+      if (bad_regions <= 20) std::fprintf(stderr, "[savepoint-verify] %s: region %u:%08X +%X: %u pages differ, first %08X\n", when, r.space, r.base, r.size, bad, first);
+    }
+  }
+  std::fprintf(stderr, "[savepoint-verify] memory %s: %u regions / %llu pages differ\n", when, bad_regions, (unsigned long long)bad_pages);
+}
+
+// Diagnostic: with threads still parked, wait and look for guest memory writers the park misses.
+void RecheckAfter(memory::Memory* mem, const char* when) {
+  const char* ms = std::getenv("REX_SAVEPOINT_RECHECK_MS");
+  if (!ms) return;
+  std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(ms)));
+  VerifySnapshot(mem, when);
+}
+
 Clock::time_point g_capture_park_time;  // when the captured threads stopped
 uint64_t g_capture_guest_ticks = 0;
 
@@ -561,6 +588,7 @@ SavepointStats CaptureInProcessSavepoint() {
   CollectRegions(physical, 1, mem->physical_membase(), g_snap.regions);
   for (auto& r : g_snap.regions) st.bytes += r.size;
   st.regions = uint32_t(g_snap.regions.size());
+  RecheckAfter(mem, "at capture after recheck wait");
   for (auto& t : parked) g_snap.all_parked.push_back(t.get());
   for (auto& t : parked) {
     ThreadSnap ts;
@@ -982,20 +1010,7 @@ SavepointStats RewindToInProcessSavepoint() {
     }
     g_rewind_phase = 6;
     // Check that every captured byte really is back after the heap and graphics rewinds ran.
-    uint64_t bad_pages = 0; uint32_t bad_regions = 0;
-    for (auto& r : g_snap.regions) {
-      uint8_t* base = r.space ? mem->physical_membase() : mem->virtual_membase();
-      uint32_t bad = 0, first = 0;
-      for (uint32_t off = 0; off < r.size; off += 4096) {
-        uint32_t len = std::min<uint32_t>(4096, r.size - off);
-        if (std::memcmp(base + r.base + off, r.data.data() + off, len) != 0) { if (!bad) first = r.base + off; ++bad; }
-      }
-      if (bad) {
-        ++bad_regions; bad_pages += bad;
-        if (bad_regions <= 20) std::fprintf(stderr, "[savepoint-verify] region %u:%08X +%X: %u pages differ after restore, first %08X\n", r.space, r.base, r.size, bad, first);
-      }
-    }
-    std::fprintf(stderr, "[savepoint-verify] memory after restore: %u regions / %llu pages differ\n", bad_regions, (unsigned long long)bad_pages);
+    VerifySnapshot(mem, "after restore");
   }
   st.regions = uint32_t(g_snap.regions.size());
   REXSYS_INFO("[savepoint-s3] rewind: recommitted {} regions, {} failed", recommitted, recommit_failed);
@@ -1047,6 +1062,7 @@ SavepointStats RewindToInProcessSavepoint() {
   // Mode "all": revived frames free their blocks for real from here; the deferred ones stay leaked.
   // Mode "stack": stays on, so a second load of the same savepoint still finds those blocks intact.
   if (defer_free::g_all) defer_free::g_active.store(false);
+  RecheckAfter(mem, "after restore + recheck wait");
   // Time stands still from the capture's park to here, for the guest clock and for restored timed waits.
   if (!std::getenv("REX_SAVEPOINT_NO_CLOCK")) {
     // Guest time is guest state: without this the rewound frame sees the whole save-to-rewind gap as elapsed.
