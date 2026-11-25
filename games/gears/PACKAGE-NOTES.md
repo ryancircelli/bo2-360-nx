@@ -32,7 +32,7 @@ Bring-up verifies a clean build, title screen, main menu, opening cinematic,
 and over two minutes of third-person play in the opening prison scene. Scripted
 movement and look inputs reach the guest; capture comparison shows the camera
 changed. The packed app passes the campaign route. Guide and Finder-launch
-checks are recorded in the stream report. Audio, save persistence, later levels,
+checks both pass, and the app passes strict ad-hoc signature verification. Audio, save persistence, later levels,
 multiplayer, title updates, other disc editions, and metal360's newer package API
 remain unverified. This note describes requirements; it does not claim a working
 metal360 package.
