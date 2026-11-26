@@ -70,6 +70,7 @@ fullenv=(); for e in "${envs[@]}"; do fullenv+=("REX_$e"); done
 [ -n "$portoff" ] && fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$portoff")   # explicit offset; otherwise a free one is picked below. other instances bind UDP 31000/31001; each test run uses its own ports
 fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
           MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs"
+          METAL360_SUPPORT_DIR="$out/support" METAL360_LOG_DIR="$out/logs"   # metal360 apps' launcher
           BO2ZM_ROUTE="$rname" BO2ZM_PLAYERS="$players")   # the perf log's route and players header lines
 [ -n "$data" ] && fullenv+=(BO2_DATA="$data")
 # Another copy of the game on the default ports makes the socket bind fail, and the game then reboots itself over and
