@@ -432,6 +432,28 @@ class KeyboardInputDialog : public XamDialog {
   bool cancelled_ = true;
 };
 
+// No keyboard UI: answer like a player who pressed Done. default_text is guest (big-endian) text, so it is
+// copied as is; swapping it again gave games a byte-swapped name. With no default, the profile's gamertag:
+// an empty name makes a name prompt ask again forever (Fallout 3's birth scene).
+void FillKeyboardAnswer(char16_t* buffer, size_t buffer_length, std::u16string_view guest_default,
+                        std::string_view fallback_text) {
+  std::memset(buffer, 0, buffer_length * sizeof(char16_t));
+  if (!guest_default.empty()) {
+    rex::string::copy_truncating(buffer, guest_default, buffer_length);
+  } else {
+    rex::string::copy_and_swap_truncating(buffer, rex::string::to_utf16(fallback_text), buffer_length);
+  }
+}
+
+X_RESULT AnswerKeyboardWithoutUI(uint32_t user_index, mapped_wstring default_text, mapped_wstring buffer,
+                                 uint32_t buffer_length) {
+  const auto* profile = REX_KERNEL_STATE()->user_profile(user_index);
+  FillKeyboardAnswer(buffer, buffer_length, default_text.value(), profile ? profile->name() : "Player");
+  REXKRNL_INFO("XamShowKeyboardUI: no keyboard UI, answered '{}'",
+               rex::string::to_utf8(rex::memory::load_and_swap<std::u16string>(buffer)));
+  return X_ERROR_SUCCESS;
+}
+
 // https://www.se7ensins.com/forums/threads/release-how-to-use-xshowkeyboardui-release.906568/
 u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_text,
                             mapped_wstring title, mapped_wstring description, mapped_wstring buffer,
@@ -446,18 +468,11 @@ u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_te
 
   assert_true(overlapped.guest_address() != 0);
 
-  auto buffer_size = static_cast<size_t>(buffer_length) * 2;
 
   X_RESULT result;
   if (REXCVAR_GET(headless)) {
-    auto run = [default_text, buffer, buffer_length, buffer_size]() -> X_RESULT {
-      // Redirect default_text back into the buffer.
-      if (!default_text) {
-        std::memset(buffer, 0, buffer_size);
-      } else {
-        rex::string::copy_and_swap_truncating(buffer, default_text.value(), buffer_length);
-      }
-      return X_ERROR_SUCCESS;
+    auto run = [user_index, default_text, buffer, buffer_length]() -> X_RESULT {
+      return AnswerKeyboardWithoutUI(user_index, default_text, buffer, buffer_length);
     };
     result = xeXamDispatchHeadless(run, overlapped.guest_address());
   } else {
@@ -501,13 +516,8 @@ u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_te
           close, overlapped.guest_address());
     } else {
       // Fallback to headless
-      auto run = [default_text, buffer, buffer_length, buffer_size]() -> X_RESULT {
-        if (!default_text) {
-          std::memset(buffer, 0, buffer_size);
-        } else {
-          rex::string::copy_and_swap_truncating(buffer, default_text.value(), buffer_length);
-        }
-        return X_ERROR_SUCCESS;
+      auto run = [user_index, default_text, buffer, buffer_length]() -> X_RESULT {
+        return AnswerKeyboardWithoutUI(user_index, default_text, buffer, buffer_length);
       };
       result = xeXamDispatchHeadless(run, overlapped.guest_address());
     }

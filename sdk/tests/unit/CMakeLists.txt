@@ -162,3 +162,10 @@ target_include_directories(disc_swap_tests PRIVATE ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(disc_swap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(disc_swap_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME disc_swap_tests COMMAND disc_swap_tests)
+
+add_executable(keyboard_answer_tests kernel/keyboard_answer_test.cpp)
+target_link_libraries(keyboard_answer_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(keyboard_answer_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
+)
+add_test(NAME keyboard_answer_tests COMMAND keyboard_answer_tests)
