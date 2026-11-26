@@ -193,6 +193,11 @@ def referenced_entries(starts, ends):
                     consider((hi + (lo - 0x10000 if lo & 0x8000 else lo)) & 0xFFFFFFFF, "lis+addi")
                 elif (v >> 26) == 24 and ((v >> 21) & 31) == ((w >> 21) & 31):   # ori rX, rD, lo
                     consider(hi | (v & 0xFFFF), "lis+ori")
+        elif not (text_lo <= ea < text_hi) and not w % 4:
+            # A word in a data section that points into .text (vtable, function pointer list). Only code outside
+            # .text is scanned, so SEH/EH tables inside it are not read; consider() keeps just targets that follow
+            # an exit or a call.
+            consider(w, "data pointer")
     return found
 
 
