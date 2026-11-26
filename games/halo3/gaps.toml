@@ -35,11 +35,11 @@
 "0x82582C48" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
 "0x8258A4B8" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
 "0x8258BD80" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r30, r3
+"0x825A2180" = { }   # tail thunk (restored: gaps.toml is not idempotent)
 "0x8258D4E8" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: lwz r30, 0x7c(r31)
 "0x8258D660" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: li r11, 0
 "0x825921DC" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
 "0x82593980" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: lis r11, -0x4000
-"0x82598474" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: lwz r27, 0xcc(r31)
 "0x825985E8" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: bl 0x82593820
 "0x8259895C" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: bl 0x82593820
 "0x82598A9C" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: bl 0x82593820
@@ -66,8 +66,6 @@
 "0x826CEFD0" = { }   # 8 B: addi r3, r3, -0x10
 "0x826D10F8" = { }   # 28 B: lbz r10, 0x3c(r3)
 "0x826F5B70" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
-"0x826F5BD8" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
-"0x826F5C3C" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
 "0x826F5CC8" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
 "0x826F5D84" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
 "0x826F5DD0" = { }   # referenced as an entry (data pointer), inside the body walk of an earlier function: mr r8, r8
