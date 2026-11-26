@@ -69,21 +69,17 @@ bool SDLWindowedAppContext::Initialize() {
     // dummy driver, which consumes samples at the real-time rate without opening a CoreAudio device.
     SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
     SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
-  }
-#endif
-  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
-    REXLOG_ERROR("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: {}", SDL_GetError());
-    return false;
-  }
-#if REX_PLATFORM_MAC
-  if (headless) {
-    // Prohibited: no Dock icon, no menu bar, can never be activated or take focus.
+    // Prohibited before SDL's finishLaunching: no Dock icon (not even a flash), no menu bar, never activated.
     using SetPolicyFn = bool (*)(id, SEL, long);
     id app = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend)(
         reinterpret_cast<id>(objc_getClass("NSApplication")), sel_registerName("sharedApplication"));
     reinterpret_cast<SetPolicyFn>(objc_msgSend)(app, sel_registerName("setActivationPolicy:"), 2);
   }
 #endif
+  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+    REXLOG_ERROR("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: {}", SDL_GetError());
+    return false;
+  }
   const char* video_driver_in_use = SDL_GetCurrentVideoDriver();
   REXLOG_INFO("SDL video driver: {}", video_driver_in_use ? video_driver_in_use : "unknown");
   uint32_t first = SDL_RegisterEvents(2);
