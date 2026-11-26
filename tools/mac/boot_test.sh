@@ -65,7 +65,8 @@ done < "$route"
 envs+=(LOG_LEVEL=info BO2ZM_TEST_EXIT_ON_ERROR=true AUDIO_MUTE=true WINDOW_START_MINIMIZED=true BO2ZM_PERF_LOG="$out/perf.tsv" BO2ZM_CAPTURE_EVERY_S=${CAPTURE_EVERY_S:-15} BO2ZM_CAPTURE_MAX=${CAPTURE_MAX:-60})
 [ "$video" = 1 ] && envs+=(BO2ZM_VIDEO_RGBA="$out/capture.rgba")   # hook for the build agent, see docs/mac/README.md
 fullenv=(); for e in "${envs[@]}"; do fullenv+=("REX_$e"); done
-[ "$pads" = sdk ] && [ "$scripted" = 1 ] && fullenv+=(REX_HID_VIRTUAL_PAD_SCRIPT="$(cd "$(dirname "$route")" && pwd)/$(basename "$route")")
+# v0.11 SDKs read the pad script from hid.script.file with the script driver selected; older ones from REX_HID_VIRTUAL_PAD_SCRIPT.
+[ "$pads" = sdk ] && [ "$scripted" = 1 ] && { _ps="$(cd "$(dirname "$route")" && pwd)/$(basename "$route")"; fullenv+=(REX_HID_VIRTUAL_PAD_SCRIPT="$_ps" REX_HID_DRIVERS=sdl3,script REX_HID_SCRIPT_FILE="$_ps"); }
 [ -n "$portoff" ] && fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$portoff")   # explicit offset; otherwise a free one is picked below. other instances bind UDP 31000/31001; each test run uses its own ports
 fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
           MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs"
