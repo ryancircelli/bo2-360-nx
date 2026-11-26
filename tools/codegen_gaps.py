@@ -54,7 +54,12 @@ def word(ea):
 
 
 def decode(ea):
-    return next(md.disasm(data[ea - BASE: ea - BASE + 4], ea), None)
+    ins = next(md.disasm(data[ea - BASE: ea - BASE + 4], ea), None)
+    w = struct.unpack_from(">I", data, ea - BASE)[0]
+    if ins is None and (w >> 26) in (4, 5, 6):   # Xbox 360 VMX128 / AltiVec: real code that capstone cannot name
+        from types import SimpleNamespace
+        return SimpleNamespace(mnemonic="vmx128", op_str=f"0x{w:08x}")
+    return ins
 
 
 def branch_target(ea, w):
@@ -156,21 +161,31 @@ def referenced_entries(starts, ends):
     import bisect
     text_lo, text_hi = TEXT
     found = {}
-    def consider(t, how):
+    def consider(t, how, table=False):
         if t % 4 or not (text_lo < t < text_hi) or t in LABELS or t in ends:
             return
         i = bisect.bisect_right(starts, t) - 1
         if i < 0 or not (starts[i] < t < ends[starts[i]]):
             return
         prev = word(t - 4)
-        if not (is_exit(prev) or ((prev >> 26) == 18 and (prev & 1) == 1)) or decode(t) is None or IMAGE_RANGE[0] <= word(t) < IMAGE_RANGE[1]:
+        ends_fn = is_exit(prev) or (prev >> 26) == 18 or prev in (0x4E800020, 0x4E800420)   # b, blr, bctr (vtable slots only)
+        if not (is_exit(prev) or ((prev >> 26) == 18 and (prev & 1) == 1) or (table and ends_fn)) or decode(t) is None or IMAGE_RANGE[0] <= word(t) < IMAGE_RANGE[1]:
             return   # (a word that is itself an image address is table data, not code)
         found[t] = how
     n = len(data) // 4
+    def is_code(i):
+        if not 0 <= i < n:
+            return False
+        v = struct.unpack_from(">I", data, 4 * i)[0]
+        return text_lo < v < text_hi and v % 4 == 0 and not text_lo <= BASE + 4 * i < text_hi
     for k in range(n):
         w = struct.unpack_from(">I", data, 4 * k)[0]
         ea = BASE + 4 * k
-        # (data words are not used: SEH/EH scope tables point at handler labels in the middle of functions)
+        # Data words count only inside a vtable-like run (3+ consecutive words that all are code addresses): SEH/EH scope
+        # tables point at handler labels in the middle of functions, but are not runs of bare code pointers.
+        if not (text_lo <= ea < text_hi) and is_code(k):
+            if (is_code(k - 1) and is_code(k + 1)) or (is_code(k + 1) and is_code(k + 2)) or (is_code(k - 1) and is_code(k - 2)):
+                consider(w, "vtable word", True)
         if (w >> 26) == 15 and (w & 0xFFFF) >= 0x8000 and text_lo <= ea < text_hi:
             hi = (w & 0xFFFF) << 16
             for j in range(1, 7):
