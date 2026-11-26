@@ -1,5 +1,6 @@
 """Gate kit self-test: log-check regex and the game table. No game, OCR or runq needed: `gate.py selftest`."""
 import importlib.util
+import os
 from pathlib import Path
 import unittest
 
@@ -37,6 +38,16 @@ class Launch(unittest.TestCase):
         src = (HERE / 'gate.py').read_text()
         for name in ('REX_UI_SDL_START_MINIMIZED', 'REX_UI_FULLSCREEN', 'REX_APU_MUTE'):
             self.assertIn("'" + name + "'", src)
+
+
+class HeadlessMarker(unittest.TestCase):
+    def test_marker_found_only_when_present(self):
+        import tempfile
+        for body, want in ((b'xx headless_active yy', True), (b'nothing', False)):
+            with tempfile.TemporaryDirectory() as d:
+                os.makedirs(d + '/Contents/MacOS')
+                open(d + '/Contents/MacOS/lib', 'wb').write(body)
+                self.assertEqual(gate.has_headless(d), want)
 
 
 class GameTable(unittest.TestCase):

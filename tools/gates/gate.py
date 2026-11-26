@@ -571,6 +571,19 @@ def inner_args(a, out):
     return x
 
 
+def has_headless(app):
+    """True when some binary in the bundle carries the off-screen mode marker (origin/headless-test-mode)."""
+    mac = os.path.join(app, 'Contents', 'MacOS')
+    for f in (os.listdir(mac) if os.path.isdir(mac) else []):
+        p = os.path.join(mac, f)
+        if os.path.isfile(p) and not os.path.islink(p):
+            with open(p, 'rb') as fh:
+                while chunk := fh.read(1 << 24):
+                    if b'headless_active' in chunk:
+                        return True
+    return False
+
+
 def queue_gate(a, gate=None, game=None):
     """Submit one gate as a runq job, wait, print and return the result line."""
     gate, game = gate or a.gate, game or a.game
@@ -578,6 +591,9 @@ def queue_gate(a, gate=None, game=None):
     app = a.app if (a.app and game == a.game) else installed_app(game)
     out = a.out if (a.out and game == a.game and gate == a.gate) else default_out(game, gate)
     os.makedirs(os.path.dirname(out.rstrip('/')), exist_ok=True)
+    if not a.window and not has_headless(app):
+        return out_line('FAIL', gate, game, f'{app} has no off-screen mode (no headless_active marker): a test window would reach the screen and the guard kills it. '
+                        'Build the app from origin/headless-test-mode, or pass --window to test a real window', out)
     if a.now:
         b.app, b.out = app, out
         return run_inner(b)
@@ -834,6 +850,7 @@ def main():
     p.add_argument('--env', action='append', default=[])
     p.add_argument('--no-seed', action='store_true', help='do not clone the owner profile into the run')
     p.add_argument('--class', dest='klass', default='harness')
+    p.add_argument('--window', action='store_true', help='allow an app without off-screen mode (a real window; the screen guard may kill it)')
     p.add_argument('--now', action='store_true', help='run inline instead of through runq (debugging only)')
     p.add_argument('--inner', action='store_true', help=argparse.SUPPRESS)
     p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3), p.add_argument('--bench', action='store_true', help='speed bo2: deterministic bench instead of fps pairs'), p.add_argument('--no-control-cache', action='store_true')
