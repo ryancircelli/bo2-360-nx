@@ -5,6 +5,7 @@
 
 #include <rex/input/script/script_input_driver.h>
 
+using namespace rex;
 using namespace rex::input;
 using namespace rex::input::script;
 
