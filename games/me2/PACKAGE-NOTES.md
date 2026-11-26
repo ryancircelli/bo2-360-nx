@@ -25,8 +25,8 @@ committed package contents.
 
 Stage the boot disc at `data/game/`, disc 2 at `data/disc2/`, preserving each
 whole filesystem separately. Their inventory has 989 shared paths, 892 paths
-unique to disc 1 and 1,189 unique to disc 2. Shared-path sizes are equal;
-content equivalence of every shared file has not yet been checked. Do not
+unique to disc 1 and 1,189 unique to disc 2. All 987 shared data files are byte-identical (SHA-256); only the two XEX
+containers differ, with decrypted differences described above. Do not
 merge the disc directories. Include writable profile storage separately.
 The scratch launcher points at an external two-disc data root. A distributable
 app assembled locally from the owner's discs must carry or refer to both
