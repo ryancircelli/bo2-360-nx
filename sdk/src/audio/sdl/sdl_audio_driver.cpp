@@ -208,7 +208,14 @@ bool SDLAudioDriver::Initialize() {
 
   if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
     REXAPU_ERROR("SDL_InitSubSystem(SDL_INIT_AUDIO) failed: {}", SDL_GetError());
-    return false;
+    if (!REXCVAR_GET(audio_mute)) {
+      return false;
+    }
+    // Muted with no SDL output (e.g. headless asked for a "dummy" driver this SDL build lacks): a failed driver
+    // made some titles (Mass Effect 2) crash in their audio thread, so run a null sink: pump paces, Pump drains.
+    pump_active_ = true;
+    pump_ = std::thread([this]() { Pump(); });
+    return true;
   }
   sdl_initialized_ = true;
 
@@ -308,6 +315,13 @@ void SDLAudioDriver::Pump() {
     }
     if (in_queue < 2) {
       semaphore_->Release(1, nullptr);
+    }
+    if (!sdl_stream_) {  // null sink: nothing consumes queued frames
+      std::unique_lock<std::mutex> guard(frames_mutex_);
+      while (!frames_queued_.empty()) {
+        frames_unused_.push(frames_queued_.front());
+        frames_queued_.pop();
+      }
     }
     deadline += interval;
     if (now >= deadline) {
