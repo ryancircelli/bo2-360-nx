@@ -13,6 +13,8 @@
 
 #include <SDL3/SDL_metal.h>
 #include <SDL3/SDL_video.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 
 namespace rex {
 namespace ui {
@@ -22,9 +24,18 @@ CAMetalLayerSurface::~CAMetalLayerSurface() {
     SDL_Metal_DestroyView(static_cast<SDL_MetalView>(metal_view_));
     metal_view_ = nullptr;
   }
+  if (owns_layer_ && layer_) {
+    using ReleaseFn = void (*)(const void*, SEL);
+    reinterpret_cast<ReleaseFn>(objc_msgSend)(layer_, sel_registerName("release"));
+  }
 }
 
 bool CAMetalLayerSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const {
+  if (!window_) {
+    width_out = width_;
+    height_out = height_;
+    return width_ && height_;
+  }
   int pixel_width = 0;
   int pixel_height = 0;
   if (!SDL_GetWindowSizeInPixels(window_, &pixel_width, &pixel_height)) {
