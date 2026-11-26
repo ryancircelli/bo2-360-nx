@@ -1,0 +1,5 @@
+# Gears campaign bring-up: Start, then accept the default campaign choices.
+# Captures must be inspected: an alive run alone does not prove gameplay.
+duration_s = 300
+players = 1
+pad1 = 30-30.5:start,40-40.5:a,50-50.5:a,60-60.5:a,70-70.5:a,80-80.5:a,90-90.5:a,100-100.5:a,110-110.5:a,180-184:stick_up,200-201:look_right
