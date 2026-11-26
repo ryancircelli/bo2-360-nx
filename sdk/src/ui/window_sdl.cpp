@@ -258,7 +258,11 @@ bool WindowSDL::OpenImpl() {
   // desired state so a reopened window comes back with the state it had.
   ApplyTextInputActiveNow();
   ApplyCursorVisibilityNow();
-  SDL_ShowWindow(sdl_window_);
+  // A test run never shows the window at all: minimize-at-show still left a 1280x752 window on screen for seconds
+  // (the guard killed Gears at 4-8 s). Hidden windows still get a layer and present.
+  if (!REXCVAR_GET(window_start_minimized)) {
+    SDL_ShowWindow(sdl_window_);
+  }
 
   // Actualize state for the common Window code. Listener dispatch is handled
   // by Window::Open after OpenImpl returns; these only record initial state.
