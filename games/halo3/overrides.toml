@@ -10,12 +10,12 @@
 # KTHREAD+0x164; ConvertFiberToThread frees/clears it. CreateFiber initializes
 # stack bounds and continuation; DeleteFiber releases them. The switch entry
 # saves the current register context and restores the target's context.
+# Lone branch thunk after a function's last tail branch; called through a function pointer (boot12 FATAL: invalid function 0x822010D0).
+"0x822010D0" = { }   # b 0x82200e38
+
 [rexcrt]
 ConvertThreadToFiber = 0x8259FC20
 ConvertFiberToThread = 0x8259FCB0
 CreateFiber = 0x8259FD00
 DeleteFiber = 0x8259FDE0
 SwitchToFiber = 0x825A2180
-
-# Lone branch thunk after a function's last tail branch; called through a function pointer (boot12 FATAL: invalid function 0x822010D0).
-"0x822010D0" = { }   # b 0x82200e38
