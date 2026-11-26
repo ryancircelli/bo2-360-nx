@@ -392,6 +392,8 @@ def live_record_route(rec, argv, t0, alive=None):
         lines = ['# ' + l if pad_key.match(l) else l for l in open(st['route']).read().splitlines()]
     lines += [f'# recorded from live session {rec["name"]} ({m.group(1)} pad samples)',
               f'REX_HID_REPLAY_INPUT = {samples}', f'REX_HID_REPLAY_DELAY = {int(m.group(2)) / 1000:.3f}']
+    if st.get('pads') or not st.get('route'):   # keep the live pads so the replay can be driven on from where it ends
+        lines.append(f'REX_HID_VIRTUAL_PADS = {min(max(st.get("pads") or 1, 1), 4)}')
     if st.get('ff') and st['ff'] != 1:
         lines.append('REX_HID_VIRTUAL_PAD_GUEST_TIME = true   # recorded on the guest clock: start with the same --ff')
     with open(route_out, 'w') as f:
