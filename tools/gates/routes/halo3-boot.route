@@ -1,5 +1,6 @@
-# First Halo 3 boot: capture startup before attempting navigation.
-duration_s = 90
+# Halo 3 boot to menu, then Start Solo Game: A presses every 12 s from the menu (reached ~90 s).
+duration_s = 320
 players = 1
 BO2ZM_BENCHMARK = false
-BO2ZM_TEST_BUTTONS =
+REX_GUEST_CAPTURE_EVERY_S = 10
+pad1 = 100-100.4:a, 112-112.4:a, 124-124.4:a, 136-136.4:a, 148-148.4:a, 160-160.4:a, 172-172.4:a, 184-184.4:a
