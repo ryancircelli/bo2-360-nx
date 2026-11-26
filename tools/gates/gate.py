@@ -40,6 +40,8 @@ GAMES = {
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
+    # No drive route yet: boot and install only.
+    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive=None, scene_s=180, settle_s=75, seed='nfsmw2012-360'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
@@ -800,7 +802,7 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'nfsmw2012': 'most wanted 2012'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli
