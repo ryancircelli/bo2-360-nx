@@ -1,0 +1,9 @@
+[project]
+name = "me2"
+sdk_version = "0.10.0"
+game_root = "."
+
+[entrypoint]
+file_path = "work/default.xex"
+out_directory_path = "generated/default"
+includes = ["overrides.toml", "gaps.toml"]
