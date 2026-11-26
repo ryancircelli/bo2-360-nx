@@ -147,3 +147,9 @@ set_target_properties(xmemory_heap_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
 )
 add_test(NAME xmemory_heap_tests COMMAND xmemory_heap_tests)
+
+add_executable(disc_swap_tests filesystem/disc_swap_test.cpp)
+target_include_directories(disc_swap_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(disc_swap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(disc_swap_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME disc_swap_tests COMMAND disc_swap_tests)

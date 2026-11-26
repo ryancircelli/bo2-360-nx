@@ -548,8 +548,6 @@ REX_EXPORT_STUB(__imp__XamLoaderGetClearCache);
 REX_EXPORT_STUB(__imp__XamLoaderGetCurrentTitleD3DVersion);
 REX_EXPORT_STUB(__imp__XamLoaderGetGameInfo);
 REX_EXPORT_STUB(__imp__XamLoaderGetLogonTitle);
-REX_EXPORT_STUB(__imp__XamLoaderGetMediaInfo);
-REX_EXPORT_STUB(__imp__XamLoaderGetMediaInfoEx);
 REX_EXPORT_STUB(__imp__XamLoaderGetPriorTitleId);
 REX_EXPORT_STUB(__imp__XamLoaderGetState);
 REX_EXPORT_STUB(__imp__XamLoaderIsKinectUIPreferredForLogonTitle);
