@@ -34,4 +34,15 @@ folders, with the normal `update/` and `content/` siblings.
 
 The SDK disc-swap implementation (original commit b324d385) remounts `game:`
 and `d:` and retains old devices for open handles. `XamSwapDisc` is an actual
-import of this title. Runtime swap/menu/gameplay proof remains pending.
+import of this title. The title's only call site is sub_829EF350: it builds the
+localized "insert disc" strings, creates an event, picks disc = (current == 1 ? 2 : 1)
+from the global at 0x8336C22C, calls the XDK wrapper sub_82C36D50 -> XamSwapDisc,
+waits INFINITE on the event (the SDK sets it), sleeps 1 s and stores the new disc.
+Proven 2026-11-26: menus, New Game, the prologue cinematic and controllable
+gameplay on the Normandy; `cmd swap_disc 2` mid-gameplay remounts disc2 (2,190
+entries) and the game keeps running. The title-owned call has not been reached
+(needs a save late in the game).
+
+Running it in a test: the prologue's conversations stop on a dialogue wheel (two
+lines of text next to a wheel icon) and wait for a choice: hold the left stick
+toward an option and press A. They are not slow motion.
