@@ -228,19 +228,7 @@ u32 NtSuspendThread_entry(u32 handle, mapped_u32 suspend_count_ptr) {
     }
 
     REXKRNL_TRACE("[NtSuspendThread] handle={:08X} thread={}", uint32_t(handle), thread->name());
-#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
-    auto* current_thread = XThread::GetCurrentThread();
-    bool is_self_suspend = current_thread && current_thread == thread.get();
-    if (is_self_suspend) {
-      REXKRNL_TRACE("[NtSuspendThread] self-suspend for thread={:08X}", uint32_t(handle));
-      suspend_count = thread->SelfSuspend();
-      result = X_STATUS_SUCCESS;
-    } else {
-      result = thread->Suspend(&suspend_count);
-    }
-#else
     result = thread->Suspend(&suspend_count);
-#endif
   } else {
     REXKRNL_WARN("[NtSuspendThread] handle={:08X} NOT FOUND", uint32_t(handle));
     result = X_STATUS_INVALID_HANDLE;

@@ -93,7 +93,8 @@ struct Fiber {
   friend void ::rex_fiber_trampoline(void);
 #elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
   ucontext_t context_{};
-  std::vector<uint8_t> stack_;
+  void* stack_ = nullptr;  // mmap'd: guard page at the low end, pages committed on touch
+  size_t stack_size_ = 0;
   void (*entry_)(void*) = nullptr;
   void* arg_ = nullptr;
   bool is_thread_fiber_ = false;
