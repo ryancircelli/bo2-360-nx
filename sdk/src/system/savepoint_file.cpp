@@ -847,7 +847,9 @@ bool LoadSavepointFile(const std::string& path) {
   for (uint32_t n = in.U32(); n && in.ok; --n) {
     auto m = in.Str();
     auto* kst = Runtime::instance()->kernel_state();
-    if (kst->GetModule(m, true)) continue;
+    // Same path() string as one of this boot's modules (GetModule's path resolve misses the main xex).
+    auto mods = kst->object_table()->GetObjectsByType<XModule>(XObject::Type::Module);
+    if (std::any_of(mods.begin(), mods.end(), [&](auto& x) { return x->path() == m; })) continue;
     if (!kst->LoadUserModule(m, false)) {
       SPLOAD_ERR("[savepoint] load: module {} did not load", m);
       return false;
@@ -1016,7 +1018,9 @@ bool LoadSavepointFile(const std::string& path) {
       kbs.Read<uint32_t>();
       auto m = kbs.Read<std::string>();
       if (std::find(loaded_dlls.begin(), loaded_dlls.end(), m) != loaded_dlls.end()) {
-        auto mod = ks->GetModule(m, true);
+        object_ref<XModule> mod;
+        for (auto& x : ks->object_table()->GetObjectsByType<XModule>(XObject::Type::Module))
+          if (x->path() == m) mod = x;
         if (!mod || !mod->RestoreLoaded(&kbs)) {
           SPLOAD_ERR("[savepoint] load: module {} did not take its saved handles", m);
           return false;
