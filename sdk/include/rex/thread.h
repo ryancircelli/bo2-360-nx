@@ -118,9 +118,31 @@ struct SpinScope {
   SpinScope(const SpinScope&) = delete;
   SpinScope& operator=(const SpinScope&) = delete;
   uint64_t start_;
+  uint32_t epoch_ = 0;
 };
-// fn(thread id as pthread_threadid_np gives it, spin instructions so far) for every thread that spun.
-void ForEachSpinCount(void (*fn)(uint64_t tid, uint64_t instr, void* ctx), void* ctx);
+// A span that may turn out to be spin (a job the game picks and then puts back unrun): MarkSpin where it starts,
+// CountSpinSince once it is known to be spin. Spin scopes inside the span are not counted twice.
+struct SpinMark {
+  uint64_t instr = 0, spin = 0;
+  uint32_t epoch = 0;
+};
+SpinMark MarkSpin();
+// Instructions since the mark outside spin scopes and counted spans (0 for an empty mark).
+uint64_t NotSpinSince(const SpinMark& mark);
+// Count them as spin, less not_spin of them (work inside the span, e.g. jobs a wait ran to their end).
+void CountSpinSince(const SpinMark& mark, uint64_t not_spin = 0);
+// After a savepoint rewind: threads' stacks hold scopes and marks from the save, drop them uncounted.
+void SpinCountRewound();
+// Gaps: instructions a thread runs between two spin scopes (from the end of one to the start of the next), summed by
+// size, bucket b = gaps of [2^(b-1), 2^b) instructions. A wait loop's own check between its waits is a short gap, and
+// there are more of them the longer it waits; real work between waits is a long one (bench_spin_gap_bits).
+constexpr int kSpinGapBuckets = 40;
+struct SpinCounts {
+  uint64_t instr = 0;  // inside spin scopes
+  uint64_t gap_sum[kSpinGapBuckets] = {}, gap_n[kSpinGapBuckets] = {};
+};
+// fn(thread id as pthread_threadid_np gives it, counts so far) for every thread that spun.
+void ForEachSpinCount(void (*fn)(uint64_t tid, const SpinCounts& counts, void* ctx), void* ctx);
 
 // Memory barrier (request - may be ignored).
 void SyncMemory();

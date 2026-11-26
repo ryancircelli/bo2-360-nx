@@ -1,0 +1,110 @@
+--- runq
++++ runq
+@@ -476,26 +476,36 @@
+ 
+ 
+ def read_bench(run_dir):
+-    """The deterministic bench's result (SDK bench_frames): the last '[bench] json' line of the game log, per frame.
+-    work = instructions minus spin (yields, sleeps, waits, critical-section spin), the figure that compares builds."""
++    """The deterministic bench's result (SDK bench_frames): every '[bench] json' line of the game log (one per round,
++    bench_rounds), per frame, averaged over the rounds. work = instructions minus spin (yields, sleeps, waits, the
++    game's wait loops), the figure that compares builds; work_per_kdraw = work per 1000 draws (cancels scene content)."""
+     try:
+-        line = None
++        R = []
+         with open(os.path.join(run_dir, 'game.log'), errors='replace') as f:
+             for l in f:
+                 if '[bench] json ' in l:
+-                    line = l
+-        if not line:
++                    R.append(json.loads(l.split('[bench] json ', 1)[1]))
++        if not R:
+             return None
+-        j = json.loads(line.split('[bench] json ', 1)[1])
++        mean = lambda xs: sum(xs) / len(xs)
++        work = lambda j: j['work'] if 'work' in j else j['instr'] - j.get('spin_instr', 0)
++        j = R[-1]
+         n = j['frames']
+-        spin = j.get('spin_instr', 0)
+         th = sorted(j.get('threads', []), key=lambda t: -(t['instr'] - t.get('spin_instr', 0)))
+-        return {'frames': n, 'fps': j['fps'], 'stall_frames': j.get('stall_frames'), 'frame_lock_hz': j.get('frame_lock_hz'),
+-                'instr_m_per_frame': round(j['instr'] / n / 1e6, 3), 'spin_m_per_frame': round(spin / n / 1e6, 3),
+-                'work_m_per_frame': round((j['instr'] - spin) / n / 1e6, 3),
+-                'cpu_ms_per_frame': round(j['cpu_ms'] / n, 3), 'gpu_ms_per_frame': round(j['gpu_ms'] / n, 4),
+-                'threads': [{'name': t['name'], 'work_m': round((t['instr'] - t.get('spin_instr', 0)) / n / 1e6, 3),
+-                             'spin_m': round(t.get('spin_instr', 0) / n / 1e6, 3)} for t in th[:16]]}
++        out = {'frames': sum(r['frames'] for r in R), 'rounds': len(R), 'fps': round(mean([r['fps'] for r in R]), 2),
++               'stall_frames': sum(r.get('stall_frames') or 0 for r in R), 'frame_lock_hz': j.get('frame_lock_hz'),
++               'instr_m_per_frame': round(mean([r['instr'] / r['frames'] for r in R]) / 1e6, 3),
++               'spin_m_per_frame': round(mean([(r['instr'] - work(r)) / r['frames'] for r in R]) / 1e6, 3),
++               'work_m_per_frame': round(mean([work(r) / r['frames'] for r in R]) / 1e6, 3),
++               'round_work_m': [round(work(r) / r['frames'] / 1e6, 2) for r in R],
++               'cpu_ms_per_frame': round(mean([r['cpu_ms'] / r['frames'] for r in R]), 3),
++               'gpu_ms_per_frame': round(mean([r['gpu_ms'] / r['frames'] for r in R]), 4),
++               'threads': [{'name': t['name'], 'work_m': round((t['instr'] - t.get('spin_instr', 0)) / n / 1e6, 3),
++                            'spin_m': round(t.get('spin_instr', 0) / n / 1e6, 3)} for t in th[:16]]}
++        if all(r.get('draws') for r in R):
++            out['draws_per_frame'] = round(mean([r['draws'] / r['frames'] for r in R]), 1)
++            out['work_per_kdraw'] = round(mean([work(r) / r['draws'] for r in R]) / 1e3, 4)
++        return out
+     except (OSError, ValueError, KeyError, ZeroDivisionError):
+         return None
+ 
+@@ -3102,11 +3112,11 @@
+         if not a.app:
+             sys.exit('runq: --app is required with --route')
+         name = a.name or os.path.basename(rp).split('.')[0]
+-        if re.match(r'town4', os.path.basename(rp)) and 'det' not in os.path.basename(rp):
++        if re.match(r'town4', os.path.basename(rp)) and not re.search(r'det|rounds', os.path.basename(rp)):
+             print('runq: hint: for a CPU-side speed A/B of BO2 town4, the deterministic bench is ~10x faster and less noisy than an fps pair: '
+-                  'runq submit --app APP --route <branch>/tools/mac/bench/town4_det.route --class bench --solo --timeout 420 '
+-                  '--env "END_ON_LOG=[bench] done", compare with abverdict.py --bench (WORKFLOW.md "Deterministic bench"). '
+-                  'GPU-side changes still need fps runs.', file=sys.stderr)
++                  'runq submit --app APP --route <branch>/tools/mac/bench/town4_rounds.route --class bench --timeout 1500 '
++                  '--env "END_ON_LOG=[bench] done" (runs beside games and builds), compare with abverdict.py --bench (WORKFLOW.md "Deterministic bench"). '
++                  'GPU-side changes need --solo bench runs or fps runs.', file=sys.stderr)
+         out = os.path.abspath(os.path.expanduser(a.out)) if a.out else os.path.join(D['jobs'], f'{jid}-{name}')
+         dur = 600
+         for line in open(rp):
+--- abverdict.py
++++ abverdict.py
+@@ -57,6 +57,7 @@
+     if not b: return None,'no bench result (window not reached?)'
+     if j.get('status') not in ('done',None): return None,'runq status '+str(j.get('status'))
+     if b.get('stall_frames') and b['stall_frames']>0.01*b['frames']: return None,'%d stall frames (guest clock ran on wall time)'%b['stall_frames']
++    b=dict(b,solo=j.get('solo'))
+     return b,None
+ def bench_verdict(a,b,eff,z=2.5):
+     """a, b: per-run costs (lower = faster). Welch se of the relative difference; FASTER/SLOWER/SAME/MORE."""
+@@ -70,11 +71,21 @@
+     for side,lst in (('A',o.a),('B',o.b)):
+         for out in lst:
+             b,bad=bench_of(out)
+-            print(side,out,('work %.1f M/frame spin %.1f gpu %.3f ms/frame fps %.1f'%(b['work_m_per_frame'],b['spin_m_per_frame'],b['gpu_ms_per_frame'],b['fps'])) if b else '-',('INVALID: '+bad) if bad else 'ok')
++            print(side,out,('work %.1f M/frame (%s/1000 draws) spin %.1f gpu %.3f ms/frame fps %.1f rounds %s'%(b['work_m_per_frame'],b.get('work_per_kdraw','-'),b['spin_m_per_frame'],b['gpu_ms_per_frame'],b['fps'],b.get('round_work_m','-'))) if b else '-',('INVALID: '+bad) if bad else 'ok')
+             if b: S[side].append(b)
+     if len(S['A'])<2 or len(S['B'])<2: print('VERDICT RERUN (need >= 2 valid bench runs per side)'); return 2
+     worst=0
+-    for key,lab in (('work_m_per_frame','CPU work'),('gpu_ms_per_frame','GPU time')):
++    # work per 1000 draws cancels scene content (draws/frame differ ~5% between boots); a change that adds or removes
++    # draws is judged on work per frame instead (--per-frame).
++    kd=not o.per_frame and all(x.get('work_per_kdraw') for x in S['A']+S['B'])
++    keys=[('work_per_kdraw','CPU work per 1000 draws')] if kd else [('work_m_per_frame','CPU work per frame')]
++    if kd:
++        da=st.mean(x['draws_per_frame'] for x in S['A']); db=st.mean(x['draws_per_frame'] for x in S['B'])
++        print('draws/frame: A %.0f B %.0f (%+.1f%%)'%(da,db,100*(db/da-1)))
++    # GPU ms/frame moves with load (6.7-10.2 ms in 3-at-once runs): judged only when every run had the machine alone
++    if all(x.get('solo') for x in S['A']+S['B']): keys.append(('gpu_ms_per_frame','GPU time'))
++    else: print('GPU time: not judged (needs --solo runs on both sides)')
++    for key,lab in keys:
+         a=[x[key] for x in S['A']]; b=[x[key] for x in S['B']]
+         v,d,se=bench_verdict(a,b,o.min_effect)
+         print('%s: A %.2f (cv %.2f%%) B %.2f (cv %.2f%%) -> %s delta %+.2f%% se %.2f%%'%(lab,st.mean(a),100*st.stdev(a)/st.mean(a),st.mean(b),100*st.stdev(b)/st.mean(b),v,100*d,100*se))
+@@ -84,6 +95,7 @@
+     ap=argparse.ArgumentParser(); ap.add_argument('--a',nargs='+',required=True); ap.add_argument('--b',nargs='+',required=True)
+     ap.add_argument('--sigma',type=float,default=None); ap.add_argument('--min-effect',type=float,default=0.015)
+     ap.add_argument('--max-pairs',type=int,default=3); ap.add_argument('--skip',type=float,default=60)
++    ap.add_argument('--per-frame',action='store_true',help='bench: judge CPU work per frame, not per 1000 draws (for changes that add or remove draws)')
+     ap.add_argument('--bench',action='store_true',help='deterministic bench runs: CPU work and GPU time, statistics over N runs')
+     o=ap.parse_args(); A=[];B=[]
+     if o.bench: sys.exit(main_bench(o))
