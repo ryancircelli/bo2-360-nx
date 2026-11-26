@@ -3271,6 +3271,30 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       Close();
     }
     Close();
+    // Normalized num_format: unsigned components of fixed formats with up to
+    // 16-bit components are rounded to 16 fractional bits, as the texture unit
+    // returns them (Xenia-canary TextureCache::GetIntegerScaleBits; FH1/FH2
+    // SSAO masks compare filtered samples at that precision).
+    Open("else");
+    std::string qf = NewTemp("qf");
+    Line("uint {} = {} & 63u;", qf, FetchWord(tf, 1));
+    // Bit per TextureFormat: FormatInfo::fixed with no component over 16 bits.
+    Open(fmt::format("if (((({} < 32u) ? 0x0723E7FCu : 0x5DC60000u) >> ({} & "
+                     "31u)) & 1u)",
+                     qf, qf));
+    for (uint32_t i = 0; i < 4; ++i) {
+      if (!(nonzero & (1u << i))) continue;
+      Open(fmt::format(
+          "if (extract_bits({}, {}, 2) == {}u)",
+          SysU(offsetof(SystemConstants, texture_swizzled_signs) +
+               sizeof(uint32_t) * (tf >> 2)),
+          (tf & 3) * 8 + 2 * i, uint32_t(xenos::TextureSign::kUnsigned)));
+      Line("{}.{} = rint({}.{} * 65536.0f) * (1.0f / 65536.0f);", res,
+           kComp[i], res, kComp[i]);
+      Close();
+    }
+    Close();
+    Close();
     std::string e = NewTemp("ea");
     Line("float {} = as_type<float>(extract_bits(as_type<int>({}), 13, 6) * "
          "{} + as_type<int>(1.0f));",

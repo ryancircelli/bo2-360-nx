@@ -14011,26 +14011,16 @@ void MetalCommandProcessor::ApplyDepthStencilState(
   }
 
   if (depth_control.stencil_enable) {
+    // Metal takes separate refs (like Xenia Vulkan); the back descriptor is
+    // the front one unless backface_enable, so the back ref must follow it.
     uint32_t ref_front = stencil_ref_mask_front.stencilref;
-    uint32_t ref_back = stencil_ref_mask_back.stencilref;
-    uint32_t ref = ref_front;
-    if (primitive_polygonal && depth_control.backface_enable &&
-        dynamic_state.pa_su_sc_mode_cntl.cull_front &&
-        !dynamic_state.pa_su_sc_mode_cntl.cull_back) {
-      ref = ref_back;
-    } else if (primitive_polygonal && depth_control.backface_enable &&
-               ref_front != ref_back) {
-      static bool mismatch_logged = false;
-      if (!mismatch_logged) {
-        mismatch_logged = true;
-        REXLOG_WARN(
-            "Metal: front/back stencil ref differ (front={}, back={}); using "
-            "front for both",
-            ref_front, ref_back);
-      }
-    }
+    uint32_t ref_back =
+        primitive_polygonal && depth_control.backface_enable
+            ? uint32_t(stencil_ref_mask_back.stencilref)
+            : ref_front;
+    uint32_t ref = ref_front | (ref_back << 16);
     if (!stencil_reference_valid_ || current_stencil_reference_ != ref) {
-      current_render_encoder_->setStencilReferenceValue(ref);
+      current_render_encoder_->setStencilReferenceValues(ref_front, ref_back);
       current_stencil_reference_ = ref;
       stencil_reference_valid_ = true;
     }

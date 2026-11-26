@@ -88,6 +88,7 @@ class DeferredRenderEncoder {
   void setRenderPipelineState(const MTL::RenderPipelineState* state);
   void setDepthStencilState(const MTL::DepthStencilState* state);
   void setStencilReferenceValue(uint32_t value);
+  void setStencilReferenceValues(uint32_t front, uint32_t back);
   void setViewport(MTL::Viewport viewport);
   void setScissorRect(MTL::ScissorRect rect);
   void setBlendColor(float r, float g, float b, float a);
@@ -272,6 +273,8 @@ class RenderEncoderRef {
   REX_ENCODER_REF_FORWARD(setDepthStencilState,
                           (const MTL::DepthStencilState* state), (state))
   REX_ENCODER_REF_FORWARD(setStencilReferenceValue, (uint32_t value), (value))
+  REX_ENCODER_REF_FORWARD(setStencilReferenceValues,
+                          (uint32_t front, uint32_t back), (front, back))
   REX_ENCODER_REF_FORWARD(setViewport, (MTL::Viewport viewport), (viewport))
   REX_ENCODER_REF_FORWARD(setScissorRect, (MTL::ScissorRect rect), (rect))
   REX_ENCODER_REF_FORWARD(setCullMode, (MTL::CullMode mode), (mode))
