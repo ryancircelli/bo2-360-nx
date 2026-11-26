@@ -190,7 +190,8 @@ class Game:
         if ff and ff != 1:
             e['REX_GUEST_TIME_SCALE'] = str(ff)
             e['REX_HID_VIRTUAL_PAD_GUEST_TIME'] = 'true'   # the route keeps its pace in guest time
-        e['REX_HEADLESS'] = 'false' if via_open else 'true'   # off-screen engine mode; `open` tests the real window
+        # off-screen engine mode; `open` tests the real window; a job's own REX_HEADLESS=false (runq --window) wins
+        e['REX_HEADLESS'] = 'false' if via_open else os.environ.get('REX_HEADLESS', 'true')
         e.update(env or {})
         self.env, self.t0 = e, time.monotonic()
         self.proc = None
