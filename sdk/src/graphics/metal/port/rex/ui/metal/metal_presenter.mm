@@ -1259,6 +1259,10 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
       }
     } else if (metal_layer.bounds.size.width > 0.0) {
       backing_scale = CGFloat(new_surface_width) / metal_layer.bounds.size.width;
+    } else if (graphics::metal::vsync_lock::Enabled()) {
+      // Off-screen layer (headless cvar): no window, drawables pace to the main display.
+      NSScreen* screen = [NSScreen mainScreen];
+      graphics::metal::vsync_lock::SetDisplayRefreshHz(screen ? double(screen.maximumFramesPerSecond) : 60.0);
     }
     if (!(backing_scale > 0.0)) {
       backing_scale = 1.0;
