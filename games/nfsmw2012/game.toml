@@ -1,0 +1,11 @@
+# Need for Speed: Most Wanted 2012 (Xbox 360, 2012, Criterion) title manifest (rex/game_info.h, LoadGameManifest).
+# Compiled into the executable by rexglue_game_manifest() (games/nfsmw2012/CMakeLists.txt).
+
+[game]
+name = "nfsmw2012"
+title_ids = ["45410961"]
+executable = "game:\\DEFAULT.XEX"     # the disc's launcher; it loads the recompiled game module HAWAII.XEX.DLL
+local_data_root = "~/Games/Xbox360/nfsmw2012/disc"  # read-only extracted disc; --game_data_root wins
+
+[defaults]
+gpu_plugin = "metal"

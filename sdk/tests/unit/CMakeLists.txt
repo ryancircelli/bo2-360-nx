@@ -16,6 +16,23 @@ target_link_libraries(codegen_branch_tests PRIVATE
 
 add_test(NAME codegen_branch_tests COMMAND codegen_branch_tests)
 
+add_executable(codegen_vector_tests
+    codegen/vector_test.cpp
+)
+
+target_include_directories(codegen_vector_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/thirdparty/simde
+)
+
+target_link_libraries(codegen_vector_tests PRIVATE
+    rexcodegen
+    Catch2::Catch2WithMain
+)
+
+add_test(NAME codegen_vector_tests COMMAND codegen_vector_tests)
+
 add_executable(chrono_steady_cast_tests
     chrono/chrono_steady_cast_test.cpp
 )
@@ -31,14 +48,36 @@ target_link_libraries(chrono_steady_cast_tests PRIVATE
 
 add_test(NAME chrono_steady_cast_tests COMMAND chrono_steady_cast_tests)
 
+add_executable(thread_spin_tests core/thread_spin_test.cpp)
+target_include_directories(thread_spin_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(thread_spin_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME thread_spin_tests COMMAND thread_spin_tests)
+
 add_executable(slot_table_tests input/slot_table_test.cpp)
 target_link_libraries(slot_table_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME slot_table_tests COMMAND slot_table_tests)
+
+add_executable(guide_input_gate_tests ui/guide_input_gate_test.cpp)
+target_link_libraries(guide_input_gate_tests PRIVATE rexruntime imgui::imgui Catch2::Catch2WithMain)
+add_test(NAME guide_input_gate_tests COMMAND guide_input_gate_tests)
+
+add_executable(host_path_rename_tests filesystem/host_path_rename_test.cpp)
+target_link_libraries(host_path_rename_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME host_path_rename_tests COMMAND host_path_rename_tests)
+
+add_executable(live_pad_tests input/live_pad_test.cpp)
+target_link_libraries(live_pad_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME live_pad_tests COMMAND live_pad_tests)
 
 add_executable(metal_constant_overrides_tests graphics/metal_constant_overrides_test.cpp)
 target_include_directories(metal_constant_overrides_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
 add_test(NAME metal_constant_overrides_tests COMMAND metal_constant_overrides_tests)
+
+add_executable(metal_readback_merge_tests graphics/metal_readback_merge_test.cpp)
+target_include_directories(metal_readback_merge_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
+add_test(NAME metal_readback_merge_tests COMMAND metal_readback_merge_tests)
 
 add_executable(patch_loader_tests patch/patch_loader_test.cpp)
 target_include_directories(patch_loader_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
@@ -105,6 +144,13 @@ add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
 add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
+
+add_executable(xmemory_heap_tests system/xmemory_heap_test.cpp)
+target_link_libraries(xmemory_heap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xmemory_heap_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
+)
+add_test(NAME xmemory_heap_tests COMMAND xmemory_heap_tests)
 
 add_executable(disc_swap_tests filesystem/disc_swap_test.cpp)
 target_include_directories(disc_swap_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)

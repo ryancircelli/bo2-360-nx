@@ -209,6 +209,13 @@ bool Clock::frame_locked() {
   return frame_lock_step_ != 0;
 }
 uint64_t Clock::frame_lock_frames() { return frame_lock_frames_.load(std::memory_order_relaxed); }
+uint64_t Clock::frame_lock_base() { return frame_lock_base_; }
+void Clock::RewindFrameLock(uint64_t base) {
+  frame_lock_seq_.fetch_add(1, std::memory_order_acq_rel);
+  frame_lock_base_ = base;
+  frame_lock_host_ = Clock::QueryHostTickCount();
+  frame_lock_seq_.fetch_add(1, std::memory_order_release);
+}
 uint64_t Clock::frame_lock_stalls() { return frame_lock_stalls_.load(std::memory_order_relaxed); }
 
 // Offset of the current guest system file time relative to the guest base time.

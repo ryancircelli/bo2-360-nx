@@ -57,7 +57,7 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/../../core/bo2zm_memcpy_callers.cpp
     ${BO2ZM_ROOT}/src/bo2zm_debug_options.cpp
     ${BO2ZM_ROOT}/src/bo2zm_test_waits.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_waits.cpp
+    ${BO2ZM_ROOT}/src/bo2zm_sound_mix.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
     ${BO2ZM_ROOT}/src/bo2zm_webm.cpp
@@ -69,7 +69,6 @@ set(BO2ZM_SOURCES
     # The entity loops: a read-only scan pass before sub_822FD360, the plane test sub_822FE3B8 natively.
     ${BO2ZM_ROOT}/src/bo2zm_native_entities.cpp
     ${BO2ZM_ROOT}/src/bo2zm_stream_alloc.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_jobs.cpp
     # BO2's memcpy/memmove/memset as native code ([rexcrt] in overrides.toml)
     ${BO2ZM_ROOT}/src/bo2zm_crt.cpp
     ${BO2ZM_ROOT}/src/bo2zm_test_pad.cpp

@@ -372,6 +372,11 @@ class MetalSharedMemory : public SharedMemory {
     uint64_t submission;
     uint64_t guest_hash;
     uint64_t export_frame;
+    // Guest dwords at export time (small ranges only): lets a readback keep
+    // the CPU's later writes per dword instead of dropping the whole range.
+    std::vector<uint32_t> snapshot;
+    // GPU buffer at note time; dwords still equal to it were not exported.
+    std::vector<uint32_t> gpu_snapshot;
   };
   std::deque<PendingReadback> pending_readbacks_;
   struct PendingVerify {

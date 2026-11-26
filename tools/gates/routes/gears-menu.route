@@ -1,0 +1,4 @@
+# Gears of War: leave the title with Start, then inspect the main menu.
+duration_s = 90
+players = 1
+pad1 = 30-30.5:start
