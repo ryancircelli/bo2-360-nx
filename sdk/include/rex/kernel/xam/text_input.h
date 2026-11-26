@@ -14,6 +14,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace rex::kernel::xam {
 
@@ -22,6 +23,11 @@ namespace rex::kernel::xam {
 // while another text input is open.
 bool ShowTextInput(std::string title, std::string default_text, size_t max_length,
                    std::function<void(std::optional<std::string>)> done);
+
+// The answer of a keyboard with no UI (XamShowKeyboardUI), as if the player pressed Done: guest_default (the game's
+// big-endian text) as is, else fallback_text (the gamertag). Fills buffer (big-endian, buffer_length chars with NUL).
+void FillKeyboardAnswer(char16_t* buffer, size_t buffer_length, std::u16string_view guest_default,
+                        std::string_view fallback_text);
 
 // Whether a text input is open or closed moments ago (any thread).
 bool TextInputOpen();
