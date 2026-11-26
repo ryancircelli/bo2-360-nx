@@ -815,13 +815,8 @@ Regions RegionsBiquadNative(const PPCContext& ctx, uint8_t*) {
   return rg;
 }
 
-// vmsum4fp128 with the console's arithmetic (rex::ppc::VmxDot: double products, guest order (0+2)+(1+3), one narrowing,
-// overflow to QNaN, denormal inputs flushed). These F4 vectors keep guest word k in lane k, VmxDot wants guest word k
-// in lane 3-k (the generated code's layout), so both are reversed first.
 inline F4 Dot(F4 c, F4 s) {
-  const V a = simde_mm_shuffle_ps(c, c, 0x1B);
-  const V b = simde_mm_shuffle_ps(s, s, 0x1B);
-  return rex::ppc::VmxDot<4>(a, b);
+  return simde_vdupq_n_f32(simde_vaddvq_f32(simde_vmulq_f32(c, s)));
 }
 template <int kLane>
 inline F4 State(F4 s, F4 u, F4 y) {
@@ -1019,18 +1014,18 @@ void Reverb(PPCContext& ctx, uint8_t* base) {
     const V v12 = simde_mm_mul_ps(v55, v0);                     // vmulfp128 v12,v55,v0
     const V v39 = simde_mm_mul_ps(v60, v62);                    // vmulfp128 v39,v60,v62
     const V v9 = simde_mm_mul_ps(v58, v10);                     // vmulfp128 v9,v58,v10
-    const V v44 = rex::ppc::VmxDot<4>(k128, t544);             // vmsum4fp128 v44,v52,v46
-    const V v45 = rex::ppc::VmxDot<4>(k144, t560);             // vmsum4fp128 v45,v53,v47
-    const V v36 = rex::ppc::VmxDot<4>(k160, t576);             // vmsum4fp128 v36,v51,v40
-    const V v35 = rex::ppc::VmxDot<4>(k0, t480);               // vmsum4fp128 v35,v49,v43
-    const V v37 = rex::ppc::VmxDot<4>(k16, t496);              // vmsum4fp128 v37,v50,v38
-    const V v34 = rex::ppc::VmxDot<4>(k32, t512);              // vmsum4fp128 v34,v48,v42
+    const V v44 = simde_mm_dp_ps(k128, t544, 0xFF);             // vmsum4fp128 v44,v52,v46
+    const V v45 = simde_mm_dp_ps(k144, t560, 0xFF);             // vmsum4fp128 v45,v53,v47
+    const V v36 = simde_mm_dp_ps(k160, t576, 0xFF);             // vmsum4fp128 v36,v51,v40
+    const V v35 = simde_mm_dp_ps(k0, t480, 0xFF);               // vmsum4fp128 v35,v49,v43
+    const V v37 = simde_mm_dp_ps(k16, t496, 0xFF);              // vmsum4fp128 v37,v50,v38
+    const V v34 = simde_mm_dp_ps(k32, t512, 0xFF);              // vmsum4fp128 v34,v48,v42
     const V v33 = Perm(v44, v45, m110);                         // vperm128 v33,v44,v45,v7
     const V b10 = simde_mm_mul_ps(v56, v11);                    // vmulfp128 v10,v56,v11
     v13 = simde_mm_add_ps(simde_mm_mul_ps(input, v8), a13);   // vmaddfp v13,v0,v8,v13
     const V v51 = Perm(v33, v36, m130);                         // vperm128 v51,v33,v36,v6
-    const V v48 = rex::ppc::VmxDot<4>(k48, t528);              // vmsum4fp128 v48,v52,v50
-    const V v53 = rex::ppc::VmxDot<4>(k176, t592);             // vmsum4fp128 v53,v32,v60
+    const V v48 = simde_mm_dp_ps(k48, t528, 0xFF);              // vmsum4fp128 v48,v52,v50
+    const V v53 = simde_mm_dp_ps(k176, t592, 0xFF);             // vmsum4fp128 v53,v32,v60
     const V p63 = Perm(v35, v37, m110);                         // vperm128 v63,v35,v37,v7
     const V v49 = Perm(p63, v34, m130);                         // vperm128 v49,v63,v34,v6
     const V p0 = Perm(v51, v53, m70);                           // vperm128 v0,v51,v53,v5

@@ -378,7 +378,8 @@ class XThread : public XObject {
   X_STATUS Resume(uint32_t* out_suspend_count = nullptr);
   X_STATUS Suspend(uint32_t* out_suspend_count = nullptr);
 #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
-  // Increment suspend count and block until another thread resumes us.
+  void RequestStop();
+  // Increment suspend count and block until resumed or requested to stop.
   uint32_t SelfSuspend();
 #endif
   X_STATUS Delay(uint32_t processor_mode, uint32_t alertable, uint64_t interval);
@@ -432,6 +433,7 @@ class XThread : public XObject {
 #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
   std::mutex suspend_mutex_;
   std::condition_variable suspend_cv_;
+  bool stop_requested_ = false;
 #endif
 
   std::mutex thread_lock_;

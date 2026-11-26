@@ -13,6 +13,8 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -1462,6 +1464,18 @@ u32 KeSuspendThread_entry(mapped_void kthread_ptr) {
   return old_suspend_count;
 }
 
+// Per-thread FPR save area (guest thread == host thread). Behaviour from xenia-canary 445ce54
+// xboxkrnl_misc.cc (BSD-3-Clause), which stores f0-f31 in the KTHREAD; rewritten.
+static thread_local std::array<PPCRegister, 32> t_fpu_save;
+
+void KeSaveFloatingPointState_entry() {
+  std::memcpy(t_fpu_save.data(), &current_ppc_context()->f0, sizeof(t_fpu_save));
+}
+
+void KeRestoreFloatingPointState_entry() {
+  std::memcpy(&current_ppc_context()->f0, t_fpu_save.data(), sizeof(t_fpu_save));
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
 REX_EXPORT(__imp__ExCreateThread, rex::kernel::xboxkrnl::ExCreateThread_entry)
@@ -1531,6 +1545,9 @@ REX_EXPORT(__imp__KeInsertQueueApc, rex::kernel::xboxkrnl::KeInsertQueueApc_entr
 REX_EXPORT(__imp__KeRemoveQueueApc, rex::kernel::xboxkrnl::KeRemoveQueueApc_entry)
 REX_EXPORT(__imp__KiApcNormalRoutineNop, rex::kernel::xboxkrnl::KiApcNormalRoutineNop_entry)
 REX_EXPORT(__imp__KeInitializeDpc, rex::kernel::xboxkrnl::KeInitializeDpc_entry)
+REX_EXPORT(__imp__KeSaveFloatingPointState, rex::kernel::xboxkrnl::KeSaveFloatingPointState_entry)
+REX_EXPORT(__imp__KeRestoreFloatingPointState,
+           rex::kernel::xboxkrnl::KeRestoreFloatingPointState_entry)
 REX_EXPORT(__imp__KeInsertQueueDpc, rex::kernel::xboxkrnl::KeInsertQueueDpc_entry)
 REX_EXPORT(__imp__KeRemoveQueueDpc, rex::kernel::xboxkrnl::KeRemoveQueueDpc_entry)
 REX_EXPORT(__imp__ExInitializeReadWriteLock, rex::kernel::xboxkrnl::ExInitializeReadWriteLock_entry)
@@ -1569,11 +1586,9 @@ REX_EXPORT_STUB(__imp__KeIpiGenericCall);
 REX_EXPORT_STUB(__imp__KeQueryBackgroundProcessors);
 REX_EXPORT_STUB(__imp__KeQueryInterruptTime);
 REX_EXPORT_STUB(__imp__KeRegisterDriverNotification);
-REX_EXPORT_STUB_RETURN(__imp__KeRestoreFloatingPointState, 0);
 REX_EXPORT_STUB(__imp__KeRestoreVectorUnitState);
 REX_EXPORT_STUB(__imp__KeRetireDpcList);
 REX_EXPORT_STUB(__imp__KeRundownQueue);
-REX_EXPORT_STUB_RETURN(__imp__KeSaveFloatingPointState, 0);
 REX_EXPORT_STUB(__imp__KeSaveVectorUnitState);
 REX_EXPORT_STUB(__imp__KeSetBackgroundProcessors);
 REX_EXPORT_STUB(__imp__KeSetPriorityClassThread);

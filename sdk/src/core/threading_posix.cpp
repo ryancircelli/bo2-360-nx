@@ -40,6 +40,7 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #include <cstddef>
 #include <ctime>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <memory>
 
@@ -1187,6 +1188,9 @@ class PosixCondition<Timer> : public PosixConditionBase {
 
 #else  // !REX_FAST_WAITS
 
+// How often an alertable wait checks for queued user callbacks.
+constexpr auto kAlertablePollSlice = std::chrono::milliseconds(1);
+
 class PosixConditionBase {
  public:
   PosixConditionBase() {
@@ -1208,55 +1212,95 @@ class PosixConditionBase {
   virtual bool Signal() = 0;
 
   WaitResult Wait(std::chrono::milliseconds timeout) {
-    bool executed;
-#if defined(__SWITCH__)
-    const auto deadline = timeout == std::chrono::milliseconds::max()
-                              ? std::chrono::steady_clock::time_point::max()
-                              : std::chrono::steady_clock::now() + timeout;
-    // A plain blocking lock. The earlier try_lock + 100 us sleep loop (so that the timeout also
-    // covered taking the lock) was most of the samples of BO2's job worker threads in a console profile, and
-    // every sleep delayed the wake-up. This mutex is only held for a few
-    // instructions (Signal, Reset, Pulse, the predicate), and Horizon's kernel mutex lends the holder the
-    // waiter's priority, so a blocked waiter cannot starve it.
-    std::unique_lock<std::mutex> lock(mutex_);
-#elif REX_PLATFORM_LINUX
-    auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
-    int lock_result = pthread_mutex_lock(native_mutex);
-    if (lock_result == EOWNERDEAD) {
-      pthread_mutex_consistent(native_mutex);
-    } else if (lock_result != 0) {
+    return WaitUntil(DeadlineFromTimeout(timeout), nullptr, nullptr);
+  }
+
+  static std::chrono::steady_clock::time_point DeadlineFromTimeout(std::chrono::milliseconds timeout) {
+    if (timeout == std::chrono::milliseconds::max()) {
+      return std::chrono::steady_clock::time_point::max();
+    }
+    return std::chrono::steady_clock::now() + timeout;
+  }
+
+  // Waits for this object until `deadline` (time_point::max() = forever).
+  //
+  // A thread that blocks is queued (WaitNode) in arrival order, and an event's Set or Pulse releases the queued
+  // threads directly, as the Xbox 360 / NT kernel does: a released thread succeeds even if the event is reset
+  // or taken by another thread before it runs again, and a thread that arrives after the Set cannot take the
+  // signal from one that was already waiting.
+  //
+  // `to_signal` (SignalAndWait): signaled only once this thread is queued, so a thread it wakes that signals
+  // this object back cannot take that signal with its own wait first. The two objects' locks are never held
+  // together (SignalAndWait(a, b) and SignalAndWait(b, a) at once must not deadlock).
+  //
+  // `alert_flag` (alertable waits): kUserCallback as soon as it is set, checked every kAlertablePollSlice while
+  // staying queued.
+  WaitResult WaitUntil(std::chrono::steady_clock::time_point deadline, PosixConditionBase* to_signal,
+                       const std::atomic<bool>* alert_flag) {
+    std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
+    if (!LockForWait(lock)) {
       return WaitResult::kFailed;
     }
-    std::unique_lock<std::mutex> lock(mutex_, std::adopt_lock);
-#else
-    std::unique_lock<std::mutex> lock(mutex_);
-#endif
-    // A PulseEvent releases the threads waiting at that moment (pulses() changes) without leaving
-    // the event signaled; see PosixCondition<Event>::Pulse.
-    const uint64_t initial_pulse = pulses();
-    auto predicate = [this, initial_pulse] { return this->signaled() || this->pulses() != initial_pulse; };
-    if (predicate()) {
-      executed = true;
-    } else {
-      ++waiters_;
-      if (timeout == std::chrono::milliseconds::max()) {
-        cond_.wait(lock, predicate);
-        executed = true;  // Did not time out;
-      } else {
-#if defined(__SWITCH__)
-        // Do not start another full timeout after acquiring the lock.
-        executed = cond_.wait_until(lock, deadline, predicate);
-#else
-        executed = cond_.wait_for(lock, timeout, predicate);
-#endif
+    const bool infinite = deadline == std::chrono::steady_clock::time_point::max();
+    WaitNode node;
+    bool queued = false;
+    if (to_signal) {
+      if (!signaled()) {
+        Enqueue(&node);
+        queued = true;
       }
-      --waiters_;
+      lock.unlock();
+      const bool signal_ok = to_signal->Signal();
+      if (!LockForWait(lock)) {
+        // The node is on this stack and may be queued: it cannot be left behind. Only a mutex that is no longer
+        // usable (ENOTRECOVERABLE) gets here.
+        std::terminate();
+      }
+      if (!signal_ok) {
+        if (node.released) {
+          ReturnRelease();
+        } else if (queued) {
+          Unlink(&node);
+        }
+        return WaitResult::kFailed;
+      }
     }
-    if (executed) {
-      post_execution();
-      return WaitResult::kSuccess;
-    } else {
-      return WaitResult::kTimeout;
+    while (true) {
+      if (node.released) {
+        return WaitResult::kSuccess;  // The releaser unlinked the node.
+      }
+      if (signaled()) {
+        if (queued) {
+          Unlink(&node);
+        }
+        post_execution();
+        return WaitResult::kSuccess;
+      }
+      if (alert_flag && alert_flag->load(std::memory_order_acquire)) {
+        if (queued) {
+          Unlink(&node);
+        }
+        return WaitResult::kUserCallback;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (!infinite && now >= deadline) {
+        if (queued) {
+          Unlink(&node);
+        }
+        return WaitResult::kTimeout;
+      }
+      if (!queued) {
+        Enqueue(&node);
+        queued = true;
+      }
+      if (alert_flag) {
+        const auto slice_end = now + kAlertablePollSlice;
+        cond_.wait_until(lock, infinite ? slice_end : std::min(deadline, slice_end));
+      } else if (infinite) {
+        cond_.wait(lock);
+      } else {
+        cond_.wait_until(lock, deadline);
+      }
     }
   }
 
@@ -1422,10 +1466,74 @@ class PosixConditionBase {
 
   inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
-  // How many PulseEvents so far (events only), and how many threads are inside Wait's condition
-  // variable wait. Both under mutex_.
-  inline virtual uint64_t pulses() const { return 0; }
+
+  // A thread blocked in WaitUntil, queued in arrival order (under mutex_).
+  struct WaitNode {
+    WaitNode* prev = nullptr;
+    WaitNode* next = nullptr;
+    bool released = false;  // Set by ReleaseOldestWaiter: the wait has succeeded.
+  };
+
+  // Takes mutex_ for a wait. On Linux the mutex is robust: a thread that died holding it does not block waits
+  // forever.
+  bool LockForWait(std::unique_lock<std::mutex>& lock) {
+#if REX_PLATFORM_LINUX && !defined(__SWITCH__)
+    auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
+    int lock_result = pthread_mutex_lock(native_mutex);
+    if (lock_result == EOWNERDEAD) {
+      pthread_mutex_consistent(native_mutex);
+    } else if (lock_result != 0) {
+      return false;
+    }
+    lock = std::unique_lock<std::mutex>(mutex_, std::adopt_lock);
+#else
+    // On Horizon a plain blocking lock. The earlier try_lock + 100 us sleep loop (so that the timeout also
+    // covered taking the lock) was most of the samples of BO2's job worker threads in a console profile, and
+    // every sleep delayed the wake-up. This mutex is only held for a few instructions, and Horizon's kernel
+    // mutex lends the holder the waiter's priority, so a blocked waiter cannot starve it.
+    lock.lock();
+#endif
+    return true;
+  }
+
+  void Enqueue(WaitNode* node) {
+    node->prev = wait_tail_;
+    node->next = nullptr;
+    if (wait_tail_) {
+      wait_tail_->next = node;
+    } else {
+      wait_head_ = node;
+    }
+    wait_tail_ = node;
+    ++waiters_;
+  }
+  void Unlink(WaitNode* node) {
+    (node->prev ? node->prev->next : wait_head_) = node->next;
+    (node->next ? node->next->prev : wait_tail_) = node->prev;
+    node->prev = node->next = nullptr;
+    --waiters_;
+  }
+  // Ends the wait of the thread that has waited longest. The caller notifies cond_. False if nobody waits.
+  bool ReleaseOldestWaiter() {
+    WaitNode* node = wait_head_;
+    if (!node) {
+      return false;
+    }
+    Unlink(node);
+    node->released = true;
+    return true;
+  }
+  void ReleaseAllWaiters() {
+    while (ReleaseOldestWaiter()) {
+    }
+  }
+  // SignalAndWait's signal failed after this thread had been released: give the release back (under mutex_).
+  virtual void ReturnRelease() {}
+
+  // Threads blocked in WaitUntil (the length of the wait_head_ list). Under mutex_.
   uint32_t waiters_ = 0;
+  WaitNode* wait_head_ = nullptr;
+  WaitNode* wait_tail_ = nullptr;
   std::condition_variable cond_;
   std::mutex mutex_;
 };
@@ -1444,9 +1552,18 @@ class PosixCondition<Event> : public PosixConditionBase {
       : signal_(initial_state), manual_reset_(manual_reset) {}
   virtual ~PosixCondition() = default;
 
+  // SetEvent. A manual-reset event releases every thread waiting now (they succeed even if the event is reset
+  // before they run, the Set + Reset pulse that guest condition variables use) and stays signaled. An auto-reset
+  // event hands the signal to the thread that has waited longest and stays non-signaled; with nobody waiting it
+  // stays signaled until a wait takes it.
   bool Signal() override {
     auto lock = std::unique_lock<std::mutex>(mutex_);
-    signal_ = true;
+    if (manual_reset_) {
+      signal_ = true;
+      ReleaseAllWaiters();
+    } else if (!ReleaseOldestWaiter()) {
+      signal_ = true;
+    }
     cond_.notify_all();
     return true;
   }
@@ -1463,15 +1580,12 @@ class PosixCondition<Event> : public PosixConditionBase {
   void Pulse() {
     auto lock = std::unique_lock<std::mutex>(mutex_);
     if (manual_reset_) {
-      ++pulse_count_;
-      signal_ = false;
-      cond_.notify_all();
-    } else if (waiters_ > 0) {
-      signal_ = true;
-      cond_.notify_one();
+      ReleaseAllWaiters();
     } else {
-      signal_ = false;
+      ReleaseOldestWaiter();
     }
+    signal_ = false;
+    cond_.notify_all();
   }
 
  private:
@@ -1481,14 +1595,18 @@ class PosixCondition<Event> : public PosixConditionBase {
       signal_ = false;
     }
   }
-  inline uint64_t pulses() const override { return pulse_count_; }
   uint64_t CaptureRewindValue() const override { return signal_; }
   void RestoreRewindValue(uint64_t value) override { signal_ = value != 0; }
-  uint64_t CaptureRewindAuxiliary() const override { return pulse_count_; }
-  void RestoreRewindAuxiliary(uint64_t value) override { pulse_count_ = value; }
+  void ReturnRelease() override {
+    if (!manual_reset_) {
+      if (!ReleaseOldestWaiter()) {
+        signal_ = true;
+      }
+      cond_.notify_all();
+    }
+  }
   bool signal_;
   const bool manual_reset_;
-  uint64_t pulse_count_ = 0;
 };
 
 template <>
@@ -1958,6 +2076,9 @@ class PosixCondition<Thread> : public PosixConditionBase {
 #endif
   }
 
+  // Set while user callbacks are queued; an alertable wait ends when it is set.
+  const std::atomic<bool>* pending_user_callbacks_flag() const { return &has_pending_user_callbacks_; }
+
   bool DispatchQueuedUserCallbacks() {
     if (!has_pending_user_callbacks_.load(std::memory_order_acquire)) {
       return false;
@@ -2190,6 +2311,15 @@ bool DispatchCurrentThreadUserCallback() {
   return current_thread_condition_ && current_thread_condition_->DispatchQueuedUserCallbacks();
 }
 
+#if !REX_FAST_WAITS
+const std::atomic<bool>* CurrentThreadPendingUserCallbacksFlag() {
+  if (!current_thread_condition_) {
+    Thread::GetCurrentThread();
+  }
+  return current_thread_condition_ ? current_thread_condition_->pending_user_callbacks_flag() : nullptr;
+}
+#endif
+
 #if REX_FAST_WAITS
 // For the stress test (games/bo2/src/bo2zm_test_waits.cpp): how many threads wait on handle right now, so it can pulse
 // only once they are all inside the wait.
@@ -2232,10 +2362,6 @@ SleepResult AlertableSleep(std::chrono::microseconds duration) {
 #endif  // REX_FAST_WAITS
 
 namespace {
-
-#if !REX_FAST_WAITS
-constexpr auto kAlertablePollSlice = std::chrono::milliseconds(1);
-#endif
 
 class ScopedAlertableState {
  public:
@@ -2403,56 +2529,68 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
   }
+  auto& condition = posix_wait_handle->condition();
   if (!is_alertable) {
-    return posix_wait_handle->condition().Wait(timeout);
+    return condition.Wait(timeout);
   }
 
   ScopedAlertableState alertable_state_guard(true);
-  auto deadline = ComputeAlertableDeadline(timeout);
-
+  const auto deadline = ComputeAlertableDeadline(timeout);
+  const std::atomic<bool>* alert_flag = CurrentThreadPendingUserCallbacksFlag();
   while (true) {
     if (DispatchCurrentThreadUserCallback()) {
       return WaitResult::kUserCallback;
     }
-    auto result = posix_wait_handle->condition().Wait(ComputeAlertableWaitTimeout(deadline));
-    if (result != WaitResult::kTimeout) {
+    // Stays queued on the object for the whole wait (a signal meant for this thread cannot go to a later
+    // arrival between polls) and returns kUserCallback once a callback is queued.
+    const auto result = condition.WaitUntil(deadline, nullptr, alert_flag);
+    if (result != WaitResult::kUserCallback) {
       return result;
-    }
-    // Even with a zero timeout the signaled object has to be checked once.
-    if (HasAlertableTimeoutElapsed(deadline)) {
-      return WaitResult::kTimeout;
     }
   }
 }
 
+// NtSignalAndWaitForSingleObjectEx: the signal and the start of the wait are one operation (see
+// PosixConditionBase::WaitUntil), and the object is signaled exactly once whatever the wait returns.
 WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_handle_to_wait_on,
                          bool is_alertable, std::chrono::milliseconds timeout) {
-  auto result = WaitResult::kFailed;
   auto posix_wait_handle_to_signal = dynamic_cast<PosixWaitHandle*>(wait_handle_to_signal);
   auto posix_wait_handle_to_wait_on = dynamic_cast<PosixWaitHandle*>(wait_handle_to_wait_on);
   if (posix_wait_handle_to_signal == nullptr || posix_wait_handle_to_wait_on == nullptr) {
     return WaitResult::kFailed;
   }
-  if (!posix_wait_handle_to_signal->condition().Signal()) {
-    return WaitResult::kFailed;
+  auto& to_signal = posix_wait_handle_to_signal->condition();
+  auto& to_wait_on = posix_wait_handle_to_wait_on->condition();
+  if (&to_signal == &to_wait_on) {
+    if (!to_signal.Signal()) {
+      return WaitResult::kFailed;
+    }
+    return Wait(wait_handle_to_wait_on, is_alertable, timeout);
   }
-
+  const auto deadline = ComputeAlertableDeadline(timeout);
   if (!is_alertable) {
-    return posix_wait_handle_to_wait_on->condition().Wait(timeout);
+    return to_wait_on.WaitUntil(deadline, &to_signal, nullptr);
   }
 
   ScopedAlertableState alertable_state_guard(true);
-  auto deadline = ComputeAlertableDeadline(timeout);
-  while (true) {
-    if (DispatchCurrentThreadUserCallback()) {
-      return WaitResult::kUserCallback;
+  const std::atomic<bool>* alert_flag = CurrentThreadPendingUserCallbacksFlag();
+  if (alert_flag && alert_flag->load(std::memory_order_acquire)) {
+    // A callback is already queued: signal, run it and return, as the alertable wait would at once.
+    if (!to_signal.Signal()) {
+      return WaitResult::kFailed;
     }
-    result = posix_wait_handle_to_wait_on->condition().Wait(ComputeAlertableWaitTimeout(deadline));
-    if (result != WaitResult::kTimeout) {
+    DispatchCurrentThreadUserCallback();
+    return WaitResult::kUserCallback;
+  }
+  PosixConditionBase* pending_signal = &to_signal;
+  while (true) {
+    const auto result = to_wait_on.WaitUntil(deadline, pending_signal, alert_flag);
+    pending_signal = nullptr;
+    if (result != WaitResult::kUserCallback) {
       return result;
     }
-    if (HasAlertableTimeoutElapsed(deadline)) {
-      return WaitResult::kTimeout;
+    if (DispatchCurrentThreadUserCallback()) {
+      return WaitResult::kUserCallback;
     }
   }
 }
@@ -2475,6 +2613,10 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
       return std::make_pair(WaitResult::kFailed, 0);
     }
     conditions[i] = &handle->condition();
+  }
+  if (wait_handle_count == 1) {
+    // One object: the queued wait (stays queued through alertable polls).
+    return std::make_pair(Wait(wait_handles[0], is_alertable, timeout), size_t(0));
   }
   if (!is_alertable) {
     return PosixConditionBase::WaitMultiple(conditions, wait_handle_count, wait_all, timeout);

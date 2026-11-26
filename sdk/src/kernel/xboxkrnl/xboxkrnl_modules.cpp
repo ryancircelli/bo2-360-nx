@@ -148,6 +148,12 @@ u32 XexUnloadImage_entry(mapped_void hmodule) {
   return X_STATUS_SUCCESS;
 }
 
+// From rexglue-sdk v0.11.0 xboxkrnl_xex.cpp (BSD-3-Clause); rewritten.
+u32 XexUnloadImageAndExitThread_entry(mapped_void hmodule, u32 exit_code) {
+  XexUnloadImage_entry(hmodule);
+  return XThread::GetCurrentThread()->Exit(exit_code);
+}
+
 u32 XexGetProcedureAddress_entry(mapped_void hmodule, u32 ordinal, mapped_u32 out_function_ptr) {
   // May be entry point?
   assert_not_zero(ordinal);
@@ -221,6 +227,8 @@ REX_EXPORT(__imp__XexCheckExecutablePrivilege,
 REX_EXPORT(__imp__XexGetModuleHandle, rex::kernel::xboxkrnl::XexGetModuleHandle_entry)
 REX_EXPORT(__imp__XexGetModuleSection, rex::kernel::xboxkrnl::XexGetModuleSection_entry)
 REX_EXPORT(__imp__XexLoadImage, rex::kernel::xboxkrnl::XexLoadImage_entry)
+REX_EXPORT(__imp__XexUnloadImageAndExitThread,
+           rex::kernel::xboxkrnl::XexUnloadImageAndExitThread_entry)
 REX_EXPORT(__imp__XexUnloadImage, rex::kernel::xboxkrnl::XexUnloadImage_entry)
 REX_EXPORT(__imp__XexGetProcedureAddress, rex::kernel::xboxkrnl::XexGetProcedureAddress_entry)
 REX_EXPORT(__imp__ExRegisterTitleTerminateNotification,
@@ -233,7 +241,6 @@ REX_EXPORT_STUB(__imp__XexPcToFileHeader);
 REX_EXPORT_STUB(__imp__XexRegisterPatchDescriptor);
 REX_EXPORT_STUB(__imp__XexSendDeferredNotifications);
 REX_EXPORT_STUB(__imp__XexStartExecutable);
-REX_EXPORT_STUB(__imp__XexUnloadImageAndExitThread);
 REX_EXPORT_STUB(__imp__XexUnloadTitleModules);
 REX_EXPORT_STUB(__imp__XexVerifyImageHeaders);
 REX_EXPORT_STUB(__imp__XexGetModuleImportVersions);

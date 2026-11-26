@@ -250,7 +250,7 @@ void Item(Native& n, uint32_t box, uint32_t array, uint32_t index, const Plane* 
   for (uint32_t i = 0; i < count; ++i) {
     const VI corner = ApplyPerm(corner_a, corner_b, planes[i].perm);
     ctx.fpscr.enableFlushMode();
-    const V dot = rex::ppc::VmxDot<4>(simde_mm_castsi128_ps(planes[i].plane), simde_mm_castsi128_ps(corner));
+    const V dot = simde_mm_dp_ps(simde_mm_castsi128_ps(planes[i].plane), simde_mm_castsi128_ps(corner), 0xFF);
     minimum = simde_mm_min_ps(minimum, dot);
   }
   ctx.fpscr.enableFlushMode();
@@ -301,8 +301,8 @@ void Cull(Native& n, uint32_t node, const Plane* planes, uint32_t count, uint32_
     const VI near_corner = ApplyPerm(corner_a, corner_b, planes[i].perm);  // v54
     ctx.fpscr.enableFlushMode();
     const V plane = simde_mm_castsi128_ps(planes[i].plane);
-    const V far_dot = rex::ppc::VmxDot<4>(plane, simde_mm_castsi128_ps(far_corner));
-    const V near_dot = rex::ppc::VmxDot<4>(plane, simde_mm_castsi128_ps(near_corner));
+    const V far_dot = simde_mm_dp_ps(plane, simde_mm_castsi128_ps(far_corner), 0xFF);
+    const V near_dot = simde_mm_dp_ps(plane, simde_mm_castsi128_ps(near_corner), 0xFF);
     if (kept_count >= kMaxPlanes) {
       n.overflow = true;
       return;

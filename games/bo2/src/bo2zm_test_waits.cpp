@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <random>
 #include <thread>
@@ -144,6 +145,99 @@ std::string PingPong(double scale, std::string* detail) {
   return failed ? Format("a wait timed out (%d)", failed.load()) : "";
 }
 
+// SignalAndWait is one operation: the caller is already waiting when the other thread wakes. The woken thread
+// signals back and at once tries the same auto-reset event itself; the signal must go to the thread already
+// waiting, not to the late arrival.
+std::string SignalAndWaitBaton(double scale, std::string* detail, bool alertable) {
+  const int rounds = Scaled(scale, 20000);
+  auto go = Event::CreateAutoResetEvent(false);
+  auto done = Event::CreateAutoResetEvent(false);
+  std::atomic<int> steals{0}, failed{0};
+  std::atomic<bool> stop{false};
+  std::thread other([&] {
+    while (!stop) {
+      const WaitResult r = Wait(go.get(), 100ms);
+      if (r != WaitResult::kSuccess) {
+        continue;
+      }
+      done->Set();
+      if (Wait(done.get(), 0ms) == WaitResult::kSuccess) {
+        ++steals;
+        done->Set();  // hand it back so the round still ends
+      }
+    }
+  });
+  int r = 0;
+  for (; r < rounds; ++r) {
+    if (rex::thread::SignalAndWait(go.get(), done.get(), alertable, kPatience) != WaitResult::kSuccess) {
+      ++failed;
+      break;
+    }
+  }
+  stop = true;
+  other.join();
+  *detail = Format("%d rounds, %d stolen", r, steals.load());
+  if (failed) {
+    return Format("round %d: SignalAndWait timed out", r);
+  }
+  return steals ? Format("the late arrival took %d of %d signals meant for the waiting thread", steals.load(), r)
+                : "";
+}
+std::string SignalAndWaitPlain(double scale, std::string* detail) {
+  return SignalAndWaitBaton(scale, detail, false);
+}
+std::string SignalAndWaitAlertable(double scale, std::string* detail) {
+  return SignalAndWaitBaton(scale, detail, true);
+}
+
+// Setting an auto-reset event that has a waiter releases that waiter; a thread that arrives afterwards finds the
+// event non-signaled.
+std::string AutoSetGoesToWaiter(double scale, std::string* detail) {
+  const int rounds = Scaled(scale, 500);
+  auto ev = Event::CreateAutoResetEvent(false);
+  std::atomic<int> round{-1}, released{0}, timeouts{0};
+  std::atomic<bool> stop{false};
+  std::thread waiter([&] {
+    for (int r = 0;; ++r) {
+      WaitUntil([&] { return round.load() >= r || stop.load(); }, 60s);
+      if (stop) {
+        return;
+      }
+      if (Wait(ev.get(), kPatience) == WaitResult::kSuccess) {
+        ++released;
+      } else {
+        ++timeouts;
+      }
+    }
+  });
+  int steals = 0;
+  std::string error;
+  for (int r = 0; r < rounds; ++r) {
+    round = r;
+    if (!UntilWaiting(ev.get(), 1)) {
+      error = "the waiter did not arrive";
+      break;
+    }
+    ev->Set();
+    if (Wait(ev.get(), 0ms) == WaitResult::kSuccess) {
+      ++steals;
+      ev->Set();
+    }
+    if (!WaitUntil([&] { return released.load() + timeouts.load() >= r + 1; }, 2 * kPatience)) {
+      error = Format("round %d: the waiter is still inside", r);
+      break;
+    }
+  }
+  stop = true;
+  waiter.join();
+  *detail = Format("%d rounds, %d stolen, %d waiter timeouts", rounds, steals, timeouts.load());
+  if (!error.empty()) {
+    return error;
+  }
+  return steals || timeouts ? Format("a later Wait took %d of %d signals from the waiting thread", steals, rounds)
+                            : "";
+}
+
 // An auto-reset event releases exactly one waiter per Set, and is not left signaled.
 std::string AutoOnePerSet(double scale, std::string* detail) {
   const int sets = Scaled(scale, 2000);
@@ -250,6 +344,10 @@ std::string ManualReleasesAll(double scale, std::string* detail, int mode) {
     }
     if (!WaitUntil([&] { return released.load() + timeouts.load() == kWaiters * (r + 1); }, 2 * kPatience)) {
       error = Format("round %d: waiters still inside", r);
+      break;
+    }
+    if (timeouts.load()) {
+      error = Format("round %d: %d of %d waiters were not released", r, timeouts.load(), kWaiters);
       break;
     }
     if (mode == 0) {
@@ -1092,6 +1190,9 @@ bool Run(double scale, const std::function<void(const std::string&)>& log) {
   const Entry tests[] = {
       {"rules", Rules},
       {"ping_pong", PingPong},
+      {"signal_and_wait", SignalAndWaitPlain},
+      {"signal_and_wait_alertable", SignalAndWaitAlertable},
+      {"auto_set_goes_to_waiter", AutoSetGoesToWaiter},
       {"auto_one_per_set", AutoOnePerSet},
       {"manual_set", ManualSet},
       {"manual_set_reset", ManualSetReset},
@@ -1115,7 +1216,19 @@ bool Run(double scale, const std::function<void(const std::string&)>& log) {
 #endif
   int failed = 0;
   const auto start = Clock::now();
+#if defined(BO2ZM_TEST_WAITS_STANDALONE)
+  // Standalone runner only: BO2ZM_TEST_WAITS_ONLY=name1,name2 runs just those tests.
+  const char* only = std::getenv("BO2ZM_TEST_WAITS_ONLY");
+  const std::string only_list = only ? "," + std::string(only) + "," : "";
+  int skipped = 0;
+#endif
   for (const Entry& entry : tests) {
+#if defined(BO2ZM_TEST_WAITS_STANDALONE)
+    if (!only_list.empty() && only_list.find("," + std::string(entry.name) + ",") == std::string::npos) {
+      ++skipped;
+      continue;
+    }
+#endif
     std::string detail;
     const auto t0 = Clock::now();
     const std::string error = entry.test(scale, &detail);
@@ -1128,6 +1241,9 @@ bool Run(double scale, const std::function<void(const std::string&)>& log) {
     }
   }
   int total = int(sizeof(tests) / sizeof(tests[0]));
+#if defined(BO2ZM_TEST_WAITS_STANDALONE)
+  total -= skipped;
+#endif
 #if BO2ZM_FAST_WAITS_HOOKS
   const uint64_t lost = rex::thread::FastWaitLostWakeups() - lost_before;
   ++total;
