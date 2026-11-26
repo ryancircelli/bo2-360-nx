@@ -1308,6 +1308,14 @@ BoundsInfo scanForBounds(DecodedBinary& decoded, uint32_t bctrAddr, const CodeRe
 
     using namespace rex::codegen::ppc;
 
+    // An arithmetic redefinition starts a new index value. A comparison before
+    // it constrains the old value, even when the same register number is reused.
+    // Without a bound for this value, let table validation determine its extent.
+    if ((insn->opcode == Opcode::addi || insn->opcode == Opcode::addis ||
+         insn->opcode == Opcode::li || insn->opcode == Opcode::lis ||
+         insn->opcode == Opcode::mulli) && insn->D.RT == expectedReg)
+      break;
+
     // Look for cmpli/cmpi followed by conditional branch
     if (insn->opcode == Opcode::cmpli) {
       // cmpli crX, L, rA, UIMM

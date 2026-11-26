@@ -20,6 +20,8 @@
 #include <rex/codegen/function_node.h>
 #include <rex/codegen/test_support.h>
 #include <rex/codegen/phases.h>
+#include <rex/codegen/function_scanner.h>
+#include "codegen/decoded_binary.h"
 
 using namespace rex::codegen;
 
@@ -192,4 +194,25 @@ TEST_CASE("Validation accepts a resolved tail call to a function entry", "[codeg
 
   REQUIRE(phases::Validate(*fx.ctx).has_value());
   CHECK(fx.emit(thunk).find("REX_FATAL") == std::string::npos);
+}
+
+TEST_CASE("Switch bounds ignore comparison before index redefinition", "[codegen][switch]") {
+  std::vector<uint8_t> data;
+  AppendWord(data, 0x2B0B0000);  // cmplwi cr6,r11,0: unrelated boolean
+  AppendWord(data, 0x3975FFFE);  // addi r11,r21,-2: new switch index
+  AppendWord(data, 0x3D808200);  // lis r12,0x8200
+  AppendWord(data, 0x398C0040);  // addi r12,r12,0x40
+  AppendWord(data, 0x5560103A);  // slwi r0,r11,2
+  AppendWord(data, 0x7C0C002E);  // lwzx r0,r12,r0
+  AppendWord(data, 0x7C0903A6);  // mtctr r0
+  AppendWord(data, 0x4E800420);  // bctr
+  data.resize(0x40, 0);
+  for (uint32_t i = 0; i < 8; ++i) AppendWord(data, kBase + 0x60 + i * 4);
+  for (uint32_t i = 0; i < 8; ++i) AppendWord(data, 0x4E800020);
+  EmitFixture fx(std::move(data));
+  fx.ctx->initDecoded();
+  CodeRegion region{kBase, kBase + 0x80};
+  auto table = detectJumpTable(fx.ctx->decoded(), kBase + 0x1C, region, kBase, kBase + 0x80);
+  REQUIRE(table.has_value());
+  CHECK(table->targets.size() == 8);
 }
