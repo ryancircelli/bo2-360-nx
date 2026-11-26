@@ -216,3 +216,25 @@ TEST_CASE("Switch bounds ignore comparison before index redefinition", "[codegen
   REQUIRE(table.has_value());
   CHECK(table->targets.size() == 8);
 }
+
+TEST_CASE("Switch bounds ignore comparison before index load and extend", "[codegen][switch]") {
+  std::vector<uint8_t> data;
+  AppendWord(data, 0x2B0B0000);  // cmpwi cr6,r11,0: loop count
+  AppendWord(data, 0xA16A001A);  // lhz r11,26(r10): new index
+  AppendWord(data, 0x7D6B0734);  // extsh r11,r11
+  AppendWord(data, 0x3D808200);  // lis r12,0x8200
+  AppendWord(data, 0x398C0040);  // addi r12,r12,0x40
+  AppendWord(data, 0x5560103A);  // slwi r0,r11,2
+  AppendWord(data, 0x7C0C002E);  // lwzx r0,r12,r0
+  AppendWord(data, 0x7C0903A6);  // mtctr r0
+  AppendWord(data, 0x4E800420);  // bctr
+  data.resize(0x40, 0);
+  for (uint32_t i = 0; i < 8; ++i) AppendWord(data, kBase + 0x60 + i * 4);
+  for (uint32_t i = 0; i < 8; ++i) AppendWord(data, 0x4E800020);
+  EmitFixture fx(std::move(data));
+  fx.ctx->initDecoded();
+  CodeRegion region{kBase, kBase + 0x80};
+  auto table = detectJumpTable(fx.ctx->decoded(), kBase + 0x20, region, kBase, kBase + 0x80);
+  REQUIRE(table.has_value());
+  CHECK(table->targets.size() == 8);
+}

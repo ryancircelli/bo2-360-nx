@@ -1313,7 +1313,12 @@ BoundsInfo scanForBounds(DecodedBinary& decoded, uint32_t bctrAddr, const CodeRe
     // Without a bound for this value, let table validation determine its extent.
     if ((insn->opcode == Opcode::addi || insn->opcode == Opcode::addis ||
          insn->opcode == Opcode::li || insn->opcode == Opcode::lis ||
-         insn->opcode == Opcode::mulli) && insn->D.RT == expectedReg)
+         insn->opcode == Opcode::mulli || insn->opcode == Opcode::lwz ||
+         insn->opcode == Opcode::lhz || insn->opcode == Opcode::lha ||
+         insn->opcode == Opcode::lbz) && insn->D.RT == expectedReg)
+      break;
+    if ((insn->opcode == Opcode::extsh || insn->opcode == Opcode::extsb) &&
+        insn->X.RA == expectedReg)
       break;
 
     // Look for cmpli/cmpi followed by conditional branch
