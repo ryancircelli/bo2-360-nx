@@ -294,7 +294,7 @@ set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
 
 # Disable dummy drivers
 set(SDL_DISKAUDIO OFF CACHE BOOL "" FORCE)
-set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
+set(SDL_DUMMYAUDIO ON CACHE BOOL "" FORCE)   # headless test mode: paced silent output with no audio device
 set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
 
 # Linux video and audio backends. Both video drivers are always built so the

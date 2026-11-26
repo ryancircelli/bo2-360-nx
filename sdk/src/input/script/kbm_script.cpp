@@ -23,6 +23,7 @@
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/script/script_events.h>
 #include <rex/logging.h>
+#include <rex/ui/window_sdl.h>
 
 REXCVAR_DEFINE_STRING(kbm_test_script, "", "Input",
                       "Tests: a file of scripted keyboard and mouse steps (see kbm_script.h)");
@@ -65,7 +66,8 @@ void SleepMs(int64_t ms) {
 SDL_WindowID GameWindow() {
   int count = 0;
   SDL_Window** windows = SDL_GetWindows(&count);
-  const SDL_WindowID id = (windows && count > 0) ? SDL_GetWindowID(windows[0]) : 0;
+  const SDL_WindowID id =
+      (windows && count > 0) ? SDL_GetWindowID(windows[0]) : rex::ui::WindowSDL::kHeadlessWindowId;  // headless: none
   SDL_free(windows);
   return id;
 }

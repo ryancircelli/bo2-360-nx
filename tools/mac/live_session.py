@@ -143,6 +143,7 @@ def main():
     env = dict(os.environ)
     env.update({
         'REX_AUDIO_MUTE': 'true', 'REX_WINDOW_START_MINIMIZED': 'true',   # owner rules: silent, never in the way
+        'REX_HEADLESS': 'true',   # off-screen engine mode: no window, Dock icon or audio device (headless-test-mode)
         'REX_METAL_TEST_CONTROL_DIR': control, 'REX_METAL_TEST_BACKGROUND': '1',
         'SDL_HIDAPI_LIBUSB': '0', 'SDL_JOYSTICK_HIDAPI': '0',               # never open the owner's real devices
         'SDL_WINDOW_ACTIVATE_WHEN_SHOWN': '0', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED': '0', 'SDL_HINT_MAC_BACKGROUND_APP': '1',

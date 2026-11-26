@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #include "rex/ui/metal/metal_test_control.h"
 #include "rex/ui/windowed_app_context.h"
+#include "rex/ui/window_sdl.h"
 #include "rex/ui/presenter.h"
 #include "rex/ui/metal/metal_presenter.h"
 #include "rex/graphics/metal/metal_trace.h"
@@ -70,7 +71,7 @@ bool BackgroundMode() {
 }
 bool SendKey(SDL_Scancode key, bool down) {
   int count = 0; SDL_Window** windows = SDL_GetWindows(&count);
-  Uint32 id = count ? SDL_GetWindowID(windows[0]) : 0;
+  Uint32 id = count ? SDL_GetWindowID(windows[0]) : rex::ui::WindowSDL::kHeadlessWindowId;  // headless: no SDL window
   SDL_free(windows);
   if (!id) return false;
   if (BackgroundMode()) {
@@ -120,7 +121,7 @@ bool SendPad(int button, Sint32 flags) {
 constexpr SDL_JoystickID kFakePhysicalPad = 0x7FFFFFF0;
 bool SendPhysicalKey(SDL_Scancode key, bool down) {
   int count = 0; SDL_Window** windows = SDL_GetWindows(&count);
-  Uint32 id = count ? SDL_GetWindowID(windows[0]) : 0;
+  Uint32 id = count ? SDL_GetWindowID(windows[0]) : rex::ui::WindowSDL::kHeadlessWindowId;  // headless: no SDL window
   SDL_free(windows);
   if (!id) return false;
   if (down) {

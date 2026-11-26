@@ -25,8 +25,11 @@
 
 #include <imgui.h>
 
+// Test runs (runq, gate.py, runq live) set REX_HEADLESS=true: on macOS the game also renders to an off-screen
+// CAMetalLayer with no window, Dock icon or audio device (src/ui/window_sdl.cpp, windowed_app_context_sdl.cpp).
 REXCVAR_DEFINE_BOOL(headless, false, "Kernel",
-                    "Don't display any UI, using defaults for prompts as needed");
+                    "Don't display any UI, using defaults for prompts as needed. macOS: no window, Dock icon or "
+                    "audio device either; frames render to an off-screen Metal layer at the window size");
 #include <rex/kernel/xam/private.h>
 #include <rex/hook.h>
 #include <rex/types.h>
