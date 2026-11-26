@@ -49,13 +49,6 @@ REXCVAR_DEFINE_BOOL(window_start_minimized, false, "UI/Window",
                     "is skipped at start). For test runs")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
-// Test runs (runq, gate.py, runq live): REX_HEADLESS=true renders to an off-screen CAMetalLayer with no window at all,
-// so a test game cannot reach the screen, Dock, menu bar or speakers. Captures, traces and test control are unchanged.
-REXCVAR_DEFINE_BOOL(headless, false, "UI/Window",
-                    "Off-screen test mode: no window, no Dock icon, no audio device; frames render to an off-screen "
-                    "Metal layer at the window size (macOS)")
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-
 REXCVAR_DEFINE_STRING(video_driver, "", "UI/Window",
                       "SDL video driver to use, such as \"wayland\" or \"x11\". Empty picks "
                       "SDL's default for the session")
