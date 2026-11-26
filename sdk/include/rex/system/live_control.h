@@ -14,6 +14,8 @@
  *   timescale [X]            read, or set guest time scale live (0.1..16; 1 = real time)
  *   savepoint save PATH      write guest memory at the next frame (rex/system/savepoint.h)
  *   savepoint load PATH      not available yet (the savepoint-rewind work plugs in here)
+ *   record PATH              all pad input since start, in the hid_replay_input format (replay it as a route)
+ *   press|hold|release|stick|trigger|pad ...   drive the virtual pads (rex/input/script/script_input_driver.h)
  *
  * Replies start with "ok" or "error". Unknown commands return an empty string.
  */

@@ -96,6 +96,17 @@ Frame Evaluate(const std::vector<Step>& steps, double seconds, uint32_t segment 
 /// Fills buttons, triggers and sticks. Moves tilt fully, looks by look_percent.
 void ControlsToGamepad(uint32_t controls, int look_percent, X_INPUT_GAMEPAD* out);
 
+/// Live control of the script pads from a running test (runq live exec, rex/system/live_control.h):
+///   press NAMES [ms] [pN]       queued tap (default 150 ms; NAMES as in scripts, e.g. a, down, lb+rb)
+///   hold NAMES [pN] / release NAMES|all [pN]
+///   stick l|r X Y [ms] [pN]     X, Y in -1..1 (up = +Y); held until changed, or for ms; "stick l off"
+///   trigger l|r V [ms] [pN]     V in 0..1; "trigger l off"
+///   pad [pN]                    what is applied now
+/// Live input is added on top of the pad's script, so it goes through the same
+/// keystroke and state path a route uses (and into the input recorder).
+/// Returns "" when `command` is not one of these (or press names no pad control).
+std::string LivePadCommand(std::string_view command, std::string_view args);
+
 /// Pads 1..N on players 1..N, each replaying its script.
 class ScriptInputDriver final : public InputDriver {
  public:
@@ -131,6 +142,8 @@ class ScriptInputDriver final : public InputDriver {
     uint32_t packet = 0;
     double last_seconds = -1;
     std::deque<X_INPUT_KEYSTROKE> keys;
+    X_INPUT_GAMEPAD live = {};  // live analog overrides (see LivePadCommand)
+    uint8_t live_mask = 0;      // bit 0..3 lx ly rx ry, 4 lt, 5 rt
   };
   /// Advances one pad to now. Caller holds mutex_. Returns connected.
   bool Update(size_t index);
