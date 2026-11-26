@@ -40,6 +40,10 @@ add_executable(slot_table_tests input/slot_table_test.cpp)
 target_link_libraries(slot_table_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME slot_table_tests COMMAND slot_table_tests)
 
+add_executable(guide_input_gate_tests ui/guide_input_gate_test.cpp)
+target_link_libraries(guide_input_gate_tests PRIVATE rexruntime imgui::imgui Catch2::Catch2WithMain)
+add_test(NAME guide_input_gate_tests COMMAND guide_input_gate_tests)
+
 add_executable(metal_constant_overrides_tests graphics/metal_constant_overrides_test.cpp)
 target_include_directories(metal_constant_overrides_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
