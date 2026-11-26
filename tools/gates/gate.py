@@ -40,10 +40,22 @@ GAMES = {
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
+    # new games (boot + shot gates; drive needs a rule in driving.py and a route): nfsmw2012 has no drive route, so its drive gate FAILs closed
+    'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
+    'ac1': dict(app="Assassin's Creed.app", drive='ac1-drive', scene_s=150, settle_s=60, seed='ac1-360'),
+    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive=None, scene_s=180, settle_s=75, seed='nfsmw2012-360'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
-CRASH = re.compile(r'(Guest access violation|unregistered function|MISMATCH|lost wake|Assertion failed|fatal error|Segmentation|EXC_BAD)')
+# MISMATCH only as its own word and never as a zero counter: the Metal plugin logs `verify_mismatch=0` in every perf line.
+CRASH = re.compile(r'(Guest access violation|unregistered function|(?<![\w])MISMATCH(?![\w]*\s*[=:]\s*0\b)|verify_mismatch=[1-9]|lost wake|Assertion failed|fatal error|Segmentation|EXC_BAD)')
+
+
+def log_hit(m):
+    """The whole log line a CRASH match sits in, so the gate line says which check fired (not just the word)."""
+    t = m.string
+    a, b = t.rfind('\n', 0, m.start()) + 1, t.find('\n', m.end())
+    return t[a:b if b >= 0 else len(t)][:160].split('] ', 3)[-1]
 
 
 # ----------------------------------------------------------------------------------------------- helpers
@@ -347,7 +359,7 @@ def g_boot(a, G):
     ok = alive and not crash and (frames is None or frames > 0) and (st is None or st[0] > 3 or st[1] > 3)
     facts = f'ready {t_ready:.0f}s alive {secs}s frames {frames} image {"mean %.0f sd %.0f" % st if st else "none"}'
     if crash:
-        facts += f' LOG {crash.group(0)}'
+        facts += f' LOG {log_hit(crash)}'
     if new:
         facts += f' new-kinds {len(new)}'
     return out_line('PASS' if ok else 'FAIL', 'boot', a.game, facts, a.out, a.out)
@@ -377,7 +389,7 @@ def g_shot(a, G):
     ok = alive and ok_any and not crash
     facts = f'scene at {at}s (ff {ff}) shots {len(shots)} ' + (f'mean {shots[-1][1][0]:.0f} sd {shots[-1][1][1]:.0f}' if shots and shots[-1][1] else 'none')
     if crash:
-        facts += f' LOG {crash.group(0)}'
+        facts += f' LOG {log_hit(crash)}'
     return out_line('PASS' if ok else 'FAIL', 'shot', a.game, facts, os.path.join(a.out, 'shots'), a.out)
 
 
@@ -415,7 +427,7 @@ def g_drive(a, G):
     if died is not None:
         facts += f' exited {died}'
     if crash:
-        facts += f' LOG {crash.group(0)}'
+        facts += f' LOG {log_hit(crash)}'
     if new is not None:
         facts += f' new-kinds {len(new)}'
     return out_line('PASS' if ok else 'FAIL', 'drive', a.game, facts, a.out, a.out)
@@ -443,7 +455,7 @@ def g_guide(a, G):
     ok = alive and opened and closed and not crash and (not sysui or (sysui[0] == '1' and sysui[-1] == '0'))
     facts = f'opened {opened} closed {closed} XN_SYS_UI {"".join(sysui) or "n/a"} alive {alive} press-replies {r1!r}/{r2!r}'
     if crash:
-        facts += f' LOG {crash.group(0)}'
+        facts += f' LOG {log_hit(crash)}'
     return out_line('PASS' if ok else 'FAIL', 'guide', a.game, facts, os.path.join(a.out, 'shots'), a.out)
 
 
@@ -464,7 +476,7 @@ def g_open(a, G):
     open(os.path.join(a.out, 'fd.txt'), 'w').write(f'pid={G.pid}\nmaxfd={mx}\n')
     facts = f'ready {ready} alive {alive} max-fds {mx} (<256) frames {frames}'
     if crash:
-        facts += f' LOG {crash.group(0)}'
+        facts += f' LOG {log_hit(crash)}'
     return out_line('PASS' if ok else 'FAIL', 'open', a.game, facts, a.out, a.out)
 
 
@@ -800,13 +812,13 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay'])
+    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'selftest'])
     p.add_argument('game', nargs='*')
     p.add_argument('--app', help='app to test (default: the installed one); for install: the NEW app')
     p.add_argument('--out')
@@ -834,6 +846,8 @@ def main():
     if a.gate == 'set':
         a.games, a.game = a.game, None
         return g_set(a)
+    if a.gate == 'selftest':   # no game: log regex, game table, gameplay detector rules (seconds)
+        sys.exit(subprocess.run([sys.executable, '-I', '-m', 'unittest', 'discover', '-s', HERE, '-p', 'test_*.py']).returncode)
     if a.gate == 'replay':
         return g_replay(a)
     if len(a.game) != 1 or a.game[0] not in GAMES:

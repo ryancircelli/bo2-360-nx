@@ -1,0 +1,4 @@
+# Assassin's Creed (2007): A presses through the legal/title/intro, then the Animus lab; B twice at the end.
+duration_s = 300
+players = 1
+pad1 = 20-20.4:a,24-24.4:a,28-28.4:a,32-32.4:a,36-36.4:a,40-40.4:a,44-44.4:a,48-48.4:a,52-52.4:a,56-56.4:a,60-60.4:a,64-64.4:a,68-68.4:a,72-72.4:a,76-76.4:a,80-80.4:a,84-84.4:a,88-88.4:a,92-92.4:a,96-96.4:a,110-110.4:b,120-120.4:b
