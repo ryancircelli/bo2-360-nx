@@ -195,6 +195,9 @@ class Game:
         e = dict(os.environ)
         e.update({
             'REX_AUDIO_MUTE': 'true', 'REX_APU_MUTE': 'true', 'REX_WINDOW_START_MINIMIZED': 'true',
+            # v0.11 apps read only the canonical names (the aliases above are for older apps): without these gears/ac1/bo1/fh1 open a visible window and the screen guard kills them
+            'REX_UI_SDL_START_MINIMIZED': 'true', 'REX_UI_FULLSCREEN': 'false',
+            'REX_HEADLESS': os.environ.get('REX_HEADLESS', 'true'),   # off-screen mode of origin/headless-test-mode; apps without it ignore this
             'REX_METAL_TEST_CONTROL_DIR': self.control, 'REX_METAL_TEST_BACKGROUND': '1',
             'SDL_HIDAPI_LIBUSB': '0', 'SDL_JOYSTICK_HIDAPI': '0',   # never open the owner's real pads
             'SDL_WINDOW_ACTIVATE_WHEN_SHOWN': '0', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED': '0', 'SDL_HINT_MAC_BACKGROUND_APP': '1',

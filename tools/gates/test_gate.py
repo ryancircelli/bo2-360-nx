@@ -32,6 +32,13 @@ class LogCheck(unittest.TestCase):
         self.assertNotIn('[b] ok', hit)
 
 
+class Launch(unittest.TestCase):
+    def test_canonical_minimized_and_mute_names_are_set(self):
+        src = (HERE / 'gate.py').read_text()
+        for name in ('REX_UI_SDL_START_MINIMIZED', 'REX_UI_FULLSCREEN', 'REX_APU_MUTE'):
+            self.assertIn("'" + name + "'", src)
+
+
 class GameTable(unittest.TestCase):
     def test_every_gate_game_has_a_gameplay_rule(self):
         self.assertEqual(sorted(set(gate.GAMES) - set(driving.GAMES)), [], 'drive would fail closed for these: add a rule')
