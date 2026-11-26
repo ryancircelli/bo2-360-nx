@@ -588,8 +588,12 @@ X_STATUS XThread::Create() {
     // Set thread ID override. This is used by logging.
     rex::thread::set_current_thread_id(handle());
 
-    // Set name immediately, if we have one.
-    thread_->set_name(thread_name_);
+    // Set name immediately, if we have one. Under thread_lock_: a guest SetThreadName races this and both write the
+    // host thread's name string (double free, "pointer being freed was not allocated").
+    {
+      std::lock_guard<std::mutex> lock(thread_lock_);
+      thread_->set_name(thread_name_);
+    }
 
     PROFILE_THREAD_ENTER(thread_name_.c_str());
     PROFILE_THREAD_CREATED();
@@ -1634,8 +1638,11 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state, stream::ByteStre
       rex::thread::set_current_thread_id(thread->handle());
       runtime::ThreadState::Bind(thread->thread_state_.get());
 
-      // Set name immediately, if we have one.
-      thread->thread_->set_name(thread->name());
+      // Set name immediately, if we have one (under thread_lock_, see Create()).
+      {
+        std::lock_guard<std::mutex> lock(thread->thread_lock_);
+        thread->thread_->set_name(thread->name());
+      }
 
       PROFILE_THREAD_ENTER(thread->name().c_str());
 

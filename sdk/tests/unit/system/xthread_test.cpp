@@ -6,6 +6,9 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <string>
+#include <thread>
+#include <vector>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
@@ -67,4 +70,34 @@ TEST_CASE("XHostThread initializes host floating-point exception masks", "[runti
   REQUIRE(thread->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
   REQUIRE(callback_called.load(std::memory_order_acquire));
   CHECK(TrapsMasked(callback_csr.load(std::memory_order_relaxed)));
+}
+
+// Stress: the host thread names itself at start (Create) while other threads run SetThreadName on it; both write the
+// host thread's name string. Before the fix this double-freed the string ("pointer being freed was not allocated").
+TEST_CASE("XThread::set_name is safe against the start-up name write", "[runtime][thread][name]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+
+  for (int round = 0; round < 300; ++round) {
+    auto thread = rex::system::object_ref<rex::system::XHostThread>(new rex::system::XHostThread(
+        runtime.kernel_state(), 128 * 1024, rex::system::X_CREATE_SUSPENDED, [] { return 0; }));
+    REQUIRE(thread->Create() == X_STATUS_SUCCESS);
+    std::atomic<bool> go{false};
+    std::vector<std::thread> namers;
+    for (int i = 0; i < 3; ++i) {
+      namers.emplace_back([&, i] {
+        while (!go.load(std::memory_order_acquire)) {
+        }
+        for (int n = 0; n < 20; ++n) {
+          thread->set_name("a-fairly-long-thread-name-to-force-heap-allocation-" + std::to_string(i * 100 + n));
+        }
+      });
+    }
+    go.store(true, std::memory_order_release);
+    REQUIRE(thread->Resume() == X_STATUS_SUCCESS);
+    thread->Wait(0, 0, 0, nullptr);
+    for (auto& t : namers) t.join();
+  }
 }
