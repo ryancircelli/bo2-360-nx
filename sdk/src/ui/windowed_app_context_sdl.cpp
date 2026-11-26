@@ -26,16 +26,6 @@
 #if REX_PLATFORM_MAC
 #include <objc/message.h>
 #include <objc/runtime.h>
-
-// Headless: make the app Prohibited before anything touches AppKit (an earlier NSApp registers the bundle as a
-// regular app for a moment). The env is read directly because cvars are parsed later; the cvar path below repeats it.
-__attribute__((constructor)) static void RexHeadlessEarlyPolicy() {
-  const char* v = std::getenv("REX_HEADLESS");
-  if (!v || !(v[0] == '1' || v[0] == 't' || v[0] == 'T')) return;
-  id app = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend)(reinterpret_cast<id>(objc_getClass("NSApplication")),
-                                                          sel_registerName("sharedApplication"));
-  reinterpret_cast<bool (*)(id, SEL, long)>(objc_msgSend)(app, sel_registerName("setActivationPolicy:"), 2);
-}
 #endif
 
 namespace rex::ui {
