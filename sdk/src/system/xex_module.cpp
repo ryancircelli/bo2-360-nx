@@ -14,6 +14,7 @@
 #include "crypto/rijndael-alg-fst.h"
 #include "pe/pe_image.h"
 
+#include <atomic>
 #include <algorithm>
 #include <unordered_map>
 
@@ -460,7 +461,11 @@ int XexModule::ReadImage(const void* xex_addr, size_t xex_length, bool use_dev_k
     return 0;
   }
 
-  memory()->LookupHeap(base_address_)->Reset();
+  // Only the first image (the title, into a fresh heap) starts from an empty heap: a DLL the game loads later
+  // (Forza's media and speech facades, flagged as title modules too) must not wipe the page table entries of
+  // the running title image and its allocations.
+  static std::atomic<bool> first_image{true};
+  if (first_image.exchange(false)) memory()->LookupHeap(base_address_)->Reset();
 
   aes_decrypt_buffer(use_dev_key ? xe_xex2_devkit_key : xe_xex2_retail_key,
                      reinterpret_cast<const uint8_t*>(xex_security_info()->aes_key), 16,

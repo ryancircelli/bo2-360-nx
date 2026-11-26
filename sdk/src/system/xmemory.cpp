@@ -1228,8 +1228,22 @@ BaseHeap::RewindState BaseHeap::CaptureRewindState() {
   return state;
 }
 
+namespace {
+// diag REX_HEAP_WATCH=ADDR: backtrace of every page-table wipe/release that covers ADDR
+void HeapWatch(const char* what, uint32_t lo, uint64_t size) {
+  static const char* w = std::getenv("REX_HEAP_WATCH");
+  if (!w) return;
+  const uint32_t a = uint32_t(std::strtoul(w, nullptr, 16));
+  if (a < lo || a - lo >= size) return;
+  std::fprintf(stderr, "[heap-watch] %s %08X size %llX covers %08X\n", what, lo, (unsigned long long)size, a);
+  void* bt[24];
+  backtrace_symbols_fd(bt, backtrace(bt, 24), 2);
+}
+}  // namespace
+
 void BaseHeap::Rewind(const RewindState& state) {
   std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
+  HeapWatch("Rewind", heap_base_, uint64_t(page_table_.size()) << page_size_shift_);
   assert_true(state.pages.size() == page_table_.size());
   for (size_t i = 0; i < page_table_.size(); ++i) {
     page_table_[i].qword = state.pages[i];
@@ -1343,6 +1357,7 @@ bool BaseHeap::Restore(stream::ByteStream* stream) {
 
 void BaseHeap::Reset() {
   // TODO(DrChat): protect pages.
+  HeapWatch("Reset", heap_base_, uint64_t(page_table_.size()) << page_size_shift_);
   std::memset(page_table_.data(), 0, sizeof(PageEntry) * page_table_.size());
   // TODO(Triang3l): Remove access callbacks from pages if this is a physical
   // memory heap.
