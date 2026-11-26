@@ -393,7 +393,7 @@ struct LiveTap {
 struct LivePad {
   uint32_t held = 0;
   std::vector<LiveTap> taps;
-  double queue_end = 0;
+  double queue_end = -1;  // end of the last queued tap (none yet: the first tap is not delayed)
   int16_t axis[4] = {};      // lx ly rx ry
   double axis_until[4] = {};  // 0 off, -1 until changed, else LiveNow() expiry
   uint8_t trig[2] = {};
