@@ -1,0 +1,10 @@
+# Fallout 3 (Xbox 360, GOTY disc, title 425307D5): Gamebryo. Single executable default.xex, no DLL modules.
+[project]
+name = "fallout3"
+sdk_version = "0.10.0"
+game_root = "."
+
+[entrypoint]
+file_path = "work/default.xex"
+out_directory_path = "generated/default"
+includes = ["overrides.toml", "gaps.toml"]
