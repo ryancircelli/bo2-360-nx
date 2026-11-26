@@ -568,6 +568,13 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
       OnMinimized(destruction_receiver);
       break;
     case SDL_EVENT_WINDOW_RESTORED:
+      // A test run (window_start_minimized) must never end up on the owner's screen: whatever restores the window
+      // later (a game mode set, a fullscreen toggle, the app being raised), put it back. Seen on v0.11 apps ~19 s in.
+      if (REXCVAR_GET(window_start_minimized) && sdl_window_) {
+        REXLOG_INFO("Window restored while start-minimized is set; minimizing it again");
+        SDL_MinimizeWindow(sdl_window_);
+        break;
+      }
       OnRestored(destruction_receiver);
       break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
