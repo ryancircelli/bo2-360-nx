@@ -105,3 +105,7 @@ add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
 add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
+
+add_executable(rsa_public_selfcheck crypto/rsa_public_test.cpp)
+target_include_directories(rsa_public_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME rsa_public_selfcheck COMMAND rsa_public_selfcheck)
