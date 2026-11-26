@@ -63,8 +63,7 @@ if(BO2CP_NATIVE)
         ${BO2ZM_SRC}/bo2zm_debug_options.cpp
         ${BO2ZM_SRC}/bo2zm_switch.cpp
         ${BO2ZM_SRC}/bo2zm_webm.cpp
-        ${BO2ZM_SRC}/bo2zm_waits.cpp
-        ${BO2ZM_SRC}/bo2zm_jobs.cpp
+        ${BO2ZM_SRC}/bo2zm_sound_mix.cpp
         ${BO2ZM_SRC}/bo2zm_crt.cpp
         ${BO2ZM_SRC}/bo2zm_native_cull.cpp
         ${BO2ZM_SRC}/bo2zm_native_entities.cpp

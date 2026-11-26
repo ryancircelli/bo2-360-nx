@@ -16,6 +16,7 @@
 
 #include <rex/chrono/clock.h>
 #include <rex/stream.h>
+#include <rex/thread_spin.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>  // For TranslateAnsiStringAddress
 #include <rex/system/xobject.h>
@@ -278,6 +279,7 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
       // the core for the whole timeout.
       if (!opt_timeout || *opt_timeout == 0) {
         rex::thread::MaybeYield();
+        rex::thread::NoteGuestPoll();
       }
       return X_STATUS_TIMEOUT;
     default:
@@ -306,6 +308,7 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
       return X_STATUS_USER_APC;
     case rex::thread::WaitResult::kTimeout:
       rex::thread::MaybeYield();
+      if (timeout_ms.count() == 0) rex::thread::NoteGuestPoll();
       return X_STATUS_TIMEOUT;
     default:
     case rex::thread::WaitResult::kAbandoned:
@@ -351,6 +354,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
         return X_STATUS_USER_APC;
       case rex::thread::WaitResult::kTimeout:
         rex::thread::MaybeYield();
+        if (timeout_ms.count() == 0) rex::thread::NoteGuestPoll();
         return X_STATUS_TIMEOUT;
       default:
       case rex::thread::WaitResult::kAbandoned:
@@ -373,6 +377,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
         return X_STATUS_USER_APC;
       case rex::thread::WaitResult::kTimeout:
         rex::thread::MaybeYield();
+        if (timeout_ms.count() == 0) rex::thread::NoteGuestPoll();
         return X_STATUS_TIMEOUT;
       default:
       case rex::thread::WaitResult::kAbandoned:

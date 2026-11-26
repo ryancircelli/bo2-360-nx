@@ -93,8 +93,8 @@ The ReXGlue SDK (`sdk/`) carries Xenia's implementation of the 360's kernel and 
 - **Memory**: Horizon has no sparse memory and cannot change permissions on mirrored memory, so the guest window is
   reserved empty, committed in chunks and mapped into every view on first access; the exception handler emulates
   accesses to unmapped pages (`sdk/src/core/guest_memory_switch.h`).
-- **Threads**: each guest thread is a Horizon thread. The game's job system is mapped in `games/bo2/src/bo2zm_waits.cpp`,
-  where its polling loops sleep instead of spinning.
+- **Threads**: each guest thread is a Horizon thread. The game's job system is uses the SDK spin-wait backoff (`sdk/src/core/thread_spin.cpp`,
+  cvar `spin_wait_backoff`): a guest thread that polls back to back sleeps a growing time instead of spinning.
 - **Fourth core**: from a four-core forwarder, the game wraps the kernel's core-mask and priority calls and places
   threads by rule (the Server on all four cores, the mixer and XMA decoder alone on core 3). A failsafe returns to
   three cores when core 3 stays busy for two seconds (`sdk/src/ui/switch_core3.cpp`).
