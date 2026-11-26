@@ -1,0 +1,4 @@
+# Mass Effect 2: press Start after the intro, then inspect the front end.
+duration_s = 120
+players = 1
+pad1 = 30-30.5:start,45-45.5:start,60-60.5:start
