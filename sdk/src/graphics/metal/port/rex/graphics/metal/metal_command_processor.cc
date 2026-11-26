@@ -2423,6 +2423,10 @@ void MetalCommandProcessor::ReturnFromWait() {
     gpu_time_trace::RecordWait("tr_cp_idle_us", gpu_time_trace::idle_start_us);
     gpu_time_trace::idle_start_us = 0;
   }
+  // The guest may be polling for a memexport or resolve result that only
+  // reaches guest RAM when its submission is processed as completed; nothing
+  // else processes completions while the CP spins in WAIT_REG_MEM.
+  ProcessCompletedSubmissions();
   CommandProcessor::ReturnFromWait();
 }
 

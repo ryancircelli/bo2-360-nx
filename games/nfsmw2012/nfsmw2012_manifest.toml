@@ -1,0 +1,18 @@
+# Need for Speed Most Wanted 2012 (Xbox 360, title 45410961): Criterion engine game. The disc's executable (DEFAULT.XEX) is a small launcher; the game
+# itself is the module HAWAII.XEX.DLL, loaded at runtime. Both are recompiled. No hand-written function lists: gaps.toml is
+# derived by tools/codegen_gaps.py; overrides.toml holds only what the analyser cannot derive (see its comments).
+[project]
+name = "nfsmw2012"
+sdk_version = "0.10.0"
+game_root = "."
+
+[entrypoint]
+file_path = "work/default.xex"
+out_directory_path = "generated/default"
+includes = ["overrides.toml", "gaps.toml"]
+
+[[modules]]
+guest_path = "HAWAII.XEX.DLL"
+file_path = "work/game_module.xex"
+out_directory_path = "generated/game"
+includes = ["overrides-game.toml", "gaps-game.toml"]
