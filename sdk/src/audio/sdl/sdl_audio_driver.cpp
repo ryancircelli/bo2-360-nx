@@ -545,7 +545,10 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
     } else {
       auto buffer = driver->frames_queued_.front();
       driver->frames_queued_.pop();
-      if (REXCVAR_GET(audio_mute)) {
+      // Muted with audio_dump_output_s set: mix for real, dump the real samples, then send silence.
+      const bool mute = REXCVAR_GET(audio_mute);
+      bool dumped = false;
+      if (mute && REXCVAR_GET(audio_dump_output_s) <= 0) {
         std::memset(data, 0, len);
       } else {
         switch (driver->sdl_device_channels_) {
@@ -561,13 +564,20 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
             assert_unhandled_case(driver->sdl_device_channels_);
             break;
         }
+        if (mute) {
+          RecordOutput(data, len, driver->sdl_device_channels_);
+          dumped = true;
+          std::memset(data, 0, len);
+        }
       }
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
         driver->frames_unused_.push(buffer);
         break;
       }
-      RecordOutput(data, len, driver->sdl_device_channels_);
+      if (!dumped) {
+        RecordOutput(data, len, driver->sdl_device_channels_);
+      }
       CountFrame(false);
       driver->frames_unused_.push(buffer);
 
