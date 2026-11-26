@@ -55,7 +55,7 @@ class IGraphicsSystem;
 // Implemented by the GPU plugin. op 0 (save, command-processor thread): waits for the GPU, fills `state`
 // (register file, ring and interrupt state, last swap) and `gpu_pages` ({u32 physical address, u32 size,
 // bytes}... for pages only the GPU copy holds). op 1 (load): applies `state`, invalidates GPU memory and
-// presents the saved last frame.
+// presents the saved last frame. op 2 / op 3 (load): hold / release the guest interrupt callback.
 using GraphicsFileHook = bool (*)(IGraphicsSystem* graphics, int op, std::vector<uint8_t>& state,
                                   std::vector<uint8_t>& gpu_pages);
 void SetGraphicsFileHook(IGraphicsSystem* graphics, GraphicsFileHook hook);

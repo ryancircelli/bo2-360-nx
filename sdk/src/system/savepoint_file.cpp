@@ -59,6 +59,11 @@ REXCVAR_DEFINE_STRING(load_savepoint, "", "Test",
 
 extern "C" uintptr_t __stack_chk_guard;  // libsystem_c, shared by every image in the process
 
+namespace rex::kernel::crt {
+rex::thread::Fiber* RecreateGuestFiber(rex::system::KernelState* ks, uint32_t start_address, uint32_t guest_fiber_addr,
+                                      size_t host_stack);
+}
+
 namespace rex::system {
 
 // savepoint.cpp
@@ -81,7 +86,7 @@ void VisitInProcessSnapshot(
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr char kMagic[8] = {'R', 'E', 'X', 'S', 'P', '2', 0, 0};
-constexpr uint32_t kVersion = 9;
+constexpr uint32_t kVersion = 11;  // 10: fibers, 11: procedure thunks
 constexpr uint64_t kArenaSize = 0x120000000ull;  // virtual + physical guest views (xmemory.cpp)
 constexpr uint32_t kEnd = 0x21444E45;  // "END!"
 
@@ -206,6 +211,15 @@ struct ThreadRec {
   std::vector<uint8_t> ctx_bytes, band;
 };
 
+// A guest fiber (rexcrt hooks): thread fibers name their thread; others are fresh (never run) or suspended in
+// SwitchToFiber with their host stack band in rec.
+struct FiberRec {
+  uint32_t addr = 0, uid = 0, stack_base = 0, stack_bottom = 0, start = 0, owner = 0, kind = 0;  // kind 0/1/2
+  uint64_t host_stack = 0;
+  ThreadRec rec;
+};
+enum : uint32_t { kThreadFiber = 0, kFreshFiber = 1, kSuspendedFiber = 2 };
+
 // The executable's thread-local block for the calling thread, {lo, hi} (0, 0 when it has none). Native game
 // code keeps pointers into it in callee-saved registers, so moved stacks need it mapped old -> new.
 std::pair<uint64_t, uint64_t> ExeTlsBlock() {
@@ -258,6 +272,36 @@ std::pair<uint64_t, uint64_t> ExeRange() {
   return {lo + slide, hi + slide};
 }
 
+// The executable's writable segments (globals, bss), with this process's slide.
+std::vector<std::pair<uint64_t, uint64_t>> ExeDataRanges() {
+  std::vector<std::pair<uint64_t, uint64_t>> r;
+  auto* h = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
+  const uint64_t slide = uint64_t(_dyld_get_image_vmaddr_slide(0));
+  auto* lc = reinterpret_cast<const load_command*>(h + 1);
+  for (uint32_t i = 0; i < h->ncmds; ++i) {
+    auto* seg = reinterpret_cast<const segment_command_64*>(lc);
+    if (lc->cmd == LC_SEGMENT_64 && (seg->initprot & VM_PROT_WRITE) && seg->vmsize)
+      r.push_back({seg->vmaddr + slide, seg->vmaddr + seg->vmsize + slide});
+    lc = reinterpret_cast<const load_command*>(reinterpret_cast<const uint8_t*>(lc) + lc->cmdsize);
+  }
+  return r;
+}
+
+// A host function as {image file name, offset}: images load at another address in the next process.
+bool FuncToFile(::PPCFunc* f, std::string& image, uint64_t& offset) {
+  Dl_info info{};
+  if (!dladdr(reinterpret_cast<void*>(f), &info) || !info.dli_fname) return false;
+  image = std::filesystem::path(info.dli_fname).filename().string();
+  offset = reinterpret_cast<uint64_t>(f) - reinterpret_cast<uint64_t>(info.dli_fbase);
+  return true;
+}
+::PPCFunc* FuncFromFile(const std::string& image, uint64_t offset) {
+  for (uint32_t i = 0; i < _dyld_image_count(); ++i)
+    if (std::filesystem::path(_dyld_get_image_name(i)).filename() == image)
+      return reinterpret_cast<::PPCFunc*>(reinterpret_cast<uint64_t>(_dyld_get_image_header(i)) + offset);
+  return nullptr;
+}
+
 std::string Sym(uint64_t pc) {
   Dl_info info{};
   if (!dladdr(reinterpret_cast<void*>(pc), &info)) return "?";
@@ -292,8 +336,9 @@ bool StillWaiting(XThread* t, const arm_thread_state64_t& gp) {
 }
 
 // Runs with every thread parked. Empty string = ok.
+// fiber: a suspended fiber's saved registers (t and ctx null); it resumes as if its SwitchToFiber returned.
 std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_neon_state64_t& neon, void* ctx,
-                          std::pair<uint64_t, uint64_t> exe, ThreadRec& rec) {
+                          std::pair<uint64_t, uint64_t> exe, ThreadRec& rec, bool fiber = false) {
   auto in_exe = [&](uint64_t pc) { return pc >= exe.first && pc < exe.second; };
   // Recompiled game code is extern "C"; C++ in the executable (a game's native hooks) is host code like the SDK.
   auto game = [&](uint64_t pc) { return in_exe(pc) && Sym(pc).rfind("_Z", 0) != 0; };
@@ -347,7 +392,18 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
   if (i0 < 0) return "no game frames (pc in " + Sym(f[0].pc) + ")";
   bool leaf = true;
   for (int i = 0; i < i0; ++i) leaf = leaf && InSystemLib(f[i].pc);
-  if (i0 > 0 && !leaf) {
+  if (fiber) {
+    // The fiber that switches to it has already loaded its guest registers; SwitchToFiber does nothing after.
+    if (i0 <= 0) return "fiber not inside a call";
+    rec.blocked = 3;
+    rec.gp = at_i0;
+    rec.neon = neon_i0;
+    arm_thread_state64_set_fp(rec.gp, f[i0].fp);
+    arm_thread_state64_set_sp(rec.gp, f[i0].sp);
+    arm_thread_state64_set_pc_fptr(rec.gp, reinterpret_cast<void*>(f[i0].pc));
+    rec.gp.__x[0] = 0;
+    rec.gp.__cpsr = gp.__cpsr;
+  } else if (i0 > 0 && !leaf) {
     std::string callee = Sym(f[i0 - 1].pc - 1);
     // A native hook (C++ in the executable) is called like a guest function, (ctx, base); restarting it is
     // only safe while it waits, so the thread must be stopped inside a system library.
@@ -386,7 +442,7 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
   }
   size_t i1 = size_t(i0);
   while (i1 + 1 < f.size() && in_exe(f[i1 + 1].pc)) ++i1;
-  if (i1 + 1 >= f.size() || Sym(f[i1 + 1].pc - 1).find("XThread7Execute") == std::string::npos)
+  if (i1 + 1 >= f.size() || (!fiber && Sym(f[i1 + 1].pc - 1).find("XThread7Execute") == std::string::npos))
     return "game frames not entered from XThread::Execute (" + Sym(f[std::min(i1 + 1, f.size() - 1)].pc - 1) + ")";
   for (size_t i = size_t(i0); i <= i1; ++i)
     if (!game(f[i].pc)) return "host code between game frames (" + Sym(f[i].pc) + ")";
@@ -394,12 +450,14 @@ std::string AnalyzeThread(XThread* t, const arm_thread_state64_t& gp, const arm_
   if (rec.record < (arm_thread_state64_get_sp(rec.gp) & ~15ull) || rec.record + 16 > f[i1 + 1].sp)
     return "oldest frame record outside the game frames";
   if (reinterpret_cast<const uint64_t*>(rec.record)[1] != f[i1 + 1].pc) return "oldest frame record not found";
-  rec.handle = t->handle();
+  rec.handle = t ? t->handle() : 0;
   rec.band_top = f[i1 + 1].sp;
   rec.band_lo = (arm_thread_state64_get_sp(rec.gp) - 256) & ~15ull;  // + red zone
   rec.band.assign(reinterpret_cast<const uint8_t*>(rec.band_lo), reinterpret_cast<const uint8_t*>(rec.band_top));
-  rec.ctx = reinterpret_cast<uint64_t>(ctx);
-  rec.ctx_bytes.assign(static_cast<const uint8_t*>(ctx), static_cast<const uint8_t*>(ctx) + sizeof(::PPCContext));
+  if (ctx) {
+    rec.ctx = reinterpret_cast<uint64_t>(ctx);
+    rec.ctx_bytes.assign(static_cast<const uint8_t*>(ctx), static_cast<const uint8_t*>(ctx) + sizeof(::PPCContext));
+  }
   return "";
 }
 
@@ -575,9 +633,11 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   std::vector<ThreadRec> threads;
   std::vector<uint8_t> kernel(32u << 20);
   std::vector<std::string> module_paths;
+  std::vector<FiberRec> fibers;
   size_t kernel_len = 0;
   uint64_t ticks = 0, time_base = 0;
   std::string why;
+  int tries = 0;
   g_capture_parked_hook = [&] {
     threads.clear(), why.clear();
     if (std::getenv("REX_SAVEPOINT_VERIFY")) {
@@ -598,13 +658,67 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
         auto it = g_tls.find(t->handle());
         if (it != g_tls.end()) rec.tls_lo = it->second.first, rec.tls_hi = it->second.second;
       }
+      // A thread stopped mid game code, or in a native wait whose frame spilled executable pointers, resumes
+      // with host pointers the load cannot move (BO2's main then called an unregistered function, twice):
+      // retry for a moment where every thread sits in a kernel wait; accept the rest after ~1.2 s.
+      if (e.empty() && rec.blocked != 1 && tries < 60) e = rec.blocked ? "woken in a native wait" : "running in game code";
       if (!e.empty()) why = fmt::format("thread {:08X}: {}", t->handle(), e);
       threads.push_back(std::move(rec));
     });
+    fibers.clear();
+    for (auto& [addr, info] : ks->fibers()) {
+      if (!why.empty()) break;
+      FiberRec fr;
+      fr.addr = addr, fr.uid = info.uid, fr.stack_base = info.guest_stack_base, fr.stack_bottom = info.guest_stack_bottom;
+      fr.start = info.start_address;
+      if (info.is_thread_fiber) {
+        fr.kind = kThreadFiber;
+        for (auto& th : ks->object_table()->GetObjectsByType<XThread>(XObject::Type::Thread))
+          if (th->main_fiber() == info.host_fiber) fr.owner = th->handle();
+        if (!fr.owner) why = fmt::format("fiber {:08X}: thread fiber without its thread", addr);
+      } else if (!info.host_fiber->started()) {
+        fr.kind = kFreshFiber, fr.host_stack = info.host_fiber->stack_size();
+      } else {
+        // A fiber running on a thread fails that thread's analysis (its frames do not start at XThread::Execute).
+        fr.kind = kSuspendedFiber, fr.host_stack = info.host_fiber->stack_size();
+        auto* mc = info.host_fiber->ucontext()->uc_mcontext;
+        std::string e = AnalyzeThread(nullptr, mc->__ss, mc->__ns, nullptr, exe, fr.rec, true);
+        if (!e.empty()) why = fmt::format("fiber {:08X}: {}", addr, e);
+      }
+      fibers.push_back(std::move(fr));
+    }
     // Kernel objects: the table's handle counts, then guest threads, then the rest (type, length, Save bytes).
     stream::ByteStream bs(kernel.data(), kernel.size());
     DiagPeek("save");
+    if (std::getenv("REX_SAVEPOINT_DIAG"))  // how each module image's pages look to the region scan
+      for (auto& m : ks->object_table()->GetObjectsByType<XModule>(XObject::Type::Module)) {
+        if (m->is_host_object()) continue;
+        auto* xm = static_cast<UserModule*>(m.get())->xex_module();
+        for (uint32_t a : {xm ? xm->base_address() : 0u, 0x832DF034u}) {
+          memory::HeapAllocationInfo info{};
+          auto* heap = Runtime::instance()->memory()->LookupHeap(a);
+          if (heap && heap->QueryRegionInfo(a, &info))
+            std::fprintf(stderr, "[savepoint] image %s %08X: heap %08X state %x protect %x size %x alloc %08X\n",
+                         m->name().c_str(), a, heap->heap_base(), info.state, info.protect, info.region_size,
+                         info.allocation_base);
+        }
+      }
     ks->content_manager()->SaveOpenContent(&bs);  // before objects: restored files reopen on these devices
+    // Procedure thunks: guest addresses handed out for native exports, which the game keeps in its globals.
+    auto pools = ks->function_dispatcher()->SaveThunks();
+    bs.Write<uint32_t>(uint32_t(pools.size()));
+    for (auto& pool : pools) {
+      bs.Write<uint32_t>(pool.code_base), bs.Write<uint32_t>(pool.next_thunk_address);
+      bs.Write<uint32_t>(uint32_t(pool.free_thunks.size()));
+      for (uint32_t a : pool.free_thunks) bs.Write<uint32_t>(a);
+      bs.Write<uint32_t>(uint32_t(pool.thunks.size()));
+      for (auto& [addr, func] : pool.thunks) {
+        std::string image;
+        uint64_t offset = 0;
+        if (!FuncToFile(func, image, offset) && why.empty()) why = fmt::format("thunk {:08X}: native not in an image", addr);
+        bs.Write<uint32_t>(addr), bs.Write(std::string_view(image)), bs.Write<uint64_t>(offset);
+      }
+    }
     ks->object_table()->Save(&bs);
     for (auto& m : ks->object_table()->GetObjectsByType<XModule>(XObject::Type::Module))
       if (!m->is_host_object()) module_paths.push_back(m->path());
@@ -628,8 +742,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
     kernel_len = bs.offset();
   };
   SavepointStats st;
-  int tries = 0;
-  for (; tries < 40; ++tries) {
+  for (; tries < 80; ++tries) {
     st = CaptureInProcessSavepoint();
     if (!st.ok || why.empty()) break;
     REXSYS_INFO("[savepoint] file save retry: {}", why);
@@ -717,14 +830,21 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   out.Put(head, sizeof head);
   out.U32(uint32_t(kernel_len));
   out.Put(kernel.data(), kernel_len);
-  out.U32(uint32_t(threads.size()));
-  for (auto& t : threads) {
+  auto put_rec = [&](const ThreadRec& t) {
     out.U32(t.handle), out.U32(t.blocked);
     out.Put(&t.gp, sizeof t.gp), out.Put(&t.neon, sizeof t.neon);
     uint64_t w[6] = {t.band_lo, t.band_top, t.record, t.ctx, t.tls_lo, t.tls_hi};
     out.Put(w, sizeof w);
     out.U32(uint32_t(t.ctx_bytes.size())), out.Put(t.ctx_bytes.data(), t.ctx_bytes.size());
     out.U32(uint32_t(t.band.size())), out.Put(t.band.data(), t.band.size());
+  };
+  out.U32(uint32_t(threads.size()));
+  for (auto& t : threads) put_rec(t);
+  out.U32(uint32_t(fibers.size()));
+  for (auto& f : fibers) {
+    uint32_t w[7] = {f.addr, f.uid, f.stack_base, f.stack_bottom, f.start, f.owner, f.kind};
+    out.Put(w, sizeof w), out.Put(&f.host_stack, 8);
+    put_rec(f.rec);
   }
   out.U32(kEnd);
   bool ok = out.ok && ::close(fd) == 0 && ::rename(tmp.c_str(), path.c_str()) == 0;
@@ -898,6 +1018,7 @@ bool LoadSavepointFile(const std::string& path) {
   std::vector<Saved> saved_virtual;  // REX_SAVEPOINT_VERIFY: compared word by word before the threads resume
   // REX_SAVEPOINT_VERIFY: guest words that changed since the regions were restored, at each load step.
   auto verify_words = [&](const char* step) {
+    DiagPeek(step);
     if (!std::getenv("REX_SAVEPOINT_VERIFY")) return;
     uint32_t shown = 0, words = 0;
     for (auto& r : saved_virtual) {
@@ -918,6 +1039,18 @@ bool LoadSavepointFile(const std::string& path) {
     std::fprintf(stderr, "[savepoint] verify %s: %u virtual words changed since the regions were restored\n", step,
                  words);
   };
+  // This boot's vblank interrupt would run the game's handler on half-restored memory (Forza bugchecks there):
+  // held from here until the function returns, after the restored threads are let go.
+  struct HoldInterrupts {
+    std::vector<uint8_t> none;
+    bool Call(int op) {
+      auto* g = g_gfx.load(std::memory_order_acquire);
+      auto h = g_gfx_hook.load(std::memory_order_acquire);
+      return g && h && h(g, op, none, none);
+    }
+    HoldInterrupts() { Call(2); }
+    ~HoldInterrupts() { Call(3); }
+  } hold_interrupts;
   const uint32_t rw = memory::kMemoryProtectRead | memory::kMemoryProtectWrite;
   for (uint32_t i = 0; in.ok && i < region_count; ++i) {
     uint32_t space = in.U32(), base = in.U32(), size = in.U32(), protect = in.U32();
@@ -945,8 +1078,7 @@ bool LoadSavepointFile(const std::string& path) {
   if (auto* h = in.Take(sizeof head)) std::memcpy(head, h, sizeof head);
   std::vector<uint8_t> kernel(in.U32());
   if (auto* k = in.Take(kernel.size())) std::memcpy(kernel.data(), k, kernel.size());
-  std::vector<ThreadRec> threads(in.U32());
-  for (auto& t : threads) {
+  auto get_rec = [&](ThreadRec& t) {
     t.handle = in.U32(), t.blocked = in.U32();
     if (auto* g = in.Take(sizeof t.gp)) std::memcpy(&t.gp, g, sizeof t.gp);
     if (auto* n = in.Take(sizeof t.neon)) std::memcpy(&t.neon, n, sizeof t.neon);
@@ -957,7 +1089,17 @@ bool LoadSavepointFile(const std::string& path) {
     if (auto* c = in.Take(t.ctx_bytes.size())) std::memcpy(t.ctx_bytes.data(), c, t.ctx_bytes.size());
     t.band.resize(in.U32());
     if (auto* b = in.Take(t.band.size())) std::memcpy(t.band.data(), b, t.band.size());
-    if (!in.ok) break;
+  };
+  std::vector<ThreadRec> threads(in.U32());
+  for (auto& t : threads)
+    if (in.ok) get_rec(t);
+  std::vector<FiberRec> fibers(in.ok ? in.U32() : 0);
+  for (auto& f : fibers) {
+    uint32_t w[7] = {};
+    if (auto* x = in.Take(sizeof w)) std::memcpy(w, x, sizeof w);
+    f.addr = w[0], f.uid = w[1], f.stack_base = w[2], f.stack_bottom = w[3], f.start = w[4], f.owner = w[5], f.kind = w[6];
+    if (auto* x = in.Take(8)) std::memcpy(&f.host_stack, x, 8);
+    if (in.ok) get_rec(f.rec);
   }
   if (!in.ok || in.U32() != kEnd) {
     SPLOAD_ERR("[savepoint] load: {} is truncated", path);
@@ -1005,6 +1147,26 @@ bool LoadSavepointFile(const std::string& path) {
   };
   stream::ByteStream kbs(kernel.data(), kernel.size());
   ks->content_manager()->RestoreOpenContent(&kbs);
+  std::vector<runtime::FunctionDispatcher::ThunkPool> pools(kbs.Read<uint32_t>());
+  for (auto& pool : pools) {
+    pool.code_base = kbs.Read<uint32_t>(), pool.next_thunk_address = kbs.Read<uint32_t>();
+    pool.free_thunks.resize(kbs.Read<uint32_t>());
+    for (auto& a : pool.free_thunks) a = kbs.Read<uint32_t>();
+    pool.thunks.resize(kbs.Read<uint32_t>());
+    for (auto& [addr, func] : pool.thunks) {
+      addr = kbs.Read<uint32_t>();
+      auto image = kbs.Read<std::string>();
+      func = FuncFromFile(image, kbs.Read<uint64_t>());
+      if (!func) {
+        SPLOAD_ERR("[savepoint] load: thunk {:08X}: image {} not loaded", addr, image);
+        return false;
+      }
+    }
+  }
+  if (!ks->function_dispatcher()->RestoreThunks(pools)) {
+    SPLOAD_ERR("[savepoint] load: procedure thunks not restored (a module pool is missing)");
+    return false;
+  }
   ks->object_table()->Restore(&kbs);
   uint32_t objects = kbs.Read<uint32_t>(), restored_objects = 0;
   for (uint32_t i = 0; i < objects; ++i) {
@@ -1062,6 +1224,76 @@ bool LoadSavepointFile(const std::string& path) {
   // Threads: start each restored host thread, wait for it to park, then move its band in and let it go.
   const auto exe = ExeRange();
   const uint64_t membase = reinterpret_cast<uint64_t>(mem->virtual_membase());
+  // Fibers before the threads that switch to them; this boot's own fibers are dropped (leaked).
+  // shortcut: a fiber band gets no thread-local mapping (no game keeps native C++ frames on a fiber yet).
+  // Recompiled code keeps pointers to the executable's globals in callee-saved registers and spills them in its
+  // frames (Forza faulted writing through one into the moved image). shortcut: a 64-bit guest value that happens
+  // to fall in the old image's writable segments moves too; narrow ranges, so accepted until it bites.
+  Reloc exe_data;
+  for (auto [lo, hi] : ExeDataRanges())
+    exe_data.r.push_back({lo - (exe.first - head[1]), hi - (exe.first - head[1]), int64_t(exe.first - head[1])});
+  Reloc ctxs;  // a fiber band holds the context pointer of the thread that ran it
+  for (auto& rec : threads)
+    if (auto t = ks->object_table()->LookupObject<XThread>(rec.handle))
+      ctxs.r.push_back({rec.ctx, rec.ctx + sizeof(::PPCContext),
+                        int64_t(reinterpret_cast<uint64_t>(t->thread_state()->context()) - rec.ctx)});
+  ks->fibers().clear();
+  for (auto& f : fibers) {
+    FiberInfo info{nullptr, f.uid, f.addr, f.stack_base, f.stack_bottom, f.kind == kThreadFiber, f.start};
+    if (f.kind == kThreadFiber) {
+      if (auto t = ks->object_table()->LookupObject<XThread>(f.owner))
+        info.host_fiber = rex::thread::Fiber::ForThread(), t->set_main_fiber(info.host_fiber);
+    } else if (f.kind == kFreshFiber) {
+      info.host_fiber = kernel::crt::RecreateGuestFiber(ks, f.start, f.addr, f.host_stack);
+    } else if (auto* hf = rex::thread::Fiber::Create(f.host_stack, [](void*) { std::abort(); }, nullptr);
+               hf && f.rec.band.size() + 65536 + 4096 <= hf->stack_size()) {
+      // Same band move as a thread's (below), into the new fiber's stack, then its saved context points there.
+      const auto& rec = f.rec;
+      const uint64_t new_top = (reinterpret_cast<uint64_t>(hf->stack_data()) + hf->stack_size() - 65536) & ~15ull;
+      const int64_t sd = int64_t(new_top - rec.band_top);
+      Reloc rl = ctxs;
+      rl.r.insert(rl.r.end(), exe_data.r.begin(), exe_data.r.end());
+      rl.r.push_back({rec.band_lo, rec.band_top, sd});
+      rl.r.push_back({head[0], head[0] + kArenaSize, int64_t(membase - head[0])});
+      rl.guard_old = head[5], rl.guard_new = uint64_t(__stack_chk_guard);
+      Reloc code{{{head[1], head[2], int64_t(exe.first - head[1])}}};
+      uint8_t* dst = reinterpret_cast<uint8_t*>(new_top - rec.band.size());
+      std::memcpy(dst, rec.band.data(), rec.band.size());
+      for (size_t o = 0; o + 8 <= rec.band.size(); o += 8) {
+        uint64_t v;
+        std::memcpy(&v, dst + o, 8);
+        v = rl(v);
+        std::memcpy(dst + o, &v, 8);
+      }
+      bool ok = true;
+      for (uint64_t r = rl(arm_thread_state64_get_fp(rec.gp)); ok && r && r != rec.record + sd;) {
+        ok = r >= new_top - rec.band.size() && r + 16 <= new_top;
+        if (!ok) break;
+        auto* fr = reinterpret_cast<uint64_t*>(r);
+        fr[1] = code(fr[1]);
+        r = fr[0];
+      }
+      auto* record = reinterpret_cast<uint64_t*>(rec.record + sd);
+      record[0] = 0;
+      record[1] = reinterpret_cast<uint64_t>(&rex_sp_landing);
+      // swapcontext into it restores x19-x28, fp, sp, d8-d15 and continues at the saved return address.
+      auto* mc = hf->ucontext()->uc_mcontext;
+      for (int r = 19; r <= 28; ++r) mc->__ss.__x[r] = rl(rec.gp.__x[r]);
+      arm_thread_state64_set_fp(mc->__ss, rl(arm_thread_state64_get_fp(rec.gp)));
+      arm_thread_state64_set_sp(mc->__ss, rl(arm_thread_state64_get_sp(rec.gp)));
+      void* resume = reinterpret_cast<void*>(code(arm_thread_state64_get_pc(rec.gp)));
+      arm_thread_state64_set_lr_fptr(mc->__ss, resume);
+      arm_thread_state64_set_pc_fptr(mc->__ss, resume);
+      for (int r = 8; r <= 15; ++r) mc->__ns.__v[r] = rec.neon.__v[r];
+      if (ok) info.host_fiber = hf;
+    }
+    if (!info.host_fiber) {
+      SPLOAD_ERR("[savepoint] load: fiber {:08X} (kind {}) not rebuilt", f.addr, f.kind);
+      return false;
+    }
+    ks->RegisterFiber(f.addr, info);
+  }
+  if (std::getenv("REX_SAVEPOINT_DIAG")) std::fprintf(stderr, "[savepoint] %zu fibers rebuilt\n", fibers.size());
   for (size_t i = 0; i < threads.size(); ++i) {
     auto& rec = threads[i];
     auto t = ks->object_table()->LookupObject<XThread>(rec.handle);
@@ -1094,6 +1326,7 @@ bool LoadSavepointFile(const std::string& path) {
               {rec.tls_lo, rec.tls_hi, int64_t(ntls.first - rec.tls_lo)},
               {head[0], head[0] + kArenaSize, int64_t(membase - head[0])},
               {rec.ctx, rec.ctx + sizeof(::PPCContext), int64_t(reinterpret_cast<uint64_t>(ctx) - rec.ctx)}}};
+    rl.r.insert(rl.r.end(), exe_data.r.begin(), exe_data.r.end());
     rl.guard_old = head[5], rl.guard_new = uint64_t(__stack_chk_guard);
     Reloc code{{{head[1], head[2], int64_t(exe.first - head[1])}}};
     mach_port_t port = g_parked[i]->port;
@@ -1157,6 +1390,7 @@ bool LoadSavepointFile(const std::string& path) {
       return false;
     }
     thread_resume(port);
+    DiagPeek(hex);  // REX_SAVEPOINT_PEEK: which resumed thread changes a watched word
   }
   DiagPeek("load");
   REXSYS_INFO("[savepoint] restored {}: frame {}, {} MB in {} regions, {} objects, {} threads, memory+kernel "

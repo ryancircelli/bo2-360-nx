@@ -110,7 +110,7 @@ std::string Timescale(const std::string& args) {
 
 std::string Savepoint(const std::string& args) {
   // Same entry as the Metal test control: save | load | save PATH | file PATH.
-  return ControlInProcessSavepoint(args, 20000);
+  return ControlInProcessSavepoint(args, 100000);
 }
 
 }  // namespace

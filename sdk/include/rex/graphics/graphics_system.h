@@ -87,6 +87,8 @@ class GraphicsSystem : public system::IGraphicsSystem {
                                bool blocking) override;
 
   bool is_paused() const { return paused_; }
+  // Save point load: no guest interrupt runs while memory and threads are swapped; returns once none is running.
+  void HoldInterrupts(bool hold);
   void Pause();
   void Resume();
 
@@ -120,6 +122,8 @@ class GraphicsSystem : public system::IGraphicsSystem {
 
   uint32_t interrupt_callback_ = 0;
   uint32_t interrupt_callback_data_ = 0;
+  std::atomic<bool> interrupts_held_{false};
+  std::atomic<int> interrupts_running_{0};
 
   std::atomic<bool> vsync_worker_running_;
   system::object_ref<system::XHostThread> vsync_worker_thread_;

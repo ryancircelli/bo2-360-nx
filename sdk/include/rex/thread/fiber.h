@@ -99,6 +99,20 @@ struct Fiber {
   bool is_thread_fiber_ = false;
 
   static void Trampoline();
+
+ public:
+  // Save point file (savepoint_file.cpp): a suspended fiber's registers and stack, and rebuilding fibers
+  // in a fresh process.
+  ucontext_t* ucontext() { return &context_; }
+  uint8_t* stack_data() { return stack_.data(); }
+  size_t stack_size() const { return stack_.size(); }
+  /// A thread fiber made for another thread; SwitchToFiber names it current when that thread switches away.
+  static Fiber* ForThread();
+  static void SetCurrent(Fiber* f) { tls_current_ = f; }
+  bool started() const { return started_; }
+
+ private:
+  bool started_ = false;
 #endif
 };
 

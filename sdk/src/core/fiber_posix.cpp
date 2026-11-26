@@ -38,6 +38,12 @@ Fiber* Fiber::ConvertCurrentThread() {
   return f;
 }
 
+Fiber* Fiber::ForThread() {
+  auto* f = new Fiber();
+  f->is_thread_fiber_ = true;
+  return f;
+}
+
 Fiber* Fiber::Create(size_t stack_size, void (*entry)(void*), void* arg) {
   auto* f = new Fiber();
   f->entry_ = entry;
@@ -59,6 +65,7 @@ Fiber* Fiber::Create(size_t stack_size, void (*entry)(void*), void* arg) {
 /*static*/ void Fiber::Trampoline() {
   // tls_current_ was updated by SwitchTo before swapcontext returned here.
   Fiber* f = tls_current_;
+  f->started_ = true;
   f->entry_(f->arg_);
 }
 

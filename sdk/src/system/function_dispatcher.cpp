@@ -14,6 +14,7 @@
  */
 
 #include <unordered_set>
+#include <algorithm>
 
 #include <rex/assert.h>
 #include <rex/dbg.h>
@@ -329,6 +330,35 @@ uint32_t FunctionDispatcher::AllocateThunk(::PPCFunc* func, uint32_t caller_addr
   }
   mod->thunks.emplace(func, addr);
   return addr;
+}
+
+std::vector<FunctionDispatcher::ThunkPool> FunctionDispatcher::SaveThunks() {
+  auto global_lock = global_critical_region_.Acquire();
+  std::vector<ThunkPool> pools;
+  for (auto& t : module_tables_) {
+    ThunkPool p{t.code_base, t.next_thunk_address, t.free_thunks, {}};
+    for (auto& [func, addr] : t.thunks) p.thunks.push_back({addr, func});
+    pools.push_back(std::move(p));
+  }
+  return pools;
+}
+
+bool FunctionDispatcher::RestoreThunks(const std::vector<ThunkPool>& pools) {
+  auto global_lock = global_critical_region_.Acquire();
+  for (auto& p : pools) {
+    auto it = std::find_if(module_tables_.begin(), module_tables_.end(),
+                           [&](auto& t) { return t.code_base == p.code_base; });
+    if (it == module_tables_.end()) return false;
+    for (auto& [func, addr] : it->thunks) function_table_.erase(addr), memory_->SetFunction(addr, nullptr);
+    it->thunks.clear();
+    it->next_thunk_address = p.next_thunk_address;
+    it->free_thunks = p.free_thunks;
+    for (auto& [addr, func] : p.thunks) {
+      if (!SetFunction(addr, func)) return false;
+      it->thunks.emplace(func, addr);
+    }
+  }
+  return true;
 }
 
 void FunctionDispatcher::RegisterModule(const std::string& module_id, uint32_t code_base,

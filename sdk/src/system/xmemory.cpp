@@ -13,6 +13,8 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -1732,6 +1734,16 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
 
   // Perform table change.
   uint32_t end_page_number = base_page_number + base_page_entry.region_page_count - 1;
+  if (const char* w = std::getenv("REX_HEAP_WATCH")) {  // diag: who releases the region holding this address
+    const uint32_t a = uint32_t(std::strtoul(w, nullptr, 16));
+    const uint32_t lo = heap_base_ + (base_page_number << page_size_shift_);
+    if (a >= lo && a - lo < (base_page_entry.region_page_count << page_size_shift_)) {
+      std::fprintf(stderr, "[heap-watch] Release %08X size %X covers %08X\n", lo,
+                   base_page_entry.region_page_count << page_size_shift_, a);
+      void* bt[24];
+      backtrace_symbols_fd(bt, backtrace(bt, 24), 2);
+    }
+  }
   for (uint32_t page_number = base_page_number; page_number <= end_page_number; ++page_number) {
     auto& page_entry = page_table_[page_number];
     page_entry.qword = 0;

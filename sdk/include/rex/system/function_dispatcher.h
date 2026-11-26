@@ -114,6 +114,16 @@ class FunctionDispatcher : public IModuleRegistrar {
    */
   std::optional<std::pair<uint32_t, uint32_t>> UnregisterModule(const std::string& module_id);
 
+  /// Save points: the guest addresses handed out for native procedures (guest code keeps them in globals).
+  struct ThunkPool {
+    uint32_t code_base, next_thunk_address;
+    std::vector<uint32_t> free_thunks;
+    std::vector<std::pair<uint32_t, ::PPCFunc*>> thunks;
+  };
+  std::vector<ThunkPool> SaveThunks();
+  /// Replaces each matching pool's thunks (by code_base); false if a pool has no module here.
+  bool RestoreThunks(const std::vector<ThunkPool>& pools);
+
  private:
   bool Execute(ThreadState* thread_state, uint32_t address);
 

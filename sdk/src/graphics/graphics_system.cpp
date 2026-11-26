@@ -327,6 +327,9 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
   if (!interrupt_callback_) {
     return;
   }
+  interrupts_running_.fetch_add(1);
+  struct Done { std::atomic<int>& n; ~Done() { n.fetch_sub(1); } } done{interrupts_running_};
+  if (interrupts_held_.load()) return;
 
   auto thread = system::XThread::GetCurrentThread();
   assert_not_null(thread);
@@ -343,6 +346,11 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
   uint64_t args[] = {source, interrupt_callback_data_};
   function_dispatcher_->ExecuteInterrupt(thread->thread_state(), interrupt_callback_, args,
                                          rex::countof(args));
+}
+
+void GraphicsSystem::HoldInterrupts(bool hold) {
+  interrupts_held_.store(hold);
+  while (hold && interrupts_running_.load()) std::this_thread::yield();
 }
 
 void GraphicsSystem::MarkVblank() {

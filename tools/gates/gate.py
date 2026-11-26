@@ -33,7 +33,9 @@ SAVEPOINTS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'savepoints')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
-    'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
+    # save_log: `save` counts --at from this log line (boot time varies with machine load; a save on a loading screen is useless)
+    'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None,
+                  save_log='[cheats] guest memory in a match', save_after_s=30),
     'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
@@ -518,8 +520,16 @@ def g_save(a, G):
     """Drive the route to --at guest seconds, write SAVEPOINTS/GAME/SCENE.sp (+ .json, .png)."""
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
-    at, ff = a.at or GAMES[a.game]['scene_s'], a.ff or 1
-    while time.monotonic() < G.t0 + at / ff and G.alive():
+    cfg = GAMES[a.game]
+    log = cfg.get('save_log')
+    at, ff = a.at or cfg.get('save_after_s') or cfg['scene_s'], a.ff or 1
+    t_from = G.t0
+    if log:
+        if not G.wait_log(log, 900):
+            G.stop()
+            return out_line('FAIL', 'save', a.game, f'never logged "{log}"', a.out, a.out)
+        t_from = time.monotonic()
+    while time.monotonic() < t_from + at / ff and G.alive():
         time.sleep(1)
     if ff != 1:
         G.ctl('timescale 1', 10)
@@ -538,11 +548,11 @@ def g_save(a, G):
         if png:
             shutil.copy(png, os.path.splitext(dest)[0] + '.png')
         hdr = open(dest, 'rb').read(32)
-        json.dump(dict(made=time.strftime('%Y-%m-%d %H:%M'), at=at, ff=ff, route=os.path.basename(a.route_file or ''),
+        json.dump(dict(made=time.strftime('%Y-%m-%d %H:%M'), at=at, after_log=log, ff=ff, route=os.path.basename(a.route_file or ''),
                        fingerprint=hdr[12:28].hex(),
                        remake=f'gate.py save {a.game} --scene {a.scene} --at {at:g} --ff {ff:g} --app APP'),
                   open(os.path.splitext(dest)[0] + '.json', 'w'), indent=1)
-    facts = f'scene {a.scene} at {at:g}s (ff {ff:g}) {os.path.getsize(dest) >> 20 if ok else 0} MB in {took:.1f}s reply {r[:120]}'
+    facts = f'scene {a.scene} at {at:g}s' + (' after the in-a-match line' if log else '') + f' (ff {ff:g}) {os.path.getsize(dest) >> 20 if ok else 0} MB in {took:.1f}s reply {r[:120]}'
     return out_line('PASS' if ok else 'FAIL', 'save', a.game, facts, dest if ok else a.out, a.out)
 
 
@@ -567,6 +577,19 @@ def run_inner(a):
             return out_line('FAIL', a.gate, a.game, f'no save point {a.savepoint} (make one: gate.py save {a.game} --scene NAME)', a.out, a.out)
         env['REX_LOAD_SAVEPOINT'] = a.savepoint
         a.route, a.ff, a.at = None, 0, a.at or 3
+        # Same pads and settings (god mode...) as the run that saved, minus its inputs and one-shot starts.
+        meta = os.path.splitext(a.savepoint)[0] + '.json'
+        route = json.load(open(meta)).get('route') if os.path.isfile(meta) else None
+        route = resolve_route(a.game, route) if route else None
+        if route:
+            os.makedirs(a.out, exist_ok=True)
+            for k, v in route_env(route).items():
+                if not k.startswith(('REX_BO2ZM_TEST_START', 'REX_BO2ZM_BENCHMARK', 'REX_HID_VIRTUAL_PAD_SCRIPT')):
+                    env.setdefault(k, v)
+            players = [l for l in open(route) if l.replace(' ', '').startswith('players=')]
+            pads = os.path.join(a.out, 'pads.route')
+            open(pads, 'w').write(''.join(players))
+            env.setdefault('REX_HID_VIRTUAL_PAD_SCRIPT', pads)
     need_route = a.gate in ('shot', 'drive', 'speedrun', 'save') and not a.savepoint
     if need_route or a.route:
         a.route_file = resolve_route(a.game, a.route) if (a.route or GAMES[a.game]['drive']) else None

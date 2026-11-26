@@ -119,6 +119,10 @@ bool FileHook(rex::system::IGraphicsSystem* interface, int op, std::vector<uint8
       });
     return ok;
   }
+  if (op == 2 || op == 3) {
+    graphics->HoldInterrupts(op == 2);
+    return true;
+  }
   return false;
 }
 }  // namespace

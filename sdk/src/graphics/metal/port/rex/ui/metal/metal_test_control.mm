@@ -338,7 +338,7 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
             // Runs on its own thread so captures and input keep working while it waits.
             std::filesystem::remove(entry.path());
             std::thread([response, op = rest.empty() ? argument : argument + " " + rest] {  // "file PATH"
-              Write(response, rex::system::ControlInProcessSavepoint(op, 20000));
+              Write(response, rex::system::ControlInProcessSavepoint(op, 100000));
             }).detach();
             continue;
           } else if (command == "capture" && argument == "at") {
