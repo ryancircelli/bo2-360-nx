@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do case "$1" in
 _xd="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"
 _bin="$([ -n "$exe" ] && echo "$exe" || ls "$app"/Contents/MacOS/bo2zm 2>/dev/null)"
 if grep -q '^BO2ZM_TEST_BUTTONS.*wait_log' "$route" 2>/dev/null; then
-  if [ "$pads" = sdk ] && grep -l 'wait_log' "$_bin" "$_xd"/*.dylib 2>/dev/null | grep -q .; then
+  if [ "$pads" = sdk ] && grep -l 'wait_log' ${_bin:+"$_bin"} "$_xd"/*.dylib 2>/dev/null | grep -q .; then
     echo "wait_log: supported by this build, using the event route $(basename "$route")"
   elif [ -f "$route.timed" ]; then
     echo "wait_log: NOT supported by this build (or --pads game), using $(basename "$route").timed"; route="$route.timed"
