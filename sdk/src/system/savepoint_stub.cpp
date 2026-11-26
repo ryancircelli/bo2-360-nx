@@ -24,7 +24,6 @@ void ClearGraphicsSavepointHooks(IGraphicsSystem*) {}
 void ServiceSavepointRequest() {}
 SavepointStats CaptureInProcessSavepoint() { return Unsupported(); }
 SavepointStats RewindToInProcessSavepoint() { return Unsupported(); }
-void NoteSavepointSwap() {}
 std::string ControlInProcessSavepoint(const std::string&, int) { return "error save points need macOS"; }
 void SetGraphicsFileHook(IGraphicsSystem*, GraphicsFileHook) {}
 std::string WriteSavepointFile(const std::string&, int) { return "error save points need macOS"; }
