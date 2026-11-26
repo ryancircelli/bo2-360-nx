@@ -65,6 +65,10 @@ add_executable(host_path_rename_tests filesystem/host_path_rename_test.cpp)
 target_link_libraries(host_path_rename_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME host_path_rename_tests COMMAND host_path_rename_tests)
 
+add_executable(live_pad_tests input/live_pad_test.cpp)
+target_link_libraries(live_pad_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME live_pad_tests COMMAND live_pad_tests)
+
 add_executable(metal_constant_overrides_tests graphics/metal_constant_overrides_test.cpp)
 target_include_directories(metal_constant_overrides_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
