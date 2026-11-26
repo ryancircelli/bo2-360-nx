@@ -16,11 +16,19 @@ file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" BO2ZM_ROOT)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT DEFINED REXSDK_DIR)
-  set(REXSDK_DIR "${BO2ZM_ROOT}/../../sdk" CACHE PATH "Path to the rexglue-sdk source tree")
+# Two ways in: this folder as the build root (the fork's own builds), or metal360's native component
+# (native/CMakeLists.txt), which sets METAL360_GAME_TARGET and has already added the SDK, the generated code and
+# the executable. BO2ZM_TARGET is the executable the glue goes into either way.
+if(DEFINED METAL360_GAME_TARGET)
+  set(BO2ZM_TARGET ${METAL360_GAME_TARGET})
+else()
+  set(BO2ZM_TARGET bo2zm)
+  if(NOT DEFINED REXSDK_DIR)
+    set(REXSDK_DIR "${BO2ZM_ROOT}/../../sdk" CACHE PATH "Path to the rexglue-sdk source tree")
+  endif()
+  add_subdirectory("${REXSDK_DIR}" rexglue-sdk)
+  rexglue_project(bo2zm OUTPUT_DIR generated/default_mp)
 endif()
-add_subdirectory("${REXSDK_DIR}" rexglue-sdk)
-rexglue_project(bo2zm OUTPUT_DIR generated/default_mp)
 
 # Sources: games/bo2/ is the BO2 build project; core/ holds the game-neutral services and games/bo2/src/ the BO2 code. Both
 # directories are on the include path, so "bo2zm_x.h" resolves whichever one it lives in.
@@ -135,7 +143,11 @@ else()
     list(APPEND BO2ZM_SOURCES ${BO2ZM_ROOT}/src/bo2zm_lifecycle.cpp)
 endif()
 
-if(WIN32)
+if(DEFINED METAL360_GAME_TARGET)
+    # metal360 generates main.cpp (the app shell) and calls metal360::RegisterPackage (bo2zm_register.cpp).
+    list(REMOVE_ITEM BO2ZM_SOURCES ${BO2ZM_ROOT}/src/main.cpp)
+    target_sources(${BO2ZM_TARGET} PRIVATE ${BO2ZM_SOURCES})
+elseif(WIN32)
     add_executable(bo2zm WIN32 ${BO2ZM_SOURCES})
 else()
     add_executable(bo2zm ${BO2ZM_SOURCES})
@@ -143,37 +155,39 @@ endif()
 
 # Linux (games/bo2/build_linux.sh): the page-size check and the relaunch.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/../../core/bo2zm_linux.cpp)
+    target_sources(${BO2ZM_TARGET} PRIVATE ${BO2ZM_ROOT}/../../core/bo2zm_linux.cpp)
 endif()
 # macOS (tools/build_mac.sh): the relaunch.
 if(APPLE AND NOT BO2ZM_MIN)
-    target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/../../core/bo2zm_mac.cpp)
+    target_sources(${BO2ZM_TARGET} PRIVATE ${BO2ZM_ROOT}/../../core/bo2zm_mac.cpp)
 endif()
 
 if(BO2ZM_DEVLINK AND REXGLUE_PLATFORM_SWITCH)
-    target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/src/bo2zm_devlink_net.cpp ${BO2ZM_ROOT}/src/bo2zm_devlink_screen.cpp)
+    target_sources(${BO2ZM_TARGET} PRIVATE ${BO2ZM_ROOT}/src/bo2zm_devlink_net.cpp ${BO2ZM_ROOT}/src/bo2zm_devlink_screen.cpp)
 elseif(BO2ZM_DEVLINK)
     # The PC build checks for updates against a PC of its own (CHECK FOR UPDATES, bo2zm_updates.cpp) but never
     # downloads: the network code without zlib, which this build does not have.
-    target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/src/bo2zm_devlink_net.cpp)
-    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_devlink_net.cpp PROPERTIES
+    target_sources(${BO2ZM_TARGET} PRIVATE ${BO2ZM_ROOT}/src/bo2zm_devlink_net.cpp)
+    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_devlink_net.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES
                                 COMPILE_DEFINITIONS "BO2ZM_DEVLINK_NO_ZLIB=1;_CRT_SECURE_NO_WARNINGS")
 endif()
 if(WIN32)
-    target_link_libraries(bo2zm PRIVATE ws2_32)
+    target_link_libraries(${BO2ZM_TARGET} PRIVATE ws2_32)
 endif()
 
 # xenos: ReXGlue's emulated Xbox 360 GPU, which the PC build can use instead of the native renderer.
-rexglue_setup_target(bo2zm)
+if(NOT DEFINED METAL360_GAME_TARGET)
+  rexglue_setup_target(bo2zm)
+endif()
 
 # The game-neutral services (core/) and the BO2 sources (games/bo2/src/): a quoted "bo2zm_x.h" include finds its file in
 # either directory, as it did when both were app/src. Not the repository root: "core/threading_switch.h" is the SDK's.
-target_include_directories(bo2zm PRIVATE "${BO2ZM_ROOT}/../../core" "${BO2ZM_ROOT}/src")
-target_include_directories(bo2zm PRIVATE "${BO2ZM_ROOT}/src/native" "${BO2ZM_ROOT}/src/native/render" "${REXSDK_DIR}/src" "${REXSDK_DIR}/src/gpu")
+target_include_directories(${BO2ZM_TARGET} PRIVATE "${BO2ZM_ROOT}/../../core" "${BO2ZM_ROOT}/src")
+target_include_directories(${BO2ZM_TARGET} PRIVATE "${BO2ZM_ROOT}/src/native" "${BO2ZM_ROOT}/src/native/render" "${REXSDK_DIR}/src" "${REXSDK_DIR}/src/gpu")
 if(NOT BO2ZM_MIN)
   # v0.10 headers (cvar, logging, ...) kept alive on v0.11: games/bo2/compat/rex
-  target_include_directories(bo2zm BEFORE PRIVATE "${BO2ZM_ROOT}/compat" "${REXSDK_DIR}/thirdparty/cli11/include" "${REXSDK_DIR}/thirdparty/spdlog/include" "${REXSDK_DIR}/thirdparty/tomlplusplus/include" "${REXSDK_DIR}/src/gpu/xenos/metal/include")
-  target_sources(bo2zm PRIVATE "${BO2ZM_ROOT}/compat/src/cvar.cpp")
+  target_include_directories(${BO2ZM_TARGET} BEFORE PRIVATE "${BO2ZM_ROOT}/compat" "${REXSDK_DIR}/thirdparty/cli11/include" "${REXSDK_DIR}/thirdparty/spdlog/include" "${REXSDK_DIR}/thirdparty/tomlplusplus/include" "${REXSDK_DIR}/src/gpu/xenos/metal/include")
+  target_sources(${BO2ZM_TARGET} PRIVATE "${BO2ZM_ROOT}/compat/src/cvar.cpp")
 endif()
 
 # Hot leaf functions copied with their ctx registers as locals (tools/localize.py, from games/bo2/locals.txt; run by
@@ -181,7 +195,7 @@ endif()
 set(BO2ZM_LOCALS "${BO2ZM_ROOT}/generated/default_mp/bo2zm_locals.cpp")
 if(EXISTS "${BO2ZM_LOCALS}" AND TARGET bo2zm_recompiled)
   target_sources(bo2zm_recompiled PRIVATE "${BO2ZM_LOCALS}")
-  target_compile_definitions(bo2zm PRIVATE BO2ZM_HAS_LOCALS=1)
+  target_compile_definitions(${BO2ZM_TARGET} PRIVATE BO2ZM_HAS_LOCALS=1)
 endif()
 
 # How the generated code reaches guest memory (core/bo2zm_guest_memory.h): appended to its precompiled header, so
@@ -238,9 +252,9 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recompiled AND BO2ZM_PGO)
                            -fprofile-update=single "-fprofile-prefix-path=${_bo2zm_pgo_prefix}")
     set_property(SOURCE ${_bo2zm_pgo_native} APPEND PROPERTY COMPILE_OPTIONS -fprofile-generate=/switch/bo2zm/pgo
                  -fno-profile-values -fprofile-update=single "-fprofile-prefix-path=${_bo2zm_pgo_prefix}")
-    target_compile_definitions(bo2zm PRIVATE BO2ZM_PGO_GENERATE=1)
-    target_link_libraries(bo2zm PRIVATE gcov)
-    target_link_options(bo2zm PRIVATE "-Wl,--wrap=fopen")
+    target_compile_definitions(${BO2ZM_TARGET} PRIVATE BO2ZM_PGO_GENERATE=1)
+    target_link_libraries(${BO2ZM_TARGET} PRIVATE gcov)
+    target_link_options(${BO2ZM_TARGET} PRIVATE "-Wl,--wrap=fopen")
   elseif(BO2ZM_PGO STREQUAL "use")
     target_compile_options(bo2zm_recompiled PRIVATE "-fprofile-use=${BO2ZM_PGO_DIR}"
                            "-fprofile-prefix-path=${_bo2zm_pgo_prefix}" -fprofile-partial-training -fprofile-correction
@@ -267,37 +281,37 @@ if(REXGLUE_PLATFORM_SWITCH AND BO2ZM_DEBUG_LINES)
   if(TARGET rexaudio)  # the SDK's audio (the XMA decoder)
     target_compile_options(rexaudio PRIVATE -g1)
   endif()
-  target_link_options(bo2zm PRIVATE -g1)
+  target_link_options(${BO2ZM_TARGET} PRIVATE -g1)
 endif()
 
 # rex_app.cpp (compiled into this target) includes imgui.h, but rexruntime links
 # imgui privately, so the include path does not reach us when the SDK is a
 # subdirectory.
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
-    target_include_directories(bo2zm PRIVATE
+    target_include_directories(${BO2ZM_TARGET} PRIVATE
         $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 # The same goes for renderdoc_app.h, which rex/ui/vulkan/instance.h includes
 # outside Switch (games/bo2/src/native/ uses the SDK's Vulkan device).
 if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
-    target_include_directories(bo2zm PRIVATE
+    target_include_directories(${BO2ZM_TARGET} PRIVATE
         $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
 endif()
 # And the Vulkan headers, which the SDK's ui/graphics libraries use privately.
 if(TARGET Vulkan::Headers)
-    target_link_libraries(bo2zm PRIVATE Vulkan::Headers)
+    target_link_libraries(${BO2ZM_TARGET} PRIVATE Vulkan::Headers)
 endif()
 
 # The loading videos' VP8 decoder (games/bo2/src/bo2zm_webm.cpp) is the SDK's FFmpeg. Its headers for that file only: the FFmpeg
 # folder has its own config.h.
-target_link_libraries(bo2zm PRIVATE $<LINK_ONLY:libavcodec> $<LINK_ONLY:libavutil>)
-set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_webm.cpp PROPERTIES INCLUDE_DIRECTORIES "${REXSDK_DIR}/thirdparty/FFmpeg")
+target_link_libraries(${BO2ZM_TARGET} PRIVATE $<LINK_ONLY:libavcodec> $<LINK_ONLY:libavutil>)
+set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_webm.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES INCLUDE_DIRECTORIES "${REXSDK_DIR}/thirdparty/FFmpeg")
 
 # The native renderer (games/bo2/src/native/render) draws the game image with the SDK
 # presenter's precompiled SPIR-V, and fingerprints with the SDK's xxHash.
-target_include_directories(bo2zm PRIVATE "${REXSDK_DIR}/src/ui/shaders" "${REXSDK_DIR}/src/ui/overlay")
+target_include_directories(${BO2ZM_TARGET} PRIVATE "${REXSDK_DIR}/src/ui/shaders" "${REXSDK_DIR}/src/ui/overlay")
 find_path(BO2ZM_XXHASH_INCLUDE xxhash.h HINTS "${REXSDK_DIR}/thirdparty/xxHash" NO_CMAKE_FIND_ROOT_PATH REQUIRED)
-target_include_directories(bo2zm PRIVATE "${BO2ZM_XXHASH_INCLUDE}")
+target_include_directories(${BO2ZM_TARGET} PRIVATE "${BO2ZM_XXHASH_INCLUDE}")
 
 # This port's menu changes (games/bo2/src/ui/menus.lua) go into the program as text: bo2zm_ui.cpp runs them inside the game's
 # menu Lua. Editing menus.lua re-runs the configure step, which rewrites the header only when the text changed.
@@ -334,32 +348,34 @@ foreach(_bo2zm_lines 720 1080)
 endforeach()
 configure_file("${BO2ZM_ROOT}/src/ui/credits/bo2zm_credits_png.h.in"
                "${CMAKE_CURRENT_BINARY_DIR}/generated_ui/bo2zm_credits_png.h" @ONLY)
-target_include_directories(bo2zm PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
+target_include_directories(${BO2ZM_TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
 
 # The title manifest (games/bo2/game.toml), compiled in as rex::kGameManifest.
-rexglue_game_manifest(bo2zm "${BO2ZM_ROOT}/game.toml")
+if(NOT DEFINED METAL360_GAME_TARGET)  # metal360 compiles in the package manifest's [runtime] instead
+  rexglue_game_manifest(bo2zm "${BO2ZM_ROOT}/game.toml")
+endif()
 # On Switch it also uses the SDK's thread priority/core helpers (src/core/threading_switch.h).
 if(REXGLUE_PLATFORM_SWITCH)
-    target_include_directories(bo2zm PRIVATE "${REXSDK_DIR}/src")
+    target_include_directories(${BO2ZM_TARGET} PRIVATE "${REXSDK_DIR}/src")
 endif()
 
 # Nintendo Switch: bo2zm.nro next to the ELF. On the SD card:
 #   sdmc:/switch/bo2zm/bo2zm.nro + game/ + update/ (games/bo2/src/bo2zm_register.cpp).
 # Switch: contended host mutexes and the C heap's lock spin briefly before sleeping (games/bo2/src/bo2zm_switch_mutex.cpp).
 if(REXGLUE_PLATFORM_SWITCH)
-    target_sources(bo2zm PRIVATE ${BO2ZM_ROOT}/src/bo2zm_switch_mutex.cpp)
-    target_link_options(bo2zm PRIVATE "-Wl,--wrap=pthread_mutex_lock" "-Wl,--wrap=__malloc_lock,--wrap=__malloc_unlock")
+    target_sources(${BO2ZM_TARGET} PRIVATE ${BO2ZM_ROOT}/src/bo2zm_switch_mutex.cpp)
+    target_link_options(${BO2ZM_TARGET} PRIVATE "-Wl,--wrap=pthread_mutex_lock" "-Wl,--wrap=__malloc_lock,--wrap=__malloc_unlock")
     # The default display's id as libnx opens it, for VSYNC's refresh signal (games/bo2/src/bo2zm_switch.cpp, RefreshEvent).
-    target_link_options(bo2zm PRIVATE "-Wl,--wrap=viOpenDisplay")
+    target_link_options(${BO2ZM_TARGET} PRIVATE "-Wl,--wrap=viOpenDisplay")
 endif()
 
 # The sound limiter's rewrite repeats the game's single-precision operations one by one: GCC (whose default is
 # -ffp-contract=fast) must not fuse a product into a later add there (games/bo2/src/bo2zm_native_limiter.cpp).
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_player_projection.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_player_projection.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 endif()
 
 # Switch test build: the native renderer's ring thread's memcpy, memmove, memset and memcmp calls by call site in the
@@ -367,17 +383,17 @@ endif()
 # player build.
 option(BO2ZM_MEMCPY_CALLERS "Switch test build: log the ring thread's memcpy calls by call site" OFF)
 if(REXGLUE_PLATFORM_SWITCH AND BO2ZM_MEMCPY_CALLERS)
-    set_source_files_properties(${BO2ZM_ROOT}/../../core/bo2zm_memcpy_callers.cpp PROPERTIES COMPILE_DEFINITIONS BO2ZM_MEMCPY_CALLERS=1)
-    target_link_options(bo2zm PRIVATE "-Wl,--wrap=memcpy,--wrap=memmove,--wrap=memset,--wrap=memcmp")
+    set_source_files_properties(${BO2ZM_ROOT}/../../core/bo2zm_memcpy_callers.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES COMPILE_DEFINITIONS BO2ZM_MEMCPY_CALLERS=1)
+    target_link_options(${BO2ZM_TARGET} PRIVATE "-Wl,--wrap=memcpy,--wrap=memmove,--wrap=memset,--wrap=memcmp")
 endif()
 
 # Switch test build: the C heap's live bytes by caller in the log every minute (core/bo2zm_heap_track.cpp). On with
 # BO2_HEAP_TRACK=1 bash games/bo2/build_switch.sh; never in a player build.
 option(BO2ZM_HEAP_TRACK "Switch test build: log the C heap's live bytes by caller every minute" OFF)
 if(REXGLUE_PLATFORM_SWITCH AND BO2ZM_HEAP_TRACK)
-    set_source_files_properties(${BO2ZM_ROOT}/../../core/bo2zm_heap_track.cpp PROPERTIES COMPILE_DEFINITIONS BO2ZM_HEAP_TRACK=1
+    set_source_files_properties(${BO2ZM_ROOT}/../../core/bo2zm_heap_track.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES COMPILE_DEFINITIONS BO2ZM_HEAP_TRACK=1
                                 COMPILE_OPTIONS -fno-omit-frame-pointer)
-    target_link_options(bo2zm PRIVATE "-Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc,--wrap=memalign"
+    target_link_options(${BO2ZM_TARGET} PRIVATE "-Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc,--wrap=memalign"
                         "-Wl,--wrap=aligned_alloc,--wrap=posix_memalign")
 endif()
 
@@ -392,7 +408,7 @@ if(REXGLUE_PLATFORM_SWITCH)
     if(BO2ZM_NRO_ICON AND EXISTS "${BO2ZM_NRO_ICON}")
         set(_bo2zm_icon_arg ICON "${BO2ZM_NRO_ICON}")
     endif()
-    rexglue_switch_add_nro(bo2zm
+    rexglue_switch_add_nro(${BO2ZM_TARGET}
         NAME "Black Ops II 360 NX"
         AUTHOR "AlvaroEPena"
         VERSION "1.1.0"
@@ -403,13 +419,13 @@ endif()
 if(WIN32 AND BO2ZM_EXE_ICON AND EXISTS "${BO2ZM_EXE_ICON}")
     file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/bo2zm_icon.rc"
         CONTENT "1 ICON \"@BO2ZM_EXE_ICON@\"\n" @ONLY)
-    target_sources(bo2zm PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/bo2zm_icon.rc")
+    target_sources(${BO2ZM_TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/bo2zm_icon.rc")
 endif()
 
 # Build ID logged at startup (games/bo2/src/bo2zm_switch.cpp) and in the perf log's header
 # (games/bo2/src/bo2zm_perf_log.cpp), so every log names the build that wrote it. build_switch.sh / build_windows.sh pass the time.
 set(BO2ZM_BUILD_ID "dev" CACHE STRING "Build identifier shown in the log")
-set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_switch.cpp ${BO2ZM_ROOT}/src/bo2zm_perf_log.cpp PROPERTIES
+set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_switch.cpp ${BO2ZM_ROOT}/src/bo2zm_perf_log.cpp TARGET_DIRECTORY ${BO2ZM_TARGET} PROPERTIES
     COMPILE_DEFINITIONS "BO2ZM_BUILD_ID=\"${BO2ZM_BUILD_ID}\"")
 
 # v0.11 link: the Metal plugin's public hooks (swap hook, metal_runtime), fmt from spdlog, and the native renderer's
@@ -417,13 +433,13 @@ set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_switch.cpp ${BO2ZM_ROOT}/src
 # native renderer is off in the Metal gate).
 if(NOT BO2ZM_MIN)
     if(TARGET rexgpu-xenos-metal)
-        target_link_libraries(bo2zm PRIVATE rexgpu-xenos-metal)
+        target_link_libraries(${BO2ZM_TARGET} PRIVATE rexgpu-xenos-metal)
     endif()
     if(TARGET spdlog::spdlog)
-        target_link_libraries(bo2zm PRIVATE spdlog::spdlog)
+        target_link_libraries(${BO2ZM_TARGET} PRIVATE spdlog::spdlog)
     endif()
-    target_link_options(bo2zm PRIVATE -Wl,-undefined,dynamic_lookup)
+    target_link_options(${BO2ZM_TARGET} PRIVATE -Wl,-undefined,dynamic_lookup)
     # fmt::vformat is not exported by any SDK dylib: with dynamic_lookup it stayed null and every direct fmt::format call
     # in game code crashed. Header-only fmt compiles it into bo2zm.
-    target_compile_definitions(bo2zm PRIVATE FMT_HEADER_ONLY=1)
+    target_compile_definitions(${BO2ZM_TARGET} PRIVATE FMT_HEADER_ONLY=1)
 endif()

@@ -19,7 +19,9 @@
 #include <rex/rex_app.h>
 
 #include "bo2zm_autoexec.h"
+#if !defined(METAL360_SDK_GAME_API)
 #include "rex_game_manifest.h"  // rex::kGameManifest, from games/bo2/game.toml
+#endif
 #include "bo2zm_benchmark.h"
 #include "bo2zm_controllers.h"
 #include "bo2zm_debug_options.h"
@@ -107,10 +109,22 @@ void ConfigureInstancePaths(rex::PathConfig& paths) {
 
 }  // namespace
 
+#if defined(METAL360_SDK_GAME_API)
+// Built by metal360: its app shell owns rex::RegisterGame, loads the manifest made from
+// metal360-package.toml [runtime], then calls this (package API 2).
+namespace metal360 {
+void RegisterPackage(rex::GameApi& api);
+}  // namespace metal360
+
+void metal360::RegisterPackage(rex::GameApi& api) {
+  // The fork's main.cpp (not built here) applied REX_<FLAG> environment values to the cvars; runq routes use them.
+  rex::cvar::ApplyEnvironment();
+#else
 void rex::RegisterGame(rex::GameApi& api) {
   // Name, title id, executable, data folder, shader pack, pipeline list, link
   // port and setting defaults: games/bo2/game.toml.
   rex::UseGameManifest(api, rex::kGameManifest, "games/bo2/game.toml");
+#endif
 
   // Without command-line paths (always the case on the Switch, where the NRO
   // is started from hbmenu or a forwarder), use folders next to the

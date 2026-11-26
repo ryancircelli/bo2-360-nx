@@ -1,0 +1,55 @@
+# metal360 game package: Call of Duty: Black Ops II, Zombies and multiplayer (default_mp.xex).
+# External GPL-3.0 package: metal360's packages/index.toml pins this folder by commit and never copies it.
+# Build: metal360 build <game folder> --title-update <TU18 package>  (or --package <this folder> for a local copy).
+schema = 1
+
+[package]
+id = "bo2"
+name = "Call of Duty: Black Ops II"
+version = "0.1.0"
+core_api = ">=2,<3"
+licence = "GPL-3.0-only"
+
+[title]
+title_ids = ["415608C3"]
+# Zombies and multiplayer live in default_mp.xex; default.xex is the campaign (not built by this package).
+# overrides.toml addresses are for default_mp.xex with title update 18 applied: pass the TU18 package.
+executable = "default_mp.xex"
+accepted_executables = [
+  { sha256 = "3b679d48bfee1d2fdd6fdb826bd30481607c45307fd74aaa949045182ab3b3f4", label = "disc, default.xex" },
+]
+
+[codegen]
+overrides = "overrides.toml"
+
+[runtime]
+gpu_plugin = "metal"
+
+# From game.toml [defaults] (the fork's own build reads that file instead).
+[runtime.cvars]
+offline_user_count = 4
+
+# From game.toml [renderer.settings].
+[runtime.renderer]
+metal_tile_resolve = true
+metal_tile_resolve_half_bits = true
+metal_resolve_to_texture = true
+metal_occlusion_real = true
+metal_vsync_phase_lock = true
+metal_present_drawables = 2
+
+[app]
+bundle_name = "Black Ops II"
+bundle_id_suffix = "bo2"
+support_name = "bo2-360"
+microphone = "Black Ops II uses the microphone for in-game voice chat."
+
+[native]
+entry = "RegisterPackage"
+game_api = 2
+debt = [
+  "Whole BO2 glue (games/bo2/src + core/, GPL-3.0): game menus, cheats, bots, split-screen pads, online/System Link, settings, credits. Game features, not engine fixes; they stay per game by design.",
+  "Native audio, cull, skin, entity and limiter fast paths (bo2zm_native_*.cpp): hand-written host versions of hot guest functions. Core fix: automatic hot-function derivation (DESIGN stage 6).",
+  "Sound and job wait hooks (bo2zm_sound_waits.cpp, bo2zm_jobs.cpp): guest threads spinning on each other. Core fix: guest threading model / spin-wait backoff (metal360-core-threading).",
+  "bo2zm_crt.cpp memcpy/memset hooks: guest CRT routines replaced by host ones. Core fix: CRT pattern recognition in codegen.",
+]
