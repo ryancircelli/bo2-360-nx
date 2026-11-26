@@ -1,0 +1,11 @@
+# Fallout 3 (Xbox 360, GOTY disc, Bethesda) title manifest (rex/game_info.h, LoadGameManifest).
+# Compiled into the executable by rexglue_game_manifest() (games/fallout3/CMakeLists.txt).
+
+[game]
+name = "fallout3"
+title_ids = ["425307D5"]
+executable = "game:\\default.xex"     # the disc's launcher
+local_data_root = "~/Games/Xbox360/fallout3/disc"  # read-only extracted disc; --game_data_root wins
+
+[defaults]
+gpu_plugin = "metal"
