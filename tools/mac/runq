@@ -984,7 +984,7 @@ class Daemon:
             dst = os.path.join(out, 'app', os.path.basename(app.rstrip('/')))
             if os.path.exists(dst):
                 shutil.rmtree(os.path.dirname(dst))
-            os.makedirs(os.path.dirname(dst))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             r = subprocess.run(['cp', '-cR', app, dst], capture_output=True, text=True)  # APFS clone: no copy
             if r.returncode:
                 self.finish_record(job, slot, 2, 'error', time.time(), [], f'app clone failed: {r.stderr.strip()}')
