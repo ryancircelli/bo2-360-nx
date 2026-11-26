@@ -9,7 +9,14 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdlib>
+#include <mutex>
+
+#include <rex/filesystem/devices/host_path_device.h>
+#include <rex/filesystem/vfs.h>
+#include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/kernel/xam/module.h>
+#include <rex/runtime.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
@@ -327,11 +334,64 @@ u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
   return X_STATUS_SUCCESS;
 }
 
-u32 XamSwapDisc_entry(u32 disc_number) {
-  // Stub for multi-disc games. Single-disc games (like Blue Dragon's reblue test)
-  // don't need this, but the game may look it up dynamically via XexGetProcedureAddress.
-  REXKRNL_DEBUG("XamSwapDisc({}) - stub, returning success", (uint32_t)disc_number);
-  return X_STATUS_SUCCESS;
+namespace {
+// Disc swap (idea from xenia-canary XamSwapDisc, BSD-3): every disc is a folder in the game folder
+// (data/game = boot disc, data/disc<N> = the others) and a swap replaces the device behind game:/d:.
+constexpr char kGameDevice[] = "\\Device\\Harddisk0\\Partition1";  // Runtime::SetupVfs
+std::mutex disc_mutex;
+uint32_t current_disc = 0;
+
+uint32_t BootDisc() {
+  auto module = REX_KERNEL_STATE()->GetExecutableModule();
+  xex2_opt_execution_info* info = nullptr;
+  if (module) module->GetOptHeader(XEX_HEADER_EXECUTION_INFO, &info);
+  return info && info->disc_number ? info->disc_number : 1;
+}
+}  // namespace
+
+X_STATUS SwapDiscMedia(uint32_t disc_number) {
+  std::lock_guard lock(disc_mutex);
+  const uint32_t boot = BootDisc();
+  if (!current_disc) current_disc = boot;
+  if (disc_number == current_disc) return X_ERROR_SUCCESS;
+  auto* ks = REX_KERNEL_STATE();
+  const auto game_root = std::filesystem::absolute(ks->emulator()->game_data_root());
+  const auto root = rex::filesystem::DiscRoot(game_root, disc_number, boot);
+  if (root.empty()) {
+    REXKRNL_ERROR("XamSwapDisc({}): no disc{} folder next to {}", disc_number, disc_number,
+                  game_root.string());
+    return X_ERROR_FUNCTION_FAILED;
+  }
+  auto device = std::make_unique<rex::filesystem::HostPathDevice>(
+      kGameDevice, root, !REXCVAR_GET(allow_game_relative_writes));
+  if (!device->Initialize() || !ks->file_system()->ReplaceDevice(std::move(device))) {
+    REXKRNL_ERROR("XamSwapDisc({}): could not mount {}", disc_number, root.string());
+    return X_ERROR_FUNCTION_FAILED;
+  }
+  REXKRNL_INFO("XamSwapDisc: disc {} -> disc {} ({})", current_disc, disc_number, root.string());
+  current_disc = disc_number;
+  return X_ERROR_SUCCESS;
+}
+
+// Every disc is already in the game folder, so no "insert disc" prompt; the completion event is
+// always set (also on failure) so a title waiting on it never hangs.
+u32 XamSwapDisc_entry(u32 disc_number, ppc_ptr_t<X_KEVENT> completion_event,
+                      u32 error_message_ptr) {
+  const X_STATUS result = SwapDiscMedia(disc_number);
+  if (completion_event) {
+    rex::kernel::xboxkrnl::xeKeSetEvent(completion_event, 1, 0);
+  }
+  return result;
+}
+
+void XamLoaderGetMediaInfoEx_entry(mapped_u32 media_type, mapped_u32 title_id, mapped_u32 unk) {
+  if (media_type) *media_type = 1;  // X_DVD_DISC_STATE XBOX_360_GAME_DISC
+  if (title_id) *title_id = REX_KERNEL_STATE()->title_id();
+  if (unk) *unk = 0;
+}
+
+void XamLoaderGetMediaInfo_entry(mapped_u32 media_type, mapped_u32 title_id) {
+  XamLoaderGetMediaInfoEx_entry(media_type, title_id, mapped_u32());
 }
 
 }  // namespace xam
@@ -368,3 +428,13 @@ REX_EXPORT(__imp__XamFree, rex::kernel::xam::XamFree_entry)
 REX_EXPORT(__imp__XamQueryLiveHiveW, rex::kernel::xam::XamQueryLiveHiveW_entry)
 REX_EXPORT(__imp__XamLoaderGetDvdTrayState, rex::kernel::xam::XamLoaderGetDvdTrayState_entry)
 REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)
+REX_EXPORT(__imp__XamLoaderGetMediaInfo, rex::kernel::xam::XamLoaderGetMediaInfo_entry)
+REX_EXPORT(__imp__XamLoaderGetMediaInfoEx, rex::kernel::xam::XamLoaderGetMediaInfoEx_entry)
+
+// `runq live exec S cmd swap_disc N`: the same swap the title's XamSwapDisc runs (tests, debugging).
+REXCVAR_DEFINE_COMMAND_ARGS(
+    swap_disc,
+    [](std::string_view args) {
+      rex::kernel::xam::SwapDiscMedia(static_cast<uint32_t>(std::atoi(std::string(args).c_str())));
+    },
+    "Kernel", "Swap to disc N of a multi-disc game (data/disc<N> next to data/game)");
