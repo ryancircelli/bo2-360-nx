@@ -13,7 +13,9 @@
 #include <rex/thread.h>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <thread>
 #include <vector>
@@ -87,7 +89,11 @@ void RecordOutput(const float* data, int bytes, uint32_t channels) {
     return;
   }
   dump_output.written = true;
-  const auto path_str = rex::filesystem::GetExecutableFolder() / "audio_output.wav";
+  // REX_AUDIO_DUMP_DIR keeps the file past a run whose app folder is a temporary copy.
+  const char* dump_dir = std::getenv("REX_AUDIO_DUMP_DIR");
+  const auto path_str = (dump_dir && *dump_dir ? std::filesystem::path(dump_dir)
+                                                : rex::filesystem::GetExecutableFolder()) /
+                        "audio_output.wav";
   std::ofstream file(path_str, std::ios::binary | std::ios::trunc);
   if (file) {
     const uint32_t bytes_data = uint32_t(dump_output.sample_count.size() * sizeof(float));
