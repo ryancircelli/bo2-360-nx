@@ -843,19 +843,20 @@ bool LoadSavepointFile(const std::string& path) {
     return false;
   }
   uint32_t frame = in.U32();
-  std::vector<std::string> loaded_dlls;  // loaded here; their saved records fix handles, not reload
+  std::vector<std::pair<std::string, object_ref<XModule>>> loaded_dlls;  // loaded here; records fix handles
   for (uint32_t n = in.U32(); n && in.ok; --n) {
     auto m = in.Str();
     auto* kst = Runtime::instance()->kernel_state();
     // Same path() string as one of this boot's modules (GetModule's path resolve misses the main xex).
     auto mods = kst->object_table()->GetObjectsByType<XModule>(XObject::Type::Module);
     if (std::any_of(mods.begin(), mods.end(), [&](auto& x) { return x->path() == m; })) continue;
-    if (!kst->LoadUserModule(m, false)) {
+    auto dll = kst->LoadUserModule(m, false);
+    if (!dll) {
       SPLOAD_ERR("[savepoint] load: module {} did not load", m);
       return false;
     }
     REXSYS_INFO("[savepoint] loaded module {} (a DLL the game had loaded)", m);
-    loaded_dlls.push_back(m);
+    loaded_dlls.emplace_back(m, object_ref<XModule>(dll.release()));
   }
 
   if (std::getenv("REX_SAVEPOINT_OBJS")) LogObjects("load-boot");
@@ -1017,11 +1018,9 @@ bool LoadSavepointFile(const std::string& path) {
     if (type == XObject::Type::Module) {
       kbs.Read<uint32_t>();
       auto m = kbs.Read<std::string>();
-      if (std::find(loaded_dlls.begin(), loaded_dlls.end(), m) != loaded_dlls.end()) {
-        object_ref<XModule> mod;
-        for (auto& x : ks->object_table()->GetObjectsByType<XModule>(XObject::Type::Module))
-          if (x->path() == m) mod = x;
-        if (!mod || !mod->RestoreLoaded(&kbs)) {
+      auto dll = std::find_if(loaded_dlls.begin(), loaded_dlls.end(), [&](auto& d) { return d.first == m; });
+      if (dll != loaded_dlls.end()) {
+        if (!dll->second->RestoreLoaded(&kbs)) {
           SPLOAD_ERR("[savepoint] load: module {} did not take its saved handles", m);
           return false;
         }

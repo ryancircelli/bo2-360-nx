@@ -116,6 +116,11 @@ Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
   }
 
   // Find the device.
+  // A device mounted with a trailing separator also owns its bare root path (the parent of a reopened file).
+  if (std::any_of(devices_.cbegin(), devices_.cend(), [&](const auto& d) {
+        return rex::string::utf8_equal_case(normalized_path + "\\", d->mount_path());
+      }))
+    normalized_path += "\\";
   auto it = std::find_if(devices_.cbegin(), devices_.cend(), [&](const auto& d) {
     return rex::string::utf8_starts_with_case(normalized_path, d->mount_path());
   });
