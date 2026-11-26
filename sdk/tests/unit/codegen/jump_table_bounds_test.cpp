@@ -65,7 +65,8 @@ std::vector<uint32_t> Targets(bool copyFirst) {
   auto data = MakeSwitch(copyFirst);
   TestModule module;
   module.Load(kBase, data.data(), data.size());
-  DecodedBinary decoded(BinaryView::fromModule(module));
+  BinaryView binary = BinaryView::fromModule(module);  // DecodedBinary keeps a reference
+  DecodedBinary decoded(binary);
   decoded.decode();
   CodeRegion region{kBase, kBase + static_cast<uint32_t>(data.size())};
   auto jt = detectJumpTable(decoded, kBase + 0x2C, region, kBase, kBase + 0x48);
