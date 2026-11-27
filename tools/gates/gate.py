@@ -183,6 +183,8 @@ class Game:
     def __init__(self, app, out, game, route=None, ff=0, seed=True, env=None, via_open=False, args=()):
         self.app, self.out, self.game = app.rstrip('/'), os.path.abspath(out), game
         self.control, self.logs, self.support = (os.path.join(self.out, n) for n in ('control', 'logs', 'support'))
+        if os.path.exists(os.path.join(self.control, 'pid.txt')):   # another game (or an old run) owns this dir: sharing it would cross their control channels
+            raise SystemExit(f'FAIL run dir {self.out} already has a game control channel (control/pid.txt); use a fresh --out')
         for d in (self.control, self.logs, os.path.join(self.out, 'shots')):
             os.makedirs(d, exist_ok=True)
         plist = plistlib.load(open(os.path.join(self.app, 'Contents', 'Info.plist'), 'rb'))
@@ -559,7 +561,19 @@ def runq_submit(args, name, app, out, klass, timeout, extra=(), wait=True, solo=
 
 
 def default_out(game, gate):
-    return os.path.join(RUNS, f'{game}-{gate}-{time.strftime("%m%d-%H%M%S")}')
+    """A fresh run dir, created here with an exclusive mkdir: two gates started in the same second get different dirs
+    (1127-070645 collision: one route-end close reached both games). The pid suffix keeps names readable; the loop
+    covers one process asking twice in a second."""
+    os.makedirs(RUNS, exist_ok=True)
+    stamp = f'{time.strftime("%m%d-%H%M%S")}-p{os.getpid()}'
+    for n in range(1000):
+        out = os.path.join(RUNS, f'{game}-{gate}-{stamp}' + (f'-{n}' if n else ''))
+        try:
+            os.mkdir(out)
+            return out
+        except FileExistsError:
+            continue
+    raise RuntimeError(f'no free run dir for {game}-{gate}-{stamp}')
 
 
 def inner_args(a, out):

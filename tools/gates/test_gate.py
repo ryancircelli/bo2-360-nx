@@ -33,6 +33,34 @@ class LogCheck(unittest.TestCase):
         self.assertNotIn('[b] ok', hit)
 
 
+class RunDir(unittest.TestCase):
+    def test_same_second_gates_get_different_dirs(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(gate, 'RUNS', d), \
+                mock.patch.object(gate.time, 'strftime', return_value='1127-070645'), mock.patch.object(gate.os, 'getpid', return_value=1):
+            a, b = gate.default_out('fh1', 'drive'), gate.default_out('fh1', 'drive')   # a second gate of the same pid/second takes the -1 suffix
+            self.assertNotEqual(a, b)
+            self.assertTrue(os.path.isdir(a) and os.path.isdir(b))
+
+    def test_two_fake_gates_in_one_second_do_not_share_a_control_channel(self):
+        import tempfile, subprocess, sys
+        code = ('import sys,importlib.util as u;s=u.spec_from_file_location("gate",sys.argv[1]);m=u.module_from_spec(s);s.loader.exec_module(m);'
+                'import os;m.RUNS=sys.argv[2];print(m.default_out("fh1","drive"))')
+        with tempfile.TemporaryDirectory() as d:
+            ps = [subprocess.Popen([sys.executable, '-I', '-c', code, str(HERE / 'gate.py'), d], stdout=subprocess.PIPE, text=True) for _ in range(2)]
+            outs = [p.communicate()[0].strip() for p in ps]
+            self.assertEqual(len(set(outs)), 2, outs)
+
+    def test_reused_dir_fails_loud(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, 'control'))
+            open(os.path.join(d, 'control', 'pid.txt'), 'w').write('1')
+            with self.assertRaises(SystemExit):
+                gate.Game('/x.app', d, 'bo2')
+
+
 class Launch(unittest.TestCase):
     def test_canonical_minimized_and_mute_names_are_set(self):
         src = (HERE / 'gate.py').read_text()
