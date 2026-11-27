@@ -160,6 +160,15 @@ def stream_agent(owner):
     return rows[-1][1] if rows else ''
 
 
+def job_agent(job):
+    """Prefer the submitting agent. A generated live- name is not a stream owner."""
+    if job.get('agent'):
+        return job['agent']
+    if not job.get('owner') and (job.get('name') or '').startswith('live-'):
+        return ''
+    return stream_agent(job_owner(job))
+
+
 def freeze_log(msg):
     try:
         with open(FREEZE_LOG, 'a') as f:
@@ -2186,7 +2195,7 @@ class Daemon:
         wjson(os.path.join(out, 'IDLE-STOP.json'), dict(info, message=msg, t=t))
         open(os.path.join(out, 'stop'), 'a').close()
         self.log('live idle guard: ' + msg)
-        owner = stream_agent(job_owner(j['job']))
+        owner = job_agent(j['job'])
         if owner:
             subprocess.Popen(['paseo', 'send', owner, 'runq live idle guard: ' + msg], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -2217,7 +2226,7 @@ class Daemon:
         except OSError:
             pass
         self.log('screen guard: ' + msg)
-        owner = stream_agent(job_owner(j['job']))   # unknown owner: log only, message nobody
+        owner = job_agent(j['job'])   # unknown owner: log only, message nobody
         if owner:
             subprocess.Popen(['paseo', 'send', owner, f'runq screen guard killed {msg}'], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -3386,6 +3395,9 @@ def cmd_submit(argv):
         for i in job['inputs']:
             if not os.path.exists(i):
                 sys.exit(f'runq: no input {i}')
+    agent = os.environ.get('PASEO_AGENT_ID')
+    if agent:
+        job['agent'] = agent
     owner = a.owner or os.environ.get('RUNQ_OWNER')
     if owner:
         job['owner'] = owner

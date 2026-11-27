@@ -20,7 +20,7 @@ class SlotHygiene(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.out = Path(self.tmp.name)
-        self.job = dict(id='test', name='live-test', out=str(self.out), cmd=['python3', '-I', '/bin/live_session.py'])
+        self.job = dict(id='test', name='live-test', owner='test-owner', out=str(self.out), cmd=['python3', '-I', '/bin/live_session.py'])
         (self.out / 'live.json').write_text(json.dumps(dict(state='ready', ready_at=1000)))
 
     def test_default_expiry_and_activity(self):
@@ -71,6 +71,14 @@ class SlotHygiene(unittest.TestCase):
         self.assertFalse(q.laptop_ssh_command(['echo', 'drawer-wsl']))
         self.assertFalse(q.laptop_ssh_command(['ssh', '-o', 'HostName=drawer-wsl', 'elsewhere', 'true']))
         self.assertIsNone(q.submit_refusal(dict(cmd=['true'], where='laptop')))
+
+    def test_notification_uses_submitter_and_never_live_prefix(self):
+        with patch.object(q, 'stream_agent', return_value='unrelated-live-stream') as lookup:
+            self.assertEqual(q.job_agent(dict(agent='real-owner', name='live-slot-hygiene')), 'real-owner')
+            self.assertEqual(q.job_agent(dict(name='live-slot-hygiene')), '')
+            lookup.assert_not_called()
+            self.assertEqual(q.job_agent(dict(owner='runq-slot-hygiene', name='live-test')), 'unrelated-live-stream')
+            lookup.assert_called_once_with('runq-slot-hygiene')
 
     def test_client_control_touches_activity(self):
         # Load client into the real queue namespace, as runq dispatch does.

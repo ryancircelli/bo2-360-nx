@@ -117,6 +117,7 @@ def cmd_live(argv):
         ap.add_argument('--patch')
         ap.add_argument('--keep', type=int, default=0, help='idle allowance in seconds, at most 1800')
         ap.add_argument('--lifetime', type=float, default=2700)
+        ap.add_argument('--owner', help='owning stream, passed to runq submit')
         ap.add_argument('--class', dest='klass', default='proof')
         ap.add_argument('--arg', action='append', default=[])
         ap.add_argument('--env', action='append', default=[])
@@ -142,7 +143,7 @@ def cmd_live(argv):
             cmd += ['--ff', str(a.ff)]
         cmd += [f'--arg={x}' for x in a.arg] + [f'--env={x}' for x in a.env]
         sub = [sys.executable, '-I', os.path.join(HERE, 'runq'), 'submit', '--app', a.app, '--name', 'live-' + a.name,
-               '--class', a.klass, '--timeout', str(int(a.lifetime + a.ready_timeout + 120))] + \
+               '--owner', a.owner or os.environ.get('RUNQ_OWNER') or a.name, '--class', a.klass, '--timeout', str(int(a.lifetime + a.ready_timeout + 120))] + \
               (['--solo', '--timing'] if a.solo else []) + ['--'] + cmd
         r = subprocess.run(sub, capture_output=True, text=True)
         m = re.search(r'job (\S+) out (\S+)', r.stdout)
