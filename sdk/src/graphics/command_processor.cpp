@@ -11,6 +11,9 @@
 
 #include <cstdio>
 #include <algorithm>
+#include <chrono>
+#include <string>
+#include <thread>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -817,6 +820,23 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
           "**** INDIRECT RINGBUFFER: Failed to execute packet (base {:08X}, count {:08X}, "
           "read offset {:08X}, write offset {:08X}, capacity {:08X}).",
           ptr, count, reader.read_offset(), reader.write_offset(), reader.capacity());
+      // Failure-only evidence: the words around the bad header (marked >), read now and 1 ms later. A difference means
+      // the game was still writing this buffer; the same words mean the stream is malformed or was parsed out of step.
+      static uint32_t dumped = 0;
+      if (dumped < 8) {
+        ++dumped;
+        const uint32_t at = uint32_t((reader.read_offset() ? reader.read_offset() : reader.capacity()) / 4 - 1);
+        const uint32_t first = at > 32 ? at - 32 : 0, last = std::min(count, at + 28);
+        auto* words = memory_->TranslatePhysical<uint32_t*>(ptr);
+        for (int pass = 0; pass < 2; ++pass) {
+          std::string dump;
+          for (uint32_t i = first; i < last; ++i) {
+            dump += fmt::format(" {}{:08X}", i == at ? ">" : "", memory::load_and_swap<uint32_t>(words + i));
+          }
+          REXGPU_ERROR("**** INDIRECT RINGBUFFER words {}..{} {}:{}", first, last, pass ? "1 ms later" : "now", dump);
+          if (!pass) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+      }
       assert_always();
       break;
     }
