@@ -20,7 +20,9 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <mutex>
 #include <random>
+#include <set>
 
 #if REX_PLATFORM_MAC
 #include <sys/select.h>
@@ -792,7 +794,9 @@ u32 NetDll_XNetInAddrToXnAddr_entry(u32 caller, u32 in_addr, ppc_ptr_t<XNADDR> x
 
 // https://www.google.com/patents/WO2008112448A1?cl=en
 // Reserves a port for use by system link
+static std::atomic<uint16_t> g_system_link_port{0x0C02};  // default 3074, network order as the guest passes it
 u32 NetDll_XNetSetSystemLinkPort_entry(u32 caller, u32 port) {
+  g_system_link_port = uint16_t(port);
   return 1;
 }
 
@@ -822,12 +826,51 @@ u32 NetDll_XNetGetConnectStatus_entry(u32 caller, u32 in_addr) {
   return 2;
 }
 
+// Registered key ids (8 bytes each), tracked only so XNetReplaceKey can tell registered from unknown.
+static std::mutex g_key_mutex;
+static std::set<uint64_t> g_registered_keys;
+static uint64_t KeyId(mapped_void id) { uint64_t v; std::memcpy(&v, id.host_address(), 8); return v; }
+
 u32 NetDll_XNetRegisterKey_entry(u32 caller, mapped_void xnkid, mapped_void xnkey) {
+  if (xnkid) { std::lock_guard l(g_key_mutex); g_registered_keys.insert(KeyId(xnkid)); }
   return 0;
 }
 
 u32 NetDll_XNetUnregisterKey_entry(u32 caller, mapped_void xnkid) {
+  if (xnkid) { std::lock_guard l(g_key_mutex); g_registered_keys.erase(KeyId(xnkid)); }
   return 0;
+}
+
+// XNetReplaceKey(unregister_id, replace_id): swap a registered id for another; WSAEINVAL if not registered.
+u32 NetDll_XNetReplaceKey_entry(u32 caller, mapped_void unreg, mapped_void repl) {
+  if (!unreg || !repl) return 10022;
+  std::lock_guard l(g_key_mutex);
+  if (!g_registered_keys.erase(KeyId(unreg))) return 10022;
+  g_registered_keys.insert(KeyId(repl));
+  return 0;
+}
+
+// Offline: no XNet services. 10050 (WSAENETDOWN) with zeroed outputs.
+u32 NetDll_XNetServerToInAddr_entry(u32 caller, u32 server, u32 service, mapped_u32 out) {
+  if (out) *out = 0;
+  return 10050;
+}
+u32 NetDll_XNetTsAddrToInAddr_entry(u32 caller, u32 ts, u32 service, mapped_void xnkid, mapped_u32 out) {
+  if (out) *out = 0;
+  return 10050;
+}
+u32 NetDll_XNetInAddrToServer_entry(u32 caller, u32 ina, mapped_void xnaddr_out) {
+  if (xnaddr_out) std::memset(xnaddr_out.host_address(), 0, 36);  // sizeof(XNADDR)
+  return 10050;
+}
+u32 NetDll_XNetQosGetListenStats_entry(u32 caller, mapped_void xnkid, mapped_void stats) {
+  if (stats) {
+    uint32_t size;
+    std::memcpy(&size, stats.host_address(), 4);
+    size = rex::byte_swap(size);
+    if (size >= 4 && size <= 0x100) std::memset(stats.host_address(), 0, size);
+  }
+  return 10050;
 }
 
 u32 NetDll_XNetUnregisterInAddr_entry(u32 caller, u32 in_addr) {
@@ -1450,16 +1493,16 @@ REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseLookup, 0x2af9);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseRelease, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetGetBroadcastVersionStatus, 0);
 REX_EXPORT(__imp__NetDll_XNetGetConnectStatus, rex::kernel::xam::NetDll_XNetGetConnectStatus_entry)
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetInAddrToServer, 10050);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosGetListenStats, 10050);
+REX_EXPORT(__imp__NetDll_XNetInAddrToServer, rex::kernel::xam::NetDll_XNetInAddrToServer_entry)
+REX_EXPORT(__imp__NetDll_XNetQosGetListenStats, rex::kernel::xam::NetDll_XNetQosGetListenStats_entry)
 // shortcut: 10050 (WSAENETDOWN) = offline failure; out pointers are not zeroed, so a caller that reads them anyway sees stale data. Upgrade if a game does.
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosLookup, 10050);
 REX_EXPORT(__imp__NetDll_XNetRegisterKey, rex::kernel::xam::NetDll_XNetRegisterKey_entry)
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetReplaceKey, 0x2726);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetServerToInAddr, 10050);
+REX_EXPORT(__imp__NetDll_XNetReplaceKey, rex::kernel::xam::NetDll_XNetReplaceKey_entry)
+REX_EXPORT(__imp__NetDll_XNetServerToInAddr, rex::kernel::xam::NetDll_XNetServerToInAddr_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetSetOpt, 0);
 REX_EXPORT(__imp__NetDll_XNetStartupEx, rex::kernel::xam::NetDll_XNetStartupEx_entry)
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetTsAddrToInAddr, 10050);
+REX_EXPORT(__imp__NetDll_XNetTsAddrToInAddr, rex::kernel::xam::NetDll_XNetTsAddrToInAddr_entry)
 REX_EXPORT(__imp__NetDll_XNetUnregisterInAddr, rex::kernel::xam::NetDll_XNetUnregisterInAddr_entry)
 REX_EXPORT(__imp__NetDll_XNetUnregisterKey, rex::kernel::xam::NetDll_XNetUnregisterKey_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadContinue, 0x80004005);
@@ -1516,7 +1559,7 @@ REX_EXPORT(__imp__NetDll_getpeername, rex::kernel::xam::NetDll_getpeername_entry
 // XNetGetXnAddrPlatform: platform 0 (retail console).
 namespace rex::kernel::xam {
 u32 NetDll_XNetGetSystemLinkPort_entry(u32 caller, mapped_u16 port) {
-  if (port) *port = 0x0C02;
+  if (port) *port = g_system_link_port.load();
   return 0;
 }
 u32 NetDll_XNetGetXnAddrPlatform_entry(u32 caller, u32 xnaddr, mapped_u32 platform) {
