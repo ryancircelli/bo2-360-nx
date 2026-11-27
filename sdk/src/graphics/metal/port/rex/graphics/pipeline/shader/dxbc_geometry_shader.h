@@ -68,10 +68,6 @@ bool GetGeometryShaderKey(
     DxbcShaderTranslator::Modification pixel_shader_modification,
     GeometryShaderKey& key_out);
 
-// Generates the DXBC geometry shader bytecode for the given key.
-void CreateDxbcGeometryShader(GeometryShaderKey key,
-                              std::vector<uint32_t>& shader_out);
-
 }  // namespace gpu
 }  // namespace xe
 

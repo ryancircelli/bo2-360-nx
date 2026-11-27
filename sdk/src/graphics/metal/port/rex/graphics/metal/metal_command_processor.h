@@ -32,16 +32,14 @@
 #include "rex/graphics/command_processor.h"
 #include "rex/graphics/util/draw.h"
 #include "rex/graphics/pipeline/shader/dxbc_translator.h"
-#include "rex/graphics/metal/dxbc_to_dxil_converter.h"
 #include "rex/graphics/metal/metal_deferred_render_encoder.h"
-#include "rex/graphics/metal/metal_geometry_shader.h"
+#include "rex/graphics/pipeline/shader/dxbc_geometry_shader.h"
 #include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_pipeline_cache.h"
 #include "rex/graphics/metal/metal_primitive_processor.h"
 #include "rex/graphics/metal/metal_ptr_set.h"
 #include "rex/graphics/metal/metal_render_target_cache.h"
 #include "rex/graphics/metal/metal_shader.h"
-#include "rex/graphics/metal/metal_shader_converter.h"
 #include "rex/graphics/metal/metal_shared_memory.h"
 #include "rex/graphics/metal/metal_texture_cache.h"
 #include "rex/graphics/metal/metal_upload_buffer_pool.h"
@@ -710,10 +708,6 @@ class MetalCommandProcessor final : public CommandProcessor {
     std::string capture_label;
     uint64_t trace_ps = 0;  // FABLE2_PASS_TRACE_PS
     MTL::RenderPipelineState* pipeline = nullptr;
-    MetalPipelineCache::TessellationPipelineState* tessellation_pipeline_state =
-        nullptr;
-    MetalPipelineCache::GeometryPipelineState* geometry_pipeline_state =
-        nullptr;
 
     PrimitiveProcessor::ProcessingResult primitive_processing_result = {};
     UniformBufferInfo uniforms = {};
@@ -743,8 +737,6 @@ class MetalCommandProcessor final : public CommandProcessor {
     MetalTextureCache::TextureMaterializationPlan texture_materialization_plan =
         {};
 
-    bool use_tessellation_emulation = false;
-    bool use_geometry_emulation = false;
     // FABLE2_NATIVE_TESS: hardware tessellation with per-patch half factors.
     bool native_tess = false;
     bool native_tess_cpu = false;
@@ -831,8 +823,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   // render encoder when encoder state requires it.
   bool PopulateBindlessTables(bool shared_memory_is_uav,
                               MTL::ResourceUsage shared_memory_usage,
-                              bool use_geometry_emulation,
-                              bool use_tessellation_emulation,
                               const UniformBufferInfo& uniforms);
 
   // Host draw path — bind vertex buffers and dispatch the actual draw call
@@ -879,11 +869,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool dispatch_native_points_mesh_ = false;
   bool DispatchDraw(
       const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-      bool use_tessellation_emulation,
-      MetalPipelineCache::TessellationPipelineState*
-          tessellation_pipeline_state,
-      bool use_geometry_emulation,
-      MetalPipelineCache::GeometryPipelineState* geometry_pipeline_state,
       bool shared_memory_is_uav, MTL::ResourceUsage shared_memory_usage,
       bool memexport_used, MTL::RenderStages memexport_write_stages,
       bool uses_vertex_fetch, bool shared_memory_resource_registered,
@@ -1570,7 +1555,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   };
   std::deque<RetiredMetalBuffer> retired_memexport_index_buffers_;
 
-  MTL::Buffer* tessellator_tables_buffer_ = nullptr;
 
   // System constants - matches DxbcShaderTranslator::SystemConstants layout
   DxbcShaderTranslator::SystemConstants system_constants_;
@@ -1624,8 +1608,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   // patch the logical slots that changed, and write one fresh frame-lifetime
   // table snapshot for Metal to bind.
   StageRootArgumentEntries BuildGraphicsRootArgumentEntries(
-      const UniformBufferInfo& uniforms, bool shared_memory_is_uav,
-      bool use_tessellation_emulation) const;
+      const UniformBufferInfo& uniforms, bool shared_memory_is_uav) const;
   bool AllocateStageRootArgument(size_t stage_index,
                                  const StageRootArgumentEntries& entries,
                                  StageRootArgumentAllocation& allocation_out);
@@ -1703,8 +1686,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   struct BindlessCacheKey {
     bool valid = false;
     bool shared_memory_is_uav = false;
-    bool use_geometry_emulation = false;
-    bool use_tessellation_emulation = false;
     uint32_t shared_memory_usage_bits = 0;
     uint64_t frame = 0;
     uint64_t fixed_source_serial = 0;
@@ -1785,8 +1766,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   uint64_t render_encoder_bindless_root_resources_serial_ = 0;
   std::array<uint64_t, kStageCount>
       render_encoder_bindless_stage_root_bind_serials_ = {};
-  bool render_encoder_bindless_table_bind_mesh_path_ = false;
-  bool render_encoder_bindless_table_bind_tessellation_ = false;
   std::array<StageRootArgumentAllocation, kStageCount>
       current_bindless_stage_root_arguments_ = {};
   std::array<StageRootArgumentEntries, kStageCount>

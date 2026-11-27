@@ -31,13 +31,10 @@
 #include "rex/string/buffer.h"
 #include "rex/graphics/metal/metal_msl_translator.h"
 #include "rex/graphics/pipeline/shader/dxbc_translator.h"
-#include "rex/graphics/metal/dxbc_to_dxil_converter.h"
-#include "rex/graphics/metal/metal_geometry_shader.h"
+#include "rex/graphics/pipeline/shader/dxbc_geometry_shader.h"
 #include "rex/graphics/metal/metal_pipeline_failure_backoff.h"
 #include "rex/graphics/metal/metal_readiness.h"
 #include "rex/graphics/metal/metal_shader.h"
-#include "rex/graphics/metal/metal_shader_converter.h"
-#include "rex/graphics/metal/metal_stage_compile_cache.h"
 #include "rex/graphics/metal/metal_shader_prebuild.h"
 #include "rex/graphics/primitive_processor.h"
 #include "rex/graphics/register_file.h"
@@ -260,77 +257,7 @@ class MetalPipelineCache {
   // thread; returns the number of translations queued.
   size_t StartBankPrecompile(const std::filesystem::path& bank_path);
 
-  MetalStageCompileCacheStats GetAndResetStageCompileStats();
   MetalPipelineRuntimeStats GetAndResetRuntimeStats();
-
-  // FABLE2_NS_EMU_PIPELINES (docs/native-shaders.md, "Emulation pipelines"):
-  // a geometry- or tessellation-emulation pipeline created with a plain pixel
-  // shader is rebuilt in the background with the optimized pixel library once
-  // that is ready, and published here. The plain pipeline stays alive (in-flight
-  // command buffers may reference it); both are released with the cache.
-  struct NsEmuSwap {
-    std::atomic<MTL::RenderPipelineState*> live{nullptr};
-    std::vector<MTL::RenderPipelineState*> live_retired;
-    std::atomic<MTL::RenderPipelineState*> optimized{nullptr};
-    std::atomic<bool> queued{false};
-    // FABLE2_NS_SPECIALIZE: the rebuild with the specialized pixel library
-    // (0 none, 1 queued, 2 done).
-    std::atomic<MTL::RenderPipelineState*> spec{nullptr};
-    std::atomic<uint8_t> spec_status{0};
-    MetalShader::MetalTranslation* pixel_translation = nullptr;
-    // Registered for the optimized-library rebuild (created plain).
-    bool swappable = false;
-    bool tessellation = false;
-    // Rebuilds the same pipeline with another fragment library (same entry point).
-    std::function<MTL::RenderPipelineState*(MTL::Library*)> build;
-  };
-
-  struct GeometryPipelineState {
-    MTL::RenderPipelineState* pipeline = nullptr;
-    uint32_t gs_vertex_size_in_bytes = 0;
-    uint32_t gs_max_input_primitives_per_mesh_threadgroup = 0;
-    std::shared_ptr<NsEmuSwap> ns_emu;
-    // The pipeline to bind: the optimized rebuild once published.
-    MTL::RenderPipelineState* current_pipeline() const {
-      if (ns_emu) {
-        if (auto* p = ns_emu->live.load(std::memory_order_acquire)) return p;
-        if (auto* p = ns_emu->optimized.load(std::memory_order_acquire)) {
-          return p;
-        }
-      }
-      return pipeline;
-    }
-  };
-
-  struct TessellationPipelineState {
-    MTL::RenderPipelineState* pipeline = nullptr;
-    IRRuntimeTessellationPipelineConfig config = {};
-    IRRuntimePrimitiveType primitive = IRRuntimePrimitiveTypeTriangle;
-    std::shared_ptr<NsEmuSwap> ns_emu;
-    MTL::RenderPipelineState* current_pipeline() const {
-      if (ns_emu) {
-        if (auto* p = ns_emu->live.load(std::memory_order_acquire)) return p;
-        if (auto* p = ns_emu->optimized.load(std::memory_order_acquire)) {
-          return p;
-        }
-      }
-      return pipeline;
-    }
-  };
-
-  GeometryPipelineState* GetOrCreateGeometryPipelineState(
-      MetalShader::MetalTranslation* vertex_translation,
-      MetalShader::MetalTranslation* pixel_translation,
-      GeometryShaderKey geometry_shader_key,
-      const PipelineAttachmentFormats& attachment_formats,
-      const PipelineRenderingKey& rendering_key);
-
-  TessellationPipelineState* GetOrCreateTessellationPipelineState(
-      MetalShader::MetalTranslation* domain_translation,
-      MetalShader::MetalTranslation* pixel_translation,
-      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-      const PipelineAttachmentFormats& attachment_formats,
-      const PipelineRenderingKey& rendering_key);
 
   // FABLE2_NATIVE_TESS (default 1 = exact only since 2026-10-13, =0 emulation):
   // a plain render pipeline with Metal's hardware tessellator (fractional-even
@@ -364,8 +291,6 @@ class MetalPipelineCache {
   // Ensure the shared DXBC translator has produced DXBC bytecode.
   bool EnsureDxbcTranslationReady(MetalShader::MetalTranslation* translation,
                                   const char* stage_name);
-  bool EnsureDxilTranslationReady(MetalShader::MetalTranslation* translation,
-                                  const char* stage_name);
   // FABLE2_NATIVE_SHADERS: cache key of the optimized form of a plain
   // pixel-shader metallib; disk-cache lookup (no tools run); and the
   // optimization itself (runs metal-opt + metallib, background threads only).
@@ -388,7 +313,6 @@ class MetalPipelineCache {
   // a standard / emulation pipeline is built in the background on request
   // (the first draw whose constants match the guard); no-op once requested.
   void RequestSpecPipeline(PipelineHandle* handle);
-  void RequestSpecEmuPipeline(const std::shared_ptr<NsEmuSwap>& swap);
   // Auto-learn converged for a translation without a variant: specialize it
   // again in the background (command-processor thread).
   void RequestRespecialization(MetalShader::MetalTranslation* translation);
@@ -465,9 +389,6 @@ class MetalPipelineCache {
                            uint64_t description_hash);
   bool EnsureDxbcTranslationReadyLocked(
       MetalShader::MetalTranslation* translation, const char* stage_name);
-  bool ConvertDxbcToDxil(const std::vector<uint8_t>& dxbc_data,
-                         std::vector<uint8_t>& dxil_data,
-                         std::string* error_message);
   MTL::Library* NewLibraryFromBytes(const std::vector<uint8_t>& bytes,
                                     const char* label);
   void RecordLibraryCreation(size_t byte_count, bool success, uint64_t ms);
@@ -478,8 +399,6 @@ class MetalPipelineCache {
 
   // MSC shader translation components.
   std::unique_ptr<DxbcShaderTranslator> shader_translator_;
-  std::unique_ptr<DxbcToDxilConverter> dxbc_to_dxil_converter_;
-  std::unique_ptr<MetalShaderConverter> metal_shader_converter_;
   std::mutex shader_translation_mutex_;
 
   std::atomic<uint64_t> dxil_convert_requests_{0};
@@ -544,8 +463,6 @@ class MetalPipelineCache {
                           rex::hash::IdentityHasher<uint64_t>>
       bindless_sampler_layout_map_;
 
-  class GeneratedStageCache;
-
   // MSC pipeline caches (keyed by shader combination).
   std::unordered_map<uint64_t, std::unique_ptr<PipelineHandle>> pipeline_cache_;
   // [draw-fastpath] last standard-pipeline lookup (command thread only).
@@ -556,11 +473,6 @@ class MetalPipelineCache {
   MetalShader::MetalTranslation* last_fast_pixel_translation_ = nullptr;
   PipelineAttachmentFormats last_fast_formats_ = {};
   PipelineRenderingKey last_fast_rendering_key_ = {};
-  std::unordered_map<uint64_t, GeometryPipelineState> geometry_pipeline_cache_;
-  PipelineFailureBackoff geometry_pipeline_failures_;
-  std::unordered_map<uint64_t, TessellationPipelineState>
-      tessellation_pipeline_cache_;
-  std::unique_ptr<GeneratedStageCache> generated_stages_;
   // FABLE2_NATIVE_TESS: pipelines by key, native domain functions by domain
   // translation (null: no native translation). Render thread only.
   // Guards the native tessellation / points / rectangles maps below (draw
@@ -673,12 +585,6 @@ class MetalPipelineCache {
       MetalShader::MetalTranslation* translation);
   void RegisterNativeShaderHandle(PipelineHandle* handle);
   void NativeShaderSwap(PipelineHandle* handle);
-  // FABLE2_NS_EMU_PIPELINES: choose the fragment library for a new emulation
-  // pipeline and, when it is plain, register it for the background rebuild.
-  MTL::Library* NsEmuFragmentLibrary(MetalShader::MetalTranslation* pixel_translation,
-                                     bool* out_optimized);
-  void RegisterNsEmuSwap(const std::shared_ptr<NsEmuSwap>& swap);
-  void NsEmuRebuild(const std::shared_ptr<NsEmuSwap>& swap);
   void LogNativeShaderProgress(const char* what);
   // FABLE2_NATIVE_XLATE (docs/native-translator.md): translate the guest pixel
   // shader to MSL, compile it and publish it as the optimized function.
@@ -718,13 +624,6 @@ class MetalPipelineCache {
   std::unordered_map<MetalShader::MetalTranslation*,
                      std::vector<PipelineHandle*>>
       ns_handles_;
-  std::vector<std::shared_ptr<NsEmuSwap>> ns_emu_swap_queue_;
-  std::unordered_map<MetalShader::MetalTranslation*,
-                     std::vector<std::shared_ptr<NsEmuSwap>>>
-      ns_emu_handles_;
-  std::atomic<uint64_t> ns_emu_plain_{0};
-  std::atomic<uint64_t> ns_emu_swapped_{0};
-  std::atomic<uint64_t> ns_emu_swap_failed_{0};
   size_t ns_busy_ = 0;
   bool ns_shutdown_ = false;
   bool ns_idle_logged_ = true;
@@ -745,7 +644,6 @@ class MetalPipelineCache {
   std::recursive_mutex live_mutex_;
   std::unordered_map<MetalShader::MetalTranslation*, LiveShader> live_shaders_;
   std::vector<PipelineHandle*> live_handles_;
-  std::vector<std::shared_ptr<NsEmuSwap>> live_emu_handles_;
   struct LiveNativePipeline {
     MetalShader::MetalTranslation* pixel;
     std::function<MTL::RenderPipelineState*(MTL::Function*)> build;
@@ -785,11 +683,9 @@ class MetalPipelineCache {
   void QueueSpecialization(MetalShader::MetalTranslation* translation);
   void NsSpecialize(MetalShader::MetalTranslation* translation);
   void NsSpecBuild(PipelineHandle* handle);
-  void NsSpecBuildEmu(const std::shared_ptr<NsEmuSwap>& swap);
   void LogSpecProgress(const char* what);
   std::vector<MetalShader::MetalTranslation*> ns_spec_queue_;
   std::vector<PipelineHandle*> ns_spec_build_queue_;
-  std::vector<std::shared_ptr<NsEmuSwap>> ns_spec_emu_queue_;
   std::atomic<uint64_t> ns_spec_queued_{0};
   std::atomic<uint64_t> ns_spec_from_cache_{0};
   std::atomic<uint64_t> ns_spec_generated_{0};

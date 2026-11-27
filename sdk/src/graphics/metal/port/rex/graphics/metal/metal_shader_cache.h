@@ -22,7 +22,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "rex/graphics/metal/metal_stage_compile_cache.h"
 
 namespace rex {
 namespace graphics {
@@ -92,12 +91,7 @@ class MetalArtifactStore {
 
   static constexpr uint32_t kStorageVersion = 3;
 
-  static ArtifactKey MakeStageCompileKey(const MetalStageCompileKey& stage_key);
   static ArtifactKey MakeDxilBytecodeKey(const MetalDxilBytecodeKey& dxil_key);
-  bool LoadStageCompile(const MetalStageCompileKey& key,
-                        MetalStageCompileResult* out);
-  void StoreStageCompile(const MetalStageCompileKey& key,
-                         const MetalStageCompileResult& result);
   bool LoadDxilBytecode(const MetalDxilBytecodeKey& key,
                         std::vector<uint8_t>* out);
   void StoreDxilBytecode(const MetalDxilBytecodeKey& key,

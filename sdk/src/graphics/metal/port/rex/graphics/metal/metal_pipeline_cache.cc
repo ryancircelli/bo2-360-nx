@@ -61,20 +61,6 @@
 #include "rex/graphics/registers.h"
 #include "rex/graphics/xenos.h"
 
-#include "rex/graphics/metal/metal_shader_converter.h"
-using BYTE = uint8_t;
-#include "rex/graphics/metal/d3d12_5_1_bytecode/adaptive_quad_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/adaptive_triangle_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/continuous_quad_1cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/continuous_quad_4cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/continuous_triangle_1cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/continuous_triangle_3cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/discrete_quad_1cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/discrete_quad_4cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/discrete_triangle_1cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/discrete_triangle_3cp_hs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/tessellation_adaptive_vs.h"
-#include "rex/graphics/metal/d3d12_5_1_bytecode/tessellation_indexed_vs.h"
 // Metal IR Converter Runtime - defines IRDescriptorTableEntry and bind points.
 #ifndef IR_RUNTIME_METALCPP
 #define IR_RUNTIME_METALCPP
@@ -256,61 +242,6 @@ uint64_t ElapsedMs(std::chrono::steady_clock::time_point start,
           .count());
 }
 
-void LogMetalErrorDetails(const char* label, NS::Error* error) {
-  if (!error) {
-    return;
-  }
-  const char* desc = error->localizedDescription()
-                         ? error->localizedDescription()->utf8String()
-                         : nullptr;
-  const char* failure = error->localizedFailureReason()
-                            ? error->localizedFailureReason()->utf8String()
-                            : nullptr;
-  const char* recovery =
-      error->localizedRecoverySuggestion()
-          ? error->localizedRecoverySuggestion()->utf8String()
-          : nullptr;
-  const char* domain =
-      error->domain() ? error->domain()->utf8String() : nullptr;
-  int64_t code = error->code();
-  REXLOG_ERROR("{}: domain={} code={} desc='{}' failure='{}' recovery='{}'", label,
-         domain ? domain : "<null>", code, desc ? desc : "<null>",
-         failure ? failure : "<null>", recovery ? recovery : "<null>");
-  NS::Dictionary* user_info = error->userInfo();
-  if (user_info) {
-    auto* info_desc = user_info->description();
-    REXLOG_ERROR("{}: userInfo={}", label,
-           info_desc ? info_desc->utf8String() : "<null>");
-  }
-}
-
-// FABLE2_NATIVE_TESS_DUMP=<dir> (diagnostic): the converter's tessellation
-// emulation stages (vertex + stage-in, hull, domain metallibs) and a JSON of
-// each pipeline's config, for tools/shaderlab/tess_diff.mm. Game-derived:
-// keep the folder under ignored out/.
-const char* NativeTessDumpDir() {
-  static const char* dir = [] {
-    const char* v = MetalDebugEnv("NATIVE_TESS_DUMP");
-    return (v && v[0]) ? v : nullptr;
-  }();
-  return dir;
-}
-
-void NativeTessDumpFile(const std::string& name, const std::vector<uint8_t>& bytes) {
-  const char* dir = NativeTessDumpDir();
-  if (!dir || bytes.empty()) {
-    return;
-  }
-  std::filesystem::path path = std::filesystem::path(dir) / name;
-  if (std::filesystem::exists(path)) {
-    return;
-  }
-  if (FILE* f = std::fopen(path.string().c_str(), "wb")) {
-    std::fwrite(bytes.data(), 1, bytes.size(), f);
-    std::fclose(f);
-  }
-}
-
 class ScopedAutoreleasePool {
  public:
   ScopedAutoreleasePool() : pool_(NS::AutoreleasePool::alloc()->init()) {}
@@ -324,24 +255,6 @@ class ScopedAutoreleasePool {
   NS::AutoreleasePool* pool_ = nullptr;
 };
 
-void EnsureDepthFormatForDepthWritingFragment(const char* pipeline_name,
-                                              bool fragment_writes_depth,
-                                              MTL::PixelFormat* depth_format) {
-  if (!fragment_writes_depth || !depth_format ||
-      *depth_format != MTL::PixelFormatInvalid) {
-    return;
-  }
-  *depth_format = MTL::PixelFormatDepth32Float;
-  static bool logged = false;
-  if (!logged) {
-    logged = true;
-    REXLOG_WARN(
-        "{}: fragment writes depth without a bound depth attachment; "
-        "using Depth32Float pipeline fallback",
-        pipeline_name);
-  }
-}
-
 bool ShaderUsesVertexFetch(const Shader& shader) {
   if (!shader.vertex_bindings().empty()) {
     return true;
@@ -354,34 +267,6 @@ bool ShaderUsesVertexFetch(const Shader& shader) {
     }
   }
   return false;
-}
-
-MTL::CompareFunction ToMetalCompareFunction(xenos::CompareFunction compare) {
-  static const MTL::CompareFunction kCompareMap[8] = {
-      MTL::CompareFunctionNever,         // 0
-      MTL::CompareFunctionLess,          // 1
-      MTL::CompareFunctionEqual,         // 2
-      MTL::CompareFunctionLessEqual,     // 3
-      MTL::CompareFunctionGreater,       // 4
-      MTL::CompareFunctionNotEqual,      // 5
-      MTL::CompareFunctionGreaterEqual,  // 6
-      MTL::CompareFunctionAlways,        // 7
-  };
-  return kCompareMap[uint32_t(compare) & 0x7];
-}
-
-MTL::StencilOperation ToMetalStencilOperation(xenos::StencilOp op) {
-  static const MTL::StencilOperation kStencilOpMap[8] = {
-      MTL::StencilOperationKeep,            // 0
-      MTL::StencilOperationZero,            // 1
-      MTL::StencilOperationReplace,         // 2
-      MTL::StencilOperationIncrementClamp,  // 3
-      MTL::StencilOperationDecrementClamp,  // 4
-      MTL::StencilOperationInvert,          // 5
-      MTL::StencilOperationIncrementWrap,   // 6
-      MTL::StencilOperationDecrementWrap,   // 7
-  };
-  return kStencilOpMap[uint32_t(op) & 0x7];
 }
 
 MTL::ColorWriteMask ToMetalColorWriteMask(uint32_t write_mask) {
@@ -504,80 +389,6 @@ void ApplyBlendStateToDescriptor(
   }
 }
 
-IRFormat MapVertexFormatToIRFormat(
-    const ParsedVertexFetchInstruction::Attributes& attrs) {
-  using xenos::VertexFormat;
-  switch (attrs.data_format) {
-    case VertexFormat::k_8_8_8_8:
-      if (attrs.is_integer) {
-        return attrs.is_signed ? IRFormatR8G8B8A8Sint : IRFormatR8G8B8A8Uint;
-      }
-      return attrs.is_signed ? IRFormatR8G8B8A8Snorm : IRFormatR8G8B8A8Unorm;
-    case VertexFormat::k_2_10_10_10:
-      if (attrs.is_integer) {
-        return IRFormatR10G10B10A2Uint;
-      }
-      return IRFormatR10G10B10A2Unorm;
-    case VertexFormat::k_10_11_11:
-    case VertexFormat::k_11_11_10:
-      return IRFormatR11G11B10Float;
-    case VertexFormat::k_16_16:
-      if (attrs.is_integer) {
-        return attrs.is_signed ? IRFormatR16G16Sint : IRFormatR16G16Uint;
-      }
-      return attrs.is_signed ? IRFormatR16G16Snorm : IRFormatR16G16Unorm;
-    case VertexFormat::k_16_16_16_16:
-      if (attrs.is_integer) {
-        return attrs.is_signed ? IRFormatR16G16B16A16Sint
-                               : IRFormatR16G16B16A16Uint;
-      }
-      return attrs.is_signed ? IRFormatR16G16B16A16Snorm
-                             : IRFormatR16G16B16A16Unorm;
-    case VertexFormat::k_16_16_FLOAT:
-      return IRFormatR16G16Float;
-    case VertexFormat::k_16_16_16_16_FLOAT:
-      return IRFormatR16G16B16A16Float;
-    case VertexFormat::k_32:
-      if (attrs.is_integer) {
-        return attrs.is_signed ? IRFormatR32Sint : IRFormatR32Uint;
-      }
-      return IRFormatR32Float;
-    case VertexFormat::k_32_32:
-      if (attrs.is_integer) {
-        return attrs.is_signed ? IRFormatR32G32Sint : IRFormatR32G32Uint;
-      }
-      return IRFormatR32G32Float;
-    case VertexFormat::k_32_FLOAT:
-      return IRFormatR32Float;
-    case VertexFormat::k_32_32_FLOAT:
-      return IRFormatR32G32Float;
-    case VertexFormat::k_32_32_32_FLOAT:
-      return IRFormatR32G32B32Float;
-    case VertexFormat::k_32_32_32_32:
-      if (attrs.is_integer) {
-        return attrs.is_signed ? IRFormatR32G32B32A32Sint
-                               : IRFormatR32G32B32A32Uint;
-      }
-      return IRFormatR32G32B32A32Float;
-    case VertexFormat::k_32_32_32_32_FLOAT:
-      return IRFormatR32G32B32A32Float;
-    default:
-      return IRFormatUnknown;
-  }
-}
-
-IRInputTopology GetGeometryStageInputTopology(GeometryShaderKey key) {
-  switch (key.type) {
-    case PipelineGeometryShader::kPointList:
-      return IRInputTopologyPoint;
-    case PipelineGeometryShader::kRectangleList:
-      return IRInputTopologyTriangle;
-    case PipelineGeometryShader::kQuadList:
-    default:
-      return IRInputTopologyUndefined;
-  }
-}
-
 struct StageInInputAttribute {
   uint32_t input_slot = 0;
   uint32_t offset = 0;
@@ -589,674 +400,9 @@ struct StageInInputLayout {
   std::vector<std::string> semantic_names_storage;
 };
 
-StageInInputLayout BuildStageInInputLayout(
-    const Shader& vertex_shader,
-    const MetalShaderReflectionInfo& vertex_reflection,
-    const char* log_prefix) {
-  std::vector<StageInInputAttribute> attribute_map;
-  attribute_map.reserve(32);
-
-  uint32_t attr_index = 0;
-  for (const auto& binding : vertex_shader.vertex_bindings()) {
-    for (const auto& attr : binding.attributes) {
-      if (attr_index >= 31) {
-        break;
-      }
-      StageInInputAttribute mapped = {};
-      mapped.input_slot = static_cast<uint32_t>(binding.binding_index);
-      mapped.offset =
-          static_cast<uint32_t>(attr.fetch_instr.attributes.offset * 4);
-      mapped.format = MapVertexFormatToIRFormat(attr.fetch_instr.attributes);
-      attribute_map.push_back(mapped);
-      ++attr_index;
-    }
-    if (attr_index >= 31) {
-      break;
-    }
-  }
-
-  StageInInputLayout input_layout = {};
-  input_layout.descriptor.version = IRInputLayoutDescriptorVersion_1;
-  input_layout.descriptor.desc_1_0.numElements = 0;
-  if (vertex_reflection.vertex_inputs.empty()) {
-    return input_layout;
-  }
-
-  input_layout.semantic_names_storage.reserve(
-      vertex_reflection.vertex_inputs.size());
-  uint32_t element_count = 0;
-  for (const auto& input : vertex_reflection.vertex_inputs) {
-    if (element_count >= 31) {
-      break;
-    }
-    if (input.attribute_index >= attribute_map.size()) {
-      REXLOG_WARN("{}: vertex input {} out of range (max {})", log_prefix,
-             input.attribute_index, attribute_map.size());
-      continue;
-    }
-    const StageInInputAttribute& mapped = attribute_map[input.attribute_index];
-    if (mapped.format == IRFormatUnknown) {
-      REXLOG_WARN("{}: unknown IRFormat for vertex input {}", log_prefix,
-             input.attribute_index);
-      continue;
-    }
-
-    std::string semantic_base = input.name;
-    uint32_t semantic_index = 0;
-    if (!semantic_base.empty()) {
-      size_t digit_pos = semantic_base.size();
-      while (digit_pos > 0 && std::isdigit(static_cast<unsigned char>(
-                                  semantic_base[digit_pos - 1]))) {
-        --digit_pos;
-      }
-      if (digit_pos < semantic_base.size()) {
-        semantic_index = static_cast<uint32_t>(
-            std::strtoul(semantic_base.c_str() + digit_pos, nullptr, 10));
-        semantic_base.resize(digit_pos);
-      }
-    }
-    if (semantic_base.empty()) {
-      semantic_base = "TEXCOORD";
-    }
-
-    input_layout.semantic_names_storage.push_back(std::move(semantic_base));
-    input_layout.descriptor.desc_1_0.semanticNames[element_count] =
-        input_layout.semantic_names_storage.back().c_str();
-    IRInputElementDescriptor1& element =
-        input_layout.descriptor.desc_1_0.inputElementDescs[element_count];
-    element.semanticIndex = semantic_index;
-    element.format = mapped.format;
-    element.inputSlot = mapped.input_slot;
-    element.alignedByteOffset = mapped.offset;
-    element.instanceDataStepRate = 0;
-    element.inputSlotClass = IRInputClassificationPerVertexData;
-    ++element_count;
-  }
-  input_layout.descriptor.desc_1_0.numElements = element_count;
-  return input_layout;
-}
-
 constexpr uint32_t kMetalPipelineStorageMagic = 0x4C544D58;  // 'XMTL'
-constexpr uint32_t kGeneratedStageGeometryVertex = 0x100;
-constexpr uint32_t kGeneratedStageGeometryShader = 0x101;
-constexpr uint32_t kGeneratedStageTessellationVertex = 0x200;
-constexpr uint32_t kGeneratedStageTessellationHull = 0x201;
-constexpr uint32_t kGeneratedStageTessellationDomain = 0x202;
 
 }  // namespace
-
-class MetalPipelineCache::GeneratedStageCache {
- public:
-  struct GeometryVertexStageState {
-    MTL::Library* library = nullptr;
-    MTL::Library* stage_in_library = nullptr;
-    std::string function_name;
-    uint32_t vertex_output_size_in_bytes = 0;
-  };
-
-  struct GeometryShaderStageState {
-    MTL::Library* library = nullptr;
-    std::string function_name;
-    uint32_t max_input_primitives_per_mesh_threadgroup = 0;
-    std::vector<MetalShaderFunctionConstant> function_constants;
-  };
-
-  struct TessellationVertexStageState {
-    MTL::Library* library = nullptr;
-    MTL::Library* stage_in_library = nullptr;
-    std::string function_name;
-    uint32_t vertex_output_size_in_bytes = 0;
-  };
-
-  struct TessellationHullStageState {
-    MTL::Library* library = nullptr;
-    std::string function_name;
-    MetalShaderReflectionInfo reflection;
-  };
-
-  struct TessellationDomainStageState {
-    MTL::Library* library = nullptr;
-    std::string function_name;
-    MetalShaderReflectionInfo reflection;
-  };
-
-  GeneratedStageCache(MetalPipelineCache& owner, MTL::Device* device,
-                      DxbcToDxilConverter& dxbc_to_dxil_converter,
-                      MetalShaderConverter& metal_shader_converter)
-      : owner_(owner),
-        device_(device),
-        dxbc_to_dxil_converter_(dxbc_to_dxil_converter),
-        metal_shader_converter_(metal_shader_converter) {}
-
-  ~GeneratedStageCache() {
-    for (auto& pair : geometry_vertex_stage_cache_) {
-      if (pair.second.library) {
-        pair.second.library->release();
-      }
-      if (pair.second.stage_in_library) {
-        pair.second.stage_in_library->release();
-      }
-    }
-    for (auto& pair : geometry_shader_stage_cache_) {
-      if (pair.second.library) {
-        pair.second.library->release();
-      }
-    }
-    for (auto& pair : tessellation_vertex_stage_cache_) {
-      if (pair.second.library) {
-        pair.second.library->release();
-      }
-      if (pair.second.stage_in_library) {
-        pair.second.stage_in_library->release();
-      }
-    }
-    for (auto& pair : tessellation_hull_stage_cache_) {
-      if (pair.second.library) {
-        pair.second.library->release();
-      }
-    }
-    for (auto& pair : tessellation_domain_stage_cache_) {
-      if (pair.second.library) {
-        pair.second.library->release();
-      }
-    }
-  }
-
-  std::shared_ptr<const MetalStageCompileResult> CompileStage(
-      MetalShaderStage stage, std::shared_ptr<const std::vector<uint8_t>> dxil,
-      bool enable_geometry_emulation, int input_topology,
-      const IRVersionedInputLayoutDescriptor* input_layout = nullptr,
-      uint64_t stage_in_layout_key = 0,
-      std::function<const IRVersionedInputLayoutDescriptor*(
-          const MetalShaderReflectionInfo&)>
-          stage_in_layout_builder = nullptr) {
-    MetalStageCompileRequest request;
-    request.stage = stage;
-    request.dxil_data = std::move(dxil);
-    request.enable_geometry_emulation = enable_geometry_emulation;
-    request.input_topology = input_topology;
-    request.input_layout = input_layout;
-    request.stage_in_layout_key = stage_in_layout_key;
-    request.stage_in_layout_builder = std::move(stage_in_layout_builder);
-    request.requested_outputs = kMetalStageCompileOutputMetallib;
-    if (input_layout || request.stage_in_layout_builder) {
-      request.requested_outputs |= kMetalStageCompileOutputStageInMetallib;
-    }
-    return metal_shader_converter_.CompileStage(request);
-  }
-
-  GeometryVertexStageState* GetGeometryVertexStage(
-      MetalShader::MetalTranslation* vertex_translation,
-      GeometryShaderKey geometry_shader_key) {
-    auto vertex_it = geometry_vertex_stage_cache_.find(vertex_translation);
-    if (vertex_it != geometry_vertex_stage_cache_.end()) {
-      return &vertex_it->second;
-    }
-
-    converter_census::Scope census_scope(
-        converter_census::kGeomVS,
-        vertex_translation->shader().ucode_data_hash());
-    if (!owner_.EnsureDxilTranslationReady(vertex_translation,
-                                           "geometry vertex")) {
-      REXLOG_ERROR("Geometry VS: failed to create a valid DXIL translation");
-      return nullptr;
-    }
-    std::vector<uint8_t> dxil_data = vertex_translation->GetDxilDataCopy();
-
-    IRInputTopology input_topology =
-        GetGeometryStageInputTopology(geometry_shader_key);
-    auto dxil = std::make_shared<std::vector<uint8_t>>(std::move(dxil_data));
-    const uint64_t stage_in_key_data[] = {
-        vertex_translation->shader().ucode_data_hash(),
-        vertex_translation->modification(), uint64_t(geometry_shader_key.key)};
-    uint64_t stage_in_layout_key =
-        XXH3_64bits(stage_in_key_data, sizeof(stage_in_key_data));
-    auto input_layout = std::make_shared<StageInInputLayout>();
-    std::shared_ptr<const MetalStageCompileResult> vertex_result = CompileStage(
-        MetalShaderStage::kVertex, dxil, true, static_cast<int>(input_topology),
-        nullptr, stage_in_layout_key,
-        [input_layout,
-         vertex_translation](const MetalShaderReflectionInfo& reflection)
-            -> const IRVersionedInputLayoutDescriptor* {
-          *input_layout = BuildStageInInputLayout(vertex_translation->shader(),
-                                                  reflection, "Geometry VS");
-          return &input_layout->descriptor;
-        });
-    if (!vertex_result || !vertex_result->success) {
-      REXLOG_ERROR("Geometry VS: DXIL to Metal conversion failed: {}",
-             vertex_result ? vertex_result->error_message : "unknown error");
-      return nullptr;
-    }
-    const MetalShaderReflectionInfo& vertex_reflection =
-        vertex_result->reflection;
-    if (vertex_result->stage_in_metallib.empty()) {
-      REXLOG_ERROR(
-          "Geometry VS: Failed to synthesize stage-in function "
-          "(vertex_inputs={}, output_size={})",
-          vertex_reflection.vertex_input_count,
-          vertex_reflection.vertex_output_size_in_bytes);
-      return nullptr;
-    }
-
-    if (NativeTessDumpDir()) {
-      const std::string base = fmt::format(
-          "geomvs_{:016X}_{:X}_k{:08X}", vertex_translation->shader().ucode_data_hash(),
-          vertex_translation->modification(), geometry_shader_key.key);
-      NativeTessDumpFile(base + ".metallib", vertex_result->metallib_data);
-      NativeTessDumpFile(base + ".stagein.metallib",
-                         vertex_result->stage_in_metallib);
-    }
-    MTL::Library* vertex_library =
-        owner_.NewLibraryFromBytes(vertex_result->metallib_data, "Geometry VS");
-    if (!vertex_library) {
-      return nullptr;
-    }
-    MTL::Library* stage_in_library = owner_.NewLibraryFromBytes(
-        vertex_result->stage_in_metallib, "Geometry VS stage-in");
-    if (!stage_in_library) {
-      vertex_library->release();
-      return nullptr;
-    }
-
-    GeometryVertexStageState state;
-    state.library = vertex_library;
-    state.stage_in_library = stage_in_library;
-    state.function_name = vertex_result->function_name;
-    state.vertex_output_size_in_bytes =
-        vertex_reflection.vertex_output_size_in_bytes;
-    if (state.vertex_output_size_in_bytes == 0) {
-      REXLOG_ERROR(
-          "Geometry VS: reflection returned zero output size "
-          "(vertex_inputs={})",
-          vertex_reflection.vertex_input_count);
-    }
-
-    auto [inserted_it, inserted] = geometry_vertex_stage_cache_.emplace(
-        vertex_translation, std::move(state));
-    return &inserted_it->second;
-  }
-
-  GeometryShaderStageState* GetGeometryShaderStage(
-      GeometryShaderKey geometry_shader_key) {
-    auto geom_it = geometry_shader_stage_cache_.find(geometry_shader_key);
-    if (geom_it != geometry_shader_stage_cache_.end()) {
-      return &geom_it->second;
-    }
-
-    converter_census::Scope census_scope(converter_census::kGeomGS,
-                                         geometry_shader_key.key);
-    const std::vector<uint32_t>& dxbc_dwords =
-        GetGeometryShader(geometry_shader_key);
-    std::vector<uint8_t> dxbc_bytes(dxbc_dwords.size() * sizeof(uint32_t));
-    std::memcpy(dxbc_bytes.data(), dxbc_dwords.data(), dxbc_bytes.size());
-
-    std::vector<uint8_t> dxil_data;
-    std::string dxil_error;
-    if (!owner_.ConvertDxbcToDxil(dxbc_bytes, dxil_data, &dxil_error)) {
-      REXLOG_ERROR("Geometry GS: DXBC to DXIL conversion failed: {}", dxil_error);
-      return nullptr;
-    }
-
-    IRInputTopology input_topology =
-        GetGeometryStageInputTopology(geometry_shader_key);
-    std::shared_ptr<const MetalStageCompileResult> geometry_result =
-        CompileStage(
-            MetalShaderStage::kGeometry,
-            std::make_shared<std::vector<uint8_t>>(std::move(dxil_data)), true,
-            static_cast<int>(input_topology));
-    if (!geometry_result || !geometry_result->success) {
-      REXLOG_ERROR(
-          "Geometry GS: DXIL to Metal conversion failed: {}",
-          geometry_result ? geometry_result->error_message : "unknown error");
-      return nullptr;
-    }
-    const MetalShaderReflectionInfo& geometry_reflection =
-        geometry_result->reflection;
-    if (!geometry_result->has_mesh_stage &&
-        !geometry_result->has_geometry_stage) {
-      REXLOG_ERROR(
-          "Geometry GS: MSC did not emit mesh or geometry stage (mesh={}, "
-          "geometry={})",
-          geometry_result->has_mesh_stage, geometry_result->has_geometry_stage);
-      return nullptr;
-    }
-    if (!geometry_result->has_mesh_stage) {
-      static bool mesh_missing_logged = false;
-      if (!mesh_missing_logged) {
-        mesh_missing_logged = true;
-        REXLOG_WARN(
-            "Geometry GS: MSC did not emit mesh stage; using geometry stage "
-            "library");
-      }
-    }
-
-    NativeTessDumpFile(fmt::format("gs_k{:08X}.metallib", geometry_shader_key.key),
-                       geometry_result->metallib_data);
-    MTL::Library* geometry_library = owner_.NewLibraryFromBytes(
-        geometry_result->metallib_data, "Geometry GS");
-    if (!geometry_library) {
-      return nullptr;
-    }
-
-    GeometryShaderStageState state;
-    state.library = geometry_library;
-    state.function_name = geometry_result->function_name;
-    state.max_input_primitives_per_mesh_threadgroup =
-        geometry_reflection.gs_max_input_primitives_per_mesh_threadgroup;
-    state.function_constants = geometry_reflection.function_constants;
-    if (state.max_input_primitives_per_mesh_threadgroup == 0) {
-      REXLOG_ERROR("Geometry GS: reflection returned zero max input primitives");
-    }
-
-    auto [inserted_it, inserted] = geometry_shader_stage_cache_.emplace(
-        geometry_shader_key, std::move(state));
-    return &inserted_it->second;
-  }
-
-  TessellationVertexStageState* GetTessellationVertexStage(
-      MetalShader::MetalTranslation* domain_translation,
-      xenos::TessellationMode tessellation_mode) {
-    struct VertexStageKey {
-      const void* shader;
-      uint32_t tessellation_mode;
-    } vertex_key = {domain_translation, uint32_t(tessellation_mode)};
-    uint64_t vertex_key_hash = XXH3_64bits(&vertex_key, sizeof(vertex_key));
-    auto vertex_it = tessellation_vertex_stage_cache_.find(vertex_key_hash);
-    if (vertex_it != tessellation_vertex_stage_cache_.end()) {
-      return &vertex_it->second;
-    }
-
-    const uint64_t stable_vertex_key[] = {
-        domain_translation->shader().ucode_data_hash(),
-        domain_translation->modification(), uint64_t(tessellation_mode)};
-    uint64_t stage_in_layout_key =
-        XXH3_64bits(stable_vertex_key, sizeof(stable_vertex_key));
-
-    converter_census::Scope census_scope(
-        converter_census::kTessVS,
-        domain_translation->shader().ucode_data_hash());
-    const uint8_t* vs_bytes = nullptr;
-    size_t vs_size = 0;
-    if (tessellation_mode == xenos::TessellationMode::kAdaptive) {
-      vs_bytes = ::tessellation_adaptive_vs;
-      vs_size = sizeof(::tessellation_adaptive_vs);
-    } else {
-      vs_bytes = ::tessellation_indexed_vs;
-      vs_size = sizeof(::tessellation_indexed_vs);
-    }
-    std::vector<uint8_t> dxbc_bytes(vs_bytes, vs_bytes + vs_size);
-    std::vector<uint8_t> dxil_data;
-    std::string dxil_error;
-    if (!owner_.ConvertDxbcToDxil(dxbc_bytes, dxil_data, &dxil_error)) {
-      REXLOG_ERROR("Tessellation VS: DXBC to DXIL conversion failed: {}", dxil_error);
-      return nullptr;
-    }
-
-    auto dxil = std::make_shared<std::vector<uint8_t>>(std::move(dxil_data));
-    auto input_layout = std::make_shared<StageInInputLayout>();
-    std::shared_ptr<const MetalStageCompileResult> vertex_result = CompileStage(
-        MetalShaderStage::kVertex, dxil, true,
-        static_cast<int>(IRInputTopologyUndefined), nullptr,
-        stage_in_layout_key,
-        [input_layout,
-         domain_translation](const MetalShaderReflectionInfo& reflection)
-            -> const IRVersionedInputLayoutDescriptor* {
-          *input_layout = BuildStageInInputLayout(
-              domain_translation->shader(), reflection, "Tessellation VS");
-          return &input_layout->descriptor;
-        });
-    if (!vertex_result || !vertex_result->success) {
-      REXLOG_ERROR("Tessellation VS: DXIL to Metal conversion failed: {}",
-             vertex_result ? vertex_result->error_message : "unknown error");
-      return nullptr;
-    }
-    const MetalShaderReflectionInfo& vertex_reflection =
-        vertex_result->reflection;
-    if (vertex_result->stage_in_metallib.empty()) {
-      REXLOG_ERROR("Tessellation VS: Failed to synthesize stage-in function");
-      return nullptr;
-    }
-    if (NativeTessDumpDir()) {
-      const std::string base = fmt::format(
-          "tessvs_{:016X}_{:X}_m{}", domain_translation->shader().ucode_data_hash(),
-          domain_translation->modification(), uint32_t(tessellation_mode));
-      NativeTessDumpFile(base + ".metallib", vertex_result->metallib_data);
-      NativeTessDumpFile(base + ".stagein.metallib",
-                         vertex_result->stage_in_metallib);
-    }
-
-    MTL::Library* vertex_library = owner_.NewLibraryFromBytes(
-        vertex_result->metallib_data, "Tessellation VS");
-    if (!vertex_library) {
-      return nullptr;
-    }
-    MTL::Library* stage_in_library = owner_.NewLibraryFromBytes(
-        vertex_result->stage_in_metallib, "Tessellation VS stage-in");
-    if (!stage_in_library) {
-      vertex_library->release();
-      return nullptr;
-    }
-
-    TessellationVertexStageState state;
-    state.library = vertex_library;
-    state.stage_in_library = stage_in_library;
-    state.function_name = vertex_result->function_name;
-    state.vertex_output_size_in_bytes =
-        vertex_reflection.vertex_output_size_in_bytes;
-    if (state.vertex_output_size_in_bytes == 0) {
-      REXLOG_ERROR("Tessellation VS: reflection returned zero output size");
-    }
-
-    auto [inserted_it, inserted] = tessellation_vertex_stage_cache_.emplace(
-        vertex_key_hash, std::move(state));
-    return &inserted_it->second;
-  }
-
-  TessellationHullStageState* GetTessellationHullStage(
-      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-      xenos::TessellationMode tessellation_mode) {
-    struct HullStageKey {
-      uint32_t host_vs_type;
-      uint32_t tessellation_mode;
-    } hull_key = {uint32_t(primitive_processing_result.host_vertex_shader_type),
-                  uint32_t(tessellation_mode)};
-    uint64_t hull_key_hash = XXH3_64bits(&hull_key, sizeof(hull_key));
-    auto hull_it = tessellation_hull_stage_cache_.find(hull_key_hash);
-    converter_census::Scope census_scope(converter_census::kTessHS,
-                                         hull_key_hash);
-    if (hull_it != tessellation_hull_stage_cache_.end()) {
-      return &hull_it->second;
-    }
-
-    const uint8_t* hs_bytes = nullptr;
-    size_t hs_size = 0;
-    switch (tessellation_mode) {
-      case xenos::TessellationMode::kDiscrete:
-        switch (primitive_processing_result.host_vertex_shader_type) {
-          case Shader::HostVertexShaderType::kTriangleDomainCPIndexed:
-            hs_bytes = ::discrete_triangle_3cp_hs;
-            hs_size = sizeof(::discrete_triangle_3cp_hs);
-            break;
-          case Shader::HostVertexShaderType::kTriangleDomainPatchIndexed:
-            hs_bytes = ::discrete_triangle_1cp_hs;
-            hs_size = sizeof(::discrete_triangle_1cp_hs);
-            break;
-          case Shader::HostVertexShaderType::kQuadDomainCPIndexed:
-            hs_bytes = ::discrete_quad_4cp_hs;
-            hs_size = sizeof(::discrete_quad_4cp_hs);
-            break;
-          case Shader::HostVertexShaderType::kQuadDomainPatchIndexed:
-            hs_bytes = ::discrete_quad_1cp_hs;
-            hs_size = sizeof(::discrete_quad_1cp_hs);
-            break;
-          default:
-            REXLOG_ERROR(
-                "Tessellation HS: unsupported host vertex shader type {}",
-                uint32_t(primitive_processing_result.host_vertex_shader_type));
-            return nullptr;
-        }
-        break;
-      case xenos::TessellationMode::kContinuous:
-        switch (primitive_processing_result.host_vertex_shader_type) {
-          case Shader::HostVertexShaderType::kTriangleDomainCPIndexed:
-            hs_bytes = ::continuous_triangle_3cp_hs;
-            hs_size = sizeof(::continuous_triangle_3cp_hs);
-            break;
-          case Shader::HostVertexShaderType::kTriangleDomainPatchIndexed:
-            hs_bytes = ::continuous_triangle_1cp_hs;
-            hs_size = sizeof(::continuous_triangle_1cp_hs);
-            break;
-          case Shader::HostVertexShaderType::kQuadDomainCPIndexed:
-            hs_bytes = ::continuous_quad_4cp_hs;
-            hs_size = sizeof(::continuous_quad_4cp_hs);
-            break;
-          case Shader::HostVertexShaderType::kQuadDomainPatchIndexed:
-            hs_bytes = ::continuous_quad_1cp_hs;
-            hs_size = sizeof(::continuous_quad_1cp_hs);
-            break;
-          default:
-            REXLOG_ERROR(
-                "Tessellation HS: unsupported host vertex shader type {}",
-                uint32_t(primitive_processing_result.host_vertex_shader_type));
-            return nullptr;
-        }
-        break;
-      case xenos::TessellationMode::kAdaptive:
-        switch (primitive_processing_result.host_vertex_shader_type) {
-          case Shader::HostVertexShaderType::kTriangleDomainPatchIndexed:
-            hs_bytes = ::adaptive_triangle_hs;
-            hs_size = sizeof(::adaptive_triangle_hs);
-            break;
-          case Shader::HostVertexShaderType::kQuadDomainPatchIndexed:
-            hs_bytes = ::adaptive_quad_hs;
-            hs_size = sizeof(::adaptive_quad_hs);
-            break;
-          default:
-            REXLOG_ERROR(
-                "Tessellation HS: unsupported host vertex shader type {}",
-                uint32_t(primitive_processing_result.host_vertex_shader_type));
-            return nullptr;
-        }
-        break;
-      default:
-        REXLOG_ERROR("Tessellation HS: unsupported tessellation mode {}",
-               uint32_t(tessellation_mode));
-        return nullptr;
-    }
-
-    std::vector<uint8_t> dxbc_bytes(hs_bytes, hs_bytes + hs_size);
-    std::vector<uint8_t> dxil_data;
-    std::string dxil_error;
-    if (!owner_.ConvertDxbcToDxil(dxbc_bytes, dxil_data, &dxil_error)) {
-      REXLOG_ERROR("Tessellation HS: DXBC to DXIL conversion failed: {}", dxil_error);
-      return nullptr;
-    }
-
-    std::shared_ptr<const MetalStageCompileResult> hull_result = CompileStage(
-        MetalShaderStage::kHull,
-        std::make_shared<std::vector<uint8_t>>(std::move(dxil_data)), true,
-        static_cast<int>(IRInputTopologyUndefined));
-    if (!hull_result || !hull_result->success) {
-      REXLOG_ERROR("Tessellation HS: DXIL to Metal conversion failed: {}",
-             hull_result ? hull_result->error_message : "unknown error");
-      return nullptr;
-    }
-
-    NativeTessDumpFile(
-        fmt::format("hs_t{}_m{}.metallib",
-                    uint32_t(primitive_processing_result.host_vertex_shader_type),
-                    uint32_t(tessellation_mode)),
-        hull_result->metallib_data);
-    MTL::Library* hull_library = owner_.NewLibraryFromBytes(
-        hull_result->metallib_data, "Tessellation HS");
-    if (!hull_library) {
-      return nullptr;
-    }
-
-    TessellationHullStageState state;
-    state.library = hull_library;
-    state.function_name = hull_result->function_name;
-    state.reflection = hull_result->reflection;
-    if (!state.reflection.has_hull_info) {
-      REXLOG_ERROR("Tessellation HS: reflection missing hull info");
-    }
-
-    auto [inserted_it, inserted] =
-        tessellation_hull_stage_cache_.emplace(hull_key_hash, std::move(state));
-    return &inserted_it->second;
-  }
-
-  TessellationDomainStageState* GetTessellationDomainStage(
-      MetalShader::MetalTranslation* domain_translation) {
-    uint64_t domain_key =
-        XXH3_64bits(&domain_translation, sizeof(domain_translation));
-    auto domain_it = tessellation_domain_stage_cache_.find(domain_key);
-    if (domain_it != tessellation_domain_stage_cache_.end()) {
-      return &domain_it->second;
-    }
-
-    converter_census::Scope census_scope(
-        converter_census::kTessDS,
-        domain_translation->shader().ucode_data_hash());
-    if (!owner_.EnsureDxilTranslationReady(domain_translation,
-                                           "tessellation domain")) {
-      REXLOG_ERROR("Tessellation DS: failed to create a valid DXIL translation");
-      return nullptr;
-    }
-    std::vector<uint8_t> dxil_data = domain_translation->GetDxilDataCopy();
-
-    std::shared_ptr<const MetalStageCompileResult> domain_result = CompileStage(
-        MetalShaderStage::kDomain,
-        std::make_shared<std::vector<uint8_t>>(std::move(dxil_data)), true,
-        static_cast<int>(IRInputTopologyUndefined));
-    if (!domain_result || !domain_result->success) {
-      REXLOG_ERROR("Tessellation DS: DXIL to Metal conversion failed: {}",
-             domain_result ? domain_result->error_message : "unknown error");
-      return nullptr;
-    }
-
-    NativeTessDumpFile(
-        fmt::format("ds_{:016X}_{:X}.metallib",
-                    domain_translation->shader().ucode_data_hash(),
-                    domain_translation->modification()),
-        domain_result->metallib_data);
-    MTL::Library* domain_library = owner_.NewLibraryFromBytes(
-        domain_result->metallib_data, "Tessellation DS");
-    if (!domain_library) {
-      return nullptr;
-    }
-
-    TessellationDomainStageState state;
-    state.library = domain_library;
-    state.function_name = domain_result->function_name;
-    state.reflection = domain_result->reflection;
-    if (!state.reflection.has_domain_info) {
-      REXLOG_ERROR("Tessellation DS: reflection missing domain info");
-    }
-
-    auto [inserted_it, inserted] =
-        tessellation_domain_stage_cache_.emplace(domain_key, std::move(state));
-    return &inserted_it->second;
-  }
-
- private:
-  MetalPipelineCache& owner_;
-  MTL::Device* device_ = nullptr;
-  DxbcToDxilConverter& dxbc_to_dxil_converter_;
-  MetalShaderConverter& metal_shader_converter_;
-
-  std::unordered_map<MetalShader::MetalTranslation*, GeometryVertexStageState>
-      geometry_vertex_stage_cache_;
-  std::unordered_map<GeometryShaderKey, GeometryShaderStageState,
-                     GeometryShaderKey::Hasher>
-      geometry_shader_stage_cache_;
-  std::unordered_map<uint64_t, TessellationVertexStageState>
-      tessellation_vertex_stage_cache_;
-  std::unordered_map<uint64_t, TessellationHullStageState>
-      tessellation_hull_stage_cache_;
-  std::unordered_map<uint64_t, TessellationDomainStageState>
-      tessellation_domain_stage_cache_;
-};
 
 // ---------------------------------------------------------------------------
 // ResolvePipelineRenderingKey (shared fixed-function key derivation)
@@ -1355,11 +501,6 @@ MetalPipelineCache::~MetalPipelineCache() {
     for (auto* f : item.second.retired) f->release();
   }
 
-  for (auto& emu : live_emu_handles_) {
-    if (auto* p = emu->live.load()) p->release();
-    for (auto* p : emu->live_retired) p->release();
-  }
-
   for (auto& pair : live_native_pipelines_) {
     if (pair.second.active) pair.second.active->release();
     for (auto* p : pair.second.retired) p->release();
@@ -1392,38 +533,6 @@ MetalPipelineCache::~MetalPipelineCache() {
   texture_binding_layout_map_.clear();
   texture_binding_layouts_.clear();
 
-  for (auto& pair : geometry_pipeline_cache_) {
-    if (pair.second.pipeline) {
-      pair.second.pipeline->release();
-    }
-    if (pair.second.ns_emu) {
-      if (auto* p = pair.second.ns_emu->optimized.exchange(nullptr)) {
-        p->release();
-      }
-      if (auto* p = pair.second.ns_emu->spec.exchange(nullptr)) {
-        p->release();
-      }
-    }
-  }
-  geometry_pipeline_cache_.clear();
-
-  for (auto& pair : tessellation_pipeline_cache_) {
-    if (pair.second.pipeline) {
-      pair.second.pipeline->release();
-    }
-    if (pair.second.ns_emu) {
-      if (auto* p = pair.second.ns_emu->optimized.exchange(nullptr)) {
-        p->release();
-      }
-      if (auto* p = pair.second.ns_emu->spec.exchange(nullptr)) {
-        p->release();
-      }
-    }
-  }
-  tessellation_pipeline_cache_.clear();
-
-  generated_stages_.reset();
-
   if (depth_only_pixel_function_) {
     depth_only_pixel_function_->release();
     depth_only_pixel_function_ = nullptr;
@@ -1438,8 +547,6 @@ MetalPipelineCache::~MetalPipelineCache() {
 
   shader_cache_.clear();
   shader_translator_.reset();
-  dxbc_to_dxil_converter_.reset();
-  metal_shader_converter_.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +557,6 @@ bool MetalPipelineCache::InitializeShaderTranslation(
     bool gamma_render_target_as_unorm8, bool msaa_2x_supported,
     uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y) {
   bool edram_rov_used = false;
-  generated_stages_.reset();
   native_xlate_config_.gamma_render_target_as_unorm8 =
       gamma_render_target_as_unorm8;
   native_xlate_config_.msaa_2x_supported = msaa_2x_supported;
@@ -1468,114 +574,10 @@ bool MetalPipelineCache::InitializeShaderTranslation(
       draw_resolution_scale_y,
       false);  // force_emit_source_map
 
-  // FABLE2_NO_CONVERTER builds (docs/no-converter.md): the stand-ins report
-  // "unavailable" here. That is not an error at startup; a request that
-  // actually needs the converter fails loudly instead (census refusal).
-  dxbc_to_dxil_converter_ = std::make_unique<DxbcToDxilConverter>();
-  if (!dxbc_to_dxil_converter_->Initialize() && ConverterBuiltIn()) {
-    REXLOG_ERROR("Failed to initialize DXBC to DXIL converter");
-    return false;
-  }
-
-  metal_shader_converter_ = std::make_unique<MetalShaderConverter>();
-  if (!metal_shader_converter_->Initialize() && ConverterBuiltIn()) {
-    REXLOG_ERROR("Failed to initialize Metal Shader Converter");
-    return false;
-  }
-  if (!ConverterBuiltIn()) {
-    REXLOG_INFO("[no-converter] shader converter not built: native shaders "
-                "only (native first {})",
-                NativeFirstMode() ? "on" : "OFF: guest shaders will fail");
-  }
-  generated_stages_ = std::make_unique<GeneratedStageCache>(
-      *this, device_, *dxbc_to_dxil_converter_, *metal_shader_converter_);
-
-  // Configure MSC minimum targets.
-  if (device_) {
-    IRGPUFamily min_family = IRGPUFamilyMetal3;
-    if (device_->supportsFamily(MTL::GPUFamilyApple10)) {
-      min_family = IRGPUFamilyApple10;
-    } else if (device_->supportsFamily(MTL::GPUFamilyApple9)) {
-      min_family = IRGPUFamilyApple9;
-    } else if (device_->supportsFamily(MTL::GPUFamilyApple8)) {
-      min_family = IRGPUFamilyApple8;
-    } else if (device_->supportsFamily(MTL::GPUFamilyApple7)) {
-      min_family = IRGPUFamilyApple7;
-    } else if (device_->supportsFamily(MTL::GPUFamilyApple6)) {
-      min_family = IRGPUFamilyApple6;
-    } else if (device_->supportsFamily(MTL::GPUFamilyMac2) ||
-               device_->supportsFamily(MTL::GPUFamilyMetal4) ||
-               device_->supportsFamily(MTL::GPUFamilyMetal3)) {
-      min_family = IRGPUFamilyMetal3;
-    }
-
-    NS::OperatingSystemVersion os_version =
-        NS::ProcessInfo::processInfo()->operatingSystemVersion();
-    std::ostringstream version_stream;
-    version_stream << os_version.majorVersion << "." << os_version.minorVersion
-                   << "." << os_version.patchVersion;
-    std::string min_version = version_stream.str();
-    const IRGPUFamily native_family = min_family;
-    // The converter target is pinned by default (FABLE2_MSC_MIN_TARGET,
-    // default apple7:15.0; "native" = this Mac's GPU family and exact OS
-    // version, the behaviour before 2026-10-12). The converter output, and so
-    // every stage-compile and optimized/specialized-shader cache key, then no
-    // longer depends on the Mac or its macOS version: a shader cache survives
-    // OS updates and hits on any Apple Silicon Mac (docs/native-shaders.md,
-    // "Converter target"; docs/portable-build.md). The driver still compiles
-    // each library for the real GPU. The app exports [graphics]
-    // shader_cache_target to this variable (src/core/fable2_graphics_config.h).
-    static constexpr const char* kDefaultPin = "apple7:15.0";
-    const char* pin_env = REXCVAR_GET(metal_msc_min_target).c_str();
-    // "portable" (the Dev Launcher's and the config's name) = the default.
-    const bool pin_from_env = pin_env && pin_env[0] &&
-                              std::strcmp(pin_env, "portable") != 0;
-    const char* pin = pin_from_env ? pin_env : kDefaultPin;
-    if (std::strcmp(pin, "native") == 0) {
-      REXLOG_INFO(
-          "Metal shader converter: minimum target native, family {} macOS {} "
-          "(metal_msc_min_target=native; the shader cache is tied to this "
-          "Mac and macOS version)",
-          static_cast<int>(native_family), version_stream.str());
-    } else {
-      static const std::pair<const char*, IRGPUFamily> kFamilies[] = {
-          {"apple6", IRGPUFamilyApple6}, {"apple7", IRGPUFamilyApple7},
-          {"apple8", IRGPUFamilyApple8}, {"apple9", IRGPUFamilyApple9},
-          {"apple10", IRGPUFamilyApple10}, {"metal3", IRGPUFamilyMetal3}};
-      auto parse = [&](const std::string& value) {
-        const size_t colon = value.find(':');
-        const std::string family = value.substr(0, colon);
-        const std::string version =
-            colon == std::string::npos ? std::string() : value.substr(colon + 1);
-        for (const auto& [name, id] : kFamilies) {
-          if (family == name && !version.empty() &&
-              version.find_first_not_of("0123456789.") == std::string::npos) {
-            min_family = id;
-            min_version = version;
-            return true;
-          }
-        }
-        return false;
-      };
-      std::string value(pin);
-      if (!parse(value)) {
-        REXLOG_WARN(
-            "Metal shader converter: ignoring metal_msc_min_target='{}' "
-            "(expected e.g. apple7:15.0 or native); using the default {}",
-            value, kDefaultPin);
-        value = kDefaultPin;
-        parse(value);
-      }
-      REXLOG_INFO(
-          "Metal shader converter: minimum target pinned to {} macOS {} "
-          "({}; native would be family {} macOS {})",
-          value.substr(0, value.find(':')), min_version,
-          pin_from_env && value == pin ? "metal_msc_min_target" : "default",
-          static_cast<int>(native_family), version_stream.str());
-    }
-    metal_shader_converter_->SetMinimumTarget(min_family, IROperatingSystem_macOS,
-                                              min_version);
-  }
+  // docs/no-converter.md: the shader converter is not built; native shaders only.
+  REXLOG_INFO("[no-converter] shader converter not built: native shaders "
+              "only (native first {})",
+              NativeFirstMode() ? "on" : "OFF: guest shaders will fail");
 
   // Spawn async pipeline creation threads if enabled.
   int32_t thread_count_config = REXCVAR_GET(metal_pipeline_creation_threads);
@@ -1928,52 +930,6 @@ void MetalPipelineCache::EndSubmission() {
   if (!creation_threads_.empty()) {
     creation_request_cond_.notify_one();
   }
-}
-
-bool MetalPipelineCache::ConvertDxbcToDxil(
-    const std::vector<uint8_t>& dxbc_data, std::vector<uint8_t>& dxil_data,
-    std::string* error_message) {
-  dxil_convert_requests_.fetch_add(1, std::memory_order_relaxed);
-  dxil_convert_dxbc_bytes_.fetch_add(dxbc_data.size(),
-                                     std::memory_order_relaxed);
-  MetalDxilBytecodeKey dxil_key = {};
-  if (!dxbc_data.empty() && dxbc_to_dxil_converter_) {
-    XXH128_hash_t dxbc_hash = XXH3_128bits(dxbc_data.data(), dxbc_data.size());
-    dxil_key.dxbc_size = dxbc_data.size();
-    dxil_key.dxbc_hash_low = dxbc_hash.low64;
-    dxil_key.dxbc_hash_high = dxbc_hash.high64;
-    dxil_key.converter_options_hash = dxbc_to_dxil_converter_->GetOptionsHash();
-    dxil_key.converter_version = DxbcToDxilConverter::kCacheVersion;
-    if (REXCVAR_GET(metal_shader_disk_cache) && g_metal_artifact_store &&
-        g_metal_artifact_store->LoadDxilBytecode(dxil_key, &dxil_data)) {
-      dxil_cache_hits_.fetch_add(1, std::memory_order_relaxed);
-      converter_census::Dxil(true);
-      dxil_convert_dxil_bytes_.fetch_add(dxil_data.size(),
-                                         std::memory_order_relaxed);
-      return true;
-    }
-  }
-  dxil_cache_misses_.fetch_add(1, std::memory_order_relaxed);
-  converter_census::Dxil(false);
-
-  auto start = std::chrono::steady_clock::now();
-  bool ok = dxbc_to_dxil_converter_ && dxbc_to_dxil_converter_->Convert(
-                                           dxbc_data, dxil_data, error_message);
-  auto end = std::chrono::steady_clock::now();
-  uint64_t ms = ElapsedMs(start, end);
-  dxil_convert_ms_total_.fetch_add(ms, std::memory_order_relaxed);
-  AtomicMax(dxil_convert_ms_max_, ms);
-  if (ok) {
-    dxil_convert_dxil_bytes_.fetch_add(dxil_data.size(),
-                                       std::memory_order_relaxed);
-    if (REXCVAR_GET(metal_shader_disk_cache) && g_metal_artifact_store &&
-        !dxbc_data.empty()) {
-      g_metal_artifact_store->StoreDxilBytecode(dxil_key, dxil_data);
-    }
-  } else {
-    dxil_convert_failures_.fetch_add(1, std::memory_order_relaxed);
-  }
-  return ok;
 }
 
 MTL::Library* MetalPipelineCache::NewLibraryFromBytes(
@@ -2589,10 +1545,8 @@ void MetalPipelineCache::PrewarmStoredPipelines(
         job.rendering = rendering;
         native_geom_jobs.push_back(job);
         ++queued;
-      } else if (GetOrCreateGeometryPipelineState(vertex_translation,
-                                           pixel_translation, geometry_key,
-                                           formats, rendering)) {
-        ++queued;
+      } else {
+        ++skipped;  // no native route (docs/no-converter.md)
       }
     } else if (desc.kind == uint32_t(PipelineKind::kTessellation)) {
       PrimitiveProcessor::ProcessingResult primitive = {};
@@ -2633,10 +1587,8 @@ void MetalPipelineCache::PrewarmStoredPipelines(
         job.rendering = rendering;
         native_geom_jobs.push_back(job);
         ++queued;
-      } else if (GetOrCreateTessellationPipelineState(vertex_translation,
-                                               pixel_translation, primitive,
-                                               formats, rendering)) {
-        ++queued;
+      } else {
+        ++skipped;  // no native route (docs/no-converter.md)
       }
     } else {
       ++skipped;
@@ -3122,14 +2074,10 @@ size_t MetalPipelineCache::StartBankPrecompile(const std::filesystem::path& bank
         }
         bool ok = !native_geom_prewarm_stop_.load(std::memory_order_relaxed);
         if (ok && job.kind == JobKind::kInstall) {
-          if (NativeFirstMode() && !ConverterBuiltIn()) {
-            // No-converter build: native only. A shader the native translator cannot take is left alone here
-            // (the draw path reports it, [converter-use] refused, if the game ever uses it).
-            const int native = job.t->is_valid() ? 1 : TryNativeFirst(job.t);
-            ok = native > 0 || (native < 0 && job.t->is_valid());
-          } else {
-            ok = EnsureMetalTranslationReady(job.t);
-          }
+          // Native only. A shader the native translator cannot take is left alone here
+          // (the draw path reports it, [converter-use] refused, if the game ever uses it).
+          const int native = job.t->is_valid() ? 1 : TryNativeFirst(job.t);
+          ok = native > 0 || (native < 0 && job.t->is_valid());
         } else if (ok) {
           MTL::Library* library = nullptr;
           MTL::Function* function = nullptr;
@@ -3328,69 +2276,26 @@ bool MetalPipelineCache::EnsureDepthOnlyPixelShader() {
   if (depth_only_pixel_library_) {
     return true;
   }
-  // FABLE2_NATIVE_FIRST (docs/no-converter.md): the depth-only shader the
-  // DXBC translator generates for render-target (non-ROV) output is empty:
-  // no inputs, no outputs, no discard. The same empty fragment in MSL.
-  if (NativeFirstMode()) {
-    MTL::CompileOptions* options = MTL::CompileOptions::alloc()->init();
-    options->setLanguageVersion(MTL::LanguageVersion3_2);
-    options->setMathMode(MTL::MathModeSafe);
-    NS::Error* error = nullptr;
-    MTL::Library* library = device_->newLibrary(
-        NS::String::string("#include <metal_stdlib>\n"
-                           "fragment void xe_native_depth_only_ps() {}\n",
-                           NS::UTF8StringEncoding),
-        options, &error);
-    options->release();
-    if (library) {
-      depth_only_pixel_library_ = library;
-      depth_only_pixel_function_name_ = "xe_native_depth_only_ps";
-      REXLOG_INFO("[native-first] depth-only pixel shader: native (empty)");
-      return true;
-    }
-    REXLOG_WARN("[native-first] depth-only pixel shader: MSL compile failed "
-                "({}); converter",
-                error ? error->localizedDescription()->utf8String() : "?");
-  }
-  if (!shader_translator_ || !dxbc_to_dxil_converter_ ||
-      !metal_shader_converter_) {
-    REXLOG_ERROR("Depth-only PS: shader translation not initialized");
+  // docs/no-converter.md: the depth-only shader the DXBC translator generates
+  // for render-target (non-ROV) output is empty: no inputs, no outputs, no
+  // discard. The same empty fragment in MSL.
+  MTL::CompileOptions* options = MTL::CompileOptions::alloc()->init();
+  options->setLanguageVersion(MTL::LanguageVersion3_2);
+  options->setMathMode(MTL::MathModeSafe);
+  NS::Error* error = nullptr;
+  MTL::Library* library = device_->newLibrary(
+      NS::String::string("#include <metal_stdlib>\n"
+                         "fragment void xe_native_depth_only_ps() {}\n",
+                         NS::UTF8StringEncoding),
+      options, &error);
+  options->release();
+  if (!library) {
+    REXLOG_ERROR("Depth-only PS: MSL compile failed ({})",
+                 error ? error->localizedDescription()->utf8String() : "?");
     return false;
   }
-
-  converter_census::Scope census_scope(converter_census::kDepthOnlyPS, 0);
-  std::vector<uint8_t> dxbc_data =
-      shader_translator_->CreateDepthOnlyPixelShader();
-  if (dxbc_data.empty()) {
-    REXLOG_ERROR("Depth-only PS: failed to create DXBC");
-    return false;
-  }
-
-  std::vector<uint8_t> dxil_data;
-  std::string dxil_error;
-  if (!ConvertDxbcToDxil(dxbc_data, dxil_data, &dxil_error)) {
-    REXLOG_ERROR("Depth-only PS: DXBC to DXIL conversion failed: {}", dxil_error);
-    return false;
-  }
-
-  MetalShaderConversionResult result;
-  if (!metal_shader_converter_->ConvertWithStage(MetalShaderStage::kFragment,
-                                                 dxil_data, result)) {
-    REXLOG_ERROR("Depth-only PS: DXIL to Metal conversion failed: {}",
-           result.error_message);
-    return false;
-  }
-
-  depth_only_pixel_library_ =
-      NewLibraryFromBytes(result.metallib_data, "Depth-only PS");
-  if (!depth_only_pixel_library_) {
-    return false;
-  }
-  depth_only_pixel_function_name_ = result.function_name;
-  if (depth_only_pixel_function_name_.empty()) {
-    REXLOG_ERROR("Depth-only PS: missing function name");
-    return false;
-  }
+  depth_only_pixel_library_ = library;
+  depth_only_pixel_function_name_ = "xe_native_depth_only_ps";
   return true;
 }
 
@@ -3632,34 +2537,6 @@ bool MetalPipelineCache::EnsureDxbcTranslationReadyLocked(
   return true;
 }
 
-bool MetalPipelineCache::EnsureDxilTranslationReady(
-    MetalShader::MetalTranslation* translation, const char* stage_name) {
-  if (!translation) {
-    return true;
-  }
-  if (!translation->GetDxilDataCopy().empty()) {
-    return true;
-  }
-  std::lock_guard<std::mutex> lock(shader_translation_mutex_);
-  if (!translation->GetDxilDataCopy().empty()) {
-    return true;
-  }
-  if (!EnsureDxbcTranslationReadyLocked(translation, stage_name)) {
-    return false;
-  }
-  std::vector<uint8_t> dxil_data;
-  std::string dxil_error;
-  if (!ConvertDxbcToDxil(translation->translated_binary(), dxil_data,
-                         &dxil_error)) {
-    REXLOG_ERROR("{} shader {:016X}: DXBC to DXIL conversion failed: {}",
-           stage_name ? stage_name : "guest",
-           translation->shader().ucode_data_hash(), dxil_error);
-    return false;
-  }
-  translation->SetDxilData(std::move(dxil_data));
-  return true;
-}
-
 namespace {
 // Cache key of the optimized library: the plain metallib's hash (it already
 // encodes the DXIL and the resolution scale baked into the translation) plus
@@ -3750,26 +2627,6 @@ void MetalPipelineCache::QueueNativeShaderOptimization(
     ns_optimize_queue_.push_back(translation);
   }
   ns_cond_.notify_one();
-}
-
-// FABLE2_NATIVE_XLATE: whether `library` is a native translation (entry point
-// xe_native_ps) rather than a converter library (its own entry point).
-static bool NativeXlateEntryIn(MTL::Library* library,
-                               MetalShader::MetalTranslation* translation) {
-  if (!library || !translation || !translation->is_native_xlate() ||
-      library == translation->metal_library()) {
-    return false;
-  }
-  if (library == translation->optimized_library()) {
-    return true;
-  }
-  MTL::Function* f = library->newFunction(
-      NS::String::string("xe_native_ps", NS::UTF8StringEncoding));
-  if (f) {
-    f->release();
-    return true;
-  }
-  return false;
 }
 
 bool MetalPipelineCache::CompileNativeXlate(
@@ -3997,7 +2854,7 @@ void MetalPipelineCache::LogNativeShaderProgress(const char* what) {
       "optimized-ready {} (+{} from cache at install), plain pipelines {}, "
       "swapped {}, plain-in-use {}, swap failed {} (deferred for the other "
       "shader {}, swapped later {}), fallbacks {}, {} ms "
-      "optimizing; emulation pipelines plain {}, swapped {}, failed {}",
+      "optimizing",
       what,
       std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                     warmup_start_)
@@ -4010,10 +2867,7 @@ void MetalPipelineCache::LogNativeShaderProgress(const char* what) {
       native_shaders_swap_nothing_yet_.load(std::memory_order_relaxed),
       native_shaders_swap_deferred_done_.load(std::memory_order_relaxed),
       native_shaders_fallbacks_.load(std::memory_order_relaxed),
-      native_shaders_opt_ms_total_.load(std::memory_order_relaxed),
-      ns_emu_plain_.load(std::memory_order_relaxed),
-      ns_emu_swapped_.load(std::memory_order_relaxed),
-      ns_emu_swap_failed_.load(std::memory_order_relaxed));
+      native_shaders_opt_ms_total_.load(std::memory_order_relaxed));
 }
 
 void MetalPipelineCache::NativeShaderSwap(PipelineHandle* handle) {
@@ -4113,76 +2967,6 @@ void MetalPipelineCache::NativeShaderSwap(PipelineHandle* handle) {
   }
 }
 
-MTL::Library* MetalPipelineCache::NsEmuFragmentLibrary(
-    MetalShader::MetalTranslation* pixel_translation, bool* out_optimized) {
-  *out_optimized = false;
-  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) {
-    RegisterLiveShader(pixel_translation);
-    auto found = live_shaders_.find(pixel_translation);
-    if (found != live_shaders_.end() && found->second.library) {
-      *out_optimized = true;
-      return found->second.library;
-    }
-  }
-  if (NativeShadersEmuPipelines()) {
-    if (MTL::Library* optimized = pixel_translation->optimized_library()) {
-      *out_optimized = true;
-      return optimized;
-    }
-  }
-  return pixel_translation->metal_library();
-}
-
-void MetalPipelineCache::RegisterNsEmuSwap(
-    const std::shared_ptr<NsEmuSwap>& swap) {
-  MetalShader::MetalTranslation* translation = swap->pixel_translation;
-  ns_emu_plain_.fetch_add(1, std::memory_order_relaxed);
-  {
-    std::lock_guard<std::mutex> lock(ns_mutex_);
-    if (translation->optimized_function()) {
-      // Published between the library choice and now: rebuild right away.
-      if (!swap->queued.exchange(true)) {
-        ns_emu_swap_queue_.push_back(swap);
-      }
-    } else if (translation->native_shader_state().load() == 2) {
-      return;  // optimization failed or unavailable: stays plain
-    } else {
-      ns_emu_handles_[translation].push_back(swap);
-    }
-  }
-  ns_cond_.notify_one();
-  // A plain library whose optimization was never queued (installed while no
-  // background pool existed) gets queued here; a no-op when already queued.
-  QueueNativeShaderOptimization(translation);
-}
-
-void MetalPipelineCache::NsEmuRebuild(const std::shared_ptr<NsEmuSwap>& swap) {
-  if (swap->optimized.load(std::memory_order_acquire)) {
-    return;
-  }
-  MTL::Library* library = swap->pixel_translation->optimized_library();
-  MTL::RenderPipelineState* pipeline = library ? swap->build(library) : nullptr;
-  if (!pipeline) {
-    const uint64_t n =
-        ns_emu_swap_failed_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n <= 4) {
-      REXLOG_WARN(
-          "[native-shaders] PS {:016X}: optimized {} emulation pipeline not "
-          "created; the plain pipeline stays (#{})",
-          swap->pixel_translation->shader().ucode_data_hash(),
-          swap->tessellation ? "tessellation" : "geometry", n);
-    }
-    return;
-  }
-  // The draw path loads the published pipeline once per draw
-  // (current_pipeline()); the plain one stays alive until the cache goes.
-  swap->optimized.store(pipeline, std::memory_order_release);
-  const uint64_t n = ns_emu_swapped_.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n == 1 || (n & (n - 1)) == 0) {
-    LogNativeShaderProgress("emulation pipelines swapped");
-  }
-}
-
 // ---------------------------------------------------------------------------
 // FABLE2_NS_SPECIALIZE: hot-shader specialization (metal_ns_specialize.h,
 // docs/native-shaders.md "Hot-shader specialization")
@@ -4258,21 +3042,6 @@ void MetalPipelineCache::RequestSpecPipeline(PipelineHandle* handle) {
     std::lock_guard<std::mutex> lock(ns_mutex_);
     ns_idle_logged_ = false;
     ns_spec_build_queue_.push_back(handle);
-  }
-  ns_cond_.notify_one();
-}
-
-void MetalPipelineCache::RequestSpecEmuPipeline(
-    const std::shared_ptr<NsEmuSwap>& swap) {
-  uint8_t expected = 0;
-  if (!swap || ns_threads_.empty() ||
-      !swap->spec_status.compare_exchange_strong(expected, 1)) {
-    return;
-  }
-  {
-    std::lock_guard<std::mutex> lock(ns_mutex_);
-    ns_idle_logged_ = false;
-    ns_spec_emu_queue_.push_back(swap);
   }
   ns_cond_.notify_one();
 }
@@ -4604,52 +3373,20 @@ void MetalPipelineCache::NsSpecBuild(PipelineHandle* handle) {
   handle->ns_spec_status.store(2, std::memory_order_release);
 }
 
-void MetalPipelineCache::NsSpecBuildEmu(const std::shared_ptr<NsEmuSwap>& swap) {
-  const ns_spec::Variant* variant =
-      swap->pixel_translation ? swap->pixel_translation->spec_variant()
-                              : nullptr;
-  const uint64_t cpu_start = ThreadCpuUs();
-  MTL::RenderPipelineState* pipeline =
-      variant && swap->build ? swap->build(variant->library) : nullptr;
-  ns2_build_cpu_us_.fetch_add(ThreadCpuUs() - cpu_start,
-                              std::memory_order_relaxed);
-  if (!pipeline) {
-    const uint64_t n =
-        ns_spec_pipeline_failed_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n <= 4) {
-      REXLOG_WARN("[ns-spec] specialized {} emulation pipeline not created; "
-                  "the normal pipeline stays (#{})",
-                  swap->tessellation ? "tessellation" : "geometry", n);
-    }
-  } else {
-    swap->spec.store(pipeline, std::memory_order_release);
-    const uint64_t n =
-        ns_spec_pipelines_.fetch_add(1, std::memory_order_relaxed) + 1;
-    LogNs2Pipeline(n, true);
-    if (n == 1 || (n & (n - 1)) == 0) {
-      LogSpecProgress("specialized pipelines");
-    }
-  }
-  swap->spec_status.store(2, std::memory_order_release);
-}
-
 void MetalPipelineCache::NativeShaderThread() {
   pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
   for (;;) {
     PipelineHandle* swap = nullptr;
-    std::shared_ptr<NsEmuSwap> emu_swap;
     MetalShader::MetalTranslation* translation = nullptr;
     PipelineHandle* spec_build = nullptr;
-    std::shared_ptr<NsEmuSwap> spec_emu_build;
     MetalShader::MetalTranslation* spec_translation = nullptr;
     {
       std::unique_lock<std::mutex> lock(ns_mutex_);
       ns_cond_.wait(lock, [this] {
         return ns_shutdown_ || !ns_swap_queue_.empty() ||
-               !ns_emu_swap_queue_.empty() || !ns_optimize_queue_.empty() ||
-               !ns_spec_queue_.empty() || !ns_spec_build_queue_.empty() ||
-               !ns_spec_emu_queue_.empty();
+               !ns_optimize_queue_.empty() || !ns_spec_queue_.empty() ||
+               !ns_spec_build_queue_.empty();
       });
       if (ns_shutdown_) {
         break;
@@ -4657,17 +3394,10 @@ void MetalPipelineCache::NativeShaderThread() {
       // FABLE2_NS_SPECIALIZE work comes after the optimized-library swaps:
       // first specialized pipeline builds (a draw is waiting for them), then
       // optimization, then specialization (cache loads or generation).
-      if (ns_swap_queue_.empty() && ns_emu_swap_queue_.empty() &&
-          (!ns_spec_build_queue_.empty() || !ns_spec_emu_queue_.empty())) {
-        if (!ns_spec_build_queue_.empty()) {
-          spec_build = ns_spec_build_queue_.front();
-          ns_spec_build_queue_.erase(ns_spec_build_queue_.begin());
-        } else {
-          spec_emu_build = std::move(ns_spec_emu_queue_.front());
-          ns_spec_emu_queue_.erase(ns_spec_emu_queue_.begin());
-        }
-      } else if (ns_swap_queue_.empty() && ns_emu_swap_queue_.empty() &&
-                 ns_optimize_queue_.empty()) {
+      if (ns_swap_queue_.empty() && !ns_spec_build_queue_.empty()) {
+        spec_build = ns_spec_build_queue_.front();
+        ns_spec_build_queue_.erase(ns_spec_build_queue_.begin());
+      } else if (ns_swap_queue_.empty() && ns_optimize_queue_.empty()) {
         // Hottest first, as for optimization.
         size_t best = 0;
         uint32_t best_uses = ns_spec_queue_[0]->use_count();
@@ -4680,9 +3410,6 @@ void MetalPipelineCache::NativeShaderThread() {
         }
         spec_translation = ns_spec_queue_[best];
         ns_spec_queue_.erase(ns_spec_queue_.begin() + best);
-      } else if (!ns_emu_swap_queue_.empty() && ns_swap_queue_.empty()) {
-        emu_swap = std::move(ns_emu_swap_queue_.front());
-        ns_emu_swap_queue_.erase(ns_emu_swap_queue_.begin());
       } else if (!ns_swap_queue_.empty()) {
         // Swaps first: they deliver an already-optimized shader.
         swap = ns_swap_queue_.front();
@@ -4709,12 +3436,8 @@ void MetalPipelineCache::NativeShaderThread() {
 
     if (spec_build) {
       NsSpecBuild(spec_build);
-    } else if (spec_emu_build) {
-      NsSpecBuildEmu(spec_emu_build);
     } else if (spec_translation) {
       NsSpecialize(spec_translation);
-    } else if (emu_swap) {
-      NsEmuRebuild(emu_swap);
     } else if (swap) {
       NativeShaderSwap(swap);
     } else {
@@ -4761,17 +3484,6 @@ void MetalPipelineCache::NativeShaderThread() {
           }
           ns_handles_.erase(it);
         }
-        auto emu_it = ns_emu_handles_.find(translation);
-        if (emu_it != ns_emu_handles_.end()) {
-          if (ok) {
-            for (auto& emu : emu_it->second) {
-              if (!emu->queued.exchange(true)) {
-                ns_emu_swap_queue_.push_back(emu);
-              }
-            }
-          }
-          ns_emu_handles_.erase(emu_it);
-        }
       }
       ns_cond_.notify_all();
       if (ready == 1 || (ready && (ready & (ready - 1)) == 0)) {
@@ -4786,9 +3498,9 @@ void MetalPipelineCache::NativeShaderThread() {
       ++ns_items_since_idle_log_;
       // Log the first drain, then only drains that did real work (shaders
       // first met in play arrive one at a time).
-      if (!ns_busy_ && ns_swap_queue_.empty() && ns_emu_swap_queue_.empty() &&
+      if (!ns_busy_ && ns_swap_queue_.empty() &&
           ns_optimize_queue_.empty() && ns_spec_queue_.empty() &&
-          ns_spec_build_queue_.empty() && ns_spec_emu_queue_.empty() &&
+          ns_spec_build_queue_.empty() &&
           !ns_idle_logged_ &&
           (!ns_first_idle_logged_ || ns_items_since_idle_log_ >= 16)) {
         ns_idle_logged_ = true;
@@ -4876,7 +3588,6 @@ int MetalPipelineCache::TryNativeFirst(
   {
     std::lock_guard<std::mutex> lock(ns_mutex_);
     ns_handles_.erase(translation);
-    ns_emu_handles_.erase(translation);
   }
   if (!vertex && NativeShadersMode() &&
       (ns_spec::Enabled() || ns_spec::LearnMode())) {
@@ -4932,124 +3643,11 @@ bool MetalPipelineCache::EnsureMetalTranslationReady(
     if (native < 0) {
       return translation->is_valid();
     }
-    if (!ConverterBuiltIn()) {
-      converter_census::Refused();
-      return false;
-    }
   }
-  if (!EnsureDxilTranslationReady(translation, "guest")) {
-    return false;
-  }
-
-  MetalShaderStage stage;
-  switch (translation->shader().type()) {
-    case xenos::ShaderType::kVertex:
-      stage = MetalShaderStage::kVertex;
-      break;
-    case xenos::ShaderType::kPixel:
-      stage = MetalShaderStage::kFragment;
-      break;
-    default:
-      REXLOG_ERROR("Unsupported Metal shader type {}",
-             uint32_t(translation->shader().type()));
-      return false;
-  }
-
-  MetalStageCompileRequest request;
-  request.stage = stage;
-  request.dxil_data =
-      std::make_shared<std::vector<uint8_t>>(translation->GetDxilDataCopy());
-  request.requested_outputs = kMetalStageCompileOutputMetallib;
-  std::shared_ptr<const MetalStageCompileResult> result =
-      metal_shader_converter_->CompileStage(request);
-  if (!result || !result->success) {
-    REXLOG_ERROR("Failed to translate shader {:016X} to Metal: {}",
-           translation->shader().ucode_data_hash(),
-           result ? result->error_message : "unknown error");
-    return false;
-  }
-  uint64_t library_ms = 0;
-  bool library_created = false;
-  // FABLE2_NATIVE_SHADERS (docs/native-shaders.md): a guest pixel shader whose
-  // optimized library is already in the disk cache installs it directly
-  // (warm launches: optimized pipelines come straight from the ".ns1"
-  // archive). Otherwise the plain library is installed now, exactly as with
-  // the switch off, and the shader is optimized in the background; its
-  // pipelines are swapped once that is done. Nothing here runs the tools.
-  bool queue_optimization = false;
-  bool installed = false;
-  // FABLE2_NS_SPECIALIZE: key of the plain library (learn data and NS2
-  // records), whatever library ends up installed.
-  if (NativeShadersMode() && stage == MetalShaderStage::kFragment &&
-      (ns_spec::Enabled() || ns_spec::LearnMode())) {
-    translation->SetPlainKey(ns_spec::ComputePlainKey(result->metallib_data));
-  }
-  if (NativeXlateMode() && (stage == MetalShaderStage::kFragment ||
-                            (stage == MetalShaderStage::kVertex &&
-                             NativeXlateVertexMode()))) {
-    // FABLE2_NATIVE_XLATE: the background pool translates to MSL first and
-    // falls back to the cached / -O2 library per shader (vertex shaders:
-    // the converter's library stays).
-    queue_optimization = true;
-  } else if (NativeShadersMode() && stage == MetalShaderStage::kFragment &&
-      !NativeShaderKeepPlain(translation->shader().ucode_data_hash())) {
-    // Never wait for the tool lookup here: if it has not finished, install
-    // plain; the background pool then finds the cached library and swaps.
-    std::vector<uint8_t> optimized_bytes;
-    if (AirOptimizerLookupDone() &&
-        LoadOptimizedPixelShader(result->metallib_data, &optimized_bytes)) {
-      auto optimized = std::make_shared<MetalStageCompileResult>(*result);
-      optimized->metallib_data = std::move(optimized_bytes);
-      installed = translation->InstallMetal(device_, *optimized, &library_ms,
-                                            &library_created);
-      if (installed && library_created) {
-        translation->MarkInstalledAsOptimized();
-        native_shaders_cache_hits_.fetch_add(1, std::memory_order_relaxed);
-        const uint64_t n =
-            native_shaders_optimized_.fetch_add(1, std::memory_order_relaxed) +
-            1;
-        if (n == 1 || (n & (n - 1)) == 0) {
-          REXLOG_INFO(
-              "[native-shaders] optimized pixel shaders installed from cache: "
-              "{}",
-              n);
-        }
-        result = optimized;
-      } else if (!installed) {
-        const uint64_t n = native_shaders_fallbacks_.fetch_add(
-                               1, std::memory_order_relaxed) +
-                           1;
-        REXLOG_WARN(
-            "[native-shaders] PS {:016X}: cached optimized library rejected; "
-            "plain library (fallback #{})",
-            translation->shader().ucode_data_hash(), n);
-      }
-    } else {
-      queue_optimization = true;
-    }
-  }
-  if (!installed) {
-    installed = translation->InstallMetal(device_, *result, &library_ms,
-                                          &library_created);
-  }
-  if (installed && queue_optimization) {
-    QueueNativeShaderOptimization(translation);
-  }
-  if (installed && NativeShadersMode() && ns_spec::Enabled() &&
-      stage == MetalShaderStage::kFragment &&
-      ns_spec::Candidate(translation->shader().ucode_data_hash())) {
-    QueueSpecialization(translation);
-  }
-  if (library_created) {
-    converter_census::Library(converter_census::CurrentPurpose());
-    RecordLibraryCreation(result->metallib_data.size(),
-                          translation->metal_library() != nullptr, library_ms);
-  }
-  if (!installed) {
-    return false;
-  }
-
-  return true;
+  // No converter (docs/no-converter.md): a shader without a native
+  // translation is refused.
+  converter_census::Refused();
+  return false;
 }
 
 bool MetalPipelineCache::EnsureDxbcTranslationReady(
@@ -5690,20 +4288,6 @@ void MetalPipelineCache::LiveShaderThread() {
         if (!pso) { ok = false; break; }
         ready.emplace_back(h, pso);
       }
-      std::vector<std::pair<std::shared_ptr<NsEmuSwap>, MTL::RenderPipelineState*>> emu_ready;
-      if (ok) {
-        MTL::Library* emu_library = library;
-        if (!exists) {
-          emu_library = t->optimized_library();
-          if (!emu_library) emu_library = t->metal_library();
-        }
-        for (auto& emu : live_emu_handles_) {
-          if (emu->pixel_translation != t) continue;
-          auto* pipeline = emu_library ? emu->build(emu_library) : nullptr;
-          if (!pipeline) { ok = false; break; }
-          emu_ready.emplace_back(emu, pipeline);
-        }
-      }
       std::vector<std::pair<LiveNativePipeline*, MTL::RenderPipelineState*>> native_ready;
       if (ok) {
         for (auto& pair : live_native_pipelines_) {
@@ -5729,7 +4313,6 @@ void MetalPipelineCache::LiveShaderThread() {
         for (auto& p : ready) p.second->release();
         if (function) function->release();
         if (library) library->release();
-        for (auto& p : emu_ready) p.second->release();
         for (auto& p : native_ready) p.second->release();
         REXLOG_ERROR("[shader-live] {}: pipeline rebuild failed (last working shader kept)", edit.stem);
         continue;
@@ -5742,16 +4325,12 @@ void MetalPipelineCache::LiveShaderThread() {
         if (p.first->active) p.first->retired.push_back(p.first->active);
         p.first->active = p.second;
       }
-      for (auto& p : emu_ready) {
-        auto* old = p.first->live.exchange(p.second, std::memory_order_acq_rel);
-        if (old) p.first->live_retired.push_back(old);
-      }
       for (auto& p : ready) {
         auto* old = p.first->state.exchange(p.second, std::memory_order_acq_rel);
         if (old) p.first->ns_retired_states.push_back(old);
       }
       REXLOG_INFO("[shader-live] {}: {} successful, {} pipelines rebuilt", edit.stem,
-                  exists ? "swap" : "restore", ready.size() + emu_ready.size() + native_ready.size());
+                  exists ? "swap" : "restore", ready.size() + native_ready.size());
     }
   }
 }
@@ -6055,10 +4634,9 @@ readiness::Background MetalPipelineCache::ReadinessBackground() {
   readiness::Background bg;
   {
     std::lock_guard<std::mutex> lock(ns_mutex_);
-    bg.ns_pending = uint32_t(ns_busy_ + ns_optimize_queue_.size() + ns_swap_queue_.size() +
-                             ns_emu_swap_queue_.size());
+    bg.ns_pending = uint32_t(ns_busy_ + ns_optimize_queue_.size() + ns_swap_queue_.size());
     bg.ns_spec_pending =
-        uint32_t(ns_spec_queue_.size() + ns_spec_build_queue_.size() + ns_spec_emu_queue_.size());
+        uint32_t(ns_spec_queue_.size() + ns_spec_build_queue_.size());
   }
   if (!creation_threads_.empty()) {
     std::lock_guard<std::mutex> lock(creation_request_lock_);
@@ -6080,14 +4658,6 @@ bool MetalPipelineCache::IsCreatingPipelines() {
   }
   std::lock_guard<std::mutex> lock(creation_request_lock_);
   return !creation_queue_.empty() || creation_threads_busy_ != 0;
-}
-
-MetalStageCompileCacheStats MetalPipelineCache::GetAndResetStageCompileStats() {
-  if (!metal_shader_converter_ ||
-      !metal_shader_converter_->stage_compile_cache()) {
-    return {};
-  }
-  return metal_shader_converter_->stage_compile_cache()->GetAndResetStats();
 }
 
 MetalPipelineRuntimeStats MetalPipelineCache::GetAndResetRuntimeStats() {
@@ -6125,277 +4695,6 @@ MetalPipelineRuntimeStats MetalPipelineCache::GetAndResetRuntimeStats() {
   stats.render_pipeline_ms_max =
       render_pipeline_ms_max_.exchange(0, std::memory_order_relaxed);
   return stats;
-}
-
-// ---------------------------------------------------------------------------
-// GetOrCreateGeometryPipelineState
-// ---------------------------------------------------------------------------
-
-MetalPipelineCache::GeometryPipelineState*
-MetalPipelineCache::GetOrCreateGeometryPipelineState(
-    MetalShader::MetalTranslation* vertex_translation,
-    MetalShader::MetalTranslation* pixel_translation,
-    GeometryShaderKey geometry_shader_key,
-    const PipelineAttachmentFormats& attachment_formats,
-    const PipelineRenderingKey& rendering_key) {
-  std::unique_lock<std::recursive_mutex> live_creation(live_mutex_, std::defer_lock);
-  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_creation.lock();
-  if (!vertex_translation) {
-    REXLOG_ERROR("No valid vertex shader translation for geometry pipeline");
-    return nullptr;
-  }
-  bool use_fallback_pixel_shader = (pixel_translation == nullptr);
-  bool pixel_optimized = false;
-  MTL::Library* pixel_library =
-      use_fallback_pixel_shader
-          ? nullptr
-          : NsEmuFragmentLibrary(pixel_translation, &pixel_optimized);
-  const char* pixel_function =
-      use_fallback_pixel_shader
-          ? nullptr
-          : (pixel_optimized
-                 ? pixel_translation->optimized_function_name().c_str()
-                 : pixel_translation->function_name().c_str());
-  if (use_fallback_pixel_shader) {
-    if (!EnsureDepthOnlyPixelShader()) {
-      REXLOG_ERROR("Geometry pipeline: failed to create depth-only PS");
-      return nullptr;
-    }
-    pixel_library = depth_only_pixel_library_;
-    pixel_function = depth_only_pixel_function_name_.c_str();
-  } else if (!pixel_library) {
-    REXLOG_ERROR("No valid pixel shader translation for geometry pipeline");
-    return nullptr;
-  }
-
-  uint32_t sample_count = attachment_formats.sample_count;
-  MTL::PixelFormat color_formats[4];
-  for (uint32_t i = 0; i < 4; ++i) {
-    color_formats[i] = attachment_formats.color_formats[i];
-  }
-  MTL::PixelFormat depth_format = attachment_formats.depth_format;
-  MTL::PixelFormat stencil_format = attachment_formats.stencil_format;
-
-  struct GeometryPipelineKey {
-    const void* vs;
-    const void* ps;
-    uint32_t geometry_key;
-    uint32_t sample_count;
-    uint32_t depth_format;
-    uint32_t stencil_format;
-    uint32_t color_formats[4];
-    uint32_t normalized_color_mask;
-    uint32_t alpha_to_mask_enable;
-    uint32_t blendcontrol[4];
-  } key_data = {};
-
-  key_data.vs = vertex_translation;
-  key_data.ps = use_fallback_pixel_shader
-                    ? static_cast<const void*>(pixel_library)
-                    : static_cast<const void*>(pixel_translation);
-  key_data.geometry_key = geometry_shader_key.key;
-  key_data.sample_count = sample_count;
-  key_data.depth_format = uint32_t(depth_format);
-  key_data.stencil_format = uint32_t(stencil_format);
-  for (uint32_t i = 0; i < 4; ++i) {
-    key_data.color_formats[i] = uint32_t(color_formats[i]);
-  }
-  key_data.normalized_color_mask = rendering_key.normalized_color_mask;
-  key_data.alpha_to_mask_enable = rendering_key.alpha_to_mask_enable;
-  std::memcpy(key_data.blendcontrol, rendering_key.blendcontrol,
-              sizeof(key_data.blendcontrol));
-  uint64_t key = XXH3_64bits(&key_data, sizeof(key_data));
-
-  auto it = geometry_pipeline_cache_.find(key);
-  if (it != geometry_pipeline_cache_.end()) {
-    return &it->second;
-  }
-  hitch::Scope hitch_scope(hitch::kPsoEmu);
-
-  const bool failure_backoff =
-      REXCVAR_GET(metal_geometry_pipeline_failure_backoff);
-  if (failure_backoff && !geometry_pipeline_failures_.CanAttempt(
-                             key, std::chrono::steady_clock::now())) {
-    return nullptr;
-  }
-
-  if (!generated_stages_) {
-    REXLOG_ERROR("Geometry pipeline: generated stage cache is not initialized");
-    return nullptr;
-  }
-
-  auto* vertex_stage = generated_stages_->GetGeometryVertexStage(
-      vertex_translation, geometry_shader_key);
-  if (!vertex_stage || !vertex_stage->library ||
-      !vertex_stage->stage_in_library) {
-    return nullptr;
-  }
-  auto* geometry_stage =
-      generated_stages_->GetGeometryShaderStage(geometry_shader_key);
-  if (!geometry_stage || !geometry_stage->library) {
-    return nullptr;
-  }
-
-  if (!vertex_stage->vertex_output_size_in_bytes ||
-      !geometry_stage->max_input_primitives_per_mesh_threadgroup) {
-    REXLOG_ERROR(
-        "Geometry pipeline: invalid reflection (vs_output={}, gs_max_input={})",
-        vertex_stage->vertex_output_size_in_bytes,
-        geometry_stage->max_input_primitives_per_mesh_threadgroup);
-    return nullptr;
-  }
-
-  if (NativeTessDumpDir()) {
-    const std::string json = fmt::format(
-        "{{\"vs\": \"{:016X}\", \"mod\": \"{:X}\", \"key\": \"{:08X}\", "
-        "\"type\": {}, \"vs_fn\": \"{}\", \"gs_fn\": \"{}\", "
-        "\"vertex_size\": {}, \"max_input_prims\": {}}}\n",
-        vertex_translation->shader().ucode_data_hash(),
-        vertex_translation->modification(), geometry_shader_key.key,
-        uint32_t(geometry_shader_key.type), vertex_stage->function_name,
-        geometry_stage->function_name, vertex_stage->vertex_output_size_in_bytes,
-        geometry_stage->max_input_primitives_per_mesh_threadgroup);
-    NativeTessDumpFile(
-        fmt::format("geom_{:016X}_{:X}_k{:08X}.json",
-                    vertex_translation->shader().ucode_data_hash(),
-                    vertex_translation->modification(), geometry_shader_key.key),
-        std::vector<uint8_t>(json.begin(), json.end()));
-  }
-
-  // Builds the pipeline for a given fragment library. Kept for the
-  // FABLE2_NS_EMU_PIPELINES background rebuild with the optimized pixel
-  // shader: the stage states live as long as the cache, and the optimizer
-  // threads stop before it is destroyed.
-  uint32_t blendcontrol[4];
-  std::memcpy(blendcontrol, key_data.blendcontrol, sizeof(blendcontrol));
-  const uint32_t normalized_color_mask = key_data.normalized_color_mask;
-  // The converter's entry point; the native translation's library has its
-  // own (FABLE2_NATIVE_XLATE), chosen per library at build time.
-  const std::string fragment_function =
-      (pixel_function && pixel_translation && !use_fallback_pixel_shader)
-          ? pixel_translation->function_name()
-          : std::string(pixel_function ? pixel_function : "");
-  MetalShader::MetalTranslation* fragment_translation =
-      use_fallback_pixel_shader ? nullptr : pixel_translation;
-  auto build = [device = device_, vertex_stage, geometry_stage, color_formats,
-                depth_format, stencil_format, sample_count,
-                normalized_color_mask, blendcontrol, fragment_function,
-                fragment_translation](
-                   MTL::Library* fragment_library,
-                   NS::Error** error) -> MTL::RenderPipelineState* {
-    MTL::MeshRenderPipelineDescriptor* desc =
-        MTL::MeshRenderPipelineDescriptor::alloc()->init();
-    for (uint32_t i = 0; i < 4; ++i) {
-      desc->colorAttachments()->object(i)->setPixelFormat(color_formats[i]);
-    }
-    desc->setDepthAttachmentPixelFormat(depth_format);
-    desc->setStencilAttachmentPixelFormat(stencil_format);
-    desc->setRasterSampleCount(sample_count);
-    desc->setAlphaToCoverageEnabled(false);
-    ApplyBlendStateToDescriptor(desc->colorAttachments(),
-                                normalized_color_mask, blendcontrol);
-    IRGeometryEmulationPipelineDescriptor ir_desc = {};
-    ir_desc.stageInLibrary = vertex_stage->stage_in_library;
-    ir_desc.vertexLibrary = vertex_stage->library;
-    ir_desc.vertexFunctionName = vertex_stage->function_name.c_str();
-    ir_desc.geometryLibrary = geometry_stage->library;
-    ir_desc.geometryFunctionName = geometry_stage->function_name.c_str();
-    ir_desc.fragmentLibrary = fragment_library;
-    ir_desc.fragmentFunctionName =
-        NativeXlateEntryIn(fragment_library, fragment_translation)
-            ? "xe_native_ps"
-            : fragment_function.c_str();
-    ir_desc.basePipelineDescriptor = desc;
-    ir_desc.pipelineConfig.gsVertexSizeInBytes =
-        vertex_stage->vertex_output_size_in_bytes;
-    ir_desc.pipelineConfig.gsMaxInputPrimitivesPerMeshThreadgroup =
-        geometry_stage->max_input_primitives_per_mesh_threadgroup;
-    MTL::RenderPipelineState* result =
-        IRRuntimeNewGeometryEmulationPipeline(device, &ir_desc, error);
-    desc->release();
-    return result;
-  };
-
-  NS::Error* error = nullptr;
-  auto pipeline_start = std::chrono::steady_clock::now();
-  MTL::RenderPipelineState* pipeline = build(pixel_library, &error);
-  auto pipeline_end = std::chrono::steady_clock::now();
-  RecordRenderPipelineCreation(pipeline != nullptr,
-                               ElapsedMs(pipeline_start, pipeline_end));
-
-  if (!pipeline) {
-    const auto retry_delay =
-        failure_backoff
-            ? geometry_pipeline_failures_.RecordFailure(key, pipeline_end)
-            : std::chrono::seconds(0);
-    REXLOG_ERROR(
-        "Failed to create geometry pipeline state: {}",
-        error ? error->localizedDescription()->utf8String() : "unknown error");
-    REXLOG_ERROR(
-        "Geometry pipeline identity: key={:016X} vs={:016X}/{:016X} "
-        "ps={:016X}/{:016X} geometry={:08X} retry_delay_seconds={}",
-        key, vertex_translation->shader().ucode_data_hash(),
-        vertex_translation->modification(),
-        pixel_translation ? pixel_translation->shader().ucode_data_hash() : 0,
-        pixel_translation ? pixel_translation->modification() : 0,
-        geometry_shader_key.key, retry_delay.count());
-    REXLOG_ERROR(
-        "Geometry pipeline details: vs_fn='{}' gs_fn='{}' ps_fn='{}' "
-        "depth_format={} stencil_format={} samples={}",
-        vertex_stage->function_name, geometry_stage->function_name,
-        pixel_function ? pixel_function : "<null>", uint32_t(depth_format),
-        uint32_t(stencil_format), sample_count);
-    LogMetalErrorDetails("Geometry pipeline error", error);
-    return nullptr;
-  }
-
-  geometry_pipeline_failures_.RecordSuccess(key);
-
-  GeometryPipelineState state;
-  state.pipeline = pipeline;
-  state.gs_vertex_size_in_bytes = vertex_stage->vertex_output_size_in_bytes;
-  state.gs_max_input_primitives_per_mesh_threadgroup =
-      geometry_stage->max_input_primitives_per_mesh_threadgroup;
-  // FABLE2_NS_SPECIALIZE also keeps the rebuild closure (specialized
-  // variant), even when the optimized library was used from the start.
-  const bool ns_emu_swappable = !use_fallback_pixel_shader &&
-                                NativeShadersEmuPipelines() && !pixel_optimized;
-  const bool ns_emu_spec =
-      !use_fallback_pixel_shader && pixel_translation && NativeShadersMode() &&
-      ns_spec::Enabled() &&
-      ns_spec::Candidate(pixel_translation->shader().ucode_data_hash());
-  const bool live_emu = !use_fallback_pixel_shader && pixel_translation &&
-      !REXCVAR_GET(metal_shader_live_overrides).empty();
-  if (ns_emu_swappable || ns_emu_spec || live_emu) {
-    auto swap = std::make_shared<NsEmuSwap>();
-    swap->pixel_translation = pixel_translation;
-    swap->swappable = ns_emu_swappable;
-    swap->tessellation = false;
-    swap->build = [build](MTL::Library* library) {
-      NS::Error* build_error = nullptr;
-      return build(library, &build_error);
-    };
-    state.ns_emu = swap;
-    if (live_emu) live_emu_handles_.push_back(swap);
-  }
-
-  auto [inserted_it, inserted] =
-      geometry_pipeline_cache_.emplace(key, std::move(state));
-  if (inserted_it->second.ns_emu && inserted_it->second.ns_emu->swappable) {
-    RegisterNsEmuSwap(inserted_it->second.ns_emu);
-  }
-  MetalPipelineDescription stored_description =
-      BuildGeometryPipelineDescription(vertex_translation, pixel_translation,
-                                       geometry_shader_key, attachment_formats,
-                                       rendering_key);
-  QueueStoredShader(static_cast<MetalShader&>(vertex_translation->shader()));
-  if (pixel_translation) {
-    QueueStoredShader(static_cast<MetalShader&>(pixel_translation->shader()));
-  }
-  QueueStoredPipeline(
-      stored_description,
-      XXH3_64bits(&stored_description, sizeof(stored_description)));
-  return &inserted_it->second;
 }
 
 // ---------------------------------------------------------------------------
@@ -6894,351 +5193,6 @@ MTL::RenderPipelineState* MetalPipelineCache::PublishNativeGeomPipeline(
     return it->second;
   }
   return pipeline;
-}
-
-// ---------------------------------------------------------------------------
-// GetOrCreateTessellationPipelineState
-// ---------------------------------------------------------------------------
-
-MetalPipelineCache::TessellationPipelineState*
-MetalPipelineCache::GetOrCreateTessellationPipelineState(
-    MetalShader::MetalTranslation* domain_translation,
-    MetalShader::MetalTranslation* pixel_translation,
-    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-    const PipelineAttachmentFormats& attachment_formats,
-    const PipelineRenderingKey& rendering_key) {
-  std::unique_lock<std::recursive_mutex> live_creation(live_mutex_, std::defer_lock);
-  if (!REXCVAR_GET(metal_shader_live_overrides).empty()) live_creation.lock();
-  if (!domain_translation) {
-    REXLOG_ERROR("No valid domain shader translation for tessellation pipeline");
-    return nullptr;
-  }
-  bool use_fallback_pixel_shader = (pixel_translation == nullptr);
-  bool pixel_optimized = false;
-  MTL::Library* pixel_library =
-      use_fallback_pixel_shader
-          ? nullptr
-          : NsEmuFragmentLibrary(pixel_translation, &pixel_optimized);
-  const char* pixel_function =
-      use_fallback_pixel_shader
-          ? nullptr
-          : (pixel_optimized
-                 ? pixel_translation->optimized_function_name().c_str()
-                 : pixel_translation->function_name().c_str());
-  if (use_fallback_pixel_shader) {
-    if (!EnsureDepthOnlyPixelShader()) {
-      REXLOG_ERROR("Tessellation pipeline: failed to create depth-only PS");
-      return nullptr;
-    }
-    pixel_library = depth_only_pixel_library_;
-    pixel_function = depth_only_pixel_function_name_.c_str();
-  } else if (!pixel_library) {
-    REXLOG_ERROR("No valid pixel shader translation for tessellation pipeline");
-    return nullptr;
-  }
-
-  uint32_t sample_count = attachment_formats.sample_count;
-  MTL::PixelFormat color_formats[4];
-  for (uint32_t i = 0; i < 4; ++i) {
-    color_formats[i] = attachment_formats.color_formats[i];
-  }
-  MTL::PixelFormat depth_format = attachment_formats.depth_format;
-  MTL::PixelFormat stencil_format = attachment_formats.stencil_format;
-
-  struct TessellationPipelineKey {
-    const void* ds;
-    const void* ps;
-    uint32_t host_vs_type;
-    uint32_t tessellation_mode;
-    uint32_t host_prim;
-    uint32_t sample_count;
-    uint32_t depth_format;
-    uint32_t stencil_format;
-    uint32_t color_formats[4];
-    uint32_t normalized_color_mask;
-    uint32_t alpha_to_mask_enable;
-    uint32_t blendcontrol[4];
-  } key_data = {};
-
-  key_data.ds = domain_translation;
-  key_data.ps = use_fallback_pixel_shader
-                    ? static_cast<const void*>(pixel_library)
-                    : static_cast<const void*>(pixel_translation);
-  key_data.host_vs_type =
-      uint32_t(primitive_processing_result.host_vertex_shader_type);
-  key_data.tessellation_mode =
-      uint32_t(primitive_processing_result.tessellation_mode);
-  key_data.host_prim =
-      uint32_t(primitive_processing_result.host_primitive_type);
-  key_data.sample_count = sample_count;
-  key_data.depth_format = uint32_t(depth_format);
-  key_data.stencil_format = uint32_t(stencil_format);
-  for (uint32_t i = 0; i < 4; ++i) {
-    key_data.color_formats[i] = uint32_t(color_formats[i]);
-  }
-  key_data.normalized_color_mask = rendering_key.normalized_color_mask;
-  key_data.alpha_to_mask_enable = rendering_key.alpha_to_mask_enable;
-  std::memcpy(key_data.blendcontrol, rendering_key.blendcontrol,
-              sizeof(key_data.blendcontrol));
-  uint64_t key = XXH3_64bits(&key_data, sizeof(key_data));
-
-  auto it = tessellation_pipeline_cache_.find(key);
-  if (it != tessellation_pipeline_cache_.end()) {
-    return &it->second;
-  }
-  hitch::Scope hitch_scope(hitch::kPsoEmu);
-
-  xenos::TessellationMode tessellation_mode =
-      primitive_processing_result.tessellation_mode;
-
-  if (!generated_stages_) {
-    REXLOG_ERROR("Tessellation pipeline: generated stage cache is not initialized");
-    return nullptr;
-  }
-
-  auto* vertex_stage = generated_stages_->GetTessellationVertexStage(
-      domain_translation, tessellation_mode);
-  if (!vertex_stage || !vertex_stage->library ||
-      !vertex_stage->stage_in_library) {
-    return nullptr;
-  }
-
-  auto* hull_stage = generated_stages_->GetTessellationHullStage(
-      primitive_processing_result, tessellation_mode);
-  if (!hull_stage || !hull_stage->library) {
-    return nullptr;
-  }
-
-  auto* domain_stage =
-      generated_stages_->GetTessellationDomainStage(domain_translation);
-  if (!domain_stage || !domain_stage->library) {
-    return nullptr;
-  }
-
-  IRRuntimeTessellatorOutputPrimitive output_primitive =
-      IRRuntimeTessellatorOutputUndefined;
-  switch (hull_stage->reflection.hs_tessellator_output_primitive) {
-    case IRRuntimeTessellatorOutputPoint:
-      output_primitive = IRRuntimeTessellatorOutputPoint;
-      break;
-    case IRRuntimeTessellatorOutputLine:
-      output_primitive = IRRuntimeTessellatorOutputLine;
-      break;
-    case IRRuntimeTessellatorOutputTriangleCW:
-      output_primitive = IRRuntimeTessellatorOutputTriangleCW;
-      break;
-    case IRRuntimeTessellatorOutputTriangleCCW:
-      output_primitive = IRRuntimeTessellatorOutputTriangleCCW;
-      break;
-    default:
-      REXLOG_ERROR("Tessellation pipeline: unsupported tessellator output {}",
-             hull_stage->reflection.hs_tessellator_output_primitive);
-      return nullptr;
-  }
-
-  IRRuntimePrimitiveType geometry_primitive = IRRuntimePrimitiveTypeTriangle;
-  const char* geometry_function = kIRTrianglePassthroughGeometryShader;
-  switch (output_primitive) {
-    case IRRuntimeTessellatorOutputPoint:
-      geometry_primitive = IRRuntimePrimitiveTypePoint;
-      geometry_function = kIRPointPassthroughGeometryShader;
-      break;
-    case IRRuntimeTessellatorOutputLine:
-      geometry_primitive = IRRuntimePrimitiveTypeLine;
-      geometry_function = kIRLinePassthroughGeometryShader;
-      break;
-    case IRRuntimeTessellatorOutputTriangleCW:
-    case IRRuntimeTessellatorOutputTriangleCCW:
-      geometry_primitive = IRRuntimePrimitiveTypeTriangle;
-      geometry_function = kIRTrianglePassthroughGeometryShader;
-      break;
-    default:
-      break;
-  }
-
-  if (!IRRuntimeValidateTessellationPipeline(
-          output_primitive, geometry_primitive,
-          hull_stage->reflection.hs_output_control_point_size,
-          domain_stage->reflection.ds_input_control_point_size,
-          hull_stage->reflection.hs_patch_constants_size,
-          domain_stage->reflection.ds_patch_constants_size,
-          hull_stage->reflection.hs_output_control_point_count,
-          domain_stage->reflection.ds_input_control_point_count)) {
-    REXLOG_ERROR("Tessellation pipeline: validation failed for HS/DS pairing");
-    return nullptr;
-  }
-
-  IRRuntimeTessellationPipelineConfig pipeline_config = {};
-  pipeline_config.outputPrimitiveType = output_primitive;
-  pipeline_config.vsOutputSizeInBytes =
-      vertex_stage->vertex_output_size_in_bytes;
-  pipeline_config.gsMaxInputPrimitivesPerMeshThreadgroup =
-      domain_stage->reflection.ds_max_input_prims_per_mesh_threadgroup;
-  pipeline_config.hsMaxPatchesPerObjectThreadgroup =
-      hull_stage->reflection.hs_max_patches_per_object_threadgroup;
-  pipeline_config.hsInputControlPointCount =
-      hull_stage->reflection.hs_input_control_point_count;
-  pipeline_config.hsMaxObjectThreadsPerThreadgroup =
-      hull_stage->reflection.hs_max_object_threads_per_patch;
-  pipeline_config.hsMaxTessellationFactor =
-      hull_stage->reflection.hs_max_tessellation_factor;
-  pipeline_config.gsInstanceCount = 1;
-
-  if (!pipeline_config.vsOutputSizeInBytes ||
-      !pipeline_config.gsMaxInputPrimitivesPerMeshThreadgroup ||
-      !pipeline_config.hsMaxPatchesPerObjectThreadgroup ||
-      !pipeline_config.hsInputControlPointCount ||
-      !pipeline_config.hsMaxObjectThreadsPerThreadgroup) {
-    REXLOG_ERROR(
-        "Tessellation pipeline: invalid reflection values (vs_output={}, "
-        "gs_max_input={}, hs_patches={}, hs_cp_count={}, hs_threads={})",
-        pipeline_config.vsOutputSizeInBytes,
-        pipeline_config.gsMaxInputPrimitivesPerMeshThreadgroup,
-        pipeline_config.hsMaxPatchesPerObjectThreadgroup,
-        pipeline_config.hsInputControlPointCount,
-        pipeline_config.hsMaxObjectThreadsPerThreadgroup);
-    return nullptr;
-  }
-
-  if (NativeTessDumpDir()) {
-    const std::string json = fmt::format(
-        "{{\"ds\": \"{:016X}\", \"mod\": \"{:X}\", \"host_vs_type\": {}, "
-        "\"mode\": {}, \"vs_fn\": \"{}\", \"hs_fn\": \"{}\", \"ds_fn\": \"{}\", "
-        "\"gs_fn\": \"{}\", \"output_primitive\": {}, \"vs_output_size\": {}, "
-        "\"gs_max_input_prims\": {}, \"hs_max_patches\": {}, "
-        "\"hs_input_cp\": {}, \"hs_max_object_threads\": {}, "
-        "\"hs_max_tess_factor\": {}}}\n",
-        domain_translation->shader().ucode_data_hash(),
-        domain_translation->modification(),
-        uint32_t(primitive_processing_result.host_vertex_shader_type),
-        uint32_t(tessellation_mode), vertex_stage->function_name,
-        hull_stage->function_name, domain_stage->function_name,
-        geometry_function, uint32_t(pipeline_config.outputPrimitiveType),
-        pipeline_config.vsOutputSizeInBytes,
-        pipeline_config.gsMaxInputPrimitivesPerMeshThreadgroup,
-        pipeline_config.hsMaxPatchesPerObjectThreadgroup,
-        pipeline_config.hsInputControlPointCount,
-        pipeline_config.hsMaxObjectThreadsPerThreadgroup,
-        pipeline_config.hsMaxTessellationFactor);
-    NativeTessDumpFile(
-        fmt::format("tess_{:016X}_{:X}.json",
-                    domain_translation->shader().ucode_data_hash(),
-                    domain_translation->modification()),
-        std::vector<uint8_t>(json.begin(), json.end()));
-  }
-
-  // Builds the pipeline for a given fragment library; kept for the
-  // FABLE2_NS_EMU_PIPELINES background rebuild (see the geometry pipeline).
-  uint32_t blendcontrol[4];
-  std::memcpy(blendcontrol, key_data.blendcontrol, sizeof(blendcontrol));
-  const uint32_t normalized_color_mask = key_data.normalized_color_mask;
-  // The converter's entry point; the native translation's library has its
-  // own (FABLE2_NATIVE_XLATE), chosen per library at build time.
-  const std::string fragment_function =
-      (pixel_function && pixel_translation && !use_fallback_pixel_shader)
-          ? pixel_translation->function_name()
-          : std::string(pixel_function ? pixel_function : "");
-  MetalShader::MetalTranslation* fragment_translation =
-      use_fallback_pixel_shader ? nullptr : pixel_translation;
-  auto build = [device = device_, vertex_stage, hull_stage, domain_stage,
-                geometry_function, pipeline_config, color_formats,
-                depth_format, stencil_format, sample_count,
-                normalized_color_mask, blendcontrol, fragment_function,
-                fragment_translation](
-                   MTL::Library* fragment_library,
-                   NS::Error** error) -> MTL::RenderPipelineState* {
-    MTL::MeshRenderPipelineDescriptor* desc =
-        MTL::MeshRenderPipelineDescriptor::alloc()->init();
-    for (uint32_t i = 0; i < 4; ++i) {
-      desc->colorAttachments()->object(i)->setPixelFormat(color_formats[i]);
-    }
-    desc->setDepthAttachmentPixelFormat(depth_format);
-    desc->setStencilAttachmentPixelFormat(stencil_format);
-    desc->setRasterSampleCount(sample_count);
-    desc->setAlphaToCoverageEnabled(false);
-    ApplyBlendStateToDescriptor(desc->colorAttachments(),
-                                normalized_color_mask, blendcontrol);
-    IRGeometryTessellationEmulationPipelineDescriptor ir_desc = {};
-    ir_desc.stageInLibrary = vertex_stage->stage_in_library;
-    ir_desc.vertexLibrary = vertex_stage->library;
-    ir_desc.vertexFunctionName = vertex_stage->function_name.c_str();
-    ir_desc.hullLibrary = hull_stage->library;
-    ir_desc.hullFunctionName = hull_stage->function_name.c_str();
-    ir_desc.domainLibrary = domain_stage->library;
-    ir_desc.domainFunctionName = domain_stage->function_name.c_str();
-    ir_desc.geometryLibrary = nullptr;
-    ir_desc.geometryFunctionName = geometry_function;
-    ir_desc.fragmentLibrary = fragment_library;
-    ir_desc.fragmentFunctionName =
-        NativeXlateEntryIn(fragment_library, fragment_translation)
-            ? "xe_native_ps"
-            : fragment_function.c_str();
-    ir_desc.basePipelineDescriptor = desc;
-    ir_desc.pipelineConfig = pipeline_config;
-    MTL::RenderPipelineState* result =
-        IRRuntimeNewGeometryTessellationEmulationPipeline(device, &ir_desc,
-                                                          error);
-    desc->release();
-    return result;
-  };
-
-  NS::Error* error = nullptr;
-  auto pipeline_start = std::chrono::steady_clock::now();
-  MTL::RenderPipelineState* pipeline = build(pixel_library, &error);
-  auto pipeline_end = std::chrono::steady_clock::now();
-  RecordRenderPipelineCreation(pipeline != nullptr,
-                               ElapsedMs(pipeline_start, pipeline_end));
-  if (!pipeline) {
-    REXLOG_ERROR(
-        "Failed to create tessellation pipeline state: {}",
-        error ? error->localizedDescription()->utf8String() : "unknown error");
-    return nullptr;
-  }
-
-  TessellationPipelineState state;
-  state.pipeline = pipeline;
-  state.config = pipeline_config;
-  state.primitive = geometry_primitive;
-  // FABLE2_NS_SPECIALIZE also keeps the rebuild closure (specialized
-  // variant), even when the optimized library was used from the start.
-  const bool ns_emu_swappable = !use_fallback_pixel_shader &&
-                                NativeShadersEmuPipelines() && !pixel_optimized;
-  const bool ns_emu_spec =
-      !use_fallback_pixel_shader && pixel_translation && NativeShadersMode() &&
-      ns_spec::Enabled() &&
-      ns_spec::Candidate(pixel_translation->shader().ucode_data_hash());
-  const bool live_emu = !use_fallback_pixel_shader && pixel_translation &&
-      !REXCVAR_GET(metal_shader_live_overrides).empty();
-  if (ns_emu_swappable || ns_emu_spec || live_emu) {
-    auto swap = std::make_shared<NsEmuSwap>();
-    swap->pixel_translation = pixel_translation;
-    swap->swappable = ns_emu_swappable;
-    swap->tessellation = true;
-    swap->build = [build](MTL::Library* library) {
-      NS::Error* build_error = nullptr;
-      return build(library, &build_error);
-    };
-    state.ns_emu = swap;
-    if (live_emu) live_emu_handles_.push_back(swap);
-  }
-
-  auto [inserted_it, inserted] =
-      tessellation_pipeline_cache_.emplace(key, std::move(state));
-  if (inserted_it->second.ns_emu && inserted_it->second.ns_emu->swappable) {
-    RegisterNsEmuSwap(inserted_it->second.ns_emu);
-  }
-  MetalPipelineDescription stored_description =
-      BuildTessellationPipelineDescription(
-          domain_translation, pixel_translation, primitive_processing_result,
-          tessellation_mode, attachment_formats, rendering_key);
-  QueueStoredShader(static_cast<MetalShader&>(domain_translation->shader()));
-  if (pixel_translation) {
-    QueueStoredShader(static_cast<MetalShader&>(pixel_translation->shader()));
-  }
-  QueueStoredPipeline(
-      stored_description,
-      XXH3_64bits(&stored_description, sizeof(stored_description)));
-  return &inserted_it->second;
 }
 
 }  // namespace metal

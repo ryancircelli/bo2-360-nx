@@ -45,7 +45,6 @@ set(REXGPU_METAL_SOURCES
   port/rex/graphics/metal/metal_air_optimizer.cc
   port/rex/graphics/metal/metal_ref_tessellator.cc
   port/rex/graphics/metal/metal_ns_specialize.cc
-  port/rex/graphics/metal/metal_geometry_shader.cc
   port/rex/graphics/metal/ir_runtime_impl.mm
   port/rex/graphics/metal/metal_shared_memory.cc
   port/rex/graphics/metal/metal_pipeline_cache.cc
@@ -62,7 +61,6 @@ set(REXGPU_METAL_SOURCES
   port/rex/graphics/metal/metal_graphics_system.cc
   port/rex/graphics/metal/metal_primitive_processor.cc
   port/rex/graphics/metal/metal_backend_telemetry.cc
-  port/rex/graphics/metal/metal_stage_compile_cache.cc
   port/rex/graphics/metal/metal_command_processor.cc
   port/rex/graphics/metal/metal_texture_cache.cc
   port/rex/ui/metal/metal_api.cc
@@ -74,5 +72,4 @@ set(REXGPU_METAL_SOURCES
   port/rex/ui/metal/metal_test_control.mm
   port/rex/ui/metal/metal_startup_wait.mm
   port/rex/graphics/pipeline/shader/dxbc_geometry_shader.cc
-  port/rex/graphics/metal/metal_converter_stubs.cc
 )

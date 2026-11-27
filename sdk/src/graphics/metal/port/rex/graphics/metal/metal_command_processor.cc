@@ -1450,8 +1450,6 @@ MetalCommandProcessor::~MetalCommandProcessor() {
   render_encoder_bindless_texture_resources_serial_ = 0;
   render_encoder_bindless_root_resources_serial_ = 0;
   render_encoder_bindless_stage_root_bind_serials_.fill(0);
-  render_encoder_bindless_table_bind_mesh_path_ = false;
-  render_encoder_bindless_table_bind_tessellation_ = false;
   current_bindless_stage_root_arguments_ = {};
   bindless_cache_key_.valid = false;
 }
@@ -1967,7 +1965,6 @@ void MetalCommandProcessor::RegisterInitialResidencySetResources() {
                                          : nullptr);
   AddResidencySetResource(
       render_target_cache_ ? render_target_cache_->GetEdramBuffer() : nullptr);
-  AddResidencySetResource(tessellator_tables_buffer_);
   AddResidencySetResource(null_buffer_);
   AddResidencySetResource(null_texture_);
   AddResidencySetResource(view_bindless_heap_);
@@ -2179,19 +2176,6 @@ bool MetalCommandProcessor::SetupContext() {
       REXLOG_ERROR("Failed to initialize shader translation");
       return false;
     }
-  }
-  if (mesh_shader_supported_) {
-    uint64_t tess_tables_size = IRRuntimeTessellatorTablesSize();
-    tessellator_tables_buffer_ =
-        device_->newBuffer(tess_tables_size, MTL::ResourceStorageModeShared);
-    if (!tessellator_tables_buffer_) {
-      REXLOG_ERROR("Failed to allocate tessellator tables buffer ({} bytes)",
-             tess_tables_size);
-      return false;
-    }
-    tessellator_tables_buffer_->setLabel(
-        NS::String::string("XeniaTessellatorTables", NS::UTF8StringEncoding));
-    IRRuntimeLoadTessellatorTables(tessellator_tables_buffer_);
   }
 
   // Create the upload buffer pool for per-draw constant buffer allocations.
@@ -2527,10 +2511,6 @@ void MetalCommandProcessor::ShutdownContext() {
   if (primitive_processor_) {
     primitive_processor_->Shutdown();
     primitive_processor_.reset();
-  }
-  if (tessellator_tables_buffer_) {
-    tessellator_tables_buffer_->release();
-    tessellator_tables_buffer_ = nullptr;
   }
   frame_open_ = false;
 
@@ -4266,10 +4246,6 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         GetDrawSkipTrace().Add("ds_memexport_vs_skipped", false);
       }
     }
-    if (std::strcmp(reason, "ds_geometry_pipeline_failed") == 0 &&
-        vs->ucode_data_hash() == UINT64_C(0x695413A9831D88DA)) {
-      GetDrawSkipTrace().Add("ds_geomfail_vs695413A9", false);
-    }
   }
   return result;
 }
@@ -4422,7 +4398,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
             "Metal: Tessellation emulation requested but mesh shaders are not "
             "supported on this device");
       }
-      draw_skip_reason_ = "ds_tess_no_mesh";
+      draw_skip_reason_ = "ds_no_native_route";
       return true;
     }
     if (!pixel_shader) {
@@ -4916,11 +4892,9 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   auto rendering_key =
       ResolvePipelineRenderingKey(regs, pixel_translation, use_fallback_ps);
 
-  MetalPipelineCache::TessellationPipelineState* tessellation_pipeline_state =
-      nullptr;
-  MetalPipelineCache::GeometryPipelineState* geometry_pipeline_state = nullptr;
   // FABLE2_NS_SPECIALIZE: the standard pipeline handle of this draw (null for
-  // emulation pipelines), for the specialized-pipeline lookup below.
+  // native tessellation / points pipelines), for the specialized-pipeline
+  // lookup below.
   MetalPipelineCache::PipelineHandle* spec_pipeline_handle = nullptr;
   // Diagnostic: FABLE2_SKIP_VS=<hash hex>[,<hash hex>...] skips every draw
   // with those vertex shaders (what disappears shows what they draw).
@@ -5524,62 +5498,30 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       }
     }
   }
-  if (native_tess || native_points) {
-    // The pipeline is set above; neither emulation nor the standard path.
-  } else if (use_tessellation_emulation) {
-    tessellation_pipeline_state =
-        pipeline_cache_->GetOrCreateTessellationPipelineState(
-            vertex_translation, pixel_translation, primitive_processing_result,
-            attachment_formats, rendering_key);
-    // current_pipeline(): the optimized rebuild once FABLE2_NS_EMU_PIPELINES
-    // has published it.
-    pipeline = tessellation_pipeline_state
-                   ? tessellation_pipeline_state->current_pipeline()
-                   : nullptr;
-    // A refused or failed emulation pipeline loses only this draw. Before
-    // 2026-10-14 the draw went on to DispatchDraw with a null state; its
-    // null dereference re-faulted forever in the exception handler, so the
-    // GPU Commands thread never finished the frame (no-converter build with
-    // FABLE2_NATIVE_TESS=0: audio and input on, the screen black).
-    if (!tessellation_pipeline_state || !pipeline) {
-      static bool tessellation_pipeline_failure_logged = false;
-      if (!tessellation_pipeline_failure_logged) {
-        tessellation_pipeline_failure_logged = true;
-        REXLOG_WARN(
-            "Metal: tessellation emulation pipeline unavailable; skipping "
-            "those draws");
-      }
-      draw_skip_reason_ = "ds_tessellation_pipeline_failed";
-      return pending_draw_pass_transfer_guard.Flush();
-    }
-  } else if (use_geometry_emulation) {
-    geometry_pipeline_state = pipeline_cache_->GetOrCreateGeometryPipelineState(
-        vertex_translation, pixel_translation, geometry_shader_key,
-        attachment_formats, rendering_key);
-    // FABLE2_MEMEXPORT_GEOM_FALLBACK (above): keep the memexport side
-    // effects of a vertex shader whose geometry-emulation pipeline failed by
-    // drawing it as plain points instead of skipping it.
-    if ((!geometry_pipeline_state || !geometry_pipeline_state->pipeline) &&
-        memexport_geometry_fallback && memexport_used_vertex) {
-      geometry_pipeline_state = nullptr;
+  if (!native_tess && !native_points &&
+      (use_tessellation_emulation || use_geometry_emulation)) {
+    // No native route took the draw. The converter "emulation" pipelines are
+    // gone (FABLE2_NO_CONVERTER builds could never create them; restore tag
+    // rejected/converter-emulation-pipelines), so the draw is dropped, counted
+    // under one reason. FABLE2_MEMEXPORT_GEOM_FALLBACK (above) keeps the
+    // memexport side effects of such a vertex shader by drawing it as plain
+    // points instead.
+    if (use_geometry_emulation && memexport_geometry_fallback &&
+        memexport_used_vertex) {
       use_geometry_emulation = false;
       draw_skip_reason_ = "ds_memexport_geom_fallback";
-    } else if (!geometry_pipeline_state || !geometry_pipeline_state->pipeline) {
-      static bool geometry_pipeline_failure_logged = false;
-      if (!geometry_pipeline_failure_logged) {
-        geometry_pipeline_failure_logged = true;
-        REXLOG_WARN(
-            "Metal: geometry emulation pipeline creation failed; skipping "
-            "geometry-emulated draws instead of aborting the backend draw "
-            "packet");
+    } else {
+      static bool no_native_route_logged = false;
+      if (!no_native_route_logged) {
+        no_native_route_logged = true;
+        REXLOG_WARN("Metal: {} draw has no native route; skipping such draws",
+                    use_tessellation_emulation ? "tessellated" : "geometry-expanded");
       }
-      draw_skip_reason_ = "ds_geometry_pipeline_failed";
+      draw_skip_reason_ = "ds_no_native_route";
       return pending_draw_pass_transfer_guard.Flush();
     }
-    if (geometry_pipeline_state) {
-      pipeline = geometry_pipeline_state->current_pipeline();
-    }
   }
+  // Past this point both emulation flags are false: every draw is native.
   if (!use_tessellation_emulation && !use_geometry_emulation && !native_tess &&
       !native_points) {
     // Trace-only (docs/native-shaders.md): FABLE2_NS_LOG_FETCH=<PS hash hex>
@@ -5687,40 +5629,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       cc::CountDraw(ps_native ? cc::kDrawNativeGeom : cc::kDrawNativeGeomConvPS);
     } else if (native_tess) {
       cc::CountDraw(ps_native ? cc::kDrawNativeTess : cc::kDrawNativeTessConvPS);
-    } else if (use_tessellation_emulation) {
-      cc::CountDraw(cc::kDrawTessEmu);
-      static std::unordered_set<uint64_t> logged_tess;
-      const uint64_t k[] = {vertex_shader->ucode_data_hash(),
-                            pixel_shader ? pixel_shader->ucode_data_hash() : 0,
-                            uint64_t(primitive_processing_result.tessellation_mode)};
-      if (logged_tess.insert(XXH3_64bits(k, sizeof(k))).second &&
-          logged_tess.size() <= 64) {
-        REXLOG_INFO(
-            "[converter-use] tessellation emulation: VS {:016X} PS {:016X} "
-            "mode {} host vs type {} memexport {}",
-            k[0], k[1], uint32_t(primitive_processing_result.tessellation_mode),
-            uint32_t(primitive_processing_result.host_vertex_shader_type),
-            memexport_used_vertex ? 1 : 0);
-      }
-    } else if (use_geometry_emulation) {
-      cc::CountDraw(cc::kDrawGeomEmu);
-      // Once per (VS, PS, geometry key): why this draw is emulated.
-      static std::unordered_set<uint64_t> logged_geom;
-      const uint64_t k[] = {vertex_shader->ucode_data_hash(),
-                            pixel_shader ? pixel_shader->ucode_data_hash() : 0,
-                            uint64_t(geometry_shader_key.key)};
-      if (logged_geom.insert(XXH3_64bits(k, sizeof(k))).second &&
-          logged_geom.size() <= 64) {
-        REXLOG_INFO(
-            "[converter-use] geometry emulation: VS {:016X} PS {:016X} type {} "
-            "key {:08X} memexport {} clip-cull {} kill-and {} (native points "
-            "{} rects {})",
-            k[0], k[1], uint32_t(geometry_shader_key.type),
-            geometry_shader_key.key, memexport_used_vertex ? 1 : 0,
-            uint32_t(geometry_shader_key.user_clip_plane_cull),
-            uint32_t(geometry_shader_key.has_vertex_kill_and),
-            NativePointsMode(), NativeRectsMode() ? 1 : 0);
-      }
     } else if (spec_pipeline_handle) {
       const bool vs_native =
           spec_pipeline_handle->ns_vs_native.load(std::memory_order_relaxed);
@@ -5826,8 +5734,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   MTL::RenderStages memexport_write_stages = MTL::RenderStages(0);
   if (memexport_used_vertex) {
     memexport_write_stages =
-        (use_geometry_emulation || use_tessellation_emulation ||
-         native_points_mesh)
+        native_points_mesh
             ? MTL::RenderStages(MTL::RenderStageObject | MTL::RenderStageMesh)
             : MTL::RenderStageVertex;
   }
@@ -6170,7 +6077,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       r.colormask = regs[XE_GPU_REG_RB_COLOR_MASK];
       r.su_sc_mode = regs[XE_GPU_REG_PA_SU_SC_MODE_CNTL];
       r.flags = (memexport_used_vertex ? 1u : 0u) |
-                (use_geometry_emulation ? 2u : 0u) | (pixel_shader ? 4u : 0u);
+                (pixel_shader ? 4u : 0u);
       std::fwrite(&r, sizeof(r), 1, dump_config->file);
       static uint64_t flushed_frame = 0;
       if (dump_frame != flushed_frame && (dump_frame & 63) == 0) {
@@ -6290,8 +6197,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   if (vertex_range_count || guest_dma_index_buffer_read ||
       shader_primitive_index_load) {
     shared_memory_consumer_stages =
-        (use_geometry_emulation || use_tessellation_emulation ||
-         native_points_mesh)
+        native_points_mesh
             ? MTL::RenderStages(MTL::RenderStageObject | MTL::RenderStageMesh)
             : MTL::RenderStageVertex;
   }
@@ -6565,19 +6471,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
             if (!spec_pipeline) {
               pipeline_cache_->RequestSpecPipeline(spec_pipeline_handle);
             }
-          } else {
-            const std::shared_ptr<MetalPipelineCache::NsEmuSwap>* emu =
-                tessellation_pipeline_state
-                    ? &tessellation_pipeline_state->ns_emu
-                    : (geometry_pipeline_state
-                           ? &geometry_pipeline_state->ns_emu
-                           : nullptr);
-            if (emu && *emu) {
-              spec_pipeline = (*emu)->spec.load(std::memory_order_acquire);
-              if (!spec_pipeline) {
-                pipeline_cache_->RequestSpecEmuPipeline(*emu);
-              }
-            }
           }
           if (spec_pipeline) {
             pipeline = spec_pipeline;
@@ -6664,8 +6557,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           ? pixel_shader->ucode_data_hash()
           : 0;
   prepared_draw.pipeline = pipeline;
-  prepared_draw.tessellation_pipeline_state = tessellation_pipeline_state;
-  prepared_draw.geometry_pipeline_state = geometry_pipeline_state;
   prepared_draw.primitive_processing_result = primitive_processing_result;
   if (!prepared_draw_slim) {
     prepared_draw.uniforms = uniforms;
@@ -6696,8 +6587,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   prepared_draw.texture_resource_set = current_bindless_texture_resource_set_;
   prepared_draw.texture_upload_needed =
       texture_materialization_plan.NeedsTextureUpload();
-  prepared_draw.use_tessellation_emulation = use_tessellation_emulation;
-  prepared_draw.use_geometry_emulation = use_geometry_emulation;
   prepared_draw.native_tess = native_tess;
   prepared_draw.native_tess_cpu = native_tess_cpu;
   if (native_tess_cpu) {
@@ -7964,8 +7853,7 @@ void MetalCommandProcessor::ApplyDrawDynamicState(
 
 MetalCommandProcessor::StageRootArgumentEntries
 MetalCommandProcessor::BuildGraphicsRootArgumentEntries(
-    const UniformBufferInfo& uniforms, bool shared_memory_is_uav,
-    bool use_tessellation_emulation) const {
+    const UniformBufferInfo& uniforms, bool shared_memory_is_uav) const {
   StageRootArgumentEntries entries = {};
   constexpr uint64_t kDescriptorEntrySize = sizeof(IRDescriptorTableEntry);
   uint64_t view_heap_gpu = view_bindless_heap_->gpuAddress();
@@ -8024,24 +7912,13 @@ MetalCommandProcessor::BuildGraphicsRootArgumentEntries(
   set_stage_local_cbvs(
       kGraphicsRootABSlotCBVVertexFloat, kGraphicsRootABSlotCBVVertexFetch,
       kGraphicsRootABSlotCBVVertexDescriptorIndices, kStageVertex);
-  if (use_tessellation_emulation) {
-    // Hull and domain generated stages consume the same guest constant state as
-    // the vertex/domain translation they expand. Keep these slots null on
-    // ordinary draws so normal vertex root churn doesn't patch inactive stages.
-    set_stage_local_cbvs(
-        kGraphicsRootABSlotCBVHullFloat, kGraphicsRootABSlotCBVHullFetch,
-        kGraphicsRootABSlotCBVHullDescriptorIndices, kStageVertex);
-    set_stage_local_cbvs(
-        kGraphicsRootABSlotCBVDomainFloat, kGraphicsRootABSlotCBVDomainFetch,
-        kGraphicsRootABSlotCBVDomainDescriptorIndices, kStageVertex);
-  } else {
-    entries[kGraphicsRootABSlotCBVHullFloat] = null_gpu;
-    entries[kGraphicsRootABSlotCBVHullFetch] = null_gpu;
-    entries[kGraphicsRootABSlotCBVHullDescriptorIndices] = null_gpu;
-    entries[kGraphicsRootABSlotCBVDomainFloat] = null_gpu;
-    entries[kGraphicsRootABSlotCBVDomainFetch] = null_gpu;
-    entries[kGraphicsRootABSlotCBVDomainDescriptorIndices] = null_gpu;
-  }
+  // Hull and domain slots belonged to the converter tessellation pipelines.
+  entries[kGraphicsRootABSlotCBVHullFloat] = null_gpu;
+  entries[kGraphicsRootABSlotCBVHullFetch] = null_gpu;
+  entries[kGraphicsRootABSlotCBVHullDescriptorIndices] = null_gpu;
+  entries[kGraphicsRootABSlotCBVDomainFloat] = null_gpu;
+  entries[kGraphicsRootABSlotCBVDomainFetch] = null_gpu;
+  entries[kGraphicsRootABSlotCBVDomainDescriptorIndices] = null_gpu;
   set_stage_local_cbvs(
       kGraphicsRootABSlotCBVPixelFloat, kGraphicsRootABSlotCBVPixelFetch,
       kGraphicsRootABSlotCBVPixelDescriptorIndices, kStagePixel);
@@ -8073,7 +7950,6 @@ bool MetalCommandProcessor::AllocateStageRootArgument(
 
 bool MetalCommandProcessor::PopulateBindlessTables(
     bool shared_memory_is_uav, MTL::ResourceUsage shared_memory_usage,
-    bool use_geometry_emulation, bool use_tessellation_emulation,
     const UniformBufferInfo& uniforms) {
   for (size_t stage = 0; stage < kStageCount; ++stage) {
     if (current_bindless_stage_root_valid_[stage]) {
@@ -8093,8 +7969,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     ++bindless_cache_calls_;
     cache_key.valid = true;
     cache_key.shared_memory_is_uav = shared_memory_is_uav;
-    cache_key.use_geometry_emulation = use_geometry_emulation;
-    cache_key.use_tessellation_emulation = use_tessellation_emulation;
     cache_key.shared_memory_usage_bits =
         MetalResourceUsageBits(shared_memory_usage);
     cache_key.frame = frame_current_;
@@ -8119,8 +7993,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     int miss = -1;
     if (!last.valid) miss = 0;
     else if (last.shared_memory_is_uav != shared_memory_is_uav ||
-             last.use_geometry_emulation != use_geometry_emulation ||
-             last.use_tessellation_emulation != use_tessellation_emulation ||
              last.shared_memory_usage_bits != cache_key.shared_memory_usage_bits) miss = 1;
     else if (last.frame != cache_key.frame) miss = 2;
     else if (last.fixed_source_serial != cache_key.fixed_source_serial) miss = 3;
@@ -8147,7 +8019,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     if (hit) {
       const uint64_t graphics_root_serial =
           current_bindless_stage_root_serials_[kGraphicsRootStage];
-      const bool use_mesh = use_geometry_emulation || use_tessellation_emulation;
       hit = current_bindless_stage_root_valid_[kGraphicsRootStage] &&
             current_bindless_stage_root_entries_valid_[kGraphicsRootStage] &&
             current_bindless_stage_root_arguments_[kGraphicsRootStage].valid &&
@@ -8166,9 +8037,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
                 graphics_root_serial &&
             render_encoder_bindless_stage_root_bind_serials_[kStagePixel] ==
                 graphics_root_serial &&
-            render_encoder_bindless_table_bind_mesh_path_ == use_mesh &&
-            render_encoder_bindless_table_bind_tessellation_ ==
-                use_tessellation_emulation &&
             !current_bindless_stage_root_valid_[kStagePixel] &&
             !current_bindless_stage_root_serials_[kStagePixel];
     }
@@ -8183,8 +8051,8 @@ bool MetalCommandProcessor::PopulateBindlessTables(
   }
   const bool bindless_shared_memory_uav_mismatch =
       current_bindless_shared_memory_is_uav_ != shared_memory_is_uav;
-  StageRootArgumentEntries entries = BuildGraphicsRootArgumentEntries(
-      uniforms, shared_memory_is_uav, use_tessellation_emulation);
+  StageRootArgumentEntries entries =
+      BuildGraphicsRootArgumentEntries(uniforms, shared_memory_is_uav);
   const bool entries_were_valid =
       current_bindless_stage_root_entries_valid_[kGraphicsRootStage];
   const bool root_rebuild_detail_telemetry =
@@ -8462,12 +8330,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
   PublishBindlessRootResourceSet(uniforms);
   ApplyRenderEncoderResourceSets();
 
-  const bool use_mesh_path =
-      use_geometry_emulation || use_tessellation_emulation;
-  const bool root_argument_path_needs_update =
-      render_encoder_bindless_table_bind_mesh_path_ != use_mesh_path ||
-      render_encoder_bindless_table_bind_tessellation_ !=
-          use_tessellation_emulation;
   {
     constexpr size_t kGraphicsRootStage = kStageVertex;
     const StageRootArgumentAllocation& graphics_root_arguments =
@@ -8478,76 +8340,31 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     assert_true(graphics_root_arguments.upload_frame == frame_current_);
     const bool vertex_root_argument_binding_needs_update =
         render_encoder_bindless_stage_root_bind_serials_[kStageVertex] !=
-            graphics_root_serial ||
-        root_argument_path_needs_update;
+        graphics_root_serial;
     const bool pixel_root_argument_binding_needs_update =
         render_encoder_bindless_stage_root_bind_serials_[kStagePixel] !=
         graphics_root_serial;
-    const bool root_argument_bindings_need_update =
-        vertex_root_argument_binding_needs_update ||
-        pixel_root_argument_binding_needs_update;
-    if (use_mesh_path) {
-      if (vertex_root_argument_binding_needs_update) {
-        SetRenderEncoderObjectBuffer(graphics_root_arguments.buffer,
-                                     graphics_root_arguments.offset,
-                                     kIRArgumentBufferBindPoint);
-        SetRenderEncoderMeshBuffer(graphics_root_arguments.buffer,
+    if (vertex_root_argument_binding_needs_update) {
+      SetRenderEncoderVertexBuffer(graphics_root_arguments.buffer,
                                    graphics_root_arguments.offset,
                                    kIRArgumentBufferBindPoint);
-
-        if (use_tessellation_emulation) {
-          SetRenderEncoderObjectBuffer(graphics_root_arguments.buffer,
-                                       graphics_root_arguments.offset,
-                                       kIRArgumentBufferHullDomainBindPoint);
-          SetRenderEncoderMeshBuffer(graphics_root_arguments.buffer,
-                                     graphics_root_arguments.offset,
-                                     kIRArgumentBufferHullDomainBindPoint);
-        }
-      }
-      if (pixel_root_argument_binding_needs_update) {
-        SetRenderEncoderFragmentBuffer(graphics_root_arguments.buffer,
-                                       graphics_root_arguments.offset,
-                                       kIRArgumentBufferBindPoint);
-      }
-
-      if (!heap_binds_set_on_encoder_) {
-        SetRenderEncoderObjectBuffer(view_bindless_heap_, 0,
-                                     kIRDescriptorHeapBindPoint);
-        SetRenderEncoderMeshBuffer(view_bindless_heap_, 0,
-                                   kIRDescriptorHeapBindPoint);
-        SetRenderEncoderFragmentBuffer(view_bindless_heap_, 0,
-                                       kIRDescriptorHeapBindPoint);
-        SetRenderEncoderObjectBuffer(sampler_bindless_heap_, 0,
-                                     kIRSamplerHeapBindPoint);
-        SetRenderEncoderMeshBuffer(sampler_bindless_heap_, 0,
-                                   kIRSamplerHeapBindPoint);
-        SetRenderEncoderFragmentBuffer(sampler_bindless_heap_, 0,
-                                       kIRSamplerHeapBindPoint);
-        heap_binds_set_on_encoder_ = true;
-      }
-    } else {
-      if (vertex_root_argument_binding_needs_update) {
-        SetRenderEncoderVertexBuffer(graphics_root_arguments.buffer,
+    }
+    if (pixel_root_argument_binding_needs_update) {
+      SetRenderEncoderFragmentBuffer(graphics_root_arguments.buffer,
                                      graphics_root_arguments.offset,
                                      kIRArgumentBufferBindPoint);
-      }
-      if (pixel_root_argument_binding_needs_update) {
-        SetRenderEncoderFragmentBuffer(graphics_root_arguments.buffer,
-                                       graphics_root_arguments.offset,
-                                       kIRArgumentBufferBindPoint);
-      }
+    }
 
-      if (!heap_binds_set_on_encoder_) {
-        SetRenderEncoderVertexBuffer(view_bindless_heap_, 0,
+    if (!heap_binds_set_on_encoder_) {
+      SetRenderEncoderVertexBuffer(view_bindless_heap_, 0,
+                                   kIRDescriptorHeapBindPoint);
+      SetRenderEncoderFragmentBuffer(view_bindless_heap_, 0,
                                      kIRDescriptorHeapBindPoint);
-        SetRenderEncoderFragmentBuffer(view_bindless_heap_, 0,
-                                       kIRDescriptorHeapBindPoint);
-        SetRenderEncoderVertexBuffer(sampler_bindless_heap_, 0,
+      SetRenderEncoderVertexBuffer(sampler_bindless_heap_, 0,
+                                   kIRSamplerHeapBindPoint);
+      SetRenderEncoderFragmentBuffer(sampler_bindless_heap_, 0,
                                      kIRSamplerHeapBindPoint);
-        SetRenderEncoderFragmentBuffer(sampler_bindless_heap_, 0,
-                                       kIRSamplerHeapBindPoint);
-        heap_binds_set_on_encoder_ = true;
-      }
+      heap_binds_set_on_encoder_ = true;
     }
     if (vertex_root_argument_binding_needs_update) {
       render_encoder_bindless_stage_root_bind_serials_[kStageVertex] =
@@ -8556,11 +8373,6 @@ bool MetalCommandProcessor::PopulateBindlessTables(
     if (pixel_root_argument_binding_needs_update) {
       render_encoder_bindless_stage_root_bind_serials_[kStagePixel] =
           graphics_root_serial;
-    }
-    if (root_argument_bindings_need_update) {
-      render_encoder_bindless_table_bind_mesh_path_ = use_mesh_path;
-      render_encoder_bindless_table_bind_tessellation_ =
-          use_tessellation_emulation;
     }
   }
 
@@ -8946,19 +8758,6 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
   } else {
     ++backend_telemetry_.pipeline_set_skips;
   }
-  if (draw.use_tessellation_emulation) {
-    if (!tessellator_tables_buffer_) {
-      REXLOG_ERROR("Tessellation emulation requires tessellator tables buffer");
-      return false;
-    }
-    SetRenderEncoderObjectBuffer(tessellator_tables_buffer_, 0,
-                                 kIRRuntimeTessellatorTablesBindPoint);
-    SetRenderEncoderMeshBuffer(tessellator_tables_buffer_, 0,
-                               kIRRuntimeTessellatorTablesBindPoint);
-    UseRenderEncoderResource(tessellator_tables_buffer_,
-                             MTL::ResourceUsageRead);
-  }
-
   if (draw.prepare_uniforms) {
     ApplyDrawDynamicState(draw.dynamic_state);
 
@@ -8969,7 +8768,6 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
 
     if (!PopulateBindlessTables(
             draw.shared_memory_is_uav, draw.shared_memory_usage,
-            draw.use_geometry_emulation, draw.use_tessellation_emulation,
             draw.uniforms)) {
       return false;
     }
@@ -8986,9 +8784,7 @@ bool MetalCommandProcessor::EncodePreparedDraw(const PreparedDraw& draw) {
   dispatch_native_points_mesh_ = draw.native_points_mesh;
   ZpdBeginDrawSpan();
   const bool dispatched = DispatchDraw(
-      draw.primitive_processing_result, draw.use_tessellation_emulation,
-      draw.tessellation_pipeline_state, draw.use_geometry_emulation,
-      draw.geometry_pipeline_state, draw.shared_memory_is_uav,
+      draw.primitive_processing_result, draw.shared_memory_is_uav,
       draw.shared_memory_usage, draw.memexport_used,
       draw.memexport_write_stages, draw.uses_vertex_fetch,
       draw.prepare_uniforms,
@@ -9408,8 +9204,6 @@ void MetalCommandProcessor::ResetPreparedDrawSlim(PreparedDraw& draw) {
   draw.capture_label.clear();
   draw.trace_ps = 0;
   draw.pipeline = nullptr;
-  draw.tessellation_pipeline_state = nullptr;
-  draw.geometry_pipeline_state = nullptr;
   draw.primitive_processing_result = {};
   draw.dynamic_state = {};
   draw.prepared_guest_dma_index_buffer = {};
@@ -9429,8 +9223,6 @@ void MetalCommandProcessor::ResetPreparedDrawSlim(PreparedDraw& draw) {
   draw.texture_resource_set.serial = 0;
   draw.texture_resource_set.source_serial = 0;
   draw.texture_materialization_plan.Reset();
-  draw.use_tessellation_emulation = false;
-  draw.use_geometry_emulation = false;
   draw.native_tess = false;
   draw.native_tess_cpu = false;
   draw.tess_runs.clear();
@@ -9899,10 +9691,6 @@ bool MetalCommandProcessor::ReadAdaptiveTessFactors(
 
 bool MetalCommandProcessor::DispatchDraw(
     const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-    bool use_tessellation_emulation,
-    MetalPipelineCache::TessellationPipelineState* tessellation_pipeline_state,
-    bool use_geometry_emulation,
-    MetalPipelineCache::GeometryPipelineState* geometry_pipeline_state,
     bool shared_memory_is_uav, MTL::ResourceUsage shared_memory_usage,
     bool memexport_used, MTL::RenderStages memexport_write_stages,
     bool uses_vertex_fetch, bool shared_memory_resource_registered,
@@ -9920,31 +9708,7 @@ bool MetalCommandProcessor::DispatchDraw(
   };
 
   // Bind vertex buffers / descriptors.
-  if (use_geometry_emulation || use_tessellation_emulation) {
-    IRRuntimeVertexBuffers vertex_buffers = {};
-    MTL::Buffer* shared_mem_buffer =
-        shared_memory_ ? shared_memory_->GetBuffer() : nullptr;
-    if (shared_mem_buffer) {
-      use_shared_memory_resource_if_needed(shared_mem_buffer);
-      for (uint32_t i = 0; i < vertex_range_count; ++i) {
-        const auto& range = vertex_ranges[i];
-        size_t binding_index = range.binding_index;
-        if (binding_index <
-            (sizeof(vertex_buffers) / sizeof(vertex_buffers[0]))) {
-          vertex_buffers[binding_index].addr =
-              shared_mem_buffer->gpuAddress() + range.offset;
-          vertex_buffers[binding_index].length = range.length;
-          vertex_buffers[binding_index].stride = range.stride;
-        }
-      }
-    }
-    // MSC manual: bind IRRuntimeVertexBuffers at kIRVertexBufferBindPoint (6)
-    // for the object stage when using geometry emulation.
-    current_render_encoder_->setObjectBytes(
-        vertex_buffers, sizeof(vertex_buffers), kIRVertexBufferBindPoint);
-    InvalidateRenderEncoderBufferBinding(RenderEncoderBufferStage::kObject,
-                                         kIRVertexBufferBindPoint);
-  } else if (uses_vertex_fetch) {
+  if (uses_vertex_fetch) {
     // Vertex fetch shaders read directly from shared memory via SRV, so avoid
     // stage-in bindings that can trigger invalid buffer loads.
     if (shared_memory_) {
@@ -10193,120 +9957,6 @@ bool MetalCommandProcessor::DispatchDraw(
             ? 3
             : 4,
         0, native->tess_patch_count, nullptr, 0, 1, 0);
-  } else if (use_tessellation_emulation) {
-    IRRuntimePrimitiveType tess_primitive = IRRuntimePrimitiveTypeTriangle;
-    switch (primitive_processing_result.host_primitive_type) {
-      case xenos::PrimitiveType::kTriangleList:
-        tess_primitive = IRRuntimePrimitiveType3ControlPointPatchlist;
-        break;
-      case xenos::PrimitiveType::kQuadList:
-        tess_primitive = IRRuntimePrimitiveType4ControlPointPatchlist;
-        break;
-      case xenos::PrimitiveType::kTrianglePatch:
-        tess_primitive = (primitive_processing_result.tessellation_mode ==
-                          xenos::TessellationMode::kAdaptive)
-                             ? IRRuntimePrimitiveType3ControlPointPatchlist
-                             : IRRuntimePrimitiveType1ControlPointPatchlist;
-        break;
-      case xenos::PrimitiveType::kQuadPatch:
-        tess_primitive = (primitive_processing_result.tessellation_mode ==
-                          xenos::TessellationMode::kAdaptive)
-                             ? IRRuntimePrimitiveType4ControlPointPatchlist
-                             : IRRuntimePrimitiveType1ControlPointPatchlist;
-        break;
-      default:
-        REXLOG_ERROR(
-            "Host tessellated primitive type {} returned by the primitive "
-            "processor is not supported by the Metal tessellation path",
-            uint32_t(primitive_processing_result.host_primitive_type));
-        return false;
-    }
-
-    if (!tessellation_pipeline_state) {
-      return false;  // IssueDrawImpl skips such draws; never dereference
-    }
-    const IRRuntimeTessellationPipelineConfig& tess_config =
-        tessellation_pipeline_state->config;
-
-    if (primitive_processing_result.index_buffer_type ==
-        PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
-      IRRuntimeDrawPatchesTessellationEmulation(
-          current_render_encoder_->Sync(), tess_primitive, tess_config, 1,
-          primitive_processing_result.host_draw_vertex_count, 0, 0);
-    } else {
-      MTL::IndexType index_type =
-          (primitive_processing_result.host_index_format ==
-           xenos::IndexFormat::kInt16)
-              ? MTL::IndexTypeUInt16
-              : MTL::IndexTypeUInt32;
-      MTL::Buffer* index_buffer = nullptr;
-      uint64_t index_offset = 0;
-      if (!resolve_index_buffer(index_type, index_buffer, index_offset)) {
-        return false;
-      }
-      uint32_t index_stride = (index_type == MTL::IndexTypeUInt16)
-                                  ? sizeof(uint16_t)
-                                  : sizeof(uint32_t);
-      uint32_t start_index =
-          index_stride ? uint32_t(index_offset / index_stride) : 0;
-      IRRuntimeDrawIndexedPatchesTessellationEmulation(
-          current_render_encoder_->Sync(), tess_primitive, index_type, index_buffer,
-          tess_config, 1, primitive_processing_result.host_draw_vertex_count, 0,
-          0, start_index);
-    }
-  } else if (use_geometry_emulation) {
-    IRRuntimePrimitiveType geometry_primitive = IRRuntimePrimitiveTypeTriangle;
-    switch (primitive_processing_result.host_primitive_type) {
-      case xenos::PrimitiveType::kPointList:
-        geometry_primitive = IRRuntimePrimitiveTypePoint;
-        break;
-      case xenos::PrimitiveType::kRectangleList:
-        geometry_primitive = IRRuntimePrimitiveTypeTriangle;
-        break;
-      case xenos::PrimitiveType::kQuadList:
-        geometry_primitive = IRRuntimePrimitiveTypeLineWithAdj;
-        break;
-      default:
-        REXLOG_ERROR(
-            "Host primitive type {} returned by the primitive processor is not "
-            "supported by the Metal geometry path",
-            uint32_t(primitive_processing_result.host_primitive_type));
-        return false;
-    }
-
-    IRRuntimeGeometryPipelineConfig geometry_config = {};
-    geometry_config.gsVertexSizeInBytes =
-        geometry_pipeline_state->gs_vertex_size_in_bytes;
-    geometry_config.gsMaxInputPrimitivesPerMeshThreadgroup =
-        geometry_pipeline_state->gs_max_input_primitives_per_mesh_threadgroup;
-
-    if (primitive_processing_result.index_buffer_type ==
-        PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
-      IRRuntimeDrawPrimitivesGeometryEmulation(
-          current_render_encoder_->Sync(), geometry_primitive, geometry_config, 1,
-          primitive_processing_result.host_draw_vertex_count, 0, 0);
-    } else {
-      MTL::IndexType index_type =
-          (primitive_processing_result.host_index_format ==
-           xenos::IndexFormat::kInt16)
-              ? MTL::IndexTypeUInt16
-              : MTL::IndexTypeUInt32;
-      MTL::Buffer* index_buffer = nullptr;
-      uint64_t index_offset = 0;
-      if (!resolve_index_buffer(index_type, index_buffer, index_offset)) {
-        return false;
-      }
-      uint32_t index_stride = (index_type == MTL::IndexTypeUInt16)
-                                  ? sizeof(uint16_t)
-                                  : sizeof(uint32_t);
-      uint32_t start_index =
-          index_stride ? uint32_t(index_offset / index_stride) : 0;
-      IRRuntimeDrawIndexedPrimitivesGeometryEmulation(
-          current_render_encoder_->Sync(), geometry_primitive, index_type, index_buffer,
-          geometry_config, 1,
-          primitive_processing_result.host_draw_vertex_count, start_index, 0,
-          0);
-    }
   } else {
     // Primitive topology - from primitive processor, like D3D12.
     MTL::PrimitiveType mtl_primitive = MTL::PrimitiveTypeTriangle;
@@ -11696,10 +11346,8 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
       backend_telemetry_.render_resource_registry_registers,
       MetalTelemetryRenderResourceSetName);
   const auto& direct_host_stats = rt_stats.resolve_direct_host;
-  MetalStageCompileCacheStats stage_compile_stats = {};
   MetalPipelineRuntimeStats pipeline_runtime_stats = {};
   if (pipeline_cache_) {
-    stage_compile_stats = pipeline_cache_->GetAndResetStageCompileStats();
     pipeline_runtime_stats = pipeline_cache_->GetAndResetRuntimeStats();
   }
 
@@ -11883,19 +11531,6 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
       direct_host_stats.direct_host_reject_format_mismatch,
       direct_host_stats.direct_host_reject_sample_select,
       direct_host_stats.direct_host_reject_depth_no_fast);
-  REXLOG_INFO(
-      "MetalTelemetry[{}]: stage_compile requests={} hits/misses={}/{} "
-      "waits={} failures={} persistent hits/misses={}/{} "
-      "bytes dxil/metallib={}/{} owner_ms total/max={}/{} "
-      "wait_ms total/max={}/{}",
-      reason, stage_compile_stats.requests, stage_compile_stats.memory_hits,
-      stage_compile_stats.memory_misses, stage_compile_stats.waits,
-      stage_compile_stats.failures, stage_compile_stats.persistent_hits,
-      stage_compile_stats.persistent_misses, stage_compile_stats.dxil_bytes,
-      stage_compile_stats.metallib_bytes,
-      stage_compile_stats.owner_compile_ms_total,
-      stage_compile_stats.owner_compile_ms_max,
-      stage_compile_stats.wait_ms_total, stage_compile_stats.wait_ms_max);
   REXLOG_INFO(
       "MetalTelemetry[{}]: shader_prep dxil requests/hits/misses/failures="
       "{}/{}/{}/{} "
@@ -12989,8 +12624,6 @@ void MetalCommandProcessor::ResetRenderEncoderBufferBindings() {
     }
   }
   render_encoder_bindless_stage_root_bind_serials_.fill(0);
-  render_encoder_bindless_table_bind_mesh_path_ = false;
-  render_encoder_bindless_table_bind_tessellation_ = false;
 }
 
 void MetalCommandProcessor::InvalidateRenderEncoderBufferBinding(
@@ -13007,8 +12640,6 @@ void MetalCommandProcessor::InvalidateRenderEncoderBufferBinding(
       render_encoder_bindless_stage_root_bind_serials_[kStagePixel] = 0;
     } else {
       render_encoder_bindless_stage_root_bind_serials_[kStageVertex] = 0;
-      render_encoder_bindless_table_bind_mesh_path_ = false;
-      render_encoder_bindless_table_bind_tessellation_ = false;
     }
   }
 }

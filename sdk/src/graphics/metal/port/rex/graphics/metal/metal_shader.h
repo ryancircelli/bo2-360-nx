@@ -24,10 +24,6 @@ namespace rex {
 namespace graphics {
 namespace metal {
 
-class DxbcToDxilConverter;
-class MetalShaderConverter;
-struct MetalStageCompileResult;
-
 class MetalShader : public DxbcShader {
  public:
   class MetalTranslation : public DxbcTranslation {
@@ -35,12 +31,6 @@ class MetalShader : public DxbcShader {
     MetalTranslation(MetalShader& shader, uint64_t modification)
         : DxbcTranslation(shader, modification) {}
     ~MetalTranslation();
-
-    // Install a stage-compile result as Metal library/function state.
-    bool InstallMetal(MTL::Device* device,
-                      const MetalStageCompileResult& result,
-                      uint64_t* out_new_library_ms = nullptr,
-                      bool* out_new_library_created = nullptr);
 
     void SetDxilData(std::vector<uint8_t> dxil_data);
     std::vector<uint8_t> GetDxilDataCopy() const;
