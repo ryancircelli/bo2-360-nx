@@ -8,6 +8,7 @@
 #include <rex/audio/xma/context.h>
 #include <rex/audio/xma/helpers.h>
 
+using rex::audio::XmaContext;
 namespace xma = rex::audio::xma;
 
 namespace {
@@ -81,4 +82,36 @@ TEST_CASE("A frame may start in the last bits of a packet", "[xma]") {
   SetHeader(buf, 0, kPacketBits - 32 - 5, 0);  // 5 bits left: a split frame header
   uint32_t index = 0;
   REQUIRE(xma::FindNextFrameStart(buf.data(), index, 1) == kPacketBits - 5);
+}
+
+TEST_CASE("ConvertFrame rounds to nearest and saturates", "[xma]") {
+  constexpr uint32_t n = XmaContext::kSamplesPerFrame;
+  std::vector<float> left(n, 0.0f), right(n, 0.0f);
+  const float lsb = 1.0f / 32767.0f;
+  left[0] = 1.7f * lsb;   // truncation gave 1
+  left[1] = -1.7f * lsb;  // truncation gave -1
+  left[2] = 0.4f * lsb;
+  left[3] = 1.0f;
+  left[4] = 2.0f;  // FFmpeg output can exceed [-1, 1]
+  right[0] = 2.6f * lsb;
+
+  auto be16 = [](const std::vector<uint8_t>& out, size_t i) {
+    return static_cast<int16_t>((out[i * 2] << 8) | out[i * 2 + 1]);
+  };
+
+  std::vector<uint8_t> mono(n * 2);
+  const uint8_t* planes[2] = {reinterpret_cast<const uint8_t*>(left.data()),
+                              reinterpret_cast<const uint8_t*>(right.data())};
+  XmaContext::ConvertFrame(planes, false, mono.data());
+  CHECK(be16(mono, 0) == 2);
+  CHECK(be16(mono, 1) == -2);
+  CHECK(be16(mono, 2) == 0);
+  CHECK(be16(mono, 3) == 32767);
+  CHECK(be16(mono, 4) == 32767);
+
+  std::vector<uint8_t> stereo(n * 4);
+  XmaContext::ConvertFrame(planes, true, stereo.data());
+  CHECK(be16(stereo, 0) == 2);  // L0
+  CHECK(be16(stereo, 1) == 3);  // R0, interleaved
+  CHECK(be16(stereo, 2) == -2);
 }

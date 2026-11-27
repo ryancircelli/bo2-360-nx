@@ -10,6 +10,7 @@
 */
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -1393,8 +1394,9 @@ void XmaContext::ConvertFrame(const uint8_t** samples, bool is_two_channel,
       // Raw samples sometimes aren't within [-1, 1]
       float scaled_sample = rex::clamp_float(in[i], -1.0f, 1.0f) * scale;
 
-      // Convert the sample and output it in big endian.
-      auto sample = static_cast<int16_t>(scaled_sample);
+      // Round like _mm_cvtps_epi32 on x86 (xenia-canary 2372a5410); truncating
+      // biased every sample toward zero on ARM.
+      auto sample = static_cast<int16_t>(std::lrintf(scaled_sample));
       out[o++] = rex::byte_swap(sample);
     }
   }
