@@ -216,3 +216,38 @@ TEST_CASE("Gap discovery skips a stray literal word that falls into known code",
   REQUIRE(phases::GapFill(*fx.ctx, nullptr));
   CHECK(fx.ctx->graph.getFunction(kBase + 4) == nullptr);
 }
+
+TEST_CASE("A call that ends a function does not fall into the next function", "[codegen][boundary][noreturn]") {
+  // A: bl C at its declared end; N follows A; C returns.
+  Fixture fx{0x48000009, 0x4E800020, 0x4E800020};
+  const std::unordered_set<uint32_t> known{kBase, kBase + 4, kBase + 8};
+  Discover(fx, kBase + 8, 4, known);
+  Discover(fx, kBase + 4, 4, known);
+  auto* a = Discover(fx, kBase, 4, known);
+  auto& graph = fx.ctx->graph;
+  graph.tryResolveFunction(kBase);
+  graph.sealAllReady();
+  CHECK(a->fallThroughs().empty());
+  const auto cpp = Emit(fx, a);
+  CHECK(cpp.find("sub_82000008(ctx, base);") != std::string::npos);
+  CHECK(cpp.find("sub_82000004(ctx, base);") == std::string::npos);
+  CHECK(graph.isNoReturn(kBase));
+  CHECK_FALSE(graph.isNoReturn(kBase + 8));
+  // Without a declared end there is no proof the function stops at the call.
+  CHECK(fx.scan(known).fallThroughs.contains(kBase + 4));
+}
+
+TEST_CASE("A call followed by an entry inside the declared range still falls through", "[codegen][boundary][noreturn]") {
+  // A spans 12 bytes: bl C, then M (a known entry inside A's range): li r3,2; blr. C returns.
+  Fixture fx{0x4800000D, 0x38600002, 0x4E800020, 0x4E800020};
+  const std::unordered_set<uint32_t> known{kBase, kBase + 4, kBase + 12};
+  Discover(fx, kBase + 12, 4, known);
+  Discover(fx, kBase + 4, 8, known);
+  auto* a = Discover(fx, kBase, 12, known);
+  auto& graph = fx.ctx->graph;
+  graph.tryResolveFunction(kBase);
+  graph.sealAllReady();
+  CHECK(a->fallThroughs().contains(kBase + 4));
+  CHECK(Emit(fx, a).find("sub_82000004(ctx, base);") != std::string::npos);
+  CHECK_FALSE(graph.isNoReturn(kBase));
+}

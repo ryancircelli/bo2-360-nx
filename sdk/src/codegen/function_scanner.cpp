@@ -2084,6 +2084,10 @@ BlockDiscoveryResult discoverBlocks(
       // Upstream rexglue 11742bf4: preserve entry ownership during linear scans.
       if (addr != entryPoint && knownFunctions.contains(addr)) {
         block.size = addr - blockStart;
+        // A compiler ends a function with a call only when the callee never returns, so the
+        // function after the declared end is not where that call comes back to.
+        if (pdataSize > 0 && addr >= declaredEnd && insn->is_call() && !insn->is_conditional())
+          break;
         result.fallThroughs.insert(addr);
         result.tailCalls.push_back(addr);
         result.unresolvedBranches.push_back({addr, addr, false, false});

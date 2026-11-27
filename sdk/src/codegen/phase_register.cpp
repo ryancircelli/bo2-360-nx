@@ -510,9 +510,12 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
         unresolvedCount++;
       }
 
-      // Upstream e9c1a0f6 export list, keyed by library and ordinal.
-      if (((lib_name == "xboxkrnl" || lib_name == "xboxkrnl.exe" || lib_name == "xboxkrnl.xex") && ordinal == 0x19) ||
-          ((lib_name == "xam" || lib_name == "xam.xex") && (ordinal == 0x1A4 || ordinal == 0x1A5)))
+      // Upstream e9c1a0f6 export list, keyed by library and ordinal, plus KeBugCheck (0x52),
+      // KeBugCheckEx (0x53) and XamLoaderTerminateTitle (0x1A9).
+      if (((lib_name == "xboxkrnl" || lib_name == "xboxkrnl.exe" || lib_name == "xboxkrnl.xex") &&
+           (ordinal == 0x19 || ordinal == 0x52 || ordinal == 0x53)) ||
+          ((lib_name == "xam" || lib_name == "xam.xex") &&
+           (ordinal == 0x1A4 || ordinal == 0x1A5 || ordinal == 0x1A9)))
         graph.declareNoReturn(sym.address);
       auto* node = graph.addImportFunction(sym.address, resolvedName, importThunkSize(binary, sym.address));
       if (node && node->canDiscover()) {
