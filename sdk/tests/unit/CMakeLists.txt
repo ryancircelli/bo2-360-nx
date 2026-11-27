@@ -215,3 +215,8 @@ target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(content_manager_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME content_manager_tests COMMAND content_manager_tests)
+
+add_executable(instance_ports_tests system/instance_ports_test.cpp)
+target_include_directories(instance_ports_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(instance_ports_tests PRIVATE Catch2::Catch2WithMain)
+add_test(NAME instance_ports_tests COMMAND instance_ports_tests)

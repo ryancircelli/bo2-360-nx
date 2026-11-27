@@ -204,9 +204,14 @@ bool TitleAddress(uint32_t* ip);
 bool IsSelf(uint32_t ip);
 bool OnLan(uint32_t ip);
 // Titles bind fixed ports below 1024 (BO2: 1000 and 1001), which Horizon refuses to unprivileged processes. Such a
-// port moves up by net_system_port_offset on every peer, in binds, destinations and reported sources alike.
+// port moves up by net_system_port_offset on every peer, in binds, destinations and reported sources alike. With
+// REX_INSTANCE set, instance i adds i * net_instance_port_stride, so copies on one machine never collide (the System
+// Link port 3074 moves the same way). See instance_ports.h.
 uint16_t HostPort(uint16_t guest_port);
+uint16_t HostPortFor(uint16_t guest_port, int instance);
 uint16_t GuestPort(uint16_t host_port);
+// Also names the local instance that sent from host_port (-1 when none).
+uint16_t GuestPort(uint16_t host_port, int* instance);
 // The net_system_link_trace lines (ip in host byte order, the title's port).
 void TraceSend(uint32_t ip, uint16_t guest_port, int bytes, int error);
 void TraceReceive(uint32_t ip, uint16_t guest_port, int bytes);
