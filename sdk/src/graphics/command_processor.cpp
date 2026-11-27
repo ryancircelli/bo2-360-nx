@@ -9,17 +9,19 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
-#include <cstdio>
 #include <algorithm>
-#include <chrono>
-#include <string>
-#include <thread>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <string_view>
 
 #include <fmt/format.h>
+
+// Packet-overflow logging; kept out of the block above so the Metal sdk-metal.patch context still applies.
+#include <chrono>
+#include <cstdio>
+#include <string>
+#include <thread>
 
 #include <rex/cvar.h>
 #include <rex/dbg.h>
