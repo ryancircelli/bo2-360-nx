@@ -157,11 +157,17 @@ add_executable(kernel_backfill_tests
     kernel/gather_write_test.cpp
     kernel/rtl_conversion_test.cpp
     kernel/ke_timer_test.cpp
-    kernel/ob_query_test.cpp)
+    kernel/ob_query_test.cpp
+    kernel/ke_misc_backfill_test.cpp)
 target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(kernel_backfill_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
+add_executable(rtl_raise_status_tests kernel/rtl_raise_status_test.cpp)
+target_link_libraries(rtl_raise_status_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(rtl_raise_status_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME rtl_raise_status_tests COMMAND rtl_raise_status_tests)
 add_executable(xmemory_heap_tests system/xmemory_heap_test.cpp)
 target_link_libraries(xmemory_heap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(xmemory_heap_tests PROPERTIES

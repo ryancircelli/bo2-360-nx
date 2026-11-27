@@ -221,6 +221,24 @@ u32 XexLoadImageHeaders_entry(mapped_string path, mapped_void headers) {
   return X_STATUS_NOT_IMPLEMENTED;
 }
 
+// Header base of the module containing `pc`; only the title image is modelled (stub-noref research
+// spec row XexPcToFileHeader). 0 when pc is outside it.
+u32 XexPcToFileHeader_entry(u32 pc, mapped_u32 entry_out) {
+  auto module = REX_KERNEL_STATE()->GetExecutableModule();
+  if (!module) {
+    return 0;
+  }
+  auto* ldr = REX_KERNEL_MEMORY()->TranslateVirtual<X_LDR_DATA_TABLE_ENTRY*>(module->hmodule_ptr());
+  uint32_t base = ldr->image_base;
+  if (pc < base || pc - base >= ldr->full_image_size) {
+    return 0;
+  }
+  if (entry_out) {
+    *entry_out = module->hmodule_ptr();
+  }
+  return ldr->xex_header_base;
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
 REX_EXPORT(__imp__XexCheckExecutablePrivilege,
@@ -238,7 +256,7 @@ REX_EXPORT(__imp__XexLoadImageHeaders, rex::kernel::xboxkrnl::XexLoadImageHeader
 
 REX_EXPORT_QUIET_RETURN(__imp__XexLoadExecutable, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__XexLoadImageFromMemory, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__XexPcToFileHeader, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT(__imp__XexPcToFileHeader, rex::kernel::xboxkrnl::XexPcToFileHeader_entry)
 REX_EXPORT_QUIET_RETURN(__imp__XexRegisterPatchDescriptor, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__XexSendDeferredNotifications, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__XexStartExecutable, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

@@ -1521,6 +1521,15 @@ void KeStallExecutionProcessor_entry(u32 microseconds) {
   }
 }
 
+// Single-processor model: the routine runs once, on the calling thread, and its result is returned
+// (NT runs it on every processor at IPI level and returns the current processor's result).
+u32 KeIpiGenericCall_entry(u32 routine, u32 context) {
+  auto* thread = XThread::GetCurrentThread();
+  uint64_t args[] = {context};
+  return static_cast<uint32_t>(REX_KERNEL_STATE()->function_dispatcher()->ExecuteTrap(
+      thread->thread_state(), routine, args, 1));
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
 REX_EXPORT(__imp__ExCreateThread, rex::kernel::xboxkrnl::ExCreateThread_entry)
@@ -1629,7 +1638,7 @@ REX_EXPORT_QUIET_RETURN(__imp__KeInitializeDeviceQueue, 0);  // unknown: kernel 
 REX_EXPORT_QUIET_RETURN(__imp__KeInitializeInterrupt, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_QUIET_RETURN(__imp__KeInitializeQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
 // REX_EXPORT_STUB(__imp__KeInitializeTimerEx); -- implemented below
-REX_EXPORT_QUIET_RETURN(__imp__KeIpiGenericCall, 0);  // unknown: no guest-callback helper; 0 = routine not run
+REX_EXPORT(__imp__KeIpiGenericCall, rex::kernel::xboxkrnl::KeIpiGenericCall_entry)
 REX_EXPORT_QUIET_RETURN(__imp__KeQueryBackgroundProcessors, 0);  // no APCs/background procs modelled
 REX_EXPORT_QUIET_RETURN(__imp__KeQueryInterruptTime, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_QUIET_RETURN(__imp__KeRegisterDriverNotification, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
