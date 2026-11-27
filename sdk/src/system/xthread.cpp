@@ -658,8 +658,10 @@ X_STATUS XThread::Exit(int exit_code) {
   assert_true(XThread::GetCurrentThread() == this);
   // Keep the object alive until Thread::Exit() transitions the host thread
   // into pthread_exit(). Otherwise ReleaseHandle() below may delete `this`
-  // while this method is still running.
-  auto self = retain_object(this);
+  // while this method is still running. A local reference would never be
+  // dropped (pthread_exit runs no C++ destructors on macOS): the kernel holds
+  // it until the next exiting thread has joined this one.
+  kernel_state_->HoldExitingThread(retain_object(this));
 
   // Mark as terminated before running down APCs.
   auto kthread = guest_object<X_KTHREAD>();
@@ -700,7 +702,7 @@ X_STATUS XThread::Exit(int exit_code) {
 
   running_ = false;
   ReleaseHandle();
-  DropHostRef();  // `self` keeps the object alive until pthread_exit
+  DropHostRef();  // the kernel's held reference keeps the object alive until pthread_exit
 
   // NOTE: this does not return!
   rex::thread::Thread::Exit(exit_code);
@@ -721,7 +723,7 @@ X_STATUS XThread::Terminate(int exit_code) {
   if (XThread::IsInThread(this)) {
     // Same lifetime rule as Exit(): don't allow ReleaseHandle() to destroy
     // the thread object before Thread::Exit() reaches pthread_exit().
-    auto self = retain_object(this);
+    kernel_state_->HoldExitingThread(retain_object(this));
     FreeStack();
     ReleaseHandle();
     DropHostRef();

@@ -295,6 +295,9 @@ class KernelState {
   void UnregisterThread(XThread* thread);
   void OnThreadExecute(XThread* thread);
   void OnThreadExit(XThread* thread);
+  // An exiting thread parks its last reference here (pthread_exit runs no C++ destructors on macOS); the next
+  // exiting thread joins the parked host threads and drops their references.
+  void HoldExitingThread(object_ref<XThread> thread);
   object_ref<XThread> GetThreadByID(uint32_t thread_id);
 
   FiberInfo* LookupFiber(uint32_t guest_addr);
@@ -389,6 +392,8 @@ class KernelState {
   // Must be guarded by the global critical region.
   util::ObjectTable object_table_;
   std::unordered_map<uint32_t, XThread*> threads_by_id_;
+  std::mutex exiting_threads_mutex_;
+  std::vector<object_ref<XThread>> exiting_threads_;  // guarded by exiting_threads_mutex_
   std::vector<object_ref<XNotifyListener>> notify_listeners_;
   bool has_notified_startup_ = false;
 

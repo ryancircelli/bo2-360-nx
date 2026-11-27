@@ -222,6 +222,16 @@ KernelState::~KernelState() {
     dispatch_thread_->Wait(0, 0, 0, nullptr);
   }
 
+  // Threads parked by HoldExitingThread stay alive, as every exited thread did before it: an XThread
+  // destructor this late in shutdown would touch heaps and tables that are going away.
+  {
+    std::lock_guard<std::mutex> lock(exiting_threads_mutex_);
+    for (auto& t : exiting_threads_) {
+      t.release();
+    }
+    exiting_threads_.clear();
+  }
+
   // Unload through UnloadUserModule so the recompiled-DLL teardown runs.
   // call_entry=false because guest DllMain is unsafe at shutdown.
   while (!user_modules_.empty()) {
@@ -1180,6 +1190,22 @@ void KernelState::OnThreadExecute(XThread* thread) {
   //             Xenia would iterate user_modules_ and call function_dispatcher()->Execute() for
   //             each Note that this would require reimplementation of guest thread management
   (void)thread;
+}
+
+void KernelState::HoldExitingThread(object_ref<XThread> thread) {
+  std::vector<object_ref<XThread>> exited;
+  {
+    std::lock_guard<std::mutex> lock(exiting_threads_mutex_);
+    exited.swap(exiting_threads_);
+    exiting_threads_.push_back(std::move(thread));
+  }
+  // Each of these has parked itself and is on its way to pthread_exit: the join waits for that, frees its host
+  // stack and semaphore, and the reference drop then frees the XThread unless the guest still holds a handle.
+  for (auto& t : exited) {
+    if (auto* host = t->thread()) {
+      rex::thread::Wait(host, false);
+    }
+  }
 }
 
 void KernelState::OnThreadExit(XThread* thread) {
