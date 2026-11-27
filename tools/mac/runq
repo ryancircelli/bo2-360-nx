@@ -2605,11 +2605,26 @@ class Daemon:
                                       'since_s': round(time.time() - v['start']),
                                       'paused_s': round(v.get('paused_s', 0.0) + (time.time() - v['lane_t'] if v.get('lane_pids') else 0.0))} for k, v in self.jobs.items()},
                       'quiet_starting': self.quiet_starting,
-                      'queued': self.queued(), 'last_start_by_owner': self.last_start, 'phase': self.phase,
+                      'queued': self.queued(), 'last_start_by_owner': self.last_start, 'phase': dict(self.phase, holder=self.closing_holder()) if self.phase.get('closing') else self.phase,
                       'outside_builds': self.outside_builds})
 
     def fg_jobs(self):
         return [v for v in self.jobs.values() if not v.get('lane')]
+
+    def closing_holder(self):
+        """The running ordinary game with the most expected time left: what keeps a closing window from flipping to solo.
+        -> {'id', 'name', 'left_s'} or None. An overrun job counts as its timeout allows (0 without one)."""
+        now, best = time.time(), None
+        hist = getattr(self, 'hist', ({}, {}))
+        for k, v in self.jobs.items():
+            if v.get('lane') or is_solo(v['job']):
+                continue
+            left = v['start'] + estimate_s(v['job'], hist) - now
+            if left <= 0 and v['job'].get('timeout_s'):
+                left = v['start'] + v['job']['timeout_s'] - now
+            if best is None or left > best['left_s']:
+                best = {'id': k, 'name': v['job'].get('name'), 'left_s': round(max(0.0, left))}
+        return best
 
     def lane_sync(self):
         """Long-lane jobs run through ordinary windows and are SIGSTOPped for the whole solo window (a stopped job
@@ -2817,12 +2832,14 @@ class Daemon:
                 self.hist, self.hist_t = history_wall(), time.time()
             solo_waiting = any(is_solo(j) and not adapter_hold_reason(j, self.power_status) for _, j in qjobs)
             machine_empty = not (self.fg_jobs() or self.outside)
+            hold = self.closing_holder() if self.phase.get('closing') else None
+            hold_left = hold['left_s'] if hold else 0.0
             lane_ok = sum(bool(v.get('lane')) for v in self.jobs.values()) < LANE_MAX
             for qf in q:
                 job = rjson(os.path.join(D['queue'], qf)) or {}
                 if not phase_admits(self.phase, is_solo(job), time.time(), machine_empty,
                                     estimate_s(job, self.hist), time.time() - job.get('submitted_t', time.time()),
-                                    solo_waiting, interleave_active, self.c, lane_ok and lane_safe(job)):
+                                    solo_waiting, interleave_active, self.c, lane_ok and lane_safe(job), hold_left):
                     continue
                 if adapter_hold_reason(job, self.power_status):
                     continue
@@ -2940,6 +2957,9 @@ def job_owner(j):
 PERF_HOLD_MAX_S = 900   # a speed job held by outside builds this long runs anyway, outside builds frozen
 SOLO_SHORT_S = 300       # while a solo job waits, only jobs expected to finish within this start...
 SOLO_LONG_MAX_AGE_S = 1800   # ...except a long job that has itself waited this long (no starving the soaks)
+LONG_EST_CAP_S = 900    # while a solo job waits, a game estimated longer than this starts only at the beginning of a window
+LONG_START_S = 120      # ...i.e. within this long of the window opening (and only once it has waited SOLO_LONG_MAX_AGE_S)
+CLOSING_REOPEN_S = 300  # a closing window held open by a game with more than this left admits jobs that end before it
 SOLO_BATCH_N = 3        # solo jobs run back to back per solo window
 ORD_WINDOW_S = 900      # an ordinary window lasts this long while solo jobs wait
 ORD_GRACE_S = 300       # a game may outlast the window by this much when it starts
@@ -3010,18 +3030,24 @@ def phase_step(ph, now, solos, ords, machine_empty, solo_running, c):
     closing = urgent or not ords or age >= max(floor, float(c.get('ord_window_s', ORD_WINDOW_S)))
     if closing and machine_empty:
         return new_phase('solo', now)
-    return ph if closing == bool(ph.get('closing')) else dict(ph, closing=closing)
+    return ph if closing == bool(ph.get('closing')) else dict(ph, closing=closing, closing_t=now)
 
 
-def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, interleave_active, c, lane_ok=False):
-    """May this queued job start now under the current window?"""
+def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, interleave_active, c, lane_ok=False, hold_left_s=0.0):
+    """May this queued job start now under the current window? hold_left_s: expected time left of the longest running
+    ordinary game, which is what keeps a closing window open (see closing_holder)."""
     if ph['phase'] == 'solo':
         n = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
         if solo:
             return machine_empty and ph.get('solo_started', 0) < n
         return False   # no ordinary job of any length starts until the solo batch has run (build windows are off in it)
-    if solo or ph.get('closing'):
+    if solo:
         return False
+    if ph.get('closing'):
+        # closing-window-idle (11-27 16:14): one long game held a closing window 35 min with 2 of 3 slots idle. While it
+        # has more than closing_reopen_s left, a job that surely ends before it may start; solos still get the flip
+        # the moment the machine empties.
+        return hold_left_s > float(c.get('closing_reopen_s', CLOSING_REOPEN_S)) and est_s * 1.5 <= hold_left_s
     if not solo_waiting:
         return True
     if lane_ok and is_lane_est(est_s, c):
@@ -3033,7 +3059,9 @@ def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, inter
               float(c.get('solo_share_ratio', SOLO_SHARE_RATIO)) * ph.get('prev_solo_s', 0.0))
     left = ph['t0'] + win - now
     # (estimates are medians; tonight a 23 min estimate ran 45 min, so budget 1.5x)
-    return est_s * 1.5 <= max(SOLO_SHORT_S, left + ORD_GRACE_S) or age_s >= SOLO_LONG_MAX_AGE_S
+    fits = est_s * 1.5 <= max(SOLO_SHORT_S, left + ORD_GRACE_S) and est_s <= float(c.get('long_est_cap_s', LONG_EST_CAP_S))
+    # a long job that has waited 30 min starts only at the beginning of a window (it would hold a late one open for ever)
+    return fits or (age_s >= SOLO_LONG_MAX_AGE_S and now - ph['t0'] <= float(c.get('long_start_s', LONG_START_S)))
 
 
 OWNER_PRIORITY = []   # config.json owner_priority, copied here by the daemon: first pick, after bumped jobs
@@ -3112,6 +3140,73 @@ def history_wall():
     return {k: med(v) for k, v in by_name.items()}, {k: med(v) for k, v in by_owner.items()}
 
 
+GATE_BOOT_S = 150   # ready wait + teardown added to a route's length or a gate's --secs
+
+
+def job_route_file(j):
+    """The .route a job drives: its --route argument (or a bare .route argument); a bare name is looked up like gate.py
+    does (next to gate.py, then runq/bin/routes)."""
+    cmd = j.get('cmd') or []
+    cmd = [str(a) for a in ([cmd] if isinstance(cmd, str) else cmd)]
+    r = next((cmd[i + 1] for i, a in enumerate(cmd[:-1]) if a == '--route'), None) or next((a for a in cmd if a.endswith('.route')), None)
+    if not r:
+        return None
+    gate = next((a for a in cmd if os.path.basename(a) == 'gate.py'), None)
+    dirs = [j.get('cwd') or '.']
+    if gate:
+        dirs.insert(0, os.path.join(os.path.dirname(gate), 'routes'))
+    dirs.append(os.path.join(SPOOL, 'bin', 'routes'))
+    for d in dirs:
+        for cand in (r, r + '.route'):
+            p = cand if os.path.isabs(cand) else os.path.join(d, cand)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def route_seconds(path):
+    """Largest pad time or duration_s in a route file (gate.py route_len)."""
+    best = 0.0
+    try:
+        for line in open(path, errors='replace'):
+            line = line.split('#', 1)[0]
+            m = re.match(r'\s*duration_s\s*=\s*(\d+)', line)
+            if m:
+                best = max(best, float(m.group(1)))
+            if re.match(r'\s*pad\d', line):
+                for t in re.findall(r'(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?))?:', line):
+                    best = max(best, float(t[1] or t[0]))
+    except OSError:
+        return None
+    return best or None
+
+
+def route_estimate_s(j):
+    """Expected wall time of a game job known BEFORE it runs: its route's length (scaled by gate.py --ff) or a gate.py
+    --secs, plus the boot; never above its timeout. None when neither is known."""
+    cmd = [str(a) for a in (j.get('cmd') if isinstance(j.get('cmd'), list) else [])]
+    flag = lambda k: next((cmd[i + 1] for i, a in enumerate(cmd[:-1]) if a == k), None)
+    est = None
+    rp = job_route_file(j)
+    secs = route_seconds(rp) if rp else None
+    if secs is None and any(os.path.basename(a) == 'gate.py' for a in cmd) and '--inner' in cmd:
+        try:
+            secs = float(flag('--secs') or 45)
+        except ValueError:
+            secs = 45.0
+    elif secs is not None:
+        try:
+            ff = float(flag('--ff') or 0)
+        except ValueError:
+            ff = 0.0
+        secs = secs / ff if ff > 1 else secs
+    if secs is not None:
+        est = secs + GATE_BOOT_S
+        if j.get('timeout_s'):
+            est = min(est, float(j['timeout_s']))
+    return est
+
+
 def estimate_s(j, hist):
     by_name, by_owner = hist
     n = re.sub(r'-\d+$', '', j.get('name') or '')
@@ -3119,6 +3214,9 @@ def estimate_s(j, hist):
         return by_name[n]
     if j.get('scene') or j.get('run_dir'):
         return max(60, j.get('timeout_s', 600) - 240 + 60)   # the duration plus the boot
+    r = route_estimate_s(j)
+    if r:
+        return r
     if job_owner(j) in by_owner:
         return by_owner[job_owner(j)]
     return min(j.get('timeout_s', 600), 600)
@@ -3523,6 +3621,10 @@ def cmd_submit(argv):
         sys.exit('runq submit: give --scene, --route or -- CMD')
     if solo and not solo_has_speed_signal(job):
         sys.exit(f'runq submit: {NO_SIGNAL_SOLO_MSG}')
+    if cmd and not a.timeout and not lane_safe(job) and not route_estimate_s(job):
+        print('runq: warning: a game job with no --timeout and no route to estimate from gets the default 1800 s timeout and an '
+              'unknown length; the queue cannot plan around it (a long one held a closing window 35 min on 11-27). Pass --timeout.',
+              file=sys.stderr)
     job['where'] = a.where
     why = submit_refusal(job)
     if why:
@@ -3725,6 +3827,14 @@ def cmd_wait(ids, timeout=None):
     return worst
 
 
+def closing_note(ph):
+    h = ph.get('holder')
+    if not h:
+        return ''
+    return (f'; held open by {h.get("name")} ({h.get("id")}), about {h.get("left_s", 0)} s left, closing for '
+            f'{int(time.time() - ph.get("closing_t", time.time()))} s')
+
+
 def cmd_status(_argv):
     ensure_daemon()
     time.sleep(1.2)
@@ -3738,7 +3848,7 @@ def cmd_status(_argv):
     ph = st.get('phase') or {}
     if ph:
         print(f'window: {ph.get("phase")} for {int(time.time() - ph.get("t0", time.time()))} s'
-              f'{" (closing, solo jobs next)" if ph.get("closing") else ""}'
+              f'{" (closing, solo jobs next" + closing_note(ph) + ")" if ph.get("closing") else ""}'
               f'{", " + str(ph.get("solo_started", 0)) + " solo started" if ph.get("phase") == "solo" else ""}')
     ob = st.get('outside_builds') or []
     if ob:
@@ -4338,7 +4448,12 @@ def test_phases(bump_waiting):
     assert phase_admits(ord0, False, 5, False, 600, 5, True, False, c)                 # a 10 min game fits a fresh window
     assert not phase_admits(ord0, False, 5, False, 1100, 5, True, False, c)          # a 20 min one (30 min budget) waits for age
     assert not phase_admits(ord0, False, 1100, False, 600, 5, True, False, c)          # ...and nothing long near the end
-    assert phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)          # unless it already waited 30 min
+    assert not phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)      # ...even aged, not late in the window
+    assert phase_admits(ord0, False, 5, False, 2400, 1900, True, False, c)             # ...it starts at the beginning of the next one
+    assert not phase_admits(ord0, False, 5, False, 1000, 5, True, False, dict(c, ord_window_s=3600, ord_min_s=3600))   # over long_est_cap_s
+    assert phase_admits(closing, False, 1400, False, 60, 5, True, False, c, False, 2000)    # closing window held open: short job fits
+    assert not phase_admits(closing, False, 1400, False, 1500, 5, True, False, c, False, 2000)   # ...a long one does not
+    assert not phase_admits(closing, False, 1400, False, 60, 5, True, False, c, False, 200)      # holder nearly done: flip to solo
     assert phase_admits(ord0, False, 1100, False, 2400, 5, False, False, c)            # no solo waiting: anything
     assert phase_admits(ord0, False, 1100, False, 2400, 5, True, False, c, True)       # long lane: a 40 min job starts anyway
     assert not phase_admits(ord0, False, 1100, False, 2400, 5, True, False, c, False)  # ...unless the lane is full

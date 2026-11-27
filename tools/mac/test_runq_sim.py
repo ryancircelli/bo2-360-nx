@@ -373,6 +373,65 @@ class Sim(unittest.TestCase):
         self.assertEqual(self.state_of(b), 'running', 'owner B waited behind owner A\'s higher class jobs')
         self.assertLessEqual(sum(self.state_of(i) == 'running' for i in a), 2)
 
+    # runq-closing-window-idle (11-27 16:14: one 2700 s game held a closing window 35 min, 2 of 3 slots idle, 100 jobs waited)
+    def long_route(self, secs=2400):
+        p = os.path.join(self.cache, 'long.route')
+        Path(p).write_text(f'duration_s = {secs}\nplayers = 1\npad1 = 30-30.5:start\n')
+        return p
+
+    def long_game(self, **kw):
+        return self.submit(secs=2700, klass=q.CLASSES['harness'], app='/x/g.app',
+                           cmd=['sim', '2700', '0', '--route', self.long_route()], **kw)
+
+    def test_estimate_uses_route_length_and_gate_kind(self):
+        j = dict(name='n1', cmd=['sim', '--route', self.long_route(2400)])
+        self.assertGreaterEqual(q.estimate_s(j, ({}, {})), 2400)
+        self.assertLessEqual(q.estimate_s(dict(j, timeout_s=900), ({}, {})), 900)   # never above its timeout
+        g = dict(name='n2', cmd=['python3', '-I', '/x/gates/gate.py', '--inner', 'boot', 'halo3', '--secs', '45'])
+        self.assertTrue(60 <= q.estimate_s(g, ({}, {})) <= 300)
+
+    def test_long_game_not_started_late_while_solo_waits(self):
+        self.write_config(dict(slots=3, ord_window_s=120, ord_min_s=60))
+        d = self.daemon()
+        solo = self.submit(secs=30, klass=q.CLASSES['bench'], solo=True, quiet_machine=True, measured=True)
+        long = self.long_game()
+        shorts = [self.submit(secs=30) for _ in range(6)]
+        self.run_until(d, lambda: self.state_of(solo) == 'running', 600, what='solo runs before the long game starts')
+        self.assertEqual(self.state_of(long), 'queued', 'a 40 min game started in a window that must close for a waiting solo')
+
+    def test_closing_window_held_by_long_job_still_runs_short_jobs(self):
+        self.write_config(dict(slots=3, ord_window_s=120, ord_min_s=60))
+        d = self.daemon()
+        long = self.long_game(submitted_t=self.clock.t - 2000)   # aged: allowed at the start of a window
+        self.run_for(d, 5)
+        self.assertEqual(self.state_of(long), 'running')
+        solo = self.submit(secs=30, klass=q.CLASSES['bench'], solo=True, quiet_machine=True, measured=True)
+        shorts = [self.submit(secs=30) for _ in range(16)]
+        idle = []
+
+        def check(dm):
+            waiting = any(self.state_of(i) == 'queued' for i in shorts)
+            if self.clock.t - self.START > 200 and waiting and len(dm.jobs) < 3:
+                idle.append(self.clock.t)
+        self.run_for(d, 500, check=check)
+        self.assertEqual(idle, [], f'slots idle while short jobs waited, e.g. at {idle[:3]}')
+        self.assertTrue(all(self.state_of(i) == 'done' for i in shorts))
+        self.assertEqual(self.state_of(solo), 'queued')   # solo still waits for the machine to empty, then gets it
+        self.run_until(d, lambda: self.state_of(solo) == 'done', 3000, what='solo window opens once the long job ends')
+
+    def test_status_names_the_job_holding_a_closing_window(self):
+        self.write_config(dict(slots=3, ord_window_s=120, ord_min_s=60))
+        d = self.daemon()
+        long = self.long_game(submitted_t=self.clock.t - 2000)
+        self.run_for(d, 5)
+        self.submit(secs=30, klass=q.CLASSES['bench'], solo=True, quiet_machine=True, measured=True)
+        self.submit(secs=30)
+        self.run_for(d, 200)
+        ph = json.loads(Path(q.STATE).read_text())['phase']
+        self.assertTrue(ph['closing'])
+        self.assertEqual(ph['holder']['id'], long)
+        self.assertGreater(ph['holder']['left_s'], 300)
+
     # laptop-only jobs must not hold the Mac's solo window or build cap
     def test_laptop_jobs_do_not_hold_mac(self):
         d = self.daemon()
