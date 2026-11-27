@@ -7,6 +7,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
+using namespace rex;
+
 extern "C" void __imp__RtlRaiseStatus(PPCContext&, uint8_t*);
 
 TEST_CASE("RtlRaiseStatus raises through RtlRaiseException and returns to the caller", "[kernel][rtl]") {
