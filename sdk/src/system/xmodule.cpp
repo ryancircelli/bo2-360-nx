@@ -84,7 +84,11 @@ bool XModule::Save(stream::ByteStream* stream) {
 
 bool XModule::RestoreLoaded(stream::ByteStream* stream) {
   hmodule_ptr_ = stream->Read<uint32_t>();
-  for (auto h : std::vector<X_HANDLE>(handles())) kernel_state()->object_table()->RemoveHandle(h);
+  // This boot's handles for the DLL, only where the slot is still ours: a saved object restored earlier may
+  // already sit there (Forza: event F8000030 was deleted here, its waiter got C0000008).
+  auto* table = kernel_state()->object_table();
+  for (auto h : std::vector<X_HANDLE>(handles()))
+    if (table->LookupObject<XObject>(h).get() == this) table->RemoveHandle(h);
   return RestoreObject(stream);
 }
 

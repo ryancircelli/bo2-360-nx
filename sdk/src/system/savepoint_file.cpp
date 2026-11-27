@@ -1116,7 +1116,7 @@ bool LoadSavepointFile(const std::string& path) {
   if (std::getenv("REX_SAVEPOINT_DIAG")) std::fprintf(stderr, "[savepoint] dpc list head %08X\n", uint32_t(head[6]));
   input::RebaseVirtualPadScripts();  // pad scripts count from the load, as they count from boot otherwise
 
-  // Kernel objects, keeping the ones this boot already made (same handles: boot is deterministic).
+  // Kernel objects: every saved record replaces what this boot has at its handles (boot objects are leaked).
   auto* ks = Runtime::instance()->kernel_state();
   {
     std::lock_guard<std::mutex> l(g_parked_m);
@@ -1174,7 +1174,7 @@ bool LoadSavepointFile(const std::string& path) {
     uint32_t len = kbs.Read<uint32_t>();
     size_t start = kbs.offset();
     uint32_t handle = 0;
-    std::memcpy(&handle, kernel.data() + start + 12, 4);  // SaveObject: alloc flag, guest ptr, count, handles
+    std::memcpy(&handle, kernel.data() + start + 16, 4);  // SaveObject: alloc flag, guest ptr, native ptr, count, handles
     // Modules: boot ones are this process's already (same executable, checked above); DLLs loaded above take
     // the saved handles. Records start with the module signature and path, not the handle.
     if (type == XObject::Type::Module) {
@@ -1187,11 +1187,6 @@ bool LoadSavepointFile(const std::string& path) {
           return false;
         }
       }
-      kbs.set_offset(start + len);
-      continue;
-    }
-    if (
-        (type != XObject::Type::Thread && ks->object_table()->LookupObject<XObject>(handle))) {
       kbs.set_offset(start + len);
       continue;
     }
