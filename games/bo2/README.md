@@ -26,7 +26,7 @@ Generate code only through `tools/codegen.sh`; the builds check for its fix-up p
 |---|---|
 | Start-up and glue | `main.cpp`, `bo2zm_register.cpp`; `bo2zm_guest.h` (calling game functions); `bo2zm_guest_memory.h`; `bo2zm_autoexec.cpp`, `bo2zm_commands.cpp`, `bo2zm_dvars.cpp` (the game's console, the port's commands, dvars) |
 | Switch | `bo2zm_switch.cpp` (display, VSYNC), `bo2zm_switch_mutex.cpp`, `bo2zm_relaunch.cpp`, `kernel/` |
-| Native rewrites | `bo2zm_native_cull.cpp`, `bo2zm_native_skin.cpp`, `bo2zm_native_lzx.cpp`, `bo2zm_native_audio.cpp` (also the checked-phase framework), `bo2zm_native_limiter.cpp`, `bo2zm_native_entities.cpp`, `bo2zm_stream_alloc.cpp`, `bo2zm_webm.cpp` (VP8 through FFmpeg) |
+| Native rewrites | `bo2zm_native_cull.cpp`, `bo2zm_native_skin.cpp`, `bo2zm_native_lzx.cpp`, `bo2zm_native_audio.cpp` (also the checked-phase framework), `bo2zm_stream_alloc.cpp`, `bo2zm_webm.cpp` (VP8 through FFmpeg) |
 | Memory and waits | `bo2zm_crt.cpp` and `bo2zm_page_writes.cpp` (native copies and write stamps), `bo2zm_volume_writes.cpp`, `bo2zm_waits.cpp` and `bo2zm_jobs.cpp` (the job system), `bo2zm_sound_waits.cpp`, `bo2zm_gpu_skin.cpp` |
 | Direct3D layer | `bo2zm_d3d_marker.cpp` (markers, draw records), `bo2zm_d3d_native.cpp` (native functions), `bo2zm_d3d_trace.cpp` (timing, tracing, the D3D shadow) |
 | Renderer | `native/bo2zm_native_system.cpp`; in `native/render/`: `bo2zm_native_render.cpp` (the ring thread), `bo2zm_native_draws.cpp` (draws and caches), `bo2zm_native_deferred.cpp` (recorder), `bo2zm_native_targets.cpp` (targets, resolves, present), `bo2zm_native_shaders.cpp` and `bo2zm_shader_library.cpp`, `bo2zm_native_texture_pool.cpp`, `bo2zm_native_precompile.cpp`, `bo2zm_native_hooks.cpp`, `bo2zm_native_capture.cpp` |

@@ -170,7 +170,7 @@ saves often goes to another, so some changes show only in per-thread CPU.
 
 **Code generation**
 - Plain guest memory: non-volatile loads and stores, kept correct by compiler barriers. Code 7.2 % smaller, Server
-  thread 6-9 % less CPU; **+5.8 %** together with GPU skinning, the limiter and the entity loops.
+  thread 6-9 % less CPU; **+5.8 %** together with GPU skinning, the limiter and the entity loops (the last two natives were deleted on the Mac side, tag rejected/bo2-neutral-natives).
 - Registers as C++ locals: all 31,863 save/restore helper calls gone. Part of the first pass of changes.
 - Scratch vector registers as locals: **+1.7 %**.
 - Direct calls: 97 % of calls between game functions are direct and can be inlined; the base for LTO.
@@ -187,7 +187,6 @@ saves often goes to another, so some changes show only in per-thread CPU.
 - CPU skinning kernels, bit-exact: **1.4-1.7x** per call.
 - DLC loading videos through FFmpeg's NEON VP8 decoder: the game runs at full speed while a video plays, where it ran at about a third.
 - Stream allocator search, remembered: per search **6-8x** faster (PC).
-- Entity scan **-10.6 %** time; plane test **-33 %**.
 - Four Direct3D functions in native code: no measurable gain, kept because exact.
 
 **Threads and waits**
@@ -226,7 +225,6 @@ saves often goes to another, so some changes show only in per-thread CPU.
 **Audio**
 - Decoded XMA frame cache: **+3.8 %**.
 - Sound mixer rewrites (reverb, resamplers, biquad, mixing): **+2.7 %**.
-- The limiter in one pass: **1.4x** per call.
 
 **Loading and hitches**
 - Pipelines compiled on a thread: preset changes no longer freeze the game for seconds.

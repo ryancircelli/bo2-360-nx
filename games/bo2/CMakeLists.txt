@@ -59,15 +59,12 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_test_waits.cpp
     ${BO2ZM_ROOT}/src/bo2zm_sound_mix.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
     ${BO2ZM_ROOT}/src/bo2zm_webm.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_lzx.cpp
     ${BO2ZM_ROOT}/../../core/bo2zm_page_writes.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_skin.cpp
     ${BO2ZM_ROOT}/src/bo2zm_gpu_skin.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_cull.cpp
-    # The entity loops: a read-only scan pass before sub_822FD360, the plane test sub_822FE3B8 natively.
-    ${BO2ZM_ROOT}/src/bo2zm_native_entities.cpp
     ${BO2ZM_ROOT}/src/bo2zm_stream_alloc.cpp
     # BO2's memcpy/memmove/memset as native code ([rexcrt] in overrides.toml)
     ${BO2ZM_ROOT}/src/bo2zm_crt.cpp
@@ -214,8 +211,8 @@ if(REXGLUE_PLATFORM_SWITCH AND TARGET bo2zm_recomp AND BO2ZM_PGO)
       ${BO2ZM_ROOT}/src/native/render/bo2zm_native_draws.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_deferred.cpp
       ${BO2ZM_ROOT}/src/native/render/bo2zm_native_shaders.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_shader_library.cpp
       ${BO2ZM_ROOT}/src/native/render/bo2zm_native_hooks.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_texture_pool.cpp
-      ${BO2ZM_ROOT}/src/native/bo2zm_native_system.cpp ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
-      ${BO2ZM_ROOT}/src/bo2zm_native_skin.cpp ${BO2ZM_ROOT}/src/bo2zm_gpu_skin.cpp ${BO2ZM_ROOT}/src/bo2zm_native_cull.cpp ${BO2ZM_ROOT}/src/bo2zm_native_entities.cpp
+      ${BO2ZM_ROOT}/src/native/bo2zm_native_system.cpp ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp
+      ${BO2ZM_ROOT}/src/bo2zm_native_skin.cpp ${BO2ZM_ROOT}/src/bo2zm_gpu_skin.cpp ${BO2ZM_ROOT}/src/bo2zm_native_cull.cpp
       ${BO2ZM_ROOT}/src/bo2zm_native_lzx.cpp ${BO2ZM_ROOT}/../../core/bo2zm_page_writes.cpp ${BO2ZM_ROOT}/src/bo2zm_volume_writes.cpp ${BO2ZM_ROOT}/src/bo2zm_d3d_marker.cpp
       ${BO2ZM_ROOT}/src/bo2zm_d3d_native.cpp ${BO2ZM_ROOT}/src/bo2zm_crt.cpp)
   if(BO2ZM_PGO STREQUAL "generate")
@@ -251,7 +248,7 @@ if(REXGLUE_PLATFORM_SWITCH AND BO2ZM_DEBUG_LINES)
   set_property(SOURCE ${BO2ZM_ROOT}/src/native/render/bo2zm_native_render.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_draws.cpp
                ${BO2ZM_ROOT}/src/native/render/bo2zm_native_targets.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_deferred.cpp
                ${BO2ZM_ROOT}/src/native/render/bo2zm_native_shaders.cpp ${BO2ZM_ROOT}/src/native/render/bo2zm_native_texture_pool.cpp
-               ${BO2ZM_ROOT}/src/native/render/bo2zm_native_hooks.cpp ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp ${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp
+               ${BO2ZM_ROOT}/src/native/render/bo2zm_native_hooks.cpp ${BO2ZM_ROOT}/src/bo2zm_native_audio.cpp
                APPEND PROPERTY COMPILE_OPTIONS -g1)
   if(TARGET rexaudio)  # the SDK's audio (the XMA decoder)
     target_compile_options(rexaudio PRIVATE -g1)
@@ -342,11 +339,6 @@ if(REXGLUE_PLATFORM_SWITCH)
     target_link_options(bo2zm PRIVATE "-Wl,--wrap=viOpenDisplay")
 endif()
 
-# The sound limiter's rewrite repeats the game's single-precision operations one by one: GCC (whose default is
-# -ffp-contract=fast) must not fuse a product into a later add there (games/bo2/src/bo2zm_native_limiter.cpp).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_native_limiter.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
-endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     set_source_files_properties(${BO2ZM_ROOT}/src/bo2zm_player_projection.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 endif()

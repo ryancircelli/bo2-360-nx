@@ -53,7 +53,6 @@
 #include "bo2zm_game.h"
 #include "bo2zm_benchmark.h"
 #include "bo2zm_gpu_skin.h"
-#include "bo2zm_native_limiter.h"
 #include "bo2zm_native_lzx.h"
 #include "bo2zm_native_skin.h"
 #include "bo2zm_page_writes.h"
@@ -332,14 +331,8 @@ struct LzxTags {
     g_lzx.group = Group::kStreams;
   }
 } g_lzx_tags;
-// The sound limiter (bo2zm_native_limiter.cpp): its gains use the host's pow where the game calls its own double pow
-// and rounds the result to a float right after, so a word may (very rarely) differ by one rounding; it is checked to
-// 2^-20 relative. At ~1,870 calls a second, its 5,000 checks take about 3 s of sound, well before a benchmark route's
-// A/B starts.
-Replacement g_limiter{"limiter (sub_8258BE08), native", 1.0f / 1048576.0f, true, 5000};
 Replacement* const kAll[] = {&g_scalar, &g_mix,   &g_filter, &g_biquad, &g_biquad_native, &g_fill,  &g_reverb,
-                             &g_voice_mono, &g_voice_stereo, &g_skin1,  &g_skin2, &g_skin3,  &g_lzx,
-                             &g_limiter};
+                             &g_voice_mono, &g_voice_stereo, &g_skin1,  &g_skin2, &g_skin3,  &g_lzx};
 
 std::atomic<uint64_t> g_next_summary{0};
 
@@ -1529,43 +1522,6 @@ REX_HOOK_RAW(sub_8258B208) {
   __imp__sub_8258B208(ctx, base);
 #endif
 }
-
-// --- sub_8258BE08: the sound limiter (bo2zm_native_limiter.cpp) ----------------------------------------------------
-// r3 = count, r6 = state, r7 = samples, r8 = one float out. What the original writes outside its own frame: the
-// samples (in place, and its vector scales cover ceil(count/4) vectors from r7 & ~15, its sign clearing the vectors
-// from (r7 + 16) & ~15 on), the state's first 24 bytes (+0 the copy position, +4 the envelope, +8 the gain, +16 and
-// +20 the DC blocker), its copy of the block at r6 + 128 + 4 * position and the word at r8.
-REX_EXTERN(__imp__sub_8258BE08);
-namespace {
-Regions RegionsLimiter(const PPCContext& ctx, uint8_t* base) {
-  Regions rg;
-  const uint32_t n = ctx.r3.u32, s = ctx.r6.u32, x = ctx.r7.u32;
-  if (n > 4096 || !Contiguous(s, 24)) {
-    rg.valid = false;
-    return rg;
-  }
-  if (n != 0) {
-    const uint32_t first = x & ~15u;
-    uint64_t end = std::max<uint64_t>(uint64_t(x) + 4ull * n, uint64_t(first) + 16ull * (((n - 1) >> 2) + 1));
-    if (n > 4) {
-      end = std::max<uint64_t>(end, uint64_t((x + 16) & ~15u) + 16ull * (((n - 5) >> 2) + 1));
-    }
-    rg.Append(first, uint32_t(end - first));
-  }
-  rg.Append(s, 24);
-  rg.Append(s + ((Load32(Host(base, s)) + 32) << 2), 4 * n);
-  rg.Append(ctx.r8.u32, 4);
-  return rg;
-}
-}  // namespace
-REX_HOOK_RAW(sub_8258BE08) {
-  if (!bo2zm::native_limiter::OnInThisArm()) {
-    __imp__sub_8258BE08(ctx, base);
-    return;
-  }
-  Call(g_limiter, ctx, base, __imp__sub_8258BE08, bo2zm::native_limiter::Limit, RegionsLimiter);
-}
-
 
 // The block fill runs on many threads (the mixer clears its buffers with it).
 REX_HOOK_RAW(sub_827D3060) {

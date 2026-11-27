@@ -66,9 +66,7 @@ if(BO2CP_NATIVE)
         ${BO2ZM_SRC}/bo2zm_sound_mix.cpp
         ${BO2ZM_SRC}/bo2zm_crt.cpp
         ${BO2ZM_SRC}/bo2zm_native_cull.cpp
-        ${BO2ZM_SRC}/bo2zm_native_entities.cpp
         ${BO2ZM_SRC}/bo2zm_native_audio.cpp
-        ${BO2ZM_SRC}/bo2zm_native_limiter.cpp
         ${BO2ZM_SRC}/bo2zm_native_lzx.cpp
         ${BO2ZM_SRC}/bo2zm_native_skin.cpp
         ${BO2ZM_SRC}/bo2zm_gpu_skin.cpp)
@@ -89,11 +87,6 @@ if(BO2CP_NATIVE)
     string(TIMESTAMP BO2CP_BUILD_TIME "%Y%m%d-%H%M%S")
     set_property(SOURCE ${BO2ZM_SRC}/bo2zm_switch.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS "BO2ZM_BUILD_ID=\"bo2cp-${BO2CP_BUILD_TIME}\"")
-    # The limiter's rewrite repeats the game's single-precision operations one by one: GCC must not fuse a product into
-    # a later add there (games/bo2/CMakeLists.txt does the same).
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        set_property(SOURCE ${BO2ZM_SRC}/bo2zm_native_limiter.cpp APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
-    endif()
 endif()
 
 if(WIN32)

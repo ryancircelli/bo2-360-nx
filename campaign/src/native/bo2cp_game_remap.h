@@ -118,22 +118,15 @@
 #define sub_82428468 sub_8237F910            // WaitForSingleObject(*r3, INFINITE)
 #define __imp__sub_82428468 __imp__sub_8237F910
 
-// bo2zm_native_cull.cpp and bo2zm_native_entities.cpp: the bounds-tree culling and the entity scan in native code;
-// their numeric addresses come from BO2_GAME_ADDR.
+// bo2zm_native_cull.cpp: the bounds-tree culling in native code; its numeric addresses come from BO2_GAME_ADDR.
 #define sub_828F6F08 sub_826D82C0            // bounds-tree culling
 #define __imp__sub_828F6F08 __imp__sub_826D82C0
 #define sub_828F6CB8 sub_826D8070            // culling: its state call
 #define __imp__sub_828F6CB8 __imp__sub_826D8070
 #define sub_828F6B78 sub_826D7F30            // culling: its item call
 #define __imp__sub_828F6B78 __imp__sub_826D7F30
-#define sub_822FD360 sub_8224AB18            // entity loop
-#define __imp__sub_822FD360 __imp__sub_8224AB18
-#define sub_822E6B78 sub_822357E0            // entity class job
-#define __imp__sub_822E6B78 __imp__sub_822357E0
-#define sub_822FE3B8 sub_8224BB00            // entity plane test
-#define __imp__sub_822FE3B8 __imp__sub_8224BB00
 
-// bo2zm_native_audio.cpp, bo2zm_native_limiter.cpp, bo2zm_native_lzx.cpp, bo2zm_native_skin.cpp: the sound mixer's hot code,
+// bo2zm_native_audio.cpp, bo2zm_native_lzx.cpp, bo2zm_native_skin.cpp: the sound mixer's hot code,
 // the limiter, the fastfile decoder and CPU skinning in native code.
 #define sub_8243F620 sub_82332050            // mono voice resampler
 #define __imp__sub_8243F620 __imp__sub_82332050
@@ -151,8 +144,6 @@
 #define __imp__sub_8258B0D0 __imp__sub_8249AE20
 #define sub_8258B208 sub_8249AF58            // biquad
 #define __imp__sub_8258B208 __imp__sub_8249AF58
-#define sub_8258BE08 sub_8249BB58            // limiter
-#define __imp__sub_8258BE08 __imp__sub_8249BB58
 #define sub_8258C310 sub_8249C060            // reverb parameters (called)
 #define __imp__sub_8258C310 __imp__sub_8249C060
 #define sub_82592EE8 sub_824A2C90            // reverb setup (called)

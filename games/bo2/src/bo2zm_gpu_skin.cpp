@@ -21,6 +21,8 @@
 
 // On by default on the Switch: together with plain guest memory, the native sound limiter and the entity loops it
 // raised the frame rate at round 15 from 40.9 to 43.3 FPS (+5.8 %) on an OLED. Not tried on the PC yet, so off there.
+// The limiter and entity natives were deleted (neutral on the Mac, tag rejected/bo2-neutral-natives); the Switch gain from
+// them is lost if that build is ever revived.
 #if defined(__SWITCH__)
 constexpr bool kGpuSkinDefault = true;
 #else
