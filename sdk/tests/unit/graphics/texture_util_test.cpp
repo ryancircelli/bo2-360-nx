@@ -47,3 +47,19 @@ TEST_CASE("packed level 0 tail uses the base address", "[texture_util]") {
   Pages(Fetch2D(64, 64, 0x100, 0x200, 0, 6, true), base_page, mip_page, mip_min, mip_max);
   CHECK(mip_page == 0x200);
 }
+
+// Canary 4a863a0e1: a nonzero mip_min_level is sampler state and keeps a
+// separate base page; only a base sharing the mip page is dropped.
+TEST_CASE("mip_min_level keeps a separate base page", "[texture_util]") {
+  uint32_t base_page, mip_page, mip_min, mip_max;
+  Pages(Fetch2D(256, 256, 0x100, 0x200, 2, 8, false), base_page, mip_page, mip_min, mip_max);
+  CHECK(base_page == 0x100);
+  CHECK(mip_page == 0x200);
+  CHECK(mip_min == 2);
+  Pages(Fetch2D(256, 256, 0x200, 0x200, 2, 8, false), base_page, mip_page, mip_min, mip_max);
+  CHECK(base_page == 0);
+  CHECK(mip_min == 2);
+  Pages(Fetch2D(256, 256, 0, 0x200, 0, 8, false), base_page, mip_page, mip_min, mip_max);
+  CHECK(base_page == 0);
+  CHECK(mip_min == 1);
+}
