@@ -111,3 +111,6 @@ int main(int argc, char** argv) {
 
 // Referenced by the patched SDK sources this tool compiles.
 extern "C" void fable2_ring_writeback_stored() {}
+// The plugin's patch moves this definition to the host SDK, which this tool does not link.
+REXCVAR_DEFINE_BOOL(draw_resolution_scaled_texture_offsets, true, "GPU/Shader",
+                    "Scale texture offsets with draw resolution");
