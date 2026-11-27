@@ -118,3 +118,16 @@ TEST_CASE("packed base slice strides use rounded dimensions", "[texture_util]") 
       xenos::DataDimension::k2DOrStacked, 1, 32, 65, 1, true, k8888, false, true, 0);
   CHECK(unpacked.base.array_slice_stride_bytes == 128 * 96);
 }
+
+// Canary 19da17403: linear mip rows align to max(256 / block size, 32) blocks,
+// so 96bpp rows are 32 blocks (384 bytes), not rounded up to 512 bytes.
+TEST_CASE("linear mip row pitch", "[texture_util]") {
+  texture_util::TextureGuestLayout rgb32f = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k2DOrStacked, 2, 64, 64, 1, false,
+      xenos::TextureFormat::k_32_32_32_FLOAT, false, true, 1);
+  CHECK(rgb32f.mips[1].row_pitch_bytes == 32 * 12);
+  texture_util::TextureGuestLayout rgba8 = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k2DOrStacked, 2, 64, 64, 1, false, xenos::TextureFormat::k_8_8_8_8,
+      false, true, 1);
+  CHECK(rgba8.mips[1].row_pitch_bytes == 256);
+}
