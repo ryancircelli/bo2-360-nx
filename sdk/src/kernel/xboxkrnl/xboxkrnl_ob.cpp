@@ -311,8 +311,18 @@ u32 NtQueryIoCompletion_entry(u32 handle, mapped_u32 depth) {
   return X_STATUS_SUCCESS;
 }
 
+// No object-manager directories are modelled, so every enumeration is already at its end.
+u32 NtQueryDirectoryObject_entry(u32 handle, mapped_void buffer, u32 length, u32 return_single,
+                                 u32 restart_scan, mapped_u32 context, mapped_u32 return_length) {
+  if (return_length) {
+    *return_length = 0;
+  }
+  return X_STATUS_NO_MORE_ENTRIES;
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
+REX_EXPORT(__imp__NtQueryDirectoryObject, rex::kernel::xboxkrnl::NtQueryDirectoryObject_entry)
 REX_EXPORT(__imp__NtQueryMutant, rex::kernel::xboxkrnl::NtQueryMutant_entry)
 REX_EXPORT(__imp__NtQuerySemaphore, rex::kernel::xboxkrnl::NtQuerySemaphore_entry)
 REX_EXPORT(__imp__NtQueryTimer, rex::kernel::xboxkrnl::NtQueryTimer_entry)
@@ -339,7 +349,5 @@ REX_EXPORT_QUIET_RETURN(__imp__ObLookupAnyThreadByThreadId, 0);  // round-2 spec
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__ObMakeTemporaryObject);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__ObTranslateSymbolicLink, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtCreateDirectoryObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtCreateSymbolicLinkObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtMakeTemporaryObject, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtOpenDirectoryObject, 0xC0000034);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtQueryDirectoryObject, 0x8000001A);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

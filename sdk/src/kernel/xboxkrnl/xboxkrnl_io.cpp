@@ -1191,6 +1191,38 @@ u32 NtOpenSymbolicLinkObject_entry(mapped_u32 handle_out,
   return X_STATUS_SUCCESS;
 }
 
+// Registers `\??\X:` -> target in the VFS link table, the same table ObCreateSymbolicLink fills.
+// shortcut: the link outlives its handle (as if OBJ_PERMANENT); unregister on last close if a title
+// relies on temporary links.
+u32 NtCreateSymbolicLinkObject_entry(mapped_u32 handle_out,
+                                     ppc_ptr_t<X_OBJECT_ATTRIBUTES> object_attrs,
+                                     ppc_ptr_t<X_ANSI_STRING> target_ptr) {
+  if (!object_attrs || !target_ptr) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
+  auto object_name = REX_KERNEL_MEMORY()->TranslateVirtual<X_ANSI_STRING*>(object_attrs->name_ptr);
+  auto path = rex::string::utf8_canonicalize_guest_path(
+      util::TranslateAnsiPath(REX_KERNEL_MEMORY(), object_name));
+  auto target = rex::string::utf8_canonicalize_guest_path(
+      util::TranslateAnsiPath(REX_KERNEL_MEMORY(), target_ptr));
+  if (!IsValidPath(path, false)) {
+    return X_STATUS_OBJECT_NAME_INVALID;
+  }
+  if (rex::string::utf8_starts_with(path, "\\??\\")) {
+    path = path.substr(4);  // Strip the full qualifier
+  }
+  if (!REX_KERNEL_FS()->RegisterSymbolicLink(path, target)) {
+    return X_STATUS_UNSUCCESSFUL;
+  }
+
+  object_ref<XSymbolicLink> symlink(new XSymbolicLink(REX_KERNEL_STATE()));
+  symlink->Initialize(path, target);
+  if (handle_out) {
+    *handle_out = symlink->handle();
+  }
+  return X_STATUS_SUCCESS;
+}
+
 // https://docs.microsoft.com/en-us/windows/win32/devnotes/ntquerysymboliclinkobject
 u32 NtQuerySymbolicLinkObject_entry(u32 handle, ppc_ptr_t<X_ANSI_STRING> target) {
   auto symlink = REX_KERNEL_OBJECTS()->LookupObject<XSymbolicLink>(handle);
@@ -1314,6 +1346,7 @@ REX_EXPORT(__imp__NtRemoveIoCompletion, rex::kernel::xboxkrnl::NtRemoveIoComplet
 REX_EXPORT(__imp__NtQueryFullAttributesFile, rex::kernel::xboxkrnl::NtQueryFullAttributesFile_entry)
 REX_EXPORT(__imp__NtQueryDirectoryFile, rex::kernel::xboxkrnl::NtQueryDirectoryFile_entry)
 REX_EXPORT(__imp__NtFlushBuffersFile, rex::kernel::xboxkrnl::NtFlushBuffersFile_entry)
+REX_EXPORT(__imp__NtCreateSymbolicLinkObject, rex::kernel::xboxkrnl::NtCreateSymbolicLinkObject_entry)
 REX_EXPORT(__imp__NtOpenSymbolicLinkObject, rex::kernel::xboxkrnl::NtOpenSymbolicLinkObject_entry)
 REX_EXPORT(__imp__NtQuerySymbolicLinkObject, rex::kernel::xboxkrnl::NtQuerySymbolicLinkObject_entry)
 REX_EXPORT(__imp__FscGetCacheElementCount, rex::kernel::xboxkrnl::FscGetCacheElementCount_entry)
