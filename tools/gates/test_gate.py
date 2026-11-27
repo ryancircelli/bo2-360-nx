@@ -80,17 +80,17 @@ class HeadlessMarker(unittest.TestCase):
 
 class GameTable(unittest.TestCase):
     def test_every_gate_game_has_a_gameplay_rule(self):
-        # me2 has a menu route only: its drive gate fails closed until it gets a gameplay rule.
-        self.assertEqual(sorted(set(gate.GAMES) - set(driving.GAMES) - {'me2'}), [], 'drive would fail closed for these: add a rule')
+        # me2 has a menu route only; halo3/fallout3 are boot/open only until gate-routes-newgames lands: their drive gates fail closed.
+        self.assertEqual(sorted(set(gate.GAMES) - set(driving.GAMES) - {'me2', 'halo3', 'fallout3'}), [], 'drive would fail closed for these: add a rule')
 
     def test_drive_routes_exist(self):
         for game, g in gate.GAMES.items():
             if g['drive']:
                 self.assertTrue(any((HERE / 'routes' / (g['drive'] + '.route')).exists() for _ in [0])
-                                or game in ('bo2',), f'{game}: no routes/{g["drive"]}.route')
+                                or game in ('bo2', 'halo3', 'fallout3'), f'{game}: no routes/{g["drive"]}.route')
 
-    def test_nine_games(self):
-        self.assertEqual(len(gate.GAMES), 9)
+    def test_eleven_games(self):
+        self.assertEqual(len(gate.GAMES), 11)
 
 
 if __name__ == '__main__':

@@ -41,6 +41,8 @@ SAVEPOINTS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'savepoints')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
+    'halo3': dict(app='Halo 3.app', drive='halo3-play', scene_s=180, settle_s=60, seed=None),   # boot/open only until gate-routes-newgames lands
+    'fallout3': dict(app='Fallout 3.app', drive='fallout3-play', scene_s=180, settle_s=60, seed=None),
     'me2': dict(app='Mass Effect 2.app', drive='me2-menu', scene_s=90, settle_s=60, seed='me2-360'),
     'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
     # save_log: `save` counts --at from this log line (boot time varies with machine load; a save on a loading screen is useless)
@@ -997,7 +999,7 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2', 'halo3': 'halo 3', 'fallout3': 'fallout 3'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli
