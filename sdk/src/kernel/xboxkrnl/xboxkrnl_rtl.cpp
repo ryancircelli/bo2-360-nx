@@ -32,6 +32,7 @@
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread/atomic.h>
+#include <rex/thread_spin.h>
 
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
@@ -456,7 +457,9 @@ u32 RtlTryEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
     return 1;
   }
 
-  // Failed to acquire lock.
+  // Failed to acquire lock. A caller that tries again at once is spinning (job systems that put the work back and
+  // pick it again), so the try counts as a poll for the spin backoff.
+  rex::thread::NoteGuestPoll();
   return 0;
 }
 
