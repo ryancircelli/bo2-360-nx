@@ -16,6 +16,12 @@
       "commands": [
         "press a 600"
       ]
+    },
+    {
+      "text": "MOST WANTED",
+      "commands": [
+        "press a 600"
+      ]
     }
   ],
   "controls": {

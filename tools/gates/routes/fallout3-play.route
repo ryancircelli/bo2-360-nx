@@ -28,6 +28,12 @@
       "commands": [
         "press a 600"
       ]
+    },
+    {
+      "text": "LEGAL CARD|Bethesda Softworks|ZeniMax",
+      "commands": [
+        "press b 600"
+      ]
     }
   ],
   "controls": {

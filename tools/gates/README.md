@@ -17,7 +17,7 @@ $G speed nfsmw --a OLD.app --b NEW.app          # same through the drive route's
 $G install nfsmw --app NEW.app --repo ~/dev/bo2-360-nx-<topic> [--integration origin/nfs-tonight] [--dry-run]
 $G replay BUILD_DIR --repo ~/dev/bo2-360-nx-<topic> [--only a,b]   # picture-regression replay of the saved GPU traces (sdk/tools/gputest/replay-gate); run first for any sdk/src/graphics change
 ```
-GAME = `bo2 nfsmw fh1 nfshp bo1 gears ac1 nfsmw2012` (nfsmw2012: boot/shot only, its drive FAILs closed; a game needs a rule in driving.py to pass `drive`; `$G selftest` runs the kit tests, no game). `--app` defaults to the installed app in ~/Games/Launchers (runq clones it; it is
+GAME = `bo2 nfsmw fh1 nfshp bo1 gears ac1 nfsmw2012 halo3 fallout3 me2`. A game needs a rule in driving.py to pass `drive`; `$G selftest` runs the kit tests, no game. `--app` defaults to the installed app in ~/Games/Launchers (runq clones it; it is
 never touched). Everything but `install`/`set`/`speed` is a runq job (class harness, `--class proof|ship` to change), so
 it is muted, minimized, on its own UDP ports, SDL_HIDAPI off, and waits its turn. `--now` runs inline (debug only).
 
@@ -43,3 +43,36 @@ NFSMW entry stops on `CAREER_SAFEHOUSE.LZC`, then accepts Resume Free Roam, sele
 Speed readings are recorded when OCR can read them. NFSMW uses segmented digits that Vision can miss, so proof uses the driving HUD together with world-frame differences, rather than accepting process survival. NFSMW captures every two seconds for 60 seconds after its in-game load marker to retain initial movement before a straight-line route reaches a wall.
 
 Forza recognizes the large three-digit speed in its lower-right HUD (at least 5); two moving-world captures must have that HUD. NFSMW permits a missed OCR frame between two positively recognized driving-HUD frames. `driving.json` records the exact endpoint files and deltas. The BO2 in-match marker excludes the script wait echo. All launchers receive private support/log paths under both their declared prefix and `METAL360_*`, including older BO1 apps with no prefix metadata.
+
+
+The six newer games use JSON `routes/<game>-play.route` recipes. These are currently
+**unproven drafts**; see `/tmp/bo2/gate-routes-newgames/REPORT.md` for live results.
+The conditional runner inspects screen text/logs, sends live `press`, `stick`,
+`trigger`, and `release` commands, and uses bounded `wait-for` conditions. It first
+requires camera response in both directions, then observes at least 120 seconds of
+movement, camera and action input. `driving.json` requires repeated camera reversals
+in scene pixels together with HUD or campaign-log evidence. An old checkpoint log
+and an animated cinematic cannot pass. Menus, frozen scenes and unknown states fail.
+
+`shot` on these recipes runs the same proof and saves three named looks:
+`drive-01-gameplay-start`, `drive-02-movement-camera`, `drive-03-action-end`.
+`play.json` records observations, condition matches and input replies. The engine's
+`record` command produces `recorded.input.txt` plus an ordinary `recorded.route`.
+That recording replays by time; the JSON recipe is the condition-driven source.
+Use a proven recording explicitly for `speed`; a conditional route is not a timed
+speed replay. `--ff` does not accelerate conditional navigation/play.
+
+`gate.py save gears|ac1|nfsmw2012 --app SCRATCH.app` requires a new/changed nonempty
+real title save (unchanged seed files fail), then copies the private support tree,
+launches a fresh process, requires a successful existing-content open, and reaches
+camera-controlled gameplay again. `saving.json` records hashes and reload evidence.
+It is not an engine savepoint test. Early save paths for Halo 3, Fallout 3 and ME2
+have not been established by this stream, so their save gates fail closed. The new
+save gate has offline regression tests but still needs live proof.
+
+For a neutral harness, `condition_routes.Runner` needs an adapter with `ctl(str)`,
+`shot(name) -> (png_path, stats)`, `alive()` and `log_text()`. Captures must include a
+P6 PPM beside the PNG. Supply the same recipes and `driving` verifier; keep support,
+logs, control folders and recordings private to each queued run. This path does
+not use a long-lived live session, so the runq pause policy for live sessions does
+not suspend its game in the middle of the proof.

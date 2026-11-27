@@ -122,7 +122,23 @@ class Runner:
         current = self.snapshot()
         while self.game.alive() and time.monotonic() < deadline:
             if current['state']:
-                return current
+                # Loading a campaign save is not the end of a cinematic. Do not
+                # start the two-minute interval until the camera answers both ways.
+                ready = True
+                for kind, sign in (('camera-left', 1), ('camera-right', -1)):
+                    try:
+                        after = self.trial(kind, self.recipe['controls'][kind])
+                    except RuntimeError:
+                        current = self.snapshot()
+                        ready = False
+                        break
+                    trial = self.trials[-1]
+                    shift, confidence = horizontal_motion(trial['before'], trial['after'])
+                    if shift * sign < 1 or confidence < 1.08:
+                        ready = False
+                    current = after
+                if ready:
+                    return current
             joined = ' '.join(w['text'] for w in current['words'])
             rule = next((r for r in self.recipe['navigation'] if re.search(r['text'], joined, re.I)), None)
             if rule:

@@ -25,6 +25,9 @@ verify_driving = _driving.verify
 _condition_spec = importlib.util.spec_from_file_location('gate_condition_routes', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'condition_routes.py'))
 _condition = importlib.util.module_from_spec(_condition_spec)
 _condition_spec.loader.exec_module(_condition)
+_save_spec = importlib.util.spec_from_file_location('gate_savefiles', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'savefiles.py'))
+_saves = importlib.util.module_from_spec(_save_spec)
+_save_spec.loader.exec_module(_saves)
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -203,6 +206,7 @@ class Game:
         if seed and src and os.path.isdir(src) and not os.path.exists(self.support):
             subprocess.run(['cp', '-cR', src, self.support], check=True)   # APFS clone of the owner profile; the owner's copy is never written
         os.makedirs(self.support, exist_ok=True)
+        self.initial_saves = _saves.inventory(self.support, game)
         e = dict(os.environ)
         e.update({
             'REX_AUDIO_MUTE': 'true', 'REX_APU_MUTE': 'true', 'REX_WINDOW_START_MINIMIZED': 'true',
@@ -475,6 +479,53 @@ def g_play(a, G):
         G.stop()
 
 
+def g_save(a, G):
+    """Write a title save, then reopen it in a fresh process with a private profile."""
+    evidence = dict(game=a.game, passed=False, before=G.initial_saves)
+    reload_game = None
+    try:
+        if not G.wait_ready(a.ready_timeout):
+            raise RuntimeError('control channel never answered')
+        recipe = _condition.load(a.route_file)
+        if not recipe or recipe['game'] != a.game:
+            raise ValueError('save requires the matching conditional gameplay route')
+        run = _condition.Runner(G, recipe, a.out, _driving).run()
+        proof = verify_driving(a.game, a.out, G.log_text())
+        if not run['complete'] or not proof['passed'] or CRASH.search(G.log_text()):
+            raise RuntimeError('write run did not prove gameplay')
+        G.stop()  # Include writes flushed during orderly title shutdown.
+        after = _saves.inventory(G.support, a.game)
+        writes = _saves.changed(G.initial_saves, after)
+        evidence.update(after=after, writes=writes)
+        if not writes:
+            raise RuntimeError('no new or changed nonempty title save; unchanged seed data is not a save proof')
+        reload_out = os.path.join(a.out, 'reload')
+        os.makedirs(reload_out, exist_ok=True)
+        shutil.copytree(G.support, os.path.join(reload_out, 'support'))
+        reload_game = Game(a.app, reload_out, a.game, seed=False, env={'REX_HID_VIRTUAL_PADS': '1'})
+        if not reload_game.wait_ready(a.ready_timeout):
+            raise RuntimeError('fresh reload control channel never answered')
+        recipe = dict(recipe, navigation_timeout_s=300)
+        state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()
+        evidence['reload_state'] = state
+        evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes)
+        evidence['copied_written_bytes'] = all(reload_game.initial_saves.get(name) == value for name, value in writes.items())
+        evidence['passed'] = bool(evidence['reopened'] and evidence['copied_written_bytes']
+                                  and state['state'] and not CRASH.search(reload_game.log_text()))
+        if not evidence['passed']:
+            raise RuntimeError('fresh process did not reopen written save and reach controllable gameplay')
+    except (OSError, ValueError, RuntimeError) as error:
+        evidence['error'] = str(error)
+    finally:
+        G.stop()
+        if reload_game:
+            reload_game.stop()
+        with open(os.path.join(a.out, 'saving.json'), 'w') as f:
+            json.dump(evidence, f, indent=2)
+    facts = ('title save written and reopened in fresh process' if evidence['passed'] else evidence.get('error', 'save proof incomplete'))
+    return out_line('PASS' if evidence['passed'] else 'FAIL', 'save', a.game, facts, a.out, a.out)
+
+
 def g_guide(a, G):
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
@@ -525,6 +576,9 @@ def g_open(a, G):
 def g_speedrun(a, G):
     """One speed run of a non-BO2 game: drive route, then OUT/run/perf.tsv from the game's frame csv so abverdict can read it."""
     route = a.route_file
+    if _condition.load(route):
+        G.stop()
+        return out_line('FAIL', 'speedrun', a.game, 'use a proven recorded.route for timed speed replay', a.out, a.out)
     length = route_len(route)
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
@@ -556,14 +610,16 @@ def fail_start(a, G, why):
     return out_line('FAIL', a.gate, a.game, f'{why} (exit {died}) log tail: {tail}', a.out, a.out)
 
 
-INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun)
+INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, save=g_save, guide=g_guide, open=g_open, speedrun=g_speedrun)
 
 
 def run_inner(a):
     """Runs inside the runq job (or --now): start the game the way the gate needs, then the gate body."""
     os.makedirs(a.out, exist_ok=True)
     a.route_file = None
-    need_route = a.gate in ('shot', 'drive', 'speedrun')
+    need_route = a.gate in ('shot', 'drive', 'save', 'speedrun')
+    if a.gate == 'save' and a.game not in _saves.PATTERNS:
+        return out_line('FAIL', 'save', a.game, 'no verified early title-save path for this game yet', a.out, a.out)
     if need_route or a.route:
         a.route_file = resolve_route(a.game, a.route) if (a.route or GAMES[a.game]['drive']) else None
     if need_route and not a.route_file and a.gate != 'shot':
@@ -572,7 +628,7 @@ def run_inner(a):
         t = a.at or GAMES[a.game]['settle_s']
         a.route_file = os.path.join(a.out, 'guide.route')
         open(a.route_file, 'w').write(f'players = 1\npad1 = {t}-{t + 0.4}:guide, {t + 3}-{t + 3.4}:rb, {t + 6}-{t + 6.4}:lb, {t + 9}-{t + 9.4}:guide\n')
-    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun') and not a.no_seed
+    seed = a.gate in ('shot', 'drive', 'save', 'guide', 'speedrun') and not a.no_seed
     try:
         G = Game(a.app, a.out, a.game, route=a.route_file, ff=a.ff,
                  seed=seed, via_open=(a.gate == 'open'), env=dict(kv.split('=', 1) for kv in a.env))
@@ -637,6 +693,12 @@ def queue_gate(a, gate=None, game=None):
         b.app, b.out = app, out
         return run_inner(b)
     timeout = {'boot': 300, 'shot': 900, 'drive': 1500, 'guide': 600, 'open': 400}.get(gate, 900)
+    if gate in ('shot', 'drive', 'save'):
+        route = resolve_route(game, a.route)
+        if route and _condition.load(route):
+            timeout = int(a.ready_timeout + route_len(route) + 120)
+            if gate == 'save':
+                timeout += int(a.ready_timeout + 420)
     args = ['--'] + inner_args(b, out)
     r = runq_submit(args, f'gate-{game}-{gate}', app, out, a.klass, timeout,
                     extra=['--window'] if gate == 'open' else [])   # open tests the real window: runq keeps it on-screen
@@ -877,7 +939,7 @@ def game_word(game):
 # ----------------------------------------------------------------------------------------------- cli
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'selftest'])
+    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'save', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'selftest'])
     p.add_argument('game', nargs='*')
     p.add_argument('--app', help='app to test (default: the installed one); for install: the NEW app')
     p.add_argument('--out')

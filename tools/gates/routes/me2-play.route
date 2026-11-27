@@ -20,9 +20,8 @@
     {
       "text": "no time to argue|gave you an order|there.s no|wheel",
       "commands": [
-        "stick l 1 0",
-        "press a 600",
-        "stick l off"
+        "stick l 1 0 2000",
+        "press a 600"
       ]
     }
   ],
