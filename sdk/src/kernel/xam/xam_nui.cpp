@@ -115,7 +115,7 @@ REX_EXPORT(__imp__XamShowNuiTroubleshooterUI, rex::kernel::xam::XamShowNuiTroubl
 REX_EXPORT_STUB_RETURN(__imp__XamEnableNatalPlayback, 0);
 REX_EXPORT_STUB_RETURN(__imp__XamEnableNuiAutomation, 0);
 REX_EXPORT_STUB_RETURN(__imp__XamKinectGetHardwareType, 0);
-REX_EXPORT_STUB(__imp__XamNatalDeviceAudioCalibrate);
+REX_EXPORT_STUB_RETURN(__imp__XamNatalDeviceAudioCalibrate, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraAdjustTilt, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationAutoTilt, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationGetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
