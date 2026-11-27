@@ -944,7 +944,9 @@ rex::memory::PageAccess ToPageAccess(uint32_t protect) {
 // 360 and on the PC), so dropping the protection does not change its behavior.
 // Physical memory stays as it is: there, read-only is the GPU's write watching,
 // and it has to fault.
-static rex::memory::PageAccess ToHostPageAccess(uint32_t protect, memory::HeapType heap_type) {
+static rex::memory::PageAccess ToHostPageAccess(uint32_t protect, memory::HeapType heap_type,
+                                                 bool raw_physical_view) {
+  if (raw_physical_view) return rex::memory::PageAccess::kReadWrite;
   const rex::memory::PageAccess access = ToPageAccess(protect);
 #if REX_PLATFORM_SWITCH
   if (access == rex::memory::PageAccess::kReadOnly &&
@@ -1014,7 +1016,7 @@ rex::memory::PageAccess BaseHeap::GuestAccessOfHostPage(uint32_t host_page_numbe
     }
     has_committed = true;
     const rex::memory::PageAccess page_access =
-        ToHostPageAccess(page_entry.current_protect, heap_type_);
+        ToHostPageAccess(page_entry.current_protect, heap_type_, IsRawPhysicalView());
     if (page_access == rex::memory::PageAccess::kReadWrite) {
       has_read = true;
       has_write = true;
@@ -1041,7 +1043,7 @@ rex::memory::PageAccess BaseHeap::GuestAccessOfHostPage(uint32_t host_page_numbe
 
 bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_number) {
   const uint32_t host_page_size = memory_->system_page_size_;
-  if (page_size_ >= host_page_size) {
+  if (page_size_ >= host_page_size || IsRawPhysicalView()) {
     return true;
   }
 
@@ -1452,7 +1454,7 @@ bool BaseHeap::AllocFixed(uint32_t base_address, uint32_t size, uint32_t alignme
     void* result =
         rex::memory::AllocFixed(TranslateRelative(start_page_number << page_size_shift_),
                                 page_count << page_size_shift_, alloc_type,
-                                ToHostPageAccess(protect, heap_type_));
+                                ToHostPageAccess(protect, heap_type_, IsRawPhysicalView()));
     if (!result) {
       REXSYS_ERROR("BaseHeap::AllocFixed failed to alloc range from host");
       return false;
@@ -1616,7 +1618,7 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address, uint32_t 
     void* result =
         rex::memory::AllocFixed(TranslateRelative(start_page_number << page_size_shift_),
                                 page_count << page_size_shift_, alloc_type,
-                                ToHostPageAccess(protect, heap_type_));
+                                ToHostPageAccess(protect, heap_type_, IsRawPhysicalView()));
     if (!result) {
       REXSYS_ERROR("BaseHeap::Alloc failed to alloc range from host");
       return false;
@@ -1730,7 +1732,7 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
     // TODO(benvanik): figure out why games are using memory after releasing
     // it. It's possible this is some virtual/physical stuff where the GPU
     // still can access it.
-    if (REXCVAR_GET(protect_on_release)) {
+    if (REXCVAR_GET(protect_on_release) && !IsRawPhysicalView()) {
       if (!rex::memory::Protect(TranslateRelative(base_page_number << page_size_shift_),
                                 base_page_entry.region_page_count << page_size_shift_,
                                 rex::memory::PageAccess::kNoAccess, nullptr)) {
@@ -1814,7 +1816,7 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect, uint32
     const uint32_t page_count = end_page_number - start_page_number + 1;
     memory::PageAccess old_protect_access;
     if (!rex::memory::Protect(TranslateRelative(start_page_number << page_size_shift_),
-                              page_count << page_size_shift_, ToHostPageAccess(protect, heap_type_),
+                              page_count << page_size_shift_, ToHostPageAccess(protect, heap_type_, IsRawPhysicalView()),
                               old_protect ? &old_protect_access : nullptr)) {
       REXSYS_ERROR("BaseHeap::Protect failed due to host VirtualProtect failure");
       return false;

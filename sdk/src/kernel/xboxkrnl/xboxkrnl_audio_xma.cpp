@@ -503,16 +503,11 @@ u32 XMADisableContext_entry(mapped_void context_ptr, u32 wait) {
 }
 
 u32 XMABlockWhileInUse_entry(mapped_void context_ptr) {
-  do {
-    XMA_CONTEXT_DATA context(context_ptr);
-    if (!context.input_buffer_0_valid && !context.input_buffer_1_valid) {
-      break;
-    }
-    if (!context.work_buffer_ptr) {
-      break;
-    }
-    rex::thread::Sleep(std::chrono::milliseconds(1));
-  } while (true);
+  // xenia-canary 057f66e57 (BSD-3): wait on the context lock, not on input buffers that a
+  // disabled context never invalidates.
+  static_cast<audio::AudioSystem*>(REX_KERNEL_STATE()->emulator()->audio_system())
+      ->xma_decoder()
+      ->BlockOnContext(context_ptr.guest_address(), false);
   return 0;
 }
 
