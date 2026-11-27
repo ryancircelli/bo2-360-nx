@@ -66,13 +66,13 @@ bool DatagramRegression(Runtime& runtime) {
   ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 2, Map(&received),
       Map(&flags), Map(&source), Map(&length), Map(&recv_over), nullptr) == ~0u;
   ok &= XThread::GetLastError() == 997 && received == 0xDEADBEEF;
-  int64_t zero = 0;
+  uint64_t zero = 0;
   ok &= recv_event->Wait(0, 0, 0, &zero) == X_STATUS_TIMEOUT;
 #endif
   ok &= NetDll_WSASendTo_entry(1, sender->handle(), Map(sends), 2, Map(&sent), 0,
       Map(&destination), sizeof(destination), Map(&send_over), nullptr) == 0;
   ok &= sent == 6 && send_over.internal == 0 && send_over.internal_high == 6;
-  int64_t timeout = -20000000; // two seconds, bounded failure
+  uint64_t timeout = static_cast<uint64_t>(-20000000LL); // two seconds, bounded failure
   ok &= send_event->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS;
 #if !REX_PLATFORM_WIN32
   ok &= recv_event->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS;
