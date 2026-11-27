@@ -59,18 +59,13 @@ DEFINE_bool(metal_const_fastpath, false,
             "Pack changed constant blocks (system, float, bool/loop) straight "
             "into the upload slice instead of packing into a scratch copy, "
             "comparing and copying again. Gives up reuse of byte-identical "
-            "re-uploads. Ignored while metal_constant_payload_cache is on.",
+            "re-uploads.",
             "Metal");
 DEFINE_bool(metal_encode_thread_xpass, false,
             "With metal_encode_thread: let the encode thread own whole "
             "sequences of render passes (it creates and ends the encoders); "
             "the command processor waits only when it touches the command "
             "buffer itself.",
-            "Metal");
-DEFINE_bool(metal_constant_payload_cache, false,
-            "Reuse identical Metal constant/descriptor payload uploads across "
-            "draws within a frame. Disable to A/B hash/cache CPU cost against "
-            "extra CBV uploads and root argument churn.",
             "Metal");
 DEFINE_bool(metal_pipeline_binary_archive, true,
             "Use MTLBinaryArchive for Metal pipeline compilation caching. "

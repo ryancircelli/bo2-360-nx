@@ -13,7 +13,6 @@ DECLARE_bool(metal_allow_gamma_unorm16);
 DECLARE_bool(metal_allow_tearing);
 DECLARE_bool(metal_backend_telemetry);
 DECLARE_int32(metal_backend_telemetry_interval);
-DECLARE_bool(metal_constant_payload_cache);
 DECLARE_bool(metal_cmdcost_all);
 DECLARE_bool(metal_const_fastpath);
 DECLARE_bool(metal_dedupe_gpu_access);

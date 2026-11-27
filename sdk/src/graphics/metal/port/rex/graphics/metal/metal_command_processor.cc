@@ -6716,9 +6716,8 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   const bool lite2 = DrawPrepLite2Enabled();
   const bool draw_fastpath =
       cmdcost_all_active_ || REXCVAR_GET(metal_draw_fastpath);
-  const bool const_fastpath = (cmdcost_all_active_ ||
-                               REXCVAR_GET(metal_const_fastpath)) &&
-                              !REXCVAR_GET(metal_constant_payload_cache);
+  const bool const_fastpath =
+      cmdcost_all_active_ || REXCVAR_GET(metal_const_fastpath);
   // Determine primitive type characteristics
   bool primitive_polygonal = draw_util::IsPrimitivePolygonal(regs);
 
@@ -7451,7 +7450,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   // instead of allocating a new one.  See the descriptor-indices precedent
   // below for the same pattern applied to the descriptor-indices CBV.
   auto try_reuse_or_upload =
-      [&](ConstantBufferBinding& binding, size_t cbv_slot, size_t stage_index,
+      [&](ConstantBufferBinding& binding, size_t cbv_slot,
           std::vector<uint8_t>& current_payload,
           std::vector<uint8_t>& scratch_payload, size_t logical_size,
           const char* name, auto&& writer) -> bool {
@@ -7483,17 +7482,6 @@ bool MetalCommandProcessor::PrepareDrawConstants(
       }
       return true;
     }
-    if (TryReuseConstantPayloadFromCache(binding, cbv_slot, stage_index,
-                                         scratch_payload.data(),
-                                         scratch_payload.size())) {
-      if (lite2) {
-        // [draw-prep-lite2] the scratch is refilled before its next read.
-        current_payload.swap(scratch_payload);
-      } else {
-        current_payload = scratch_payload;
-      }
-      return true;
-    }
     if (!upload_binding(binding, cbv_slot, logical_size, name,
                         [&](uint8_t* data, size_t out_size) {
                           std::memcpy(
@@ -7502,16 +7490,13 @@ bool MetalCommandProcessor::PrepareDrawConstants(
                         })) {
       return false;
     }
-    StoreConstantPayloadInCache(binding, cbv_slot, stage_index,
-                                scratch_payload.data(), scratch_payload.size());
     current_payload.swap(scratch_payload);
     return true;
   };
 
   if (!cbuffer_binding_system_.up_to_date) {
     if (!try_reuse_or_upload(
-            cbuffer_binding_system_, kCbvSlotSystem,
-            kConstantPayloadSharedStage, current_payload_system_,
+            cbuffer_binding_system_, kCbvSlotSystem, current_payload_system_,
             scratch_payload_system_,
             sizeof(DxbcShaderTranslator::SystemConstants), "system",
             [&](uint8_t* data, size_t) {
@@ -7601,7 +7586,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     const size_t float_size =
         sizeof(float) * 4 * std::max(float_map_vertex.float_count, uint32_t(1));
     if (!try_reuse_or_upload(
-            cbuffer_binding_float_vertex_, kCbvSlotFloat, kStageVertex,
+            cbuffer_binding_float_vertex_, kCbvSlotFloat,
             current_payload_float_vertex_, scratch_payload_float_vertex_,
             float_size, "vertex float", [&](uint8_t* data, size_t size) {
               write_packed_float_constants(data, size, &float_map_vertex,
@@ -7622,7 +7607,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
         std::max(float_map_pixel ? float_map_pixel->float_count : uint32_t(0),
                  uint32_t(1));
     if (!try_reuse_or_upload(
-            cbuffer_binding_float_pixel_, kCbvSlotFloat, kStagePixel,
+            cbuffer_binding_float_pixel_, kCbvSlotFloat,
             current_payload_float_pixel_, scratch_payload_float_pixel_,
             float_size, "pixel float", [&](uint8_t* data, size_t size) {
               write_packed_float_constants(data, size, float_map_pixel,
@@ -7638,7 +7623,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   if (!cbuffer_binding_bool_loop_.up_to_date) {
     if (!try_reuse_or_upload(
             cbuffer_binding_bool_loop_, kCbvSlotBoolLoop,
-            kConstantPayloadSharedStage, current_payload_bool_loop_,
+            current_payload_bool_loop_,
             scratch_payload_bool_loop_, kBoolLoopConstantsSize, "bool loop",
             [&](uint8_t* data, size_t) {
               std::memcpy(data,
@@ -7694,7 +7679,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     } else if (!cbuffer_binding_fetch_[stage].up_to_date) {
       if (!try_reuse_or_upload(
               cbuffer_binding_fetch_[stage], kCbvSlotFetch,
-              kConstantPayloadSharedStage, current_payload_fetch_[stage],
+              current_payload_fetch_[stage],
               scratch_payload_fetch_[stage], fetch_size, "fetch",
               [&](uint8_t* data, size_t) {
                 std::memcpy(data,
@@ -7755,11 +7740,6 @@ bool MetalCommandProcessor::PrepareDrawConstants(
       std::memcpy(descriptor_payload.data(), words.data(),
                   descriptor_indices_bytes);
     }
-    if (TryReuseConstantPayloadFromCache(binding, kCbvSlotDescriptorIndices,
-                                         stage, descriptor_payload.data(),
-                                         descriptor_payload.size())) {
-      return true;
-    }
     if (stage < backend_telemetry_.descriptor_index_uploads.size()) {
       ++backend_telemetry_.descriptor_index_uploads[stage];
     }
@@ -7771,9 +7751,6 @@ bool MetalCommandProcessor::PrepareDrawConstants(
             })) {
       return false;
     }
-    StoreConstantPayloadInCache(binding, kCbvSlotDescriptorIndices, stage,
-                                descriptor_payload.data(),
-                                descriptor_payload.size());
     return true;
   };
 
@@ -8070,94 +8047,6 @@ bool MetalCommandProcessor::AllocateStageRootArgument(
                     static_cast<NS::UInteger>(top_level_offset),
                     top_level_gpu_address, frame_current_, true};
   return true;
-}
-
-bool MetalCommandProcessor::TryReuseConstantPayloadFromCache(
-    ConstantBufferBinding& binding, size_t cbv_slot, size_t stage_index,
-    const uint8_t* payload, size_t size) {
-  if (!REXCVAR_GET(metal_constant_payload_cache)) {
-    return false;
-  }
-  if (!payload || !size || constant_payload_cache_.empty()) {
-    return false;
-  }
-  const uint64_t hash = XXH3_64bits(payload, size);
-  const size_t mask = constant_payload_cache_.size() - 1;
-  for (size_t probe = 0; probe < kConstantPayloadCacheProbes; ++probe) {
-    const ConstantPayloadCacheEntry& entry =
-        constant_payload_cache_[(hash + probe) & mask];
-    if (entry.generation != constant_payload_cache_generation_) {
-      break;
-    }
-    if (entry.hash != hash || entry.cbv_slot != cbv_slot ||
-        entry.stage_index != stage_index || entry.size != size ||
-        entry.binding.upload_frame != frame_current_ ||
-        std::memcmp(constant_payload_cache_arena_.data() + entry.arena_offset,
-                    payload, size) != 0) {
-      continue;
-    }
-    binding = entry.binding;
-    binding.up_to_date = true;
-    if (cbv_slot < backend_telemetry_.constant_payload_cache_hits.size()) {
-      ++backend_telemetry_.constant_payload_cache_hits[cbv_slot];
-      backend_telemetry_.constant_payload_cache_bytes_saved[cbv_slot] += size;
-      ++backend_telemetry_.cbv_reuse_hits[cbv_slot];
-    }
-    if (cbv_slot == kCbvSlotDescriptorIndices && stage_index < kStageCount) {
-      ++backend_telemetry_.descriptor_index_payload_cache_hits[stage_index];
-      backend_telemetry_
-          .descriptor_index_payload_cache_bytes_saved[stage_index] += size;
-    }
-    return true;
-  }
-  if (cbv_slot < backend_telemetry_.constant_payload_cache_misses.size()) {
-    ++backend_telemetry_.constant_payload_cache_misses[cbv_slot];
-  }
-  if (cbv_slot == kCbvSlotDescriptorIndices && stage_index < kStageCount) {
-    ++backend_telemetry_.descriptor_index_payload_cache_misses[stage_index];
-  }
-  return false;
-}
-
-void MetalCommandProcessor::StoreConstantPayloadInCache(
-    const ConstantBufferBinding& binding, size_t cbv_slot, size_t stage_index,
-    const uint8_t* payload, size_t size) {
-  if (!REXCVAR_GET(metal_constant_payload_cache)) {
-    return;
-  }
-  if (!binding.buffer || !payload || !size ||
-      binding.upload_frame != frame_current_ ||
-      constant_payload_cache_bytes_ + size > kConstantPayloadCacheMaxBytes) {
-    return;
-  }
-  if (constant_payload_cache_.empty()) {
-    constant_payload_cache_.resize(kConstantPayloadCacheSlots);
-    constant_payload_cache_arena_.reserve(size_t(4) << 20);
-  }
-  const uint64_t hash = XXH3_64bits(payload, size);
-  const size_t mask = constant_payload_cache_.size() - 1;
-  // Take the first free slot of the probe window; when it is full, replace
-  // the slot the hash lands on (the cache is only a shortcut).
-  ConstantPayloadCacheEntry* target = &constant_payload_cache_[hash & mask];
-  for (size_t probe = 0; probe < kConstantPayloadCacheProbes; ++probe) {
-    ConstantPayloadCacheEntry& entry =
-        constant_payload_cache_[(hash + probe) & mask];
-    if (entry.generation != constant_payload_cache_generation_) {
-      target = &entry;
-      break;
-    }
-  }
-  const size_t arena_offset = constant_payload_cache_arena_.size();
-  constant_payload_cache_arena_.insert(constant_payload_cache_arena_.end(),
-                                       payload, payload + size);
-  constant_payload_cache_bytes_ += size;
-  target->hash = hash;
-  target->generation = constant_payload_cache_generation_;
-  target->arena_offset = uint32_t(arena_offset);
-  target->size = uint32_t(size);
-  target->cbv_slot = uint16_t(cbv_slot);
-  target->stage_index = uint16_t(stage_index);
-  target->binding = binding;
 }
 
 bool MetalCommandProcessor::PopulateBindlessTables(
@@ -11593,9 +11482,6 @@ void MetalCommandProcessor::InvalidateFrameTransientBindings() {
   for (auto& payload : scratch_payload_fetch_) {
     payload.clear();
   }
-  ++constant_payload_cache_generation_;
-  constant_payload_cache_arena_.clear();
-  constant_payload_cache_bytes_ = 0;
 
   current_bindless_stage_root_valid_.fill(false);
   current_bindless_stage_root_frame_open_rebuild_pending_.fill(true);
@@ -11726,27 +11612,6 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
   const std::string descriptor_index_uploads =
       MetalFormatNamedCounts(backend_telemetry_.descriptor_index_uploads,
                              MetalTelemetryShaderStageName);
-  const std::string constant_payload_cache_hits =
-      MetalFormatNamedCounts(backend_telemetry_.constant_payload_cache_hits,
-                             MetalTelemetryCbvSlotName);
-  const std::string constant_payload_cache_misses =
-      MetalFormatNamedCounts(backend_telemetry_.constant_payload_cache_misses,
-                             MetalTelemetryCbvSlotName);
-  const std::string constant_payload_cache_bytes_saved = MetalFormatNamedCounts(
-      backend_telemetry_.constant_payload_cache_bytes_saved,
-      MetalTelemetryCbvSlotName);
-  const std::string descriptor_index_payload_cache_hits =
-      MetalFormatNamedCounts(
-          backend_telemetry_.descriptor_index_payload_cache_hits,
-          MetalTelemetryShaderStageName);
-  const std::string descriptor_index_payload_cache_misses =
-      MetalFormatNamedCounts(
-          backend_telemetry_.descriptor_index_payload_cache_misses,
-          MetalTelemetryShaderStageName);
-  const std::string descriptor_index_payload_cache_bytes_saved =
-      MetalFormatNamedCounts(
-          backend_telemetry_.descriptor_index_payload_cache_bytes_saved,
-          MetalTelemetryShaderStageName);
   const std::string bindless_root_allocations =
       MetalFormatNamedCounts(backend_telemetry_.bindless_root_allocations,
                              MetalTelemetryRootScopeName);
@@ -11920,14 +11785,6 @@ void MetalCommandProcessor::MaybeDumpBackendTelemetry(const char* reason,
       bindless_root_rebuild_reasons, backend_telemetry_.frame_slot_waits,
       backend_telemetry_.frame_slot_wait_submission_count,
       backend_telemetry_.frame_slot_wait_submission_last);
-  REXLOG_INFO(
-      "MetalTelemetry[{}]: binding_cache constant_payload hits={{ {} }} "
-      "misses={{ {} }} bytes_saved={{ {} }} descriptor_payload hits={{ {} }} "
-      "misses={{ {} }} bytes_saved={{ {} }}",
-      reason, constant_payload_cache_hits, constant_payload_cache_misses,
-      constant_payload_cache_bytes_saved, descriptor_index_payload_cache_hits,
-      descriptor_index_payload_cache_misses,
-      descriptor_index_payload_cache_bytes_saved);
   REXLOG_INFO(
       "MetalTelemetry[{}]: root_args allocs={{ {} }} reuse={{ {} }} "
       "noop={{ {} }} slots_patched={{ {} }} bytes_copied={{ {} }} "
