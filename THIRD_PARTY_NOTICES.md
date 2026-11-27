@@ -42,6 +42,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `b5c771f` | XeKeysConsolePrivateKeySign / SignatureVerification succeed | `sdk/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp` |
 | ReXGlue SDK `4dd9c9c` | Recompiled module found through the game partition path | `sdk/src/system/kernel_state.cpp` |
 | ReXGlue SDK `5b8e119` | Raw physical view stays read-write when an alias page is protected | `sdk/src/system/xmemory.cpp` |
+| Xenia Canary `057f66e57` | XMABlockWhileInUse waits on the context lock | `sdk/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp` |
 
 ## Libraries
 
