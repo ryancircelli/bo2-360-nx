@@ -356,7 +356,7 @@ class MetalSharedMemory : public SharedMemory {
   // route marks a range valid before copying it, as the staged route does.
   static bool ShmemValidFirstEnabled();
   void NoteMemexportReadback(uint32_t start, uint32_t length,
-                             uint64_t submission);
+                             uint64_t submission, bool merge = true);
   void ApplyCompletedMemexportReadbacks(uint64_t completed_submission);
   // [upload-precommit] trace-only check (FABLE2_UPLOAD_VERIFY=1): once the
   // submission of a staged copy (in-pass or pre-commit) has completed, the

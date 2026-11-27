@@ -212,7 +212,7 @@ constexpr uint32_t kReadbackSnapshotMaxBytes = 1u << 20;
 }  // namespace
 
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
-                                              uint64_t submission) {
+                                              uint64_t submission, bool merge) {
   if (!length || start >= kBufferSize || !submission) {
     return;
   }
@@ -242,7 +242,8 @@ void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
       PendingReadback{start, end, submission,
                       XXH3_64bits(guest + start, end - start),
                       frame_log::CurrentFrame(), {}, {}});
-  if (!(start & 3) && !((end - start) & 3) &&
+  // No snapshot = no word merge: a range the CPU wrote meanwhile is skipped whole.
+  if (merge && !(start & 3) && !((end - start) & 3) &&
       end - start <= kReadbackSnapshotMaxBytes) {
     e.snapshot.resize((end - start) >> 2);
     std::memcpy(e.snapshot.data(), guest + start, end - start);

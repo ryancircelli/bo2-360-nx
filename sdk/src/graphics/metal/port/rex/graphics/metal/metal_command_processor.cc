@@ -10620,8 +10620,10 @@ bool MetalCommandProcessor::IssueCopy() {
         return false;
       }
     } else {
+      // A resolve rewrites every word, so the memexport word merge would mix
+      // pixels into memory the game has since reused: all or nothing.
       shared_memory_->NoteMemexportReadback(written_address, written_length,
-                                            submission_current_);
+                                            submission_current_, false);
     }
   }
 
