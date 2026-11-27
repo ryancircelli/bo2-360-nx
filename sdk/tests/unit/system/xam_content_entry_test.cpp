@@ -278,25 +278,36 @@ TEST_CASE("Content calls with an invalid user fail without touching the disk", "
 
 TEST_CASE("Thumbnails round trip and a missing one reports not found with size 0", "[runtime][content][xam]") {
   Fixture f;
+  std::fprintf(stderr, "THUMB step 1\n");
   Call c("SAVE", MakeData("slot1"));
+  std::fprintf(stderr, "THUMB step 2\n");
   REQUIRE(c.Create(1) == X_ERROR_SUCCESS);
+  std::fprintf(stderr, "THUMB step 3\n");
   REQUIRE(c.Close() == X_ERROR_SUCCESS);
+  std::fprintf(stderr, "THUMB step 4\n");
   rex::be<uint32_t> size = 100;
+  std::fprintf(stderr, "THUMB step 5\n");
   uint8_t buf[8] = {};
+  std::fprintf(stderr, "THUMB step 6\n");
   CHECK(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
                                      mapped_u32(&size, 0), nullptr) == X_ERROR_FILE_NOT_FOUND);
   CHECK(uint32_t(size) == 0);
+  std::fprintf(stderr, "THUMB step 7\n");
   const uint8_t png[4] = {0x89, 'P', 'N', 'G'};
+  std::fprintf(stderr, "THUMB step 8\n");
   REQUIRE(XamContentSetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(const_cast<uint8_t*>(png), 0),
                                        4, nullptr) == X_ERROR_SUCCESS);
   size = 2;  // too small: reports the needed size and an error
   CHECK(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
                                      mapped_u32(&size, 0), nullptr) == X_ERROR_INSUFFICIENT_BUFFER);
   CHECK(uint32_t(size) == 4);
+  std::fprintf(stderr, "THUMB step 9\n");
   size = 8;
+  std::fprintf(stderr, "THUMB step 10\n");
   REQUIRE(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
                                        mapped_u32(&size, 0), nullptr) == X_ERROR_SUCCESS);
   CHECK(std::memcmp(buf, png, 4) == 0);
+  std::fprintf(stderr, "THUMB step 11\n");
 }
 
 TEST_CASE("GetCreator: saves are the user's, other content has no creator, missing is not found", "[runtime][content][xam]") {
