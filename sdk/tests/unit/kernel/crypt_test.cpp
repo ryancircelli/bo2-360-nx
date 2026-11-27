@@ -516,3 +516,13 @@ TEST_CASE("ModExp small known answers", "[kernel][crypt]") {
                                   mapped_u64::from_host(ex.data()), mapped_u64::from_host(mod.data()), 1) == 0);
   CHECK(uint64_t(out[0]) == 0);
 }
+
+TEST_CASE("ModExp two-qword known answer, in place over base", "[kernel][crypt]") {
+  // Python: pow(b, e, m) with qwords listed low first.
+  std::vector<rex::be_u64> buf{0xfedcba9876543210ull, 0x0123456789abcdefull}, ex{0x10001, 1},
+      mod{0xb492b66be98f5c7bull, 0xc3a5c85c97cb3127ull};
+  CHECK(XeCryptBnQwNeModExp_entry(mapped_u64::from_host(buf.data()), mapped_u64::from_host(buf.data()),
+                                  mapped_u64::from_host(ex.data()), mapped_u64::from_host(mod.data()), 2) == 1);
+  CHECK(uint64_t(buf[0]) == 0xb3777f54a32a81f7ull);
+  CHECK(uint64_t(buf[1]) == 0x288cbaf29777ac5full);
+}
