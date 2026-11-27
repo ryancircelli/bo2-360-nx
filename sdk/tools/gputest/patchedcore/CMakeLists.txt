@@ -48,4 +48,4 @@ add_executable(rexgpu-patched-msltest ${_metal_dir}/metal_flags.cpp
 target_include_directories(rexgpu-patched-msltest ${_inc})
 target_compile_options(rexgpu-patched-msltest PRIVATE -include ${_flags} ${_opts})
 target_link_libraries(rexgpu-patched-msltest PRIVATE rexgpu-patched-core)
-add_test(NAME patched_msl_translator_test COMMAND rexgpu-patched-msltest)
+add_test(NAME patched_msl_translator_test COMMAND rexgpu-patched-msltest ${CMAKE_CURRENT_BINARY_DIR}/msltest-out)
