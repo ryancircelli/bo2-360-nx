@@ -463,6 +463,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
   }
 
   detectSaveRestoreHelpers(binary, state);
+  phases::detectSetjmpLongjmp(binary, config);
 
   // Register imports
   {
@@ -725,6 +726,42 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
 }  // anonymous namespace
 
 namespace phases {
+
+// Recompiled as ordinary code, longjmp reloads r1 and lr from the buffer and its blr just returns to its own caller, so
+// every game that uses the pair needs it routed to ppc_setjmp / ppc_longjmp. The XDK runtime's two functions have one
+// shape in every title, with or without the VMX register block (0x200 bytes) in the middle.
+void detectSetjmpLongjmp(const BinaryView& binary, RecompilerConfig& config) {
+  for (const auto& section : binary.sections()) {
+    if (!section.executable)
+      continue;
+    auto word = [&](size_t offset) { return load_and_swap<uint32_t>(section.data + offset); };
+    for (size_t at = 0; at + 4 <= section.size; at += 4) {
+      const uint32_t insn = word(at);
+      const bool isSet = insn == 0xF8230090;  // std r1,144(r3)
+      if (!isSet && insn != 0xE8270090)       // ld r1,144(r7)
+        continue;
+      for (size_t body : {size_t{0xB8}, size_t{0x2B8}}) {
+        const size_t slot = body + (isSet ? 0 : 0x24);
+        if (at < slot)
+          continue;
+        const size_t entry = at - slot;
+        const uint32_t addr = section.baseAddress + static_cast<uint32_t>(entry);
+        if (isSet) {
+          // mflr r0; mfcr r4; stfd f14,0(r3) after the five-instruction hook check
+          if (word(entry + 0x14) == 0x7C0802A6 && word(entry + 0x18) == 0x7C800026 &&
+              word(entry + 0x1C) == 0xD9C30000 && config.setJmpAddress == 0) {
+            config.setJmpAddress = addr;
+            REXCODEGEN_INFO("setjmp found at 0x{:08X}", addr);
+          }
+        } else if (word(entry) == 0x7C0802A6 && word(entry + 4) == 0x9421FFB0 &&  // mflr r0; stwu r1,-80(r1)
+                   word(entry + 0xC) == 0x7C862378 && config.longJmpAddress == 0) {  // mr r6,r4
+          config.longJmpAddress = addr;
+          REXCODEGEN_INFO("longjmp found at 0x{:08X}", addr);
+        }
+      }
+    }
+  }
+}
 
 VoidResult Register(CodegenContext& ctx, ProgressReporter* reporter) {
   (void)reporter;

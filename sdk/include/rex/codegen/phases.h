@@ -22,6 +22,9 @@ namespace rex::codegen::phases {
 /// Register PDATA, CONFIG, helpers, imports into FunctionGraph
 VoidResult Register(CodegenContext& ctx, ProgressReporter* reporter = nullptr);
 
+/// Fill in setJmpAddress / longJmpAddress from the XDK C runtime's code shape where the config leaves them 0
+void detectSetjmpLongjmp(const BinaryView& binary, RecompilerConfig& config);
+
 /// Scan binary for bl targets, thunks, bctr locations
 VoidResult Scan(CodegenContext& ctx, ProgressReporter* reporter = nullptr);
 

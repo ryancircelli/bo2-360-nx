@@ -13,7 +13,8 @@ struct Fixture {
   std::vector<uint8_t> data;
   TestModule module;
   std::optional<CodegenContext> ctx;
-  Fixture(std::initializer_list<uint32_t> words) {
+  Fixture(std::initializer_list<uint32_t> words) : Fixture(std::vector<uint32_t>(words)) {}
+  Fixture(const std::vector<uint32_t>& words) {
     for (auto w : words)
       data.insert(data.end(), {uint8_t(w >> 24), uint8_t(w >> 16), uint8_t(w >> 8), uint8_t(w)});
     module.Load(kBase, data.data(), data.size());
@@ -250,4 +251,32 @@ TEST_CASE("A call followed by an entry inside the declared range still falls thr
   CHECK(a->fallThroughs().contains(kBase + 4));
   CHECK(Emit(fx, a).find("sub_82000004(ctx, base);") != std::string::npos);
   CHECK_FALSE(graph.isNoReturn(kBase));
+}
+
+TEST_CASE("setjmp and longjmp are found by the XDK runtime's shape", "[codegen][boundary]") {
+  for (uint32_t body : {0xB8u, 0x2B8u}) {  // without and with the VMX register block
+    std::vector<uint32_t> words(0x400, 0x60000000);
+    const uint32_t set = 4, jump = set + body / 4 + 8;
+    words[set + 5] = 0x7C0802A6;  // mflr r0
+    words[set + 6] = 0x7C800026;  // mfcr r4
+    words[set + 7] = 0xD9C30000;  // stfd f14,0(r3)
+    words[set + body / 4] = 0xF8230090;  // std r1,144(r3)
+    words[jump] = 0x7C0802A6;      // mflr r0
+    words[jump + 1] = 0x9421FFB0;  // stwu r1,-80(r1)
+    words[jump + 3] = 0x7C862378;  // mr r6,r4
+    words[jump + (body + 0x24) / 4] = 0xE8270090;  // ld r1,144(r7)
+    words[0x3F0] = 0xF8230090;  // the same store with no setjmp around it
+
+    Fixture fx{words};
+    auto& config = fx.ctx->Config();
+    phases::detectSetjmpLongjmp(fx.ctx->binary(), config);
+    CHECK(config.setJmpAddress == kBase + set * 4);
+    CHECK(config.longJmpAddress == kBase + jump * 4);
+
+    RecompilerConfig configured;
+    configured.setJmpAddress = 0x82001000;
+    phases::detectSetjmpLongjmp(fx.ctx->binary(), configured);
+    CHECK(configured.setJmpAddress == 0x82001000);
+    CHECK(configured.longJmpAddress == kBase + jump * 4);
+  }
 }
