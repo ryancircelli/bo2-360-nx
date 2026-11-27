@@ -601,6 +601,29 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
       const auto* ctx = thread_state->context();
       REXSYS_ERROR("  AV PPC r1={:08X} r3={:08X} r4={:08X} r5={:08X} lr={:08X}",
                    ctx->r1.u32, ctx->r3.u32, ctx->r4.u32, ctx->r5.u32, ctx->lr);
+      // A bad pointer is usually a field of the object in r3/r4/r30/r31: show what those point at, so one log
+      // tells a never-loaded field from freed or overwritten memory.
+      const std::pair<const char*, uint32_t> pointers[] = {
+          {"r3", ctx->r3.u32}, {"r4", ctx->r4.u32}, {"r30", ctx->r30.u32}, {"r31", ctx->r31.u32}};
+      for (const auto& [name, address] : pointers) {
+        // The read below must never fault: only a committed readable page, 32 bytes that stay inside it.
+        BaseHeap* pointee_heap =
+            av_n < 3 && address >= 0x10000 && (address & 0xFFF) <= 0x1000 - 32 ? LookupHeap(address) : nullptr;
+        memory::HeapAllocationInfo info{};
+        if (!pointee_heap || !pointee_heap->QueryRegionInfo(address & ~0xFFFu, &info) ||
+            !(info.state & memory::kMemoryAllocationCommit) || !(info.protect & memory::kMemoryProtectRead)) {
+          continue;
+        }
+        // Physical memory is read through the raw view, which the GPU's page watches never protect.
+        const uint32_t physical_address = GetPhysicalAddress(address);
+        const auto* words = physical_address != UINT32_MAX
+                                ? TranslatePhysical<const rex::be<uint32_t>*>(physical_address)
+                                : TranslateVirtual<const rex::be<uint32_t>*>(address);
+        REXSYS_ERROR("  AV {}={:08X}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}", name,
+                     address, uint32_t(words[0]), uint32_t(words[1]), uint32_t(words[2]),
+                     uint32_t(words[3]), uint32_t(words[4]), uint32_t(words[5]), uint32_t(words[6]),
+                     uint32_t(words[7]));
+      }
     }
     return false;
   }
