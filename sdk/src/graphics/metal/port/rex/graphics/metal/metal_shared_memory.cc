@@ -327,9 +327,12 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
     uint32_t cpu_kept = 0;
-    if (e.snapshot.empty() || !cpu_wrote) {
+    if (e.snapshot.empty()) {
       std::memcpy(guest + e.start, gpu + e.start, len);
     } else {
+      // Also when the hash says the CPU did not write: a whole-range copy
+      // reverts any guest write made after the upload or during the copy
+      // (MW2012 job nodes: a function pointer back to 0, then a call to 0).
       cpu_kept = MergeMemexportReadback(
           reinterpret_cast<uint32_t*>(guest + e.start),
           reinterpret_cast<const uint32_t*>(gpu + e.start),

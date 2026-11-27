@@ -24,5 +24,11 @@ int main() {
   kept = MergeMemexportReadback(guest.data(), gpu.data(), snap.data(), nullptr, 4, [](size_t, uint32_t, uint32_t) {});
   CHECK(kept == 0);
   CHECK((guest == std::vector<uint32_t>{5, 0x7F000012, 0xDEAD, 4}));
+  // The CPU wrote nothing since the export (this used to be a whole-range copy):
+  // the exported dword lands, the stale GPU word does not.
+  guest = snap;
+  kept = MergeMemexportReadback(guest.data(), gpu.data(), snap.data(), gpu_snap.data(), 4, [](size_t, uint32_t, uint32_t) {});
+  CHECK(kept == 0);
+  CHECK((guest == std::vector<uint32_t>{1, 0x7F000012, 3, 4}));
   std::cout << "metal_readback_merge_tests ok\n";
 }
