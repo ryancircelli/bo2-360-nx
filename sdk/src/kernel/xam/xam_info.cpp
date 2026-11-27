@@ -44,6 +44,14 @@ u32 XamIsXbox1TitleId_entry(u32 title_id) {
   return IsOriginalXboxTitle(title_id);
 }
 
+// Count guest UTF-16 code units, including a surrogate pair as two units.
+u32 lstrlenW_entry(mapped_u16 string) {
+  if (!string) return 0;
+  uint32_t length = 0;
+  while (string[length] != 0) ++length;
+  return length;
+}
+
 u32 XamFeatureEnabled_entry(u32 unk) {
   return 0;
 }
@@ -426,3 +434,5 @@ REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)
 REX_EXPORT(__imp__XamIsSystemExperienceTitleId, rex::kernel::xam::XamIsSystemExperienceTitleId_entry)
 REX_EXPORT(__imp__XamIsSystemTitleId, rex::kernel::xam::XamIsSystemTitleId_entry)
 REX_EXPORT(__imp__XamIsXbox1TitleId, rex::kernel::xam::XamIsXbox1TitleId_entry)
+
+REX_EXPORT(__imp__lstrlenW, rex::kernel::xam::lstrlenW_entry)

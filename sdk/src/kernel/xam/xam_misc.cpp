@@ -1040,6 +1040,5 @@ REX_EXPORT_STUB(__imp__lstrcpyW);
 REX_EXPORT_STUB(__imp__lstrcpynA);
 REX_EXPORT_STUB(__imp__lstrcpynW);
 REX_EXPORT_STUB(__imp__lstrlenA);
-REX_EXPORT_STUB(__imp__lstrlenW);
 REX_EXPORT_STUB(__imp__wsprintfA);
 REX_EXPORT_STUB(__imp__wsprintfW);
