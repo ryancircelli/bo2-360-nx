@@ -9,6 +9,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <rex/kernel/xam/nui.h>
+#include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
 #include "../quiet_return.h"
@@ -22,19 +24,10 @@ namespace xam {
 
 extern std::atomic<int> xam_dialogs_shown_;
 
-struct X_NUI_DEVICE_STATUS {
-  rex::be<uint32_t> unk0;
-  rex::be<uint32_t> unk1;
-  rex::be<uint32_t> unk2;
-  rex::be<uint32_t> status;
-  rex::be<uint32_t> unk4;
-  rex::be<uint32_t> unk5;
-};
-static_assert(sizeof(X_NUI_DEVICE_STATUS) == 24, "Size matters");
-
 u32 XamNuiGetDeviceStatus_entry(ppc_ptr_t<X_NUI_DEVICE_STATUS> status_ptr) {
+  if (!status_ptr) return X_E_INVALIDARG;
   status_ptr.Zero();
-  status_ptr->status = 0;  // Not connected.
+  status_ptr->status_bits = 0;  // Not connected.
   return 0xC0050006;       // No Kinect (Xenia's value); r3 used to keep the struct pointer.
 }
 
@@ -67,9 +60,51 @@ u32 XamShowNuiTroubleshooterUI_entry(u32 unk1, u32 unk2, u32 unk3) {
 }
 
 // Identifies the Kinect identity session; any non-zero id works with no sensor attached.
-u32 XamNuiIdentityGetSessionId_entry() {
-  return 0xDEADF00D;
+u64 XamNuiIdentityGetSessionId_entry() {
+  return 0xDEADF00DDEADF00Dull;
 }
+
+// No Kinect controller is initialized. These paths follow xenia-canary 2da2519
+// xam_nui.cc and the zero-initialized NUIController state (BSD-3-Clause).
+u32 XamNuiIsDeviceReady_entry() { return 0; }
+u32 XamNuiIsChatMicEnabled_entry() { return 0; }
+u32 XamNuiHudIsEnabled_entry() { return 0; }
+u32 XamNuiHudGetInitializeFlags_entry() { return 0; }
+u32 XamNuiCameraGetTiltControllerType_entry() { return 0; }
+u64 XamNuiHudGetEngagedTrackingID_entry() { return 0; }
+u64 XamNuiSkeletonGetBestSkeletonIndex_entry(i32) { return ~u64{0}; }
+u32 XamNuiHudSetEngagedTrackingID_entry(u32 id) {
+  return id ? X_E_FAIL : X_ERROR_SUCCESS;
+}
+u32 XamNuiCameraSetFlags_entry(u64, u32) { return X_E_DEVICE_NOT_CONNECTED; }
+void XamNuiHudGetVersions_entry(mapped_u64 xam_version, mapped_u64 xtl_version) {
+  if (xam_version) *xam_version = 0;
+  if (xtl_version) *xtl_version = 0;
+}
+u32 XamNuiGetDepthCalibration_entry(ppc_ptr_t<X_NUI_DEPTH_CALIBRATION> data) {
+  if (!data) return X_E_INVALIDARG;
+  data.Zero();
+  return 0xD000000F;  // STATUS_NO_SUCH_FILE | FACILITY_NT_BIT, as in Canary.
+}
+void XamNuiPlayerEngagementUpdate_entry(u32, u32,
+    ppc_ptr_t<X_NUI_PLAYER_ENGAGEMENT_UPDATE> data) {
+  if (data) data.Zero();
+}
+
+// Canary's tilt callback is retained, but no sensor exists to dispatch it.
+static std::atomic<u32> tilt_callback{0};
+u32 XamNuiCameraTiltSetCallback_entry(u32 callback) {
+  tilt_callback.store(callback, std::memory_order_relaxed);
+  return X_ERROR_SUCCESS;
+}
+u32 XamNuiCameraTiltGetStatus_entry(mapped_void) {
+  // Canary returns E_FAIL for both invalid records and an unavailable sensor.
+  return X_E_FAIL;
+}
+u32 XamNuiIdentityAbort_entry(u32) { return X_E_FAIL; }
+u32 XamNuiIdentityEnrollForSignIn_entry(u32, u64, u64, u32) { return X_E_FAIL; }
+u32 XamIsNuiAutomationEnabled_entry(u32, u32) { return X_ERROR_SUCCESS; }
+u32 XamIsNatalPlaybackEnabled_entry(u32, u32) { return X_ERROR_SUCCESS; }
 
 }  // namespace xam
 }  // namespace kernel
@@ -78,55 +113,59 @@ u32 XamNuiIdentityGetSessionId_entry() {
 REX_EXPORT(__imp__XamNuiGetDeviceStatus, rex::kernel::xam::XamNuiGetDeviceStatus_entry)
 REX_EXPORT(__imp__XamShowNuiTroubleshooterUI, rex::kernel::xam::XamShowNuiTroubleshooterUI_entry)
 
-REX_EXPORT_QUIET_RETURN(__imp__XamEnableNatalPlayback, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamEnableNuiAutomation, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamKinectGetHardwareType, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNatalDeviceAudioCalibrate, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraAdjustTilt, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraElevationAutoTilt, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationGetAngle, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraElevationReverseAutoTilt, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetAngle, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraElevationSetCallback, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraGetTiltControllerType, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraSetFlags, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltGetStatus, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiCameraTiltReportStatus, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltSetCallback, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiEnableChatMic, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetCameraIntrinsics, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetDepthCalibration, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_STUB_RETURN(__imp__XamNuiGetDeviceSerialNumber, 0x32);
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetFanRate, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetLoadedDepthCalibration, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetSupportString, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetSystemGestureControl, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiGetTrueColorInfo, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudEnableInputFilter, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudGetEngagedEnrollmentIndex, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudGetEngagedTrackingID, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudGetInitializeFlags, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudGetVersions, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudInterpretFrame, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudIsEnabled, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiHudSetEngagedTrackingID, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_STUB_RETURN(__imp__XamEnableNatalPlayback, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamEnableNuiAutomation, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamKinectGetHardwareType, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamNatalDeviceAudioCalibrate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraAdjustTilt, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationAutoTilt, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationGetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationReverseAutoTilt, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetCallback, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT(__imp__XamNuiCameraGetTiltControllerType, rex::kernel::xam::XamNuiCameraGetTiltControllerType_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT(__imp__XamNuiCameraSetFlags, rex::kernel::xam::XamNuiCameraSetFlags_entry)
+REX_EXPORT(__imp__XamNuiCameraTiltGetStatus, rex::kernel::xam::XamNuiCameraTiltGetStatus_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltReportStatus, 0x80004005);  // X_E_FAIL: no Kinect
+REX_EXPORT(__imp__XamNuiCameraTiltSetCallback, rex::kernel::xam::XamNuiCameraTiltSetCallback_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiEnableChatMic, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetCameraIntrinsics, 0x80004005);
+REX_EXPORT(__imp__XamNuiGetDepthCalibration, rex::kernel::xam::XamNuiGetDepthCalibration_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetDeviceSerialNumber, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetFanRate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetLoadedDepthCalibration, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetSupportString, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetSystemGestureControl, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetTrueColorInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiHudEnableInputFilter, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiHudGetEngagedEnrollmentIndex, 0x80004005);
+REX_EXPORT(__imp__XamNuiHudGetEngagedTrackingID, rex::kernel::xam::XamNuiHudGetEngagedTrackingID_entry)
+REX_EXPORT(__imp__XamNuiHudGetInitializeFlags, rex::kernel::xam::XamNuiHudGetInitializeFlags_entry)
+REX_EXPORT(__imp__XamNuiHudGetVersions, rex::kernel::xam::XamNuiHudGetVersions_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiHudInterpretFrame, 0x80004005);
+REX_EXPORT(__imp__XamNuiHudIsEnabled, rex::kernel::xam::XamNuiHudIsEnabled_entry)
+REX_EXPORT(__imp__XamNuiHudSetEngagedTrackingID, rex::kernel::xam::XamNuiHudSetEngagedTrackingID_entry)
 REX_EXPORT(__imp__XamNuiIdentityGetSessionId, rex::kernel::xam::XamNuiIdentityGetSessionId_entry)
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityAbort, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityEnrollForSignIn, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityGetColorTexture, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityGetEnrollmentInfo, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityGetQualityFlags, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityGetQualityFlagsMessage, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityIdentifyWithBiometric, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIdentityUnenroll, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIsChatMicEnabled, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiIsDeviceReady, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiNatalCameraUpdateComplete, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiNatalCameraUpdateStarting, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiPlayerEngagementUpdate, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiSetForceDeviceOff, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiSkeletonGetBestSkeletonIndex, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiSkeletonScoreUpdate, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamNuiStoreDepthCalibration, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT(__imp__XamNuiIdentityAbort, rex::kernel::xam::XamNuiIdentityAbort_entry)
+REX_EXPORT(__imp__XamNuiIdentityEnrollForSignIn, rex::kernel::xam::XamNuiIdentityEnrollForSignIn_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetColorTexture, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetEnrollmentInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetQualityFlags, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetQualityFlagsMessage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityIdentifyWithBiometric, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityUnenroll, 0x80004005);
+REX_EXPORT(__imp__XamNuiIsChatMicEnabled, rex::kernel::xam::XamNuiIsChatMicEnabled_entry)
+REX_EXPORT(__imp__XamNuiIsDeviceReady, rex::kernel::xam::XamNuiIsDeviceReady_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiNatalCameraUpdateComplete, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiNatalCameraUpdateStarting, 0x80004005);
+REX_EXPORT(__imp__XamNuiPlayerEngagementUpdate, rex::kernel::xam::XamNuiPlayerEngagementUpdate_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiSetForceDeviceOff, 0);
+REX_EXPORT(__imp__XamNuiSkeletonGetBestSkeletonIndex, rex::kernel::xam::XamNuiSkeletonGetBestSkeletonIndex_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiSkeletonScoreUpdate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiStoreDepthCalibration, 0x80004005);
+
+REX_EXPORT(__imp__XamIsNuiAutomationEnabled, rex::kernel::xam::XamIsNuiAutomationEnabled_entry)
+
+REX_EXPORT(__imp__XamIsNatalPlaybackEnabled, rex::kernel::xam::XamIsNatalPlaybackEnabled_entry)

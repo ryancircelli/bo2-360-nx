@@ -282,16 +282,6 @@ REX_EXPORT_QUIET_RETURN(__imp__XRegisterThreadNotifyRoutine, 0);  // no referenc
 REX_EXPORT_QUIET_RETURN(__imp__XTLGetLanguageV2, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XTLGetLocaleV1, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XTestOnlineIsConnectedToLive, 0x80151802);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_Clear, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_Construct, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_Destruct, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_SetBool, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_SetColorFromUint, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_SetFloat, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_SetInt, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_SetString, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUIElementPropVal_SetUint, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XUITimeline_Run, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamAccountRecoveryGetProgress, 0x490);
 REX_EXPORT_QUIET_RETURN(__imp__XamAccountRecoveryGetSetTitleSyncTime, 0x490);
 REX_EXPORT_QUIET_RETURN(__imp__XamAccountRecoveryRecoverAllProfileData, 0x490);
@@ -525,9 +515,7 @@ REX_EXPORT_QUIET_RETURN(__imp__XamIsCurrentTitleDatacenterDash, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsCurrentTitleIptv, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsDataCenterMode, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsDvrRecording, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XamIsNatalPlaybackEnabled, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsNetworkCaptivePortal, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XamIsNuiAutomationEnabled, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsOnPrivateNetwork, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsOptionalMediaUpdateInstalled, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamIsScreenSaverActive, 0);
@@ -543,7 +531,6 @@ REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetGameInfo, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetLogonTitle, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetPriorTitleId, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetState, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XamLoaderIsKinectUIPreferredForLogonTitle, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderIsTitleTerminatePending, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderLaunchTitleEx, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderLaunchTitleForReason, 0);
@@ -710,7 +697,6 @@ REX_EXPORT_QUIET_RETURN(__imp__XamReportTLSConnect, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamRequestToken, 0x80151802);
 REX_EXPORT_QUIET_RETURN(__imp__XamResolveURI, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamRestartTitleLoadAfterUpdate, 0x65B);
-REX_EXPORT_QUIET_RETURN(__imp__XamResumeUpdaterUI, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamSendMessageToLoadedApps, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamSetActiveDashAppInfo, 0);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamSetAutomation, 0x80004005);
@@ -743,9 +729,6 @@ REX_EXPORT_QUIET_RETURN(__imp__XamSwapCancel, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamSystemUpdateInstallLocal, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamSystemUpdaterLogon, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamTerminateTitleForUpdate, 0x65B);
-REX_EXPORT_QUIET_RETURN(__imp__XamTestShowNuiTroubleshooterUI, 0x80004005);
-REX_EXPORT_QUIET_RETURN(__imp__XamUIThreadDisableFontPatching, 0x80004005);
-REX_EXPORT_QUIET_RETURN(__imp__XamUIThreadEnableFontPatching, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUnloadSysApp, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUnregisterSysApp, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUpdateAllocateExtenderBuffer, 0x80004005);
@@ -837,200 +820,6 @@ REX_EXPORT_QUIET_RETURN(__imp__XdfResumeDelayedItem, 0x80151802);
 REX_EXPORT_QUIET_RETURN(__imp__XdfShutdown, 0x80151802);
 REX_EXPORT_QUIET_RETURN(__imp__XnpGetXwppMemoryLogSnapshot, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XnpGetXwppRuntimeFilter, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XuiAlloc, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiAnimRun, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiApplyLocale, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiAttachTextureBrush, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiBroadcastMessage, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiBrushGetTexture, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiBubbleMessage, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiClassDerivesFrom, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlAttachVisual, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlGetItemAssociation, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlGetNavigation, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlGetVisual, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlIsBackButton, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlIsNavButton, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlPlayOptionalVisual, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlSetItemAssociation, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiControlWantsUnfocusedInput, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiCopyString, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiCreateObject, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiCreateSolidBrush, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiCreateTextureBrush, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDefault_EmptyString, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDefault_False, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDefault_IntegerZero, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDefault_True, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDestroyBrush, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDestroyObject, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDrawShape, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiDynamicCast, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiEditGetTextLimit, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiEditSetTextFormatInfo, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiEditSetTextLimit, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementAddChild, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementBeginRender, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementDisallowRecursiveTimelineControl, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementDiscardResources, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementEnableInput, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementEndRender, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementFindNamedFrame, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetChildById, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetDescendantById, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetFirstChild, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetFocusUser, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetFullXForm, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetId, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetLastChild, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetNext, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetOpacity, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetParent, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetPivot, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetPosition, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetPrev, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetScale, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetScreenPositionCenter, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetTimeline, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetUserData, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetUserFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementGetXForm, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementHasFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementInitFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementInitUserFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementInputEnabled, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementInsertChild, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementIsDescendant, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementLayoutTree, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementPlayNamedFrames, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementPlayTimeline, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementRenderChildren, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetBounds, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetFocus, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetHittable, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetOpacity, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetPivot, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetPosition, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetRotation, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetScale, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetUserData, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementSetUserFocus, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementTreeGetFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementTreeHasFocus, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiElementUnlink, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFigureClose, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFigureGetShape, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFigureSetFill, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFigureSetShape, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFigureSetTexture, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFillRect, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFindClass, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFree, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFreeStringTable, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFreeUnusedTextures, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiFreeVisuals, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiGetBaseClass, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiGetBaseObject, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiGetClass, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiGetObjectClass, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiGetOuter, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiHandleIsValid, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiImageElementGetImagePath, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiImageElementSetImagePath, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiInit, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiIsInstanceOf, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiKillTimer, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiListEnableItemOverride, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiListGetDefaultItemSize, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiLoadFromBinary, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiLoadStringTableFromFile, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiLoadVisualFromBinary, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiLookupStringTable, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiLookupStringTableByIndex, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiMatrixMultiply, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiNavButtonGetPressPath, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiObjectFromHandle, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiObjectGetProperty, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiObjectGetPropertyDef, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiObjectGetPropertyId, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiObjectSetProperty, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiPNGTextureLoader, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiProcessInput, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiProgressBarGetRange, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiProgressBarGetValue, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiProgressBarSetRange, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiProgressBarSetValue, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRealloc, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRegisterClass, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderBegin, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderCreateDC, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderDCDeviceChanged, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderDestroyDC, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderEnd, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderGetBackBufferSize, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderGetColorSpace, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderGetDevice, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderGetViewTransform, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderGetXuiDevice, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderInit, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderInitShared, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderPresent, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderRestoreState, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderSetViewTransform, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiRenderUninit, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceClose, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceComposeLocator, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceGetBuffer, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceGetPackageEntryCount, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceGetPackageEntryInfo, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceGetTotalSize, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceLoadAll, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceLocatorIsAbsolute, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceOpen, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceOpenAndVerifyNoLoc, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceOpenNoLoc, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceOpenPackage, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceRead, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceReleasePackage, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiResourceSeek, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneCreate, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneEnableTransitionDependency, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneInterruptTransitions, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneIsInTransition, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneNavigateBack, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneNavigateBackToFirst, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneNavigateFirst, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSceneNavigateForward, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiScenePlayBackFromTransition, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiScenePlayBackToTransition, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiScenePlayFromTransition, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiScenePlayToTransition, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSelectBrush, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSelectBrushEx, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSendMessage, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSetLocale, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSetMessageFilter, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSetTimer, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSliderGetRange, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSliderGetStep, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSliderGetValue, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSliderSetRange, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSliderSetStep, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiSliderSetValue, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTabSceneGetCount, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTabSceneGetCurrentTab, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTabSceneGoto, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTextElementGetText, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTextElementMeasureText, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTextElementSetText, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiTimersRun, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiUninit, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiUnregisterClass, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiVec2TransformCoord, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiVisualCreateInstance, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiVisualGetBasePath, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XuiVisualSetBasePath, 0);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__lstrcatA, 0);
 REX_EXPORT_QUIET_RETURN(__imp__lstrcatW, 0);
 REX_EXPORT_QUIET_RETURN(__imp__lstrcpyA, 0);

@@ -36,6 +36,19 @@ void XamAvatarShutdown_entry() {
   // No-op.
 }
 
+// xenia-canary 2da2519 xam_avatar.cc (BSD-3-Clause). No avatar
+// resources exist while initialization is disabled, so both required sizes are zero.
+u32 XamAvatarGetAssetsResultSize_entry(u32, mapped_u32 result_size, mapped_u32 gpu_size) {
+  if (!result_size || !gpu_size) return X_E_INVALIDARG;
+  *result_size = 0;
+  *gpu_size = 0;
+  return X_ERROR_SUCCESS;
+}
+u32 XamAvatarGetInstrumentation_entry(u64, mapped_u32 output) {
+  if (output) *output = 0;
+  return 1;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -43,25 +56,25 @@ void XamAvatarShutdown_entry() {
 REX_EXPORT(__imp__XamAvatarInitialize, rex::kernel::xam::XamAvatarInitialize_entry)
 REX_EXPORT(__imp__XamAvatarShutdown, rex::kernel::xam::XamAvatarShutdown_entry)
 
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarBeginEnumAssets, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarEndEnumAssets, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarEnumAssets, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGenerateMipMaps, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetAssetBinary, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetAssetIcon, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetAssets, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetAssetsResultSize, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetInstalledAssetPackageDescription, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetInstrumentation, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetManifestLocalUser, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetManifestsByXuid, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetMetadataRandom, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetMetadataSignedOutProfile, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarGetMetadataSignedOutProfileCount, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarLoadAnimation, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarManifestGetBodyType, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarReinstallAwardedAsset, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarSetCustomAsset, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarSetManifest, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarSetMocks, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamAvatarWearNow, 0x80004005);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarBeginEnumAssets, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarEndEnumAssets, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarEnumAssets, 0x80070012);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGenerateMipMaps, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetAssetBinary, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetAssetIcon, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetAssets, 0x80004005);
+REX_EXPORT(__imp__XamAvatarGetAssetsResultSize, rex::kernel::xam::XamAvatarGetAssetsResultSize_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetInstalledAssetPackageDescription, 0x80004005);
+REX_EXPORT(__imp__XamAvatarGetInstrumentation, rex::kernel::xam::XamAvatarGetInstrumentation_entry)
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetManifestLocalUser, 0x65B);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetManifestsByXuid, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetMetadataRandom, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetMetadataSignedOutProfile, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarGetMetadataSignedOutProfileCount, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarLoadAnimation, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarManifestGetBodyType, 1);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarReinstallAwardedAsset, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarSetCustomAsset, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarSetManifest, 0x65B);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarSetMocks, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamAvatarWearNow, 0x80004005);

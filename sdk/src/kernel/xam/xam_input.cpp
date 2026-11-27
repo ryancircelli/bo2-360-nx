@@ -188,6 +188,33 @@ i32 XamUserGetDeviceContext_entry(u32 user_index, u32 unk, mapped_u32 out_ptr) {
   return result;
 }
 
+// Skylanders-portal raw I/O. Ported from xenia-canary xam_input.cc (BSD): argument validation is
+// kept; we emulate no portal, so a valid call fails with DEVICE_NOT_CONNECTED.
+static constexpr u32 kPortalBufferSize = 0x20;
+static u32 NonControllerRawEx(u32 device_id, mapped_u32 buffer_ptr, mapped_u32 length_ptr,
+                              bool needs_state_ptr, mapped_u16 state_ptr) {
+  if (device_id != 5 && device_id != 6) return X_ERROR_INVALID_PARAMETER;
+  if (!buffer_ptr || !length_ptr || (needs_state_ptr && !state_ptr)) return X_ERROR_INVALID_PARAMETER;
+  if (*length_ptr == 0 || *length_ptr > kPortalBufferSize) return X_ERROR_INVALID_PARAMETER;
+  return X_ERROR_DEVICE_NOT_CONNECTED;
+}
+u32 XamInputNonControllerGetRawEx_entry(u32 device_id, mapped_u32 buffer_ptr,
+                                        mapped_u32 length_ptr, mapped_u16 state_ptr) {
+  return NonControllerRawEx(device_id, buffer_ptr, length_ptr, true, state_ptr);
+}
+u32 XamInputNonControllerGetRaw_entry(mapped_u16 state_ptr, mapped_u32 length_ptr,
+                                      mapped_u32 buffer_ptr) {
+  return NonControllerRawEx(5, buffer_ptr, length_ptr, true, state_ptr);
+}
+u32 XamInputNonControllerSetRawEx_entry(u32 device_id, mapped_u32 buffer_ptr, u32 length) {
+  if (device_id != 5 && device_id != 6) return X_ERROR_INVALID_PARAMETER;
+  if (!buffer_ptr || !length || length > kPortalBufferSize) return X_ERROR_INVALID_PARAMETER;
+  return X_ERROR_DEVICE_NOT_CONNECTED;
+}
+u32 XamInputNonControllerSetRaw_entry(u32 length, mapped_u32 buffer_ptr) {
+  return XamInputNonControllerSetRawEx_entry(5, buffer_ptr, length);
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -203,25 +230,25 @@ REX_EXPORT(__imp__XamInputGetKeystroke, rex::kernel::xam::XamInputGetKeystroke_e
 REX_EXPORT(__imp__XamInputGetKeystrokeEx, rex::kernel::xam::XamInputGetKeystrokeEx_entry)
 REX_EXPORT(__imp__XamUserGetDeviceContext, rex::kernel::xam::XamUserGetDeviceContext_entry)
 
-REX_EXPORT_QUIET_RETURN(__imp__XamInputControl, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputEnableAutobind, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputGetDeviceStats, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputGetFailedConnectionOrBind, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputGetKeyLocks, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputGetKeystrokeHud, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputGetKeystrokeHudEx, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputGetUserVibrationLevel, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputNonControllerGetRaw, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputNonControllerGetRawEx, 0x80004005);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputNonControllerSetRaw, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputNonControllerSetRawEx, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_STUB_RETURN(__imp__XamInputControl, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputEnableAutobind, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetDeviceStats, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetFailedConnectionOrBind, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetKeyLocks, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetKeystrokeHud, 0x10D2);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetKeystrokeHudEx, 0x10D2);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetUserVibrationLevel, 0);
+REX_EXPORT(__imp__XamInputNonControllerGetRaw, rex::kernel::xam::XamInputNonControllerGetRaw_entry)
+REX_EXPORT(__imp__XamInputNonControllerGetRawEx, rex::kernel::xam::XamInputNonControllerGetRawEx_entry)
+REX_EXPORT(__imp__XamInputNonControllerSetRaw, rex::kernel::xam::XamInputNonControllerSetRaw_entry)
+REX_EXPORT(__imp__XamInputNonControllerSetRawEx, rex::kernel::xam::XamInputNonControllerSetRawEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamInputRawState, 0x48F);
-REX_EXPORT_QUIET_RETURN(__imp__XamInputResetLayoutKeyboard, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSendStayAliveRequest, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSendXenonButtonPress, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSetKeyLocks, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSetKeyboardTranslationHud, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSetLayoutKeyboard, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSetMinMaxAuthDelay, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputSetTextMessengerIndicator, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamInputToggleKeyLocks, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_STUB_RETURN(__imp__XamInputResetLayoutKeyboard, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSendStayAliveRequest, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSendXenonButtonPress, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetKeyLocks, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetKeyboardTranslationHud, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetLayoutKeyboard, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetMinMaxAuthDelay, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetTextMessengerIndicator, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputToggleKeyLocks, 0);

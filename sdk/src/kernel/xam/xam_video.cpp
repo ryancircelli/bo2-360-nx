@@ -39,7 +39,7 @@ u32 XGetVideoCapabilities_entry() {
 REX_EXPORT(__imp__XGetVideoMode, rex::kernel::xam::XGetVideoMode_entry)
 REX_EXPORT(__imp__XGetVideoCapabilities, rex::kernel::xam::XGetVideoCapabilities_entry)
 
-REX_EXPORT_QUIET_RETURN(__imp__XGetVideoFlags, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XGetVideoStandard, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamLoadExtraAVCodecs2, 0);  // no reference; deliberate family default, behaviour unknown
-REX_EXPORT_QUIET_RETURN(__imp__XamUnloadExtraAVCodecs2, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_STUB_RETURN(__imp__XGetVideoFlags, 0x0F);
+REX_EXPORT_STUB_RETURN(__imp__XGetVideoStandard, 1);
+REX_EXPORT_STUB_RETURN(__imp__XamLoadExtraAVCodecs2, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamUnloadExtraAVCodecs2, 0);
