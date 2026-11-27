@@ -18,6 +18,10 @@
       ]
     },
     {
+      "text": "heart of the galactic|synthetic geth|reapers",
+      "commands": []
+    },
+    {
       "text": "no time to argue|gave you an order",
       "commands": [
         "stick l 1 0 2000",

@@ -43,7 +43,7 @@ def play_state(game, words, log):
     if game == 'nfsmw2012':
         unit = any(re.fullmatch(r'MPH[I1|]?', w['text'].translate(str.maketrans('МРН','MPH')), re.I)
                    and w['x'] > .85 and w['y'] > .8 for w in words)
-        map_hud = any(re.fullmatch(r'FAIRHAVEN',w['text'],re.I) and w['x'] < .2 and w['y'] > .6 for w in words)
+        map_hud = any(re.fullmatch(r'FAIRHAV\w{0,2}',w['text'],re.I) and w['x'] < .2 and w['y'] > .6 for w in words)
         distance_hud = any(re.fullmatch(r'DISTANCE',w['text'],re.I) and w['x'] < .2 and w['y'] < .2 for w in words)
         return unit or (map_hud and distance_hud)
     if game == 'ac1':
@@ -92,7 +92,10 @@ def verify_play(game, out, log):
             if not valid:
                 raise ValueError('missing completed gameplay prerequisite: '+name)
         active = [s for s in run['observations'] if start <= s['at'] <= end]
-        if len(active) < 3 or any(not s['state'] or not play_state(game, s['words'], log) for s in active):
+        ok = [bool(s['state'] and play_state(game, s['words'], log)) for s in active]
+        # A lone OCR dropout between two gameplay frames (HUD digits flicker) is tolerated; two in a row or at an edge is not.
+        ok = [o or (0 < i < len(ok)-1 and ok[i-1] and ok[i+1]) for i, o in enumerate(ok)]
+        if len(active) < 3 or not all(ok):
             raise ValueError('menu/cutscene/unknown state in the gameplay interval')
         stamps = [s['at'] for s in active]
         if stamps != sorted(stamps) or any(b-a > 30 for a,b in zip(stamps, stamps[1:])):

@@ -513,7 +513,7 @@ def g_save(a, G):
             # The single-player menu defaults to New Campaign even when a save
             # exists. Explicitly select Continue during the reload half.
             recipe['navigation'] = [dict(text=r'NEW\s+CAMPAIGN.*CONTINUE\s+CAMPAIGN',
-                                         commands=['press down 250','press a 600'])] + recipe['navigation']
+                                         commands=['press down 250'], once=True)] + recipe['navigation']
         state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()
         evidence['reload_state'] = state
         evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes)

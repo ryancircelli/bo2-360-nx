@@ -11,6 +11,13 @@
       "mark": "nursery"
     },
     {
+      "text": "are you sure you want this",
+      "commands": [
+        "press down 250",
+        "press a 600"
+      ]
+    },
+    {
       "text": "press.*start",
       "commands": [
         "press start 600"
