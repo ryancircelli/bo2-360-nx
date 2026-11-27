@@ -1174,7 +1174,7 @@ bool LoadSavepointFile(const std::string& path) {
     uint32_t len = kbs.Read<uint32_t>();
     size_t start = kbs.offset();
     uint32_t handle = 0;
-    std::memcpy(&handle, kernel.data() + start + 12, 4);  // SaveObject: alloc flag, guest ptr, count, handles
+    std::memcpy(&handle, kernel.data() + start + 16, 4);  // SaveObject: alloc flag, guest ptr, native ptr, count, handles
     // Modules: boot ones are this process's already (same executable, checked above); DLLs loaded above take
     // the saved handles. Records start with the module signature and path, not the handle.
     if (type == XObject::Type::Module) {
@@ -1190,11 +1190,8 @@ bool LoadSavepointFile(const std::string& path) {
       kbs.set_offset(start + len);
       continue;
     }
-    if (
-        (type != XObject::Type::Thread && ks->object_table()->LookupObject<XObject>(handle))) {
-      kbs.set_offset(start + len);
-      continue;
-    }
+    // No skip when the handle is taken: at this point only a DLL loaded above can hold a saved handle, and it
+    // moves to its own saved handles when its record comes (XModule::RestoreLoaded).
     if (!XObject::Restore(ks, type, &kbs)) {
       SPLOAD_ERR("[savepoint] load: object {:08X} type {} did not restore", handle, int(type));
       return false;
@@ -1333,11 +1330,13 @@ bool LoadSavepointFile(const std::string& path) {
     if (thread_suspend(port) != KERN_SUCCESS) return false;
     uint8_t* dst = reinterpret_cast<uint8_t*>(new_top - rec.band.size());
     std::memcpy(dst, rec.band.data(), rec.band.size());
+    std::vector<bool> rl_moved(rec.band.size() / 8);  // a moved data pointer can land in an old text window
     for (size_t o = 0; o + 8 <= rec.band.size(); o += 8) {
       uint64_t v;
       std::memcpy(&v, dst + o, 8);
-      v = rl(v);
-      std::memcpy(dst + o, &v, 8);
+      const uint64_t n = rl(v);
+      rl_moved[o / 8] = n != v;
+      std::memcpy(dst + o, &n, 8);
     }
     // Return addresses: walk the frame records (now in the new band) from the innermost game frame.
     uint32_t moved_returns = 0;
@@ -1356,7 +1355,9 @@ bool LoadSavepointFile(const std::string& path) {
     }
     uint32_t moved_tables = 0;
     for (uint64_t a = new_top - rec.band.size(); a + 8 <= new_top; a += 8) {
-      if (std::find(ret_slots.begin(), ret_slots.end(), a) != ret_slots.end()) continue;
+      if (rl_moved[(a - (new_top - rec.band.size())) / 8] ||
+          std::find(ret_slots.begin(), ret_slots.end(), a) != ret_slots.end())
+        continue;
       uint64_t v;
       std::memcpy(&v, reinterpret_cast<void*>(a), 8);
       if (const uint64_t n = tw(v); n != v) std::memcpy(reinterpret_cast<void*>(a), &n, 8), ++moved_tables;
@@ -1373,7 +1374,8 @@ bool LoadSavepointFile(const std::string& path) {
       for (int r = 19; r <= 28; ++r) gp.__x[r] = code(gp.__x[r]);
     else
       for (int r = 19; r <= 28; ++r)
-        if (const uint64_t n = tw(gp.__x[r]); n != gp.__x[r]) gp.__x[r] = n, ++moved_tables;
+        if (gp.__x[r] == rec.gp.__x[r])
+          if (const uint64_t n = tw(gp.__x[r]); n != gp.__x[r]) gp.__x[r] = n, ++moved_tables;
     arm_thread_state64_set_fp(gp, rl(arm_thread_state64_get_fp(rec.gp)));
     arm_thread_state64_set_sp(gp, rl(arm_thread_state64_get_sp(rec.gp)));
     arm_thread_state64_set_lr_fptr(gp, reinterpret_cast<void*>(code(arm_thread_state64_get_lr(rec.gp))));
