@@ -112,6 +112,9 @@ class CommandProcessor {
   void CallInThread(std::function<void()> fn);
 
   virtual void ClearCaches();
+  // Save points: before a capture, GPU output the guest has not read yet must
+  // reach guest RAM (discard = false); after a rewind it is dropped (true).
+  virtual void SyncGpuOutputToGuest(bool discard) {}
   virtual void InvalidateGpuMemory();
 
   // "Desired" is for the external thread managing the post-processing effect.

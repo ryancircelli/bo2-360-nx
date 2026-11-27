@@ -11,4 +11,3 @@ gpu_plugin = "metal"
 # Auto-exposure: the CPU reads the 1x1 luminance resolves (0x1FC1A000/0x1FC1C000,
 # 8 KB tiles; the 72x40 downsample is 48 KB). Without the copy back to guest RAM
 # the exposure stays stuck and the 3D world renders near-black.
-metal_resolve_readback_max_bytes = 65536

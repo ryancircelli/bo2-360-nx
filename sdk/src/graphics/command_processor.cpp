@@ -406,6 +406,7 @@ void CommandProcessor::Rewind(const RewindState& state) {
 }
 
 void CommandProcessor::StoreRewindState() {
+  SyncGpuOutputToGuest(false);
   rewind_states[this] = std::make_unique<RewindState>(CaptureRewindState());
 }
 
@@ -414,6 +415,7 @@ void CommandProcessor::RewindStoredState() {
   if (it != rewind_states.end()) {
     // Keep the stored state: a savepoint can be loaded any number of times.
     Rewind(*it->second);
+    SyncGpuOutputToGuest(true);
   }
 }
 

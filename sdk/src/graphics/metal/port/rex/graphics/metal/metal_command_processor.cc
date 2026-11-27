@@ -2071,6 +2071,12 @@ bool MetalCommandProcessor::SetupContext() {
     REXLOG_ERROR("Failed to initialize shared memory");
     return false;
   }
+  if (REXCVAR_GET(metal_resolve_read_watch)) {
+    memory_->SetPhysicalReadWatchCallback(ServeReadWatchThunk, this);
+    read_watch_active_ = true;
+    REXLOG_INFO("[read-watch] on: resolve output is copied to guest RAM on "
+                "first CPU access");
+  }
 
   // Initialize primitive processor (index/primitive conversion like D3D12).
   primitive_processor_ = std::make_unique<MetalPrimitiveProcessor>(
@@ -2448,6 +2454,11 @@ void MetalCommandProcessor::WaitForPendingCompletionHandlers() {
 }
 
 void MetalCommandProcessor::ShutdownContext() {
+  if (read_watch_active_.exchange(false)) {
+    auto lock = rex::thread::global_critical_region::AcquireDirect();
+    ReadWatchRetireLocked(0, UINT32_MAX, 0, false);
+    memory_->SetPhysicalReadWatchCallback(nullptr, nullptr);
+  }
   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kManual)) {
     REXLOG_ERROR("Metal ShutdownContext: failed to flush prepared draw queue");
   }
@@ -10374,6 +10385,8 @@ bool MetalCommandProcessor::DispatchDraw(
       }
       shared_memory_->RangeWrittenByGpu(
           memexport_range.base_address_dwords << 2, memexport_range.size_bytes);
+      BumpReadWatch(memexport_range.base_address_dwords << 2,
+                    memexport_range.size_bytes);
       // [texture-precommit] record the write even when no stage is known
       // (no pending entry is made then): a texture load of these pages must
       // stay behind this draw in the current command buffer.
@@ -10597,9 +10610,18 @@ bool MetalCommandProcessor::IssueCopy() {
         static_cast<const uint8_t*>(buffer->contents()) + written_address;
     std::memcpy(destination, source, written_length);
     NoteMorphReadback(source, written_address, written_length, false);
+  } else if (written_length && read_watch_active_ &&
+             REXCVAR_GET(metal_resolve_readback_max_bytes) <= 0 &&
+             (!texture_cache_->IsDrawResolutionScaled() || resolve_plan.native)) {
+    ArmReadWatch(written_address, written_length);
   } else if (written_length &&
              written_length <= uint32_t(std::max(
-                                   0, REXCVAR_GET(metal_resolve_readback_max_bytes)))) {
+                                   0, REXCVAR_GET(metal_resolve_readback_max_bytes) > 0
+                                          ? REXCVAR_GET(metal_resolve_readback_max_bytes)
+                                          // shortcut: scaled resolves are not watched (the
+                                          // 1x copy needs a downscale on the GPU thread); they
+                                          // keep the eager copy of small resolves.
+                                          : (read_watch_active_ ? 65536 : 0)))) {
     // The CPU reads some resolve results (NFSMW: the 64x64 luminance
     // resolve that drives auto-exposure). Copy them back to guest RAM once
     // this command buffer completes, as memexport results are; until then the
@@ -10656,6 +10678,164 @@ bool MetalCommandProcessor::WaitForMorphReadbackSubmission(
     return false;
   }
   return true;
+}
+
+void MetalCommandProcessor::ArmReadWatch(uint32_t start, uint32_t length) {
+  start &= SharedMemory::kBufferSize - 1;
+  const uint32_t end = uint32_t(
+      std::min<uint64_t>(uint64_t(start) + length, SharedMemory::kBufferSize));
+  const uint64_t submission = submission_current_;
+  auto lock = rex::thread::global_critical_region::AcquireDirect();
+  if (!read_watch_active_) return;
+  bool found = false;
+  for (ReadWatchRange& r : read_watch_ranges_) {
+    if (r.end <= start || r.start >= end) continue;
+    // Never copy an older range while this newer write is in flight.
+    r.submission = submission;
+    found |= r.start == start && r.end == end;
+  }
+  if (!found) {
+    // shortcut: past 4096 live ranges new resolves go unwatched (the CPU sees
+    // stale bytes, as with the watch off); raise if a game logs this.
+    if (read_watch_ranges_.size() >= 4096) {
+      static bool logged = false;
+      if (!logged) {
+        logged = true;
+        REXLOG_WARN("[read-watch] 4096 ranges watched; new resolves unwatched");
+      }
+      return;
+    }
+    read_watch_ranges_.push_back({start, end, submission});
+  }
+  memory_->WatchPhysicalReads(start, end - start, true);
+}
+
+void MetalCommandProcessor::BumpReadWatch(uint32_t start, uint32_t length) {
+  if (!read_watch_active_) return;
+  start &= SharedMemory::kBufferSize - 1;
+  const uint64_t end = uint64_t(start) + length;
+  auto lock = rex::thread::global_critical_region::AcquireDirect();
+  for (ReadWatchRange& r : read_watch_ranges_) {
+    if (r.end > start && r.start < end) r.submission = submission_current_;
+  }
+}
+
+void MetalCommandProcessor::ReadWatchRetireLocked(uint32_t start, uint32_t end,
+                                                  uint64_t completed,
+                                                  bool copy) {
+  auto* buffer = shared_memory_ ? shared_memory_->GetBuffer() : nullptr;
+  const uint8_t* gpu =
+      buffer ? static_cast<const uint8_t*>(buffer->contents()) : nullptr;
+  uint8_t* guest = static_cast<uint8_t*>(memory_->TranslatePhysical(0));
+  // Pairs with the release in the command buffer completion handler.
+  std::atomic_thread_fence(std::memory_order_acquire);
+  std::vector<ReadWatchRange> retired;
+  for (size_t i = 0; i < read_watch_ranges_.size();) {
+    const ReadWatchRange r = read_watch_ranges_[i];
+    if (r.end <= start || r.start >= end ||
+        (copy && r.submission > completed)) {
+      ++i;
+      continue;
+    }
+    if (copy && gpu && guest) {
+      // The resolve uploaded its whole extent first and the guest could not
+      // write it since (no-access), so a plain copy is exact.
+      std::memcpy(guest + r.start, gpu + r.start, r.end - r.start);
+      read_watch_copied_bytes_ += r.end - r.start;
+    }
+    retired.push_back(r);
+    read_watch_ranges_[i] = read_watch_ranges_.back();
+    read_watch_ranges_.pop_back();
+  }
+  // Unwatch the 4 KB pages of the request and of retired ranges that no
+  // remaining range still needs.
+  if (end != UINT32_MAX) retired.push_back({start, end, 0});
+  for (const ReadWatchRange& r : retired) {
+    uint32_t run = UINT32_MAX;
+    const uint32_t last = std::min<uint32_t>(r.end, SharedMemory::kBufferSize);
+    for (uint32_t page = r.start & ~0xFFFu; page <= last; page += 0x1000) {
+      bool needed = page >= last;  // closes the last run
+      for (size_t k = 0; !needed && k < read_watch_ranges_.size(); ++k) {
+        needed = read_watch_ranges_[k].end > page &&
+                 read_watch_ranges_[k].start < page + 0x1000;
+      }
+      if (!needed && run == UINT32_MAX) run = page;
+      if (needed && run != UINT32_MAX) {
+        memory_->WatchPhysicalReads(run, page - run, false);
+        run = UINT32_MAX;
+      }
+    }
+  }
+}
+
+void MetalCommandProcessor::ServeReadWatch(uint32_t start, uint32_t length) {
+  const uint32_t end = start + length;
+  uint64_t need = 0;
+  {
+    auto lock = rex::thread::global_critical_region::AcquireDirect();
+    for (const ReadWatchRange& r : read_watch_ranges_) {
+      if (r.end > start && r.start < end) need = std::max(need, r.submission);
+    }
+  }
+  bool waited_ok = true;
+  if (need > GetCompletedSubmission()) {
+    ++read_watch_waits_;
+    const auto t0 = std::chrono::steady_clock::now();
+    // The command processor thread cannot wait for its own open submission.
+    if (!system::XThread::IsInThread(worker_thread_.get())) {
+      std::unique_lock<std::mutex> lock(completion_mutex_);
+      waited_ok = completion_cond_.wait_for(
+          lock, std::chrono::milliseconds(500), [&] {
+            return completed_command_buffers_.load(std::memory_order_acquire) >=
+                   need;
+          });
+    } else {
+      waited_ok = false;
+    }
+    read_watch_wait_us_ += uint64_t(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t0)
+            .count());
+  }
+  auto lock = rex::thread::global_critical_region::AcquireDirect();
+  const uint64_t completed = GetCompletedSubmission();
+  if (!waited_ok && completed < need) {
+    // Bounded: leave the stale bytes (old behaviour). Three misses turn the
+    // watch off for the session.
+    const uint32_t timeouts = ++read_watch_timeouts_;
+    REXLOG_WARN("[read-watch] wait for submission {} timed out (completed {}) "
+                "at 0x{:08X}{}",
+                need, completed, start,
+                timeouts >= 3 ? "; read watch off" : "");
+    ReadWatchRetireLocked(start, end, 0, false);
+    if (timeouts >= 3 && read_watch_active_.exchange(false)) {
+      ReadWatchRetireLocked(0, UINT32_MAX, completed, true);
+      ReadWatchRetireLocked(0, UINT32_MAX, 0, false);
+    }
+    return;
+  }
+  ReadWatchRetireLocked(start, end, completed, true);
+  const uint64_t n = ++read_watch_serves_;
+  if (n <= 16 || !(n % 1000)) {
+    REXLOG_INFO("[read-watch] serve#{} 0x{:08X}+{} waits={} wait_us={} "
+                "copied_bytes={} live_ranges={}",
+                n, start, length, read_watch_waits_.load(),
+                read_watch_wait_us_.load(), read_watch_copied_bytes_.load(),
+                read_watch_ranges_.size());
+  }
+}
+
+void MetalCommandProcessor::SyncGpuOutputToGuest(bool discard) {
+  if (!read_watch_active_) return;
+  if (!discard) {
+    EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
+    FlushCommandBufferAndWait(5000000000ULL, "read-watch savepoint");
+  }
+  auto lock = rex::thread::global_critical_region::AcquireDirect();
+  if (!discard) {
+    ReadWatchRetireLocked(0, UINT32_MAX, GetCompletedSubmission(), true);
+  }
+  ReadWatchRetireLocked(0, UINT32_MAX, 0, false);
 }
 
 void MetalCommandProcessor::NoteMorphReadback(const uint8_t* data,
@@ -11412,7 +11592,8 @@ void MetalCommandProcessor::ProcessCompletedSubmissions() {
     shared_memory_->VerifyCompletedUploads(completed);
   }
   if (shared_memory_ && (MetalSharedMemory::MemexportReadbackEnabled() ||
-                         REXCVAR_GET(metal_resolve_readback_max_bytes) > 0)) {
+                         REXCVAR_GET(metal_resolve_readback_max_bytes) > 0 ||
+                         read_watch_active_)) {
     shared_memory_->ApplyCompletedMemexportReadbacks(completed);
   }
   PruneCompletedSharedMemoryWrites(completed);

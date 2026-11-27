@@ -187,6 +187,11 @@ DEFINE_int32(metal_resolve_readback_max_bytes, 0,
              "RAM after their command buffer completes, for titles whose CPU "
              "reads resolve results (NFSMW auto-exposure). 0 = off.",
              "Metal");
+DEFINE_bool(metal_resolve_read_watch, false,
+            "Keep resolve destinations no-access to the guest until the GPU "
+            "has written them; the first CPU access waits for the GPU and "
+            "copies that resolve back to guest RAM (any size, only if read).",
+            "Metal");
 
 DEFINE_bool(metal_occlusion_real, true,
             "Answer guest occlusion queries with real Metal visibility results; "

@@ -272,6 +272,9 @@ class BaseHeap {
   // protection, so silently unprotecting here would disable the watch forever.
   // Only PhysicalHeap tracks this; every other heap has no watch state.
   virtual bool IsHostPageWriteWatched(uint32_t host_page_number) const { return false; }
+  // Whether a host page holds physical memory under a read watch
+  // (Memory::WatchPhysicalReads); such a page stays no-access.
+  virtual bool IsHostPageReadWatched(uint32_t host_page_number) const { return false; }
 
   void Initialize(memory::Memory* memory, uint8_t* membase, HeapType heap_type, uint32_t heap_base,
                   uint32_t heap_size, uint32_t page_size, uint32_t host_address_offset = 0);
@@ -340,8 +343,19 @@ class PhysicalHeap : public BaseHeap {
 
   uint32_t GetPhysicalAddress(uint32_t address) const;
 
+  // Read watch support. Caller holds the global critical region.
+  // If the host page holding virtual_address is read-watched, returns the
+  // physical range that host page covers.
+  bool ReadWatchedSpanOf(uint32_t virtual_address, uint32_t* physical_start,
+                         uint32_t* physical_length) const;
+  // Re-applies host protection to the host pages covering a physical range
+  // after its read-watch bits changed.
+  void UpdateReadWatchProtection(uint32_t physical_address, uint32_t length);
+
  protected:
   bool IsHostPageWriteWatched(uint32_t host_page_number) const override;
+  bool IsHostPageReadWatched(uint32_t host_page_number) const override;
+  void HostPagePhysicalSpan(uint32_t host_page, uint32_t* start, uint32_t* end) const;
 
   // Allocation on these heaps delegates to parent_heap_, whose own reconcile
   // pass takes the global critical region. Acquire whenever this heap or its
@@ -513,6 +527,20 @@ class Memory {
   // RegisterPhysicalMemoryInvalidationCallback.
   void UnregisterPhysicalMemoryInvalidationCallback(void* callback_handle);
 
+  // Read watch: physical ranges the GPU wrote and the guest has not seen yet.
+  // Every host page of the guest views (0xA/0xC/0xE) that holds a watched
+  // 4 KB physical page is no-access; a guest access faults and calls the
+  // callback (without the global lock) with the physical range of the faulting
+  // host page, then retries. The callback must bring that memory up to date
+  // and unwatch it, or the access faults again.
+  typedef void (*PhysicalReadWatchCallback)(void* context, uint32_t physical_address,
+                                            uint32_t length);
+  void SetPhysicalReadWatchCallback(PhysicalReadWatchCallback callback, void* context);
+  // Watches or unwatches the 4 KB physical pages overlapping the range.
+  void WatchPhysicalReads(uint32_t physical_address, uint32_t length, bool watch);
+  // Caller holds the global critical region.
+  bool IsPhysicalReadWatched(uint32_t physical_address, uint32_t length) const;
+
   // Enables physical memory access callbacks for the specified memory range,
   // snapped to system page boundaries.
   void EnablePhysicalMemoryAccessCallbacks(uint32_t physical_address, uint32_t length,
@@ -644,6 +672,10 @@ class Memory {
   rex::thread::global_critical_region global_critical_region_;
   std::vector<std::pair<PhysicalMemoryInvalidationCallback, void*>*>
       physical_memory_invalidation_callbacks_;
+  // One bit per 4 KB physical page; guarded by global_critical_region_.
+  std::vector<uint64_t> read_watch_bits_ = std::vector<uint64_t>(0x20000000 >> 12 >> 6);
+  PhysicalReadWatchCallback read_watch_callback_ = nullptr;
+  void* read_watch_context_ = nullptr;
 };
 
 }  // namespace rex::memory

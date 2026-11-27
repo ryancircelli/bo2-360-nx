@@ -1281,6 +1281,36 @@ class MetalCommandProcessor final : public CommandProcessor {
   void DiagResolveDump(uint32_t written_address, uint32_t written_length);
   bool WaitForMorphReadbackSubmission(uint32_t written_address,
                                       uint32_t written_length);
+
+  // [read-watch] metal_resolve_read_watch: resolve destinations stay
+  // no-access to the guest until their submission completes; the first guest
+  // access waits for it and copies the bytes back (ServeReadWatch).
+  struct ReadWatchRange {
+    uint32_t start;
+    uint32_t end;
+    uint64_t submission;
+  };
+  void ArmReadWatch(uint32_t start, uint32_t length);
+  // A later GPU write (memexport) into watched memory: wait for it too.
+  void BumpReadWatch(uint32_t start, uint32_t length);
+  void ServeReadWatch(uint32_t start, uint32_t length);
+  static void ServeReadWatchThunk(void* context, uint32_t start, uint32_t length) {
+    static_cast<MetalCommandProcessor*>(context)->ServeReadWatch(start, length);
+  }
+  // Copies ranges whose submission <= completed (all if discard is false and
+  // completed is UINT64_MAX), drops the rest, unwatches what no range covers.
+  // Caller holds the global critical region, which guards the ranges (the
+  // memory watch bits share it, so there is no second lock to order).
+  void ReadWatchRetireLocked(uint32_t start, uint32_t end, uint64_t completed,
+                             bool copy);
+  void SyncGpuOutputToGuest(bool discard) override;
+  std::vector<ReadWatchRange> read_watch_ranges_;
+  std::atomic<bool> read_watch_active_{false};
+  std::atomic<uint32_t> read_watch_timeouts_{0};
+  std::atomic<uint64_t> read_watch_serves_{0};
+  std::atomic<uint64_t> read_watch_waits_{0};
+  std::atomic<uint64_t> read_watch_wait_us_{0};
+  std::atomic<uint64_t> read_watch_copied_bytes_{0};
   void NoteMorphReadback(const uint8_t* data, uint32_t written_address,
                          uint32_t written_length, bool scaled);
   MTL::ComputePipelineState* morph_downscale_pipeline_ = nullptr;

@@ -611,6 +611,19 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
   // Will be rounded to physical page boundaries internally, so just pass 1 as
   // the length - guranteed not to cross page boundaries also.
   auto physical_heap = static_cast<PhysicalHeap*>(heap);
+  uint32_t read_watch_start, read_watch_length;
+  if (read_watch_callback_ &&
+      physical_heap->ReadWatchedSpanOf(virtual_address, &read_watch_start, &read_watch_length)) {
+    // Reads and writes alike: GPU output must land before the guest touches
+    // the page. The callback waits for the GPU, so never hold the lock there.
+    auto callback = read_watch_callback_;
+    void* context = read_watch_context_;
+    if (global_lock_locked_once.owns_lock()) {
+      global_lock_locked_once.unlock();
+    }
+    callback(context, read_watch_start, read_watch_length);
+    return true;
+  }
   if (physical_heap->TriggerCallbacks(std::move(global_lock_locked_once), virtual_address, 1,
                                       is_write, false)) {
     return true;
@@ -743,6 +756,56 @@ void Memory::EnablePhysicalMemoryAccessCallbacks(uint32_t physical_address, uint
                                          enable_invalidation_notifications, enable_data_providers);
   heaps_.vE0000000.EnableAccessCallbacks(physical_address, length,
                                          enable_invalidation_notifications, enable_data_providers);
+}
+
+void Memory::SetPhysicalReadWatchCallback(PhysicalReadWatchCallback callback, void* context) {
+  auto global_lock = global_critical_region_.Acquire();
+  read_watch_callback_ = callback;
+  read_watch_context_ = context;
+}
+
+void Memory::WatchPhysicalReads(uint32_t physical_address, uint32_t length, bool watch) {
+  physical_address &= 0x1FFFFFFF;
+  if (!length) {
+    return;
+  }
+  const uint32_t first = physical_address >> 12;
+  const uint32_t last =
+      uint32_t(std::min<uint64_t>(uint64_t(physical_address) + length - 1, 0x1FFFFFFF) >> 12);
+  auto global_lock = global_critical_region_.Acquire();
+  bool changed = false;
+  for (uint32_t i = first; i <= last; ++i) {
+    uint64_t& block = read_watch_bits_[i >> 6];
+    const uint64_t bit = uint64_t(1) << (i & 63);
+    if (bool(block & bit) != watch) {
+      block ^= bit;
+      changed = true;
+    }
+  }
+  // Re-arming a range nobody touched costs only this scan.
+  if (!changed) {
+    return;
+  }
+  const uint32_t start = first << 12;
+  const uint32_t span = (last - first + 1) << 12;
+  heaps_.vA0000000.UpdateReadWatchProtection(start, span);
+  heaps_.vC0000000.UpdateReadWatchProtection(start, span);
+  heaps_.vE0000000.UpdateReadWatchProtection(start, span);
+}
+
+bool Memory::IsPhysicalReadWatched(uint32_t physical_address, uint32_t length) const {
+  if (!length || physical_address >= 0x20000000) {
+    return false;
+  }
+  const uint32_t first = physical_address >> 12;
+  const uint32_t last =
+      uint32_t(std::min<uint64_t>(uint64_t(physical_address) + length - 1, 0x1FFFFFFF) >> 12);
+  for (uint32_t i = first; i <= last; ++i) {
+    if (read_watch_bits_[i >> 6] & (uint64_t(1) << (i & 63))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 uint32_t Memory::SystemHeapAlloc(uint32_t size, uint32_t alignment, uint32_t system_heap_flags) {
@@ -1078,6 +1141,9 @@ bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_
     // is safe; restoring write access loses invalidations, which is not.
     if (access == rex::memory::PageAccess::kReadWrite && IsHostPageWriteWatched(host_page_number)) {
       access = rex::memory::PageAccess::kReadOnly;
+    }
+    if (access != rex::memory::PageAccess::kNoAccess && IsHostPageReadWatched(host_page_number)) {
+      access = rex::memory::PageAccess::kNoAccess;
     }
     return access;
   };
@@ -2318,7 +2384,7 @@ void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t len
           // TODO(Triang3l): Check if data providers are already enabled.
           // If data providers are already enabled for the page, it has even
           // stricter protection.
-          protect_system_page = true;
+          protect_system_page = !IsHostPageReadWatched(i);
           page_flags_block.notify_on_invalidation |= page_flags_bit;
         }
       }
@@ -2457,7 +2523,8 @@ bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> globa
       bool unprotect_page =
           (system_page_flags_[i >> 6].notify_on_invalidation & (uint64_t(1) << (i & 63))) != 0;
       if (unprotect_page &&
-          GuestAccessOfHostPage(i) != rex::memory::PageAccess::kReadWrite) {
+          (GuestAccessOfHostPage(i) != rex::memory::PageAccess::kReadWrite ||
+           IsHostPageReadWatched(i))) {
         unprotect_page = false;
       }
       if (unprotect_page) {
@@ -2511,6 +2578,89 @@ bool PhysicalHeap::IsHostPageWriteWatched(uint32_t host_page_number) const {
   }
   return (system_page_flags_[host_page_number >> 6].notify_on_invalidation &
           (uint64_t(1) << (host_page_number & 63))) != 0;
+}
+
+void PhysicalHeap::HostPagePhysicalSpan(uint32_t host_page, uint32_t* start,
+                                        uint32_t* end) const {
+  // Same mapping as TriggerCallbacks.
+  const uint32_t physical_address_offset = GetPhysicalAddress(heap_base_);
+  *start = rex::sat_sub(host_page * system_page_size_, host_address_offset()) +
+           physical_address_offset;
+  *end = std::min(rex::sat_sub((host_page + 1) * system_page_size_, host_address_offset()),
+                  heap_size_) +
+         physical_address_offset;
+}
+
+bool PhysicalHeap::IsHostPageReadWatched(uint32_t host_page_number) const {
+  if (host_page_number >= system_page_count_) {
+    return false;
+  }
+  uint32_t start, end;
+  HostPagePhysicalSpan(host_page_number, &start, &end);
+  return end > start && memory_->IsPhysicalReadWatched(start, end - start);
+}
+
+bool PhysicalHeap::ReadWatchedSpanOf(uint32_t virtual_address, uint32_t* physical_start,
+                                     uint32_t* physical_length) const {
+  if (virtual_address < heap_base_ || virtual_address - heap_base_ >= heap_size_) {
+    return false;
+  }
+  const uint32_t host_page =
+      (virtual_address - heap_base_ + host_address_offset()) / system_page_size_;
+  if (!IsHostPageReadWatched(host_page)) {
+    return false;
+  }
+  uint32_t end;
+  HostPagePhysicalSpan(host_page, physical_start, &end);
+  *physical_length = end - *physical_start;
+  return true;
+}
+
+void PhysicalHeap::UpdateReadWatchProtection(uint32_t physical_address, uint32_t length) {
+  const uint32_t physical_address_offset = GetPhysicalAddress(heap_base_);
+  if (physical_address < physical_address_offset) {
+    if (physical_address_offset - physical_address >= length) {
+      return;
+    }
+    length -= physical_address_offset - physical_address;
+    physical_address = physical_address_offset;
+  }
+  const uint32_t relative = physical_address - physical_address_offset;
+  if (relative >= heap_size_ || !length) {
+    return;
+  }
+  length = std::min(length, heap_size_ - relative);
+  const uint32_t page_first = (relative + host_address_offset()) / system_page_size_;
+  const uint32_t page_last = std::min((relative + length - 1 + host_address_offset()) /
+                                          system_page_size_,
+                                      system_page_count_ - 1);
+  // Caller holds the global critical region (it guards both kinds of watch bits).
+  uint8_t* protect_base = membase_ + heap_base_;
+  uint32_t run_first = page_first;
+  auto access_of = [&](uint32_t i) {
+    rex::memory::PageAccess access = GuestAccessOfHostPage(i);
+    if (access == rex::memory::PageAccess::kNoAccess) {
+      return access;  // real access violations stay real
+    }
+    if (IsHostPageReadWatched(i)) {
+      return rex::memory::PageAccess::kNoAccess;
+    }
+    if (access == rex::memory::PageAccess::kReadWrite && IsHostPageWriteWatched(i)) {
+      access = rex::memory::PageAccess::kReadOnly;
+    }
+    return access;
+  };
+  rex::memory::PageAccess run_access = access_of(page_first);
+  for (uint32_t i = page_first + 1; i <= page_last + 1; ++i) {
+    const bool end = i > page_last;
+    const rex::memory::PageAccess access = end ? run_access : access_of(i);
+    if (end || access != run_access) {
+      rex::memory::Protect(protect_base + size_t(run_first) * system_page_size_,
+                           size_t(i - run_first) * system_page_size_, run_access);
+      run_first = i;
+      run_access = access;
+    }
+  }
 }
 
 uint32_t PhysicalHeap::GetPhysicalAddress(uint32_t address) const {

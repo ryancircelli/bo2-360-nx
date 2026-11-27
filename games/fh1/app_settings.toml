@@ -17,7 +17,6 @@ gpu_allow_invalid_fetch_constants = true
 
 # Keep small GPU resolve results current in guest RAM for the game's exposure feedback.
 # Without this, the picture is washed out and brightness pulses between frames.
-metal_resolve_readback_max_bytes = 65536
 
 # Optional live shader editing (restart after enabling; use absolute folders).
 # metal_shader_live_dump = "/tmp/fh1-shaders/dump"
