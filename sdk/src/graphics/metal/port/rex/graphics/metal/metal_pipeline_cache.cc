@@ -2617,8 +2617,10 @@ void MetalPipelineCache::PrewarmStoredPipelines(
           (primitive.tessellation_mode == xenos::TessellationMode::kAdaptive ||
            primitive.tessellation_mode ==
                xenos::TessellationMode::kContinuous) &&
-          primitive.host_vertex_shader_type ==
-              Shader::HostVertexShaderType::kQuadDomainPatchIndexed &&
+          IsNativeDomainType(primitive.host_vertex_shader_type) &&
+          !(cpu_pattern && primitive.host_vertex_shader_type ==
+                               Shader::HostVertexShaderType::
+                                   kTriangleDomainPatchIndexed) &&
           (cpu_pattern || !blended || NativeTessBlendedMode() ||
            NativeTessMode() == 2) &&
           !vertex_translation->shader().memexport_eM_written()) {
@@ -6625,8 +6627,10 @@ MTL::RenderPipelineState* MetalPipelineCache::GetOrCreateNativeTessPipeline(
            xenos::TessellationMode::kAdaptive &&
        primitive_processing_result.tessellation_mode !=
            xenos::TessellationMode::kContinuous) ||
-      primitive_processing_result.host_vertex_shader_type !=
-          Shader::HostVertexShaderType::kQuadDomainPatchIndexed) {
+      !IsNativeDomainType(primitive_processing_result.host_vertex_shader_type) ||
+      // The reference (CPU) pattern is quad-only.
+      (cpu_pattern && primitive_processing_result.host_vertex_shader_type ==
+                          Shader::HostVertexShaderType::kTriangleDomainPatchIndexed)) {
     return nullptr;
   }
   // The native domain function, once per domain translation.
