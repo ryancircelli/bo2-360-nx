@@ -26,6 +26,7 @@
 #include "rex/memory/utils.h"
 #include "rex/graphics/metal/metal_command_processor.h"
 #include "rex/graphics/metal/metal_frame_log.h"
+#include "rex/graphics/metal/metal_readback_merge.h"
 #include "rex/hash.h"
 
 DEFINE_bool(
@@ -206,6 +207,8 @@ bool MetalSharedMemory::MemexportReadbackEnabled() {
 namespace {
 constexpr uint32_t kReadbackMaxRangeBytes = 8u << 20;
 constexpr size_t kReadbackMaxPending = 4096;
+// MW2012 exports a job-system signal into a 400 KB range the CPU keeps writing.
+constexpr uint32_t kReadbackSnapshotMaxBytes = 1u << 20;
 }  // namespace
 
 void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
@@ -235,9 +238,22 @@ void MetalSharedMemory::NoteMemexportReadback(uint32_t start, uint32_t length,
     // drop the oldest so bookkeeping stays bounded.
     pending_readbacks_.pop_front();
   }
-  pending_readbacks_.push_back({start, end, submission,
-                                XXH3_64bits(guest + start, end - start),
-                                frame_log::CurrentFrame()});
+  PendingReadback& e = pending_readbacks_.emplace_back(
+      PendingReadback{start, end, submission,
+                      XXH3_64bits(guest + start, end - start),
+                      frame_log::CurrentFrame(), {}, {}});
+  if (!(start & 3) && !((end - start) & 3) &&
+      end - start <= kReadbackSnapshotMaxBytes) {
+    e.snapshot.resize((end - start) >> 2);
+    std::memcpy(e.snapshot.data(), guest + start, end - start);
+    if (buffer_) {
+      // Pre-draw GPU copy: only dwords that differ from it were exported.
+      e.gpu_snapshot.resize(e.snapshot.size());
+      std::memcpy(e.gpu_snapshot.data(),
+                  static_cast<const uint8_t*>(buffer_->contents()) + start,
+                  end - start);
+    }
+  }
 }
 
 void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
@@ -282,7 +298,8 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
       continue;
     }
     const uint64_t guest_hash_now = XXH3_64bits(guest + e.start, len);
-    if (guest_hash_now != e.guest_hash) {
+    const bool cpu_wrote = guest_hash_now != e.guest_hash;
+    if (cpu_wrote && e.snapshot.empty()) {
       // The CPU wrote into the export range after the export: its data wins
       // (that write also invalidated the page, so it gets re-uploaded).
       cpu_skip_bytes += len;
@@ -309,7 +326,27 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
                              : XXH3_64bits(guest + p.start, p.end - p.start);
       if (h == p.guest_hash) rebase_preserved.push_back(j);
     }
-    std::memcpy(guest + e.start, gpu + e.start, len);
+    uint32_t cpu_kept = 0;
+    if (e.snapshot.empty() || !cpu_wrote) {
+      std::memcpy(guest + e.start, gpu + e.start, len);
+    } else {
+      cpu_kept = MergeMemexportReadback(
+          reinterpret_cast<uint32_t*>(guest + e.start),
+          reinterpret_cast<const uint32_t*>(gpu + e.start),
+          e.snapshot.data(),
+          e.gpu_snapshot.empty() ? nullptr : e.gpu_snapshot.data(),
+          e.snapshot.size(), [&](size_t d, uint32_t old_value, uint32_t v) {
+            // Later snapshots that held the old guest value follow the write.
+            const uint32_t addr = e.start + uint32_t(d << 2);
+            for (size_t j = i + 1; j < pending_readbacks_.size(); ++j) {
+              PendingReadback& l = pending_readbacks_[j];
+              if (addr < l.start || addr >= l.end || l.snapshot.empty()) continue;
+              uint32_t& snap = l.snapshot[(addr - l.start) >> 2];
+              if (snap == old_value) snap = v;
+            }
+          });
+      cpu_skip_bytes += cpu_kept * 4;
+    }
     const uint64_t new_hash = XXH3_64bits(guest + e.start, len);
     for (size_t j : rebase_pending) {
       PendingReadback& l = pending_readbacks_[j];
@@ -325,6 +362,13 @@ void MetalSharedMemory::ApplyCompletedMemexportReadbacks(
     }
     bytes += len;
     ++ranges;
+    static uint32_t logged_merge = 0;
+    if (cpu_wrote && logged_merge < 24) {
+      ++logged_merge;
+      REXLOG_INFO("[memexport-readback] merged 0x{:08X} len={}: kept {} "
+                  "CPU-written dword(s), changed={}",
+                  e.start, len, cpu_kept, new_hash != guest_hash_now ? 1 : 0);
+    }
     static uint32_t logged = 0;
     if (logged < 24) {
       ++logged;

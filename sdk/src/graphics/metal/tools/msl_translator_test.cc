@@ -136,9 +136,15 @@ int main(int argc, char** argv) {
               !Contains(cube_source, ", level("),
           "computed-LOD cube fetch still uses explicit LOD or gradients",
           cube_source);
+  Require(Contains(cube_source, "0x0723E7FCu : 0x5DC60000u") &&
+              Contains(cube_source, " * 65536.0f) * (1.0f / 65536.0f);"),
+          "texture fetch does not round unsigned fixed-format samples to "
+          "16 fractional bits",
+          cube_source);
   CompileMetal(directory, "cube_implicit_lod", cube_source);
 
-  std::printf("PASS: quad_jump and cube_implicit_lod translated and compiled\n");
+  std::printf("PASS: quad_jump, cube_implicit_lod and q16 rounding translated "
+              "and compiled\n");
   return 0;
 }
 

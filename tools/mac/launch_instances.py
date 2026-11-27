@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -111,6 +112,9 @@ def main(argv):
         "BO2_CAPTURE_ROOT", f"/tmp/bo2/syslink/captures/{time.strftime('%Y%m%d-%H%M%S')}"
     )).expanduser().resolve()
     capture_root.mkdir(parents=True, exist_ok=True)
+    # Pad ownership is first come, first kept and never pruned: start each session with no claims, or pads
+    # claimed by an instance number this session does not run (or 8 stale replug entries) are refused forever.
+    (Path(tempfile.gettempdir()) / "rex-bo2-sdl-pad-ownership-v1.txt").unlink(missing_ok=True)
     children = []
     for instance, exe in enumerate(executables):
         # Repeat the guard before each process to catch proof work queued during startup.

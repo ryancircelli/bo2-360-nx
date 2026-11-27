@@ -5811,6 +5811,13 @@ void MetalPipelineCache::NoteFrameDraws(uint64_t draws) {
   const auto now = std::chrono::steady_clock::now();
   if (now - constant_last_poll_ >= std::chrono::seconds(1)) {
     constant_last_poll_ = now;
+    const std::string fixed = REXCVAR_GET(metal_shader_constants);
+    if (fixed != fixed_constants_text_) {
+      fixed_constants_text_ = fixed;
+      if (ParseMetalConstantOverrides(fixed, fixed_constant_overrides))
+        REXLOG_INFO("[shader] metal_shader_constants: {} entries", fixed_constant_overrides.size());
+      else REXLOG_ERROR("[shader] invalid metal_shader_constants; previous values kept");
+    }
     const auto path = REXCVAR_GET(metal_shader_constant_overrides);
     std::error_code ec;
     const auto stamp = std::filesystem::last_write_time(path, ec);

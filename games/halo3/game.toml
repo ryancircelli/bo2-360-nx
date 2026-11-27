@@ -1,0 +1,8 @@
+[game]
+name = "halo3"
+title_ids = ["4D5307E6"]
+executable = "game:\\default.xex"
+local_data_root = "~/Games/Xbox360/halo3/disc"
+
+[defaults]
+gpu_plugin = "metal"

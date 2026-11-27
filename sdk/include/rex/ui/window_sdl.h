@@ -27,6 +27,8 @@ namespace rex::ui {
 
 class WindowSDL final : public Window {
  public:
+  // headless cvar: the window has no SDL window and is registered under this id (SDL ids count up from 1).
+  static constexpr SDL_WindowID kHeadlessWindowId = 0x7FFFFFF0u;
   WindowSDL(WindowedAppContext& app_context, const std::string_view title,
             uint32_t desired_logical_width, uint32_t desired_logical_height);
   ~WindowSDL() override;

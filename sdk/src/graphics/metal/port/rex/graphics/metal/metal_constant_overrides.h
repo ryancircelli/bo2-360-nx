@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <utility>
@@ -10,7 +11,7 @@
 #include <vector>
 
 namespace rex::graphics::metal {
-// One scalar per line: ps|vs HEX_HASH REGISTER COMPONENT FLOAT.
+// One scalar per line (or per ';'): ps|vs HEX_HASH REGISTER COMPONENT FLOAT.
 // Parse transactionally: a bad edit leaves the previous set working.
 struct MetalConstantOverride {
   bool pixel;
@@ -21,7 +22,9 @@ struct MetalConstantOverride {
 inline bool ParseMetalConstantOverrides(
     const std::string& text, std::vector<MetalConstantOverride>& output) {
   std::vector<MetalConstantOverride> candidate;
-  std::istringstream lines(text);
+  std::string normalized = text;
+  std::replace(normalized.begin(), normalized.end(), ';', '\n');
+  std::istringstream lines(normalized);
   std::string line;
   while (std::getline(lines, line)) {
     line = line.substr(0, line.find('#'));

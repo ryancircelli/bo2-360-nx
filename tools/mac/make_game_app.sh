@@ -47,24 +47,15 @@ if [ "$BUILD" = 1 ]; then
     echo "== configure $BDIR"
     EXTRA=()
     while IFS= read -r a; do [ -n "$a" ] && EXTRA+=("$a"); done < <(field cmake_args)
+    # Host tools off: no rexglue target, so the build never reruns codegen (that would drop the fix-up passes).
     cmake -S "$G" -B "$BDIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
       "-DCMAKE_C_FLAGS=-march=armv8-a" "-DCMAKE_CXX_FLAGS=-march=armv8-a" \
       -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DREXGLUE_USE_METAL=ON -DREXGLUE_USE_VULKAN=ON -DREXGLUE_BUILD_TESTS=OFF "-DREXSDK_DIR=$ROOT/sdk" \
+      -DREXGLUE_BUILD_HOST_TOOLS=OFF \
       ${EXTRA[@]+"${EXTRA[@]}"} > "$BDIR.configure.log" 2>&1 || { cat "$BDIR.configure.log" >&2; exit 1; }
   fi
-  # The generated code is an input here: make the build's codegen step a no-op so it is reused as it is.
-  "$PY" -I - "$BDIR/build.ninja" <<'PYEOF'
-import re, sys
-p = sys.argv[1]; lines = open(p).read().split('\n')
-for i, l in enumerate(lines):
-    if l.startswith('  COMMAND = cd ') and 'rexglue codegen' in l:
-        d = re.search(r'(CMakeFiles/d/[0-9a-f]+\.d)', l).group(1)
-        st = re.search(r'gccdepfile .*? (\S+/codegen\.d)', l).group(1).replace('codegen.d', 'codegen.build.stamp')
-        lines[i] = f"  COMMAND = mkdir -p CMakeFiles/d && printf '%s: \\n' '{st}' > {d}"
-open(p, 'w').write('\n'.join(lines))
-PYEOF
   echo "== build $BDIR"
   ${RUNB[@]+"${RUNB[@]}"} cmake --build "$BDIR"
 fi

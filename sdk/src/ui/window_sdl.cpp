@@ -196,6 +196,19 @@ WindowSDL::~WindowSDL() {
 }
 
 bool WindowSDL::OpenImpl() {
+#if REX_PLATFORM_MAC
+  if (REXCVAR_GET(headless)) {
+    // No SDL/Cocoa window at all; CreateSurfaceImpl hands the presenter a standalone CAMetalLayer. Registered under
+    // an id SDL never assigns, so paint and quit events still reach this window.
+    sdl_window_id_ = kHeadlessWindowId;
+    sdl_app_context().RegisterWindow(sdl_window_id_, this);
+    const uint32_t width = GetDesiredLogicalWidth(), height = GetDesiredLogicalHeight();
+    REXLOG_INFO("[headless] active {}x{} (headless_active): no window, off-screen Metal layer", width, height);
+    WindowDestructionReceiver destruction_receiver(this);
+    OnActualSizeUpdate(width, height, destruction_receiver);
+    return true;
+  }
+#endif
   // SDL window coordinates are physical pixels on Windows and X11. Cocoa
   // uses logical points and applies the backing scale itself.
   SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
@@ -258,7 +271,11 @@ bool WindowSDL::OpenImpl() {
   // desired state so a reopened window comes back with the state it had.
   ApplyTextInputActiveNow();
   ApplyCursorVisibilityNow();
-  SDL_ShowWindow(sdl_window_);
+  // A test run never shows the window at all: minimize-at-show still left a 1280x752 window on screen for seconds
+  // (the guard killed Gears at 4-8 s). Hidden windows still get a layer and present.
+  if (!REXCVAR_GET(window_start_minimized)) {
+    SDL_ShowWindow(sdl_window_);
+  }
 
   // Actualize state for the common Window code. Listener dispatch is handled
   // by Window::Open after OpenImpl returns; these only record initial state.
@@ -295,12 +312,14 @@ void WindowSDL::DestroySDLWindow() {
     SDL_RemoveTimer(cursor_hide_timer_);
     cursor_hide_timer_ = 0;
   }
-  if (sdl_window_) {
+  if (sdl_window_id_) {
     sdl_app_context().UnregisterWindow(sdl_window_id_);
+  }
+  if (sdl_window_) {
     SDL_DestroyWindow(sdl_window_);
     sdl_window_ = nullptr;
-    sdl_window_id_ = 0;
   }
+  sdl_window_id_ = 0;
 }
 
 void* WindowSDL::GetNativeWindowHandle() const {
@@ -448,6 +467,20 @@ void WindowSDL::FocusImpl() {
 }
 
 std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed_types) {
+#if REX_PLATFORM_MAC
+  if (sdl_window_id_ == kHeadlessWindowId && (allowed_types & Surface::kTypeFlag_CAMetalLayer)) {
+    // A layer outside any window still vends drawables paced at the main display's refresh (measured 119.6 fps on a
+    // 120 Hz panel), so presentation cost and vsync pacing stay close to an on-screen run.
+    using MsgFn = id (*)(id, SEL);
+    id layer = reinterpret_cast<MsgFn>(objc_msgSend)(
+        reinterpret_cast<id>(objc_getClass("CAMetalLayer")), sel_registerName("layer"));
+    if (!layer) {
+      return nullptr;
+    }
+    reinterpret_cast<MsgFn>(objc_msgSend)(layer, sel_registerName("retain"));
+    return std::make_unique<CAMetalLayerSurface>(layer, GetActualPhysicalWidth(), GetActualPhysicalHeight());
+  }
+#endif
   if (!sdl_window_) {
     return nullptr;
   }
@@ -568,6 +601,13 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
       OnMinimized(destruction_receiver);
       break;
     case SDL_EVENT_WINDOW_RESTORED:
+      // A test run (window_start_minimized) must never end up on the owner's screen: whatever restores the window
+      // later (a game mode set, a fullscreen toggle, the app being raised), put it back. Seen on v0.11 apps ~19 s in.
+      if (REXCVAR_GET(window_start_minimized) && sdl_window_) {
+        REXLOG_INFO("Window restored while start-minimized is set; minimizing it again");
+        SDL_MinimizeWindow(sdl_window_);
+        break;
+      }
       OnRestored(destruction_receiver);
       break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:

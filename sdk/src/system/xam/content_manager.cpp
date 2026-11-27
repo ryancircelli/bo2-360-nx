@@ -325,6 +325,10 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
       // Directories only.
       continue;
     }
+    const auto entry_name = rex::path_to_utf8(file_info.name);
+    if (entry_name.ends_with(".staging") || entry_name.ends_with(".old")) {
+      continue;  // left by the reverted atomic-save build (1117fd8e); may hold unsaved progress, never list or delete
+    }
 
     XCONTENT_AGGREGATE_DATA content_data{};
     if (ReadContentHeaderFile(rex::path_to_utf8(file_info.name), xuid, title_id, content_type,
@@ -498,7 +502,7 @@ X_RESULT ContentManager::OpenContent(const std::string_view root_name, uint64_t 
   auto package = ResolvePackage(root_name, xuid, data);
   assert_not_null(package);
   package->LoadPackageLicenseMask(ResolvePackageHeaderPath(
-      data.file_name(), xuid, kernel_state_->title_id(), data.content_type));
+      data.file_name(), xuid, data.title_id, data.content_type));
   content_license = package->GetPackageLicense();
 
   {

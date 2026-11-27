@@ -1,0 +1,4 @@
+# Gears of War: conservative first-boot Start/A presses.
+duration_s = 120
+players = 1
+pad1 = 15-15.2:start,25-25.2:a,40-40.2:start,55-55.2:a,75-75.2:start,90-90.2:a

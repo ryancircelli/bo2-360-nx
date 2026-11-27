@@ -240,6 +240,17 @@ class BaseHeap {
   // Callers must hold the global critical region - see
   // AcquireHostPageReconcileLock.
   bool SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_number);
+  // The raw physical view the GPU writes through; stays read-write whatever protection a
+  // title-facing alias asks for (rexglue 5b8e119, BSD-3).
+  bool IsRawPhysicalView() const {
+    return heap_type_ == HeapType::kGuestPhysical && heap_base_ == 0;
+  }
+
+  // Host access one host page needs for the guest pages it covers: the union
+  // over its committed pages (released physical pages stay read/write unless
+  // protect_on_release). Ignores write watches. Caller holds heap_mutex_ or
+  // the global critical region.
+  rex::memory::PageAccess GuestAccessOfHostPage(uint32_t host_page_number) const;
 
   // Acquires the global critical region for operations that will run the host
   // page reconcile pass, which reads watch state guarded by it.

@@ -28,6 +28,7 @@ VirtualFileSystem::~VirtualFileSystem() {
   // Delete all devices.
   // This will explode if anyone is still using data from them.
   devices_.clear();
+  retired_devices_.clear();
   symlinks_.clear();
 }
 
@@ -47,6 +48,29 @@ bool VirtualFileSystem::UnregisterDevice(const std::string_view path) {
     }
   }
   return false;
+}
+
+bool VirtualFileSystem::ReplaceDevice(std::unique_ptr<Device> device) {
+  auto global_lock = global_critical_region_.Acquire();
+  for (auto& d : devices_) {
+    if (d->mount_path() == device->mount_path()) {
+      REXFS_INFO("Replaced device: {}", device->mount_path());
+      retired_devices_.emplace_back(std::move(d));
+      d = std::move(device);
+      return true;
+    }
+  }
+  return false;
+}
+
+std::filesystem::path DiscRoot(const std::filesystem::path& game_root, uint32_t disc,
+                               uint32_t boot_disc) {
+  std::error_code ec;
+  auto base = game_root.has_filename() ? game_root : game_root.parent_path();  // "x/game/"
+  auto own = base.parent_path() / ("disc" + std::to_string(disc));
+  if (std::filesystem::is_directory(own, ec)) return own;
+  if (disc == boot_disc && std::filesystem::is_directory(base, ec)) return base;
+  return {};
 }
 
 bool VirtualFileSystem::RegisterSymbolicLink(const std::string_view path,
@@ -225,6 +249,11 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
 
     auto file_name = rex::string::utf8_find_name_from_guest_path(path);
     entry = parent_entry->GetChild(file_name);
+    if (!entry && !parent_entry->is_read_only()) {
+      // A host file the tree does not know yet (copied in, or a stale tree): look it up on the
+      // host, or CreatePath below would recreate it with "wb" and truncate it.
+      entry = !root_entry ? ResolvePath(path) : root_entry->ResolvePath(path);
+    }
   } else {
     entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
   }

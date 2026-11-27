@@ -1,0 +1,7 @@
+# Halo 3 boot to menu, then Start Solo Game: A presses every 12 s from the menu (reached ~90 s).
+duration_s = 480
+players = 1
+BO2ZM_BENCHMARK = false
+BO2ZM_TEST_BUTTONS = sdk-pad1
+REX_GUEST_CAPTURE_EVERY_S = 10
+pad1 = 100-100.6:a, 112-112.6:a, 124-124.6:a, 136-136.6:a, 148-148.6:a, 160-160.6:a, 172-172.6:a, 184-184.6:a, 196-196.6:a, 208-208.6:a, 220-220.6:a, 232-232.6:a, 244-244.6:a, 256-256.6:a, 268-268.6:a, 280-280.6:a, 292-292.6:a, 304-304.6:a, 316-316.6:a, 328-328.6:a, 340-340.6:a, 352-352.6:a, 364-364.6:a, 376-376.6:a, 388-388.6:a, 400-400.6:a, 412-412.6:a, 424-424.6:a, 436-436.6:a, 448-448.6:a, 460-460.6:a

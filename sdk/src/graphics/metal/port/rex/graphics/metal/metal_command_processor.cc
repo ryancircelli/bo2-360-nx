@@ -2423,6 +2423,10 @@ void MetalCommandProcessor::ReturnFromWait() {
     gpu_time_trace::RecordWait("tr_cp_idle_us", gpu_time_trace::idle_start_us);
     gpu_time_trace::idle_start_us = 0;
   }
+  // The guest may be polling for a memexport or resolve result that only
+  // reaches guest RAM when its submission is processed as completed; nothing
+  // else processes completions while the CP spins in WAIT_REG_MEM.
+  ProcessCompletedSubmissions();
   CommandProcessor::ReturnFromWait();
 }
 
@@ -7577,7 +7581,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   // Override uploads are rebuilt per draw, including on removal, without
   // mutating guest registers. Existing payload deduplication still applies.
   if (!REXCVAR_GET(metal_shader_constant_overrides).empty() ||
-      REXCVAR_GET(metal_fh1_blur_threshold)) {
+      !pipeline_cache_->fixed_constant_overrides.empty()) {
     cbuffer_binding_float_vertex_.up_to_date = false;
     cbuffer_binding_float_pixel_.up_to_date = false;
   }
@@ -7586,12 +7590,8 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     if (!map) return;
     const auto* shader = pixel ? pixel_shader : vertex_shader;
     if (!shader) return;
-    if (pixel && REXCVAR_GET(metal_fh1_blur_threshold)) {
-      static const std::vector<MetalConstantOverride> blur = {
-          {true, UINT64_C(0xE68FE55ECD482EC5), 253, 3, 0.5f}};
-      ApplyMetalConstantOverrides(blur, true, shader->ucode_data_hash(),
-          map->float_bitmap, data, size);
-    }
+    ApplyMetalConstantOverrides(pipeline_cache_->fixed_constant_overrides, pixel,
+        shader->ucode_data_hash(), map->float_bitmap, data, size);
     ApplyMetalConstantOverrides(pipeline_cache_->constant_overrides, pixel,
         shader->ucode_data_hash(), map->float_bitmap, data, size);
   };
@@ -14007,26 +14007,16 @@ void MetalCommandProcessor::ApplyDepthStencilState(
   }
 
   if (depth_control.stencil_enable) {
+    // Metal takes separate refs (like Xenia Vulkan); the back descriptor is
+    // the front one unless backface_enable, so the back ref must follow it.
     uint32_t ref_front = stencil_ref_mask_front.stencilref;
-    uint32_t ref_back = stencil_ref_mask_back.stencilref;
-    uint32_t ref = ref_front;
-    if (primitive_polygonal && depth_control.backface_enable &&
-        dynamic_state.pa_su_sc_mode_cntl.cull_front &&
-        !dynamic_state.pa_su_sc_mode_cntl.cull_back) {
-      ref = ref_back;
-    } else if (primitive_polygonal && depth_control.backface_enable &&
-               ref_front != ref_back) {
-      static bool mismatch_logged = false;
-      if (!mismatch_logged) {
-        mismatch_logged = true;
-        REXLOG_WARN(
-            "Metal: front/back stencil ref differ (front={}, back={}); using "
-            "front for both",
-            ref_front, ref_back);
-      }
-    }
+    uint32_t ref_back =
+        primitive_polygonal && depth_control.backface_enable
+            ? uint32_t(stencil_ref_mask_back.stencilref)
+            : ref_front;
+    uint32_t ref = ref_front | (ref_back << 16);
     if (!stencil_reference_valid_ || current_stencil_reference_ != ref) {
-      current_render_encoder_->setStencilReferenceValue(ref);
+      current_render_encoder_->setStencilReferenceValues(ref_front, ref_back);
       current_stencil_reference_ = ref;
       stencil_reference_valid_ = true;
     }

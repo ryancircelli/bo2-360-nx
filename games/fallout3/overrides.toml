@@ -1,0 +1,4 @@
+[functions]
+
+# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
+"0x82C272E8" = { }   # addi r3, r3, 4; b 0x82c212d8   <- 0x82C27C14

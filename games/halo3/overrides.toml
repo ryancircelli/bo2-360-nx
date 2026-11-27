@@ -1,0 +1,21 @@
+[functions]
+# Derived codegen declarations only; no game behavior patches.
+
+# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
+"0x826C5118" = { }   # lis r11, -0x7e00; lis r10, -0x7dfe; lis r9, -0x7dfe; addi r11, r11, 0x1750; addi r10, r10, -0x7f1c; addi r9, r9, -0x7ff0   <- 0x826C49F4
+"0x826CC8A0" = { }   # addi r3, r3, 4; b 0x826c5758   <- 0x826CEF7C
+
+# XAPI fiber bindings, identified from this disc's code, using the shared SDK
+# host-fiber implementation. ConvertThreadToFiber allocates 0xA50 and sets
+# KTHREAD+0x164; ConvertFiberToThread frees/clears it. CreateFiber initializes
+# stack bounds and continuation; DeleteFiber releases them. The switch entry
+# saves the current register context and restores the target's context.
+# Lone branch thunk after a function's last tail branch; called through a function pointer (boot12 FATAL: invalid function 0x822010D0).
+"0x822010D0" = { }   # b 0x82200e38
+
+[rexcrt]
+ConvertThreadToFiber = 0x8259FC20
+ConvertFiberToThread = 0x8259FCB0
+CreateFiber = 0x8259FD00
+DeleteFiber = 0x8259FDE0
+SwitchToFiber = 0x825A2180

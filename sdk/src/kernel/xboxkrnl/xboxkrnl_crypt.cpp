@@ -36,6 +36,7 @@
 #include "crypto/sha256.cpp"
 #include "crypto/sha256.h"
 #include "sha512.h"
+#include "rsa_public.h"
 
 extern "C" {
 #include "aes_128/aes.h"
@@ -274,11 +275,13 @@ u32 XeCryptBnQwNeRsaPubCrypt_entry(ppc_ptr_t<uint64_t> qw_a, ppc_ptr_t<uint64_t>
                                    ppc_ptr_t<XECRYPT_RSA> rsa) {
   // 0 indicates failure (but not a BOOL return value)
 #if !REX_PLATFORM_WIN32
-  REXKRNL_ERROR(
-      "XeCryptBnQwNeRsaPubCrypt called but no implementation available for "
-      "this platform!");
-  assert_always();
-  return 1;
+  const uint32_t words = rsa->size;
+  if (!words || words > 128) return 0;
+  const size_t bytes = size_t(words) * 8;
+  return RsaPublicQwordNe(
+      {reinterpret_cast<const uint8_t*>(static_cast<uint64_t*>(qw_a)), bytes},
+      {reinterpret_cast<uint8_t*>(static_cast<uint64_t*>(qw_b)), bytes},
+      {reinterpret_cast<const uint8_t*>(&rsa[1]), bytes}, rsa->public_exponent) ? 1 : 0;
 #else
   uint32_t modulus_size = rsa->size * 8;
 
@@ -687,9 +690,17 @@ u32 XeKeysHmacShaUsingKey_entry(mapped_void obscured_key, mapped_void inp_1, u32
   return X_STATUS_SUCCESS;
 }
 
-u32 XeKeysConsolePrivateKeySign_entry(mapped_void hash, mapped_void signature) {
-  REXKRNL_DEBUG("XeKeysConsolePrivateKeySign - stub");
-  return 0;  // Success
+// Port of rexglue b5c771f (BSD-3): fills a fixed 0x1A8-byte console certificate, signature left zero.
+u32 XeKeysConsolePrivateKeySign_entry(mapped_void hash, mapped_void output) {
+  if (!hash || !output) return 0;
+  uint8_t* cert = output.as<uint8_t*>();
+  std::memset(cert, 0, 0x1A8);
+  static const uint8_t kConsoleId[5] = {0x93, 0x01, 0x64, 0xE6, 0x07};
+  static const uint8_t kManufactureDate[8] = {2, 0, 0, 5, 1, 1, 2, 2};
+  std::memcpy(cert + 2, kConsoleId, sizeof(kConsoleId));
+  cert[24 + 3] = 2;  // console_type, big endian
+  std::memcpy(cert + 28, kManufactureDate, sizeof(kManufactureDate));
+  return 1;
 }
 
 // Fixed fake console id (same values as xenia-canary); we have no key vault.
@@ -704,8 +715,7 @@ u32 XeKeysGetConsoleID_entry(mapped_void raw_bytes, mapped_void hex_string) {
 
 u32 XeKeysConsoleSignatureVerification_entry(mapped_void hash, mapped_void signature,
                                              mapped_void pubkey) {
-  REXKRNL_DEBUG("XeKeysConsoleSignatureVerification - stub");
-  return 0;  // Success (signature valid)
+  return 1;  // BOOL TRUE: every console signature is accepted (rexglue b5c771f)
 }
 
 REX_EXPORT_STUB(__imp__XeKeysGetConsoleCertificate);

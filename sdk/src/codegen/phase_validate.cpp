@@ -169,17 +169,12 @@ VoidResult validateGraph(CodegenContext& ctx) {
           if (!isInternalJump) {
             const CallEdge* edge = findCallEdgeAt(node.get(), site);
             if (!edge) {
-              // Check if target is inside another function - this is a special case
-              // where code branches to another function's internal address
-              const FunctionNode* containingFunc = graph.getFunctionContaining(target);
-              if (!containingFunc) {
-                // Target is not in any function - this is an error (call the cops)
-                errors.Add(AnalysisErrors::Category::UnresolvedCall, target, site,
-                           fmt::format("{} 0x{:08X} from 0x{:08X} in {} - no CallEdge recorded",
-                                       isCall ? "bl" : "b", target, site, node->name()));
-              }
-              // If target is inside another function, it will be handled as a tail call
-              // to that function's internal label during code generation
+              // Merely lying in another function is insufficient: the emitter
+              // requires a resolved edge to an entry, and cannot call an internal
+              // label of a different C++ function. Reject this before writing code.
+              errors.Add(AnalysisErrors::Category::UnresolvedCall, target, site,
+                         fmt::format("{} 0x{:08X} from 0x{:08X} in {} - no CallEdge recorded",
+                                     isCall ? "bl" : "b", target, site, node->name()));
             } else {
               edgesVerified++;
             }

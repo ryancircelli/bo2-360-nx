@@ -1,0 +1,11 @@
+# Assassin's Creed (Xbox 360, USA, 2007, Ubisoft Montreal) title manifest.
+# Compiled into the executable by rexglue_game_manifest() (games/ac1/CMakeLists.txt).
+
+[game]
+name = "ac1"
+title_ids = ["555307d4"]
+executable = "game:\\default.xex"
+local_data_root = "~/Games/Xbox360/ac1/disc"  # read-only extracted disc; --game_data_root wins
+
+[defaults]
+gpu_plugin = "metal"

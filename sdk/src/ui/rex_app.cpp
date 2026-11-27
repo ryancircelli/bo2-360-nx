@@ -46,6 +46,8 @@
 #include <rex/system/achievement_manager.h>
 #include <rex/system/gpu_plugin.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/user_module.h>
+#include <rex/system/xex_module.h>
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/keybinds.h>
@@ -88,6 +90,10 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
 
 REXCVAR_DEFINE_BOOL(glitch_savepoint, false, "UI",
                     "Report a glitch also writes a savepoint (all guest memory, hundreds of MB) next to the report");
+
+REXCVAR_DEFINE_INT32(guest_capture_every_s, 0, "UI",
+                     "Write the guest output as captures/guest-NNNN.png next to the log every N seconds (0 = off); for hidden test runs")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex {
 
@@ -369,6 +375,19 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
   status = runtime_->LoadXexImage(xex_image);
   if (XFAILED(status)) {
     auto msg = fmt::format("Failed to load XEX ({}): {:08X}", xex_image, status);
+    REXLOG_ERROR("{}", msg);
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+    return false;
+  }
+
+  // Code generated from another executable or title update would run against the wrong data silently.
+  if (auto* xex = runtime_->kernel_state()->GetExecutableModule()->xex_module();
+      xex->base_address() != ppc_info_.image_base || xex->image_size() != ppc_info_.image_size) {
+    auto msg = fmt::format(
+        "The game executable {} does not match this build (loaded image {:08X}+{:X}, built for "
+        "{:08X}+{:X}). Check the game files and the title update.",
+        xex_image, xex->base_address(), xex->image_size(), ppc_info_.image_base,
+        ppc_info_.image_size);
     REXLOG_ERROR("{}", msg);
     rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
     return false;
@@ -988,6 +1007,24 @@ void ReXApp::LaunchModule() {
       main_thread->Resume();
     }
 
+    if (const int every = REXCVAR_GET(guest_capture_every_s); every > 0 && !capture_thread_.joinable()) {
+      capture_thread_ = std::thread([this, every]() {
+        auto* gfx = runtime_ ? runtime_->graphics_system() : nullptr;
+        const auto dir = GlitchRoot().parent_path() / "captures";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        for (int n = 0, waited = 0; !g_glitch_stop && !shutting_down_.load(std::memory_order_acquire);) {
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+          if (++waited < every) continue;
+          waited = 0;
+          rex::ui::Presenter* presenter = gfx ? gfx->presenter() : nullptr;
+          rex::ui::RawImage img;
+          if (presenter && presenter->CaptureGuestOutput(img) && img.width && img.height)
+            WritePng(dir / fmt::format("guest-{:04d}.png", n++), img);
+        }
+      });
+    }
+
     module_thread_ = std::thread([this, main_thread = std::move(main_thread)]() mutable {
       main_thread->Wait(0, 0, 0, nullptr);
       OnGuestThreadExit(main_thread.get());
@@ -1159,6 +1196,7 @@ void ReXApp::OnDestroy() {
     module_thread_.join();
   }
   g_glitch_stop = true;
+  if (capture_thread_.joinable()) capture_thread_.join();
   if (glitch_thread_.joinable()) {
     glitch_thread_.join();
   }
