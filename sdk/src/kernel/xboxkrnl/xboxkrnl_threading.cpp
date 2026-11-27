@@ -381,8 +381,7 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 }
 
 u32 NtYieldExecution_entry() {
-  rex::thread::MaybeYield();
-  rex::thread::NoteGuestPoll();
+  rex::thread::GuestPoll();
   return X_STATUS_SUCCESS;
 }
 

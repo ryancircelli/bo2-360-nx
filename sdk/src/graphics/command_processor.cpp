@@ -227,6 +227,10 @@ void CommandProcessor::SetDesiredSwapPostEffect(SwapPostEffect swap_post_effect)
   CallInThread([this, swap_post_effect]() { swap_post_effect_actual_ = swap_post_effect; });
 }
 
+REXCVAR_DEFINE_INT32(gpu_idle_spin_yields, 500, "GPU",
+                     "Bench knob: yields the GPU command thread spins through on an empty ring before it sleeps on "
+                     "the write-pointer event (each yield ~1760 instructions)");
+
 void CommandProcessor::WorkerThreadMain() {
   if (!SetupContext()) {
     rex::FatalError("Unable to setup command processor internal state");
@@ -272,7 +276,7 @@ void CommandProcessor::WorkerThreadMain() {
         rex::thread::Wait(write_ptr_index_event_.get(), true, std::chrono::milliseconds(5));
 #else
         // If we spin around too much, revert to a "low-power" state.
-        if (loop_count > 500) {
+        if (loop_count > uint32_t(std::max(0, REXCVAR_GET(gpu_idle_spin_yields)))) {
           const int wait_time_ms = 5;
           rex::thread::Wait(write_ptr_index_event_.get(), true,
                             std::chrono::milliseconds(wait_time_ms));
