@@ -11,10 +11,13 @@
 
 #include <cstdio>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <string_view>
+#include <thread>
 
 #include <fmt/format.h>
 
@@ -44,7 +47,13 @@
 #include "trace/frame_capture.h"
 #endif
 
+REXCVAR_DEFINE_BOOL(metal_type0_register_batching, false, "Metal",
+                    "Experimental: route sequential type-0 register writes through the backend range writer.");
+
 REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
+REXCVAR_DEFINE_BOOL(gpu_ring_reinit_sync, true, "GPU",
+                    "Drain the command processor before a primary ring buffer re-init and "
+                    "reset the read and write indices together (false replays old packets)");
 
 REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                     "Refresh page-valid state from GPU-written memory at frame end. "
@@ -95,6 +104,10 @@ REXCVAR_DEFINE_BOOL(shader_precompile_background, true, "GPU",
                     "using one that is not ready yet are skipped, and it is moved to the front of "
                     "the queue.")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+// Defined by the Metal plugin (metal_command_processor.cc): ring-wait progress after the
+// read-pointer writeback store.
+extern "C" void fable2_ring_writeback_stored();
 
 namespace rex::graphics {
 
@@ -233,6 +246,24 @@ void CommandProcessor::WorkerThreadMain() {
     return;
   }
 
+  // Loads the write index and reports whether there is nothing to execute.
+  // The read index is read between two loads of the write index: a concurrent
+  // InitializeRingBuffer parks the write index before it resets the read index,
+  // so a stale write index can never pair with the reset read index (which
+  // would replay ring[0, old write index)).
+  auto ring_idle = [this](uint32_t& write_ptr_index) {
+    for (;;) {
+      write_ptr_index = write_ptr_index_.load();
+      if (write_ptr_index == 0xBAADF00D) {
+        return true;
+      }
+      const uint32_t read_ptr_index = std::atomic_ref<uint32_t>(read_ptr_index_).load();
+      if (write_ptr_index_.load() == write_ptr_index) {
+        return read_ptr_index == write_ptr_index;
+      }
+    }
+  };
+
   while (worker_running_) {
     system::ServiceSavepointRequest();
     while (!pending_fns_.empty()) {
@@ -241,8 +272,8 @@ void CommandProcessor::WorkerThreadMain() {
       fn();
     }
 
-    uint32_t write_ptr_index = write_ptr_index_.load();
-    if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {
+    uint32_t write_ptr_index = 0;
+    if (ring_idle(write_ptr_index)) {
       SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
       // We've run out of commands to execute.
       // We spin here waiting for new ones, as the overhead of waiting on our
@@ -281,9 +312,7 @@ void CommandProcessor::WorkerThreadMain() {
         rex::thread::MaybeYield();
         loop_count++;
 #endif
-        write_ptr_index = write_ptr_index_.load();
-      } while (worker_running_ && pending_fns_.empty() &&
-               (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
+      } while (worker_running_ && pending_fns_.empty() && ring_idle(write_ptr_index));
       ReturnFromWait();
       if (!worker_running_ || !pending_fns_.empty()) {
         continue;
@@ -292,14 +321,20 @@ void CommandProcessor::WorkerThreadMain() {
     assert_true(read_ptr_index_ != write_ptr_index);
 
     // Execute. Note that we handle wraparound transparently.
-    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    const uint32_t read_ptr_index = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
 
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.
     if (read_ptr_writeback_ptr_) {
       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
-                                       read_ptr_index_);
+                                       read_ptr_index);
     }
+    // [ring-wait] The writeback is visible now: wake the guest's read-pointer poll
+    // (Metal plugin, metal_command_processor.cc; FABLE2_RING_WAIT_NOSPIN).
+    fable2_ring_writeback_stored();
+    // Publish the read index last: InitializeRingBuffer (another thread) takes
+    // read == write to mean this batch, writeback included, is complete.
+    std::atomic_ref<uint32_t>(read_ptr_index_).store(read_ptr_index);
 
     // FIXME: We're supposed to process the WAIT_UNTIL register at this point,
     // but no games seem to actually use it.
@@ -424,9 +459,51 @@ bool CommandProcessor::SetupContext() {
 void CommandProcessor::ShutdownContext() {}
 
 void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
-  read_ptr_index_ = 0;
+  // Called on a guest thread (VdInitializeRingBuffer) while the worker may be
+  // running. Resetting only the read index made the worker execute
+  // ring[0, old write index) again, stale packets and any new ones the guest was
+  // writing into that range. Titles re-init the same ring (Fable II does it on
+  // another thread), so: wait until the worker has consumed everything
+  // submitted (read == write), park it with the "no commands" sentinel, reset
+  // both indices, then set the write index to 0 (CP_RB_WPTR, as on hardware).
+  // Bounded wait; on a timeout the old behaviour is kept.
+  constexpr uint32_t kParked = 0xBAADF00D;  // WorkerThreadMain: no commands
+  bool parked = false;
+  if (REXCVAR_GET(gpu_ring_reinit_sync)) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+    for (uint32_t spins = 0;; ++spins) {
+      uint32_t write_index = write_ptr_index_.load();
+      // A batch publishes read = write only after it has returned, so
+      // read == write means the worker is idle with nothing pending. The
+      // compare-exchange fails if the guest wrote a new write index meanwhile.
+      if (write_index == kParked ||
+          (std::atomic_ref<uint32_t>(read_ptr_index_).load() == write_index &&
+           write_ptr_index_.compare_exchange_strong(write_index, kParked))) {
+        parked = true;
+        break;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        REXGPU_WARN("InitializeRingBuffer: command processor did not drain in 50 ms; "
+                    "re-initialising without synchronisation");
+        break;
+      }
+      if (spins < 64) {
+        std::this_thread::yield();
+      } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+      }
+    }
+  }
+  // Atomic: the worker reads it in ring_idle (WorkerThreadMain).
+  std::atomic_ref<uint32_t>(read_ptr_index_).store(0);
   primary_buffer_ptr_ = ptr;
   primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
+  if (parked) {
+    // Same as the guest writing CP_RB_WPTR = 0: read == write == 0, and the
+    // next guest write pointer update runs only the new packets.
+    register_file_->values[XE_GPU_REG_CP_RB_WPTR] = 0;
+    UpdateWritePointer(0);
+  }
 }
 
 void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {
@@ -803,6 +880,9 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
 
 void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
   SCOPE_profile_cpu_f("gpu");
+  if (hle_census_hooks_ && OnIndirectBufferForCensus(ptr, count)) {
+    return;
+  }
 
   // Execute commands!
   memory::RingBuffer reader(memory_->TranslatePhysical(ptr), count * sizeof(uint32_t));
@@ -906,6 +986,12 @@ bool CommandProcessor::ExecutePacketType0(memory::RingBuffer* reader, uint32_t p
 
   uint32_t base_index = (packet & 0x7FFF);
   uint32_t write_one_reg = (packet >> 15) & 0x1;
+  if (!write_one_reg && type0_register_batching_active_) {
+    // The backend range writer retains side-effecting/invalid-range fallbacks.
+    // Repeated writes to one register must retain their individual ordering.
+    WriteRegisterRangeFromRing(reader, base_index, count);
+    return true;
+  }
   for (uint32_t m = 0; m < count; m++) {
     uint32_t reg_data = reader->ReadAndSwap<uint32_t>();
     uint32_t target_index = write_one_reg ? base_index : base_index + m;
@@ -948,6 +1034,16 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
   // & 1 == predicate - when set, we do bin check to see if we should execute
   // the packet. Only type 3 packets are affected.
   // We also skip predicated swaps, as they are never valid (probably?).
+  if (hle_census_hooks_) {
+    const void* header =
+        reader->buffer() + (data_start_offset + reader->capacity() - sizeof(uint32_t)) %
+                               reader->capacity();
+    const bool skipped = (packet & 1) && (bin_select_ & bin_mask_) == 0;
+    OnType3PacketForCensus(packet, header, skipped);
+    if (opcode == PM4_DRAW_INDX || opcode == PM4_DRAW_INDX_2) {
+      OnDrawPacketForCensus(header, skipped);
+    }
+  }
   if (packet & 1) {
     bool any_pass = (bin_select_ & bin_mask_) != 0;
     if (!any_pass || opcode == PM4_XE_SWAP) {

@@ -9,16 +9,19 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
-#pragma once
+#ifndef XENIA_GPU_DXBC_SHADER_H_
+#define XENIA_GPU_DXBC_SHADER_H_
 
+#include <array>
 #include <atomic>
 #include <vector>
 
-#include <rex/graphics/pipeline/shader/dxbc_translator.h>
-#include <rex/graphics/pipeline/shader/shader.h>
-#include <rex/graphics/xenos.h>
+#include "rex/graphics/pipeline/shader/dxbc_translator.h"
+#include "rex/graphics/pipeline/shader/shader.h"
+#include "rex/graphics/xenos.h"
 
-namespace rex::graphics {
+namespace rex {
+namespace graphics {
 
 class DxbcShader : public Shader {
  public:
@@ -28,8 +31,9 @@ class DxbcShader : public Shader {
         : Translation(shader, modification) {}
   };
 
-  DxbcShader(xenos::ShaderType shader_type, uint64_t ucode_data_hash, const uint32_t* ucode_dwords,
-             size_t ucode_dword_count, std::endian ucode_source_endian = std::endian::big);
+  DxbcShader(xenos::ShaderType shader_type, uint64_t ucode_data_hash,
+             const uint32_t* ucode_dwords, size_t ucode_dword_count,
+             std::endian ucode_source_endian = std::endian::big);
 
   // Resource bindings are gathered after the successful translation of any
   // modification for simplicity of translation (and they don't depend on
@@ -37,7 +41,8 @@ class DxbcShader : public Shader {
 
   static constexpr uint32_t kMaxTextureBindingIndexBits =
       DxbcShaderTranslator::kMaxTextureBindingIndexBits;
-  static constexpr uint32_t kMaxTextureBindings = DxbcShaderTranslator::kMaxTextureBindings;
+  static constexpr uint32_t kMaxTextureBindings =
+      DxbcShaderTranslator::kMaxTextureBindings;
   struct TextureBinding {
     uint32_t bindless_descriptor_index;
     uint32_t fetch_constant;
@@ -47,14 +52,18 @@ class DxbcShader : public Shader {
     bool is_signed;
   };
   // Safe to hash and compare with memcmp for layout hashing.
-  const std::vector<TextureBinding>& GetTextureBindingsAfterTranslation() const {
+  const std::vector<TextureBinding>& GetTextureBindingsAfterTranslation()
+      const {
     return texture_bindings_;
   }
-  uint32_t GetUsedTextureMaskAfterTranslation() const { return used_texture_mask_; }
+  const uint32_t GetUsedTextureMaskAfterTranslation() const {
+    return used_texture_mask_;
+  }
 
   static constexpr uint32_t kMaxSamplerBindingIndexBits =
       DxbcShaderTranslator::kMaxSamplerBindingIndexBits;
-  static constexpr uint32_t kMaxSamplerBindings = DxbcShaderTranslator::kMaxSamplerBindings;
+  static constexpr uint32_t kMaxSamplerBindings =
+      DxbcShaderTranslator::kMaxSamplerBindings;
   struct SamplerBinding {
     uint32_t bindless_descriptor_index;
     uint32_t fetch_constant;
@@ -63,9 +72,35 @@ class DxbcShader : public Shader {
     xenos::TextureFilter mip_filter;
     xenos::AnisoFilter aniso_filter;
   };
-  const std::vector<SamplerBinding>& GetSamplerBindingsAfterTranslation() const {
+  const std::vector<SamplerBinding>& GetSamplerBindingsAfterTranslation()
+      const {
     return sampler_bindings_;
   }
+
+  static constexpr uint32_t kFetchConstantDwordCount =
+      xenos::kTextureFetchConstantCount * 6;
+  static constexpr uint32_t kFetchConstantDwordMaskWordCount =
+      kFetchConstantDwordCount / 32;
+  using FetchConstantDwordMask =
+      std::array<uint32_t, kFetchConstantDwordMaskWordCount>;
+  uint32_t GetUsedCbufferMaskAfterTranslation() const {
+    return used_cbuffer_mask_;
+  }
+  const FetchConstantDwordMask& GetFetchConstantDwordMaskAfterTranslation()
+      const {
+    return fetch_constant_dword_mask_;
+  }
+
+  struct TranslationMetadata {
+    std::vector<TextureBinding> texture_bindings;
+    std::vector<SamplerBinding> sampler_bindings;
+    uint32_t used_texture_mask = 0;
+    uint32_t used_cbuffer_mask = 0;
+    FetchConstantDwordMask fetch_constant_dword_mask = {};
+  };
+
+  TranslationMetadata GetTranslationMetadata() const;
+  void SetTranslationMetadata(const TranslationMetadata& metadata);
 
  protected:
   Translation* CreateTranslationInstance(uint64_t modification) override;
@@ -77,6 +112,11 @@ class DxbcShader : public Shader {
   std::vector<TextureBinding> texture_bindings_;
   std::vector<SamplerBinding> sampler_bindings_;
   uint32_t used_texture_mask_ = 0;
+  uint32_t used_cbuffer_mask_ = 0;
+  FetchConstantDwordMask fetch_constant_dword_mask_ = {};
 };
 
-}  // namespace rex::graphics
+}  // namespace gpu
+}  // namespace xe
+
+#endif  // XENIA_GPU_DXBC_SHADER_H_

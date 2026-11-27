@@ -86,15 +86,7 @@ endforeach()
 # ---------------------------------------------------------------------------
 # 2. Private, patched copy of the SDK graphics sources
 # ---------------------------------------------------------------------------
-set(_metal_patches
-    sdk-metal.patch
-    sdk-metal-native-scale.patch
-    sdk-metal-rt-shrink.patch
-    sdk-metal-hle-census.patch
-    sdk-metal-gpucmd.patch
-    sdk-metal-ssmask.patch
-    sdk-metal-loadwindow.patch
-)
+# No SDK patches: the Metal changes to the shared graphics sources live in the tree itself.
 set(_sdk_private ${_metal_work}/sdk-private)
 
 # The copy is refreshed at build time whenever an SDK graphics source or a patch
@@ -104,10 +96,8 @@ file(GLOB_RECURSE _sdk_graphics_inputs CONFIGURE_DEPENDS
     ${REXGLUE_ROOT}/src/graphics/*
     ${REXGLUE_ROOT}/thirdparty/dxbc/*)
 list(FILTER _sdk_graphics_inputs EXCLUDE REGEX "/src/graphics/metal/")
-list(TRANSFORM _metal_patches PREPEND ${_metal_dir}/patches/ OUTPUT_VARIABLE _metal_patch_files)
-list(JOIN _metal_patches "," _metal_patch_arg)
 set(_sdk_private_args -DROOT=${REXGLUE_ROOT} -DMETAL_DIR=${_metal_dir}
-    -DPRIVATE=${_sdk_private} -DPATCH=${REXGPU_METAL_PATCH} -DPATCHES=${_metal_patch_arg})
+    -DPRIVATE=${_sdk_private} -DPATCH=${REXGPU_METAL_PATCH} -DPATCHES=)
 set(_sdk_private_cmd ${CMAKE_COMMAND} ${_sdk_private_args} -P ${_metal_dir}/sdk_private.cmake)
 # First sync at configure so the plugin's source list below exists.
 execute_process(COMMAND ${_sdk_private_cmd} RESULT_VARIABLE _rc)
@@ -121,7 +111,7 @@ add_custom_command(OUTPUT ${_sdk_stamp}
     BYPRODUCTS ${_sdk_private_files}
     COMMAND ${_sdk_private_cmd}
     COMMAND ${CMAKE_COMMAND} -E touch ${_sdk_stamp}
-    DEPENDS ${_sdk_graphics_inputs} ${_metal_patch_files} ${_metal_dir}/sdk_private.cmake
+    DEPENDS ${_sdk_graphics_inputs} ${_metal_dir}/sdk_private.cmake
     COMMENT "rexgpu-metal: syncing patched graphics sources"
     VERBATIM)
 add_custom_target(rexgpu-metal-sdk-private DEPENDS ${_sdk_stamp})

@@ -9,19 +9,41 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include "rex/graphics/pipeline/shader/dxbc.h"
+
 #include <cstring>
 
-#include <rex/graphics/pipeline/shader/dxbc.h>
-
-namespace rex::graphics {
+namespace rex {
+namespace graphics {
 
 DxbcShader::DxbcShader(xenos::ShaderType shader_type, uint64_t ucode_data_hash,
                        const uint32_t* ucode_dwords, size_t ucode_dword_count,
                        std::endian ucode_source_endian)
-    : Shader(shader_type, ucode_data_hash, ucode_dwords, ucode_dword_count, ucode_source_endian) {}
+    : Shader(shader_type, ucode_data_hash, ucode_dwords, ucode_dword_count,
+             ucode_source_endian) {}
 
-Shader::Translation* DxbcShader::CreateTranslationInstance(uint64_t modification) {
+DxbcShader::TranslationMetadata DxbcShader::GetTranslationMetadata() const {
+  TranslationMetadata metadata;
+  metadata.texture_bindings = texture_bindings_;
+  metadata.sampler_bindings = sampler_bindings_;
+  metadata.used_texture_mask = used_texture_mask_;
+  metadata.used_cbuffer_mask = used_cbuffer_mask_;
+  metadata.fetch_constant_dword_mask = fetch_constant_dword_mask_;
+  return metadata;
+}
+
+void DxbcShader::SetTranslationMetadata(const TranslationMetadata& metadata) {
+  texture_bindings_ = metadata.texture_bindings;
+  sampler_bindings_ = metadata.sampler_bindings;
+  used_texture_mask_ = metadata.used_texture_mask;
+  used_cbuffer_mask_ = metadata.used_cbuffer_mask;
+  fetch_constant_dword_mask_ = metadata.fetch_constant_dword_mask;
+}
+
+Shader::Translation* DxbcShader::CreateTranslationInstance(
+    uint64_t modification) {
   return new DxbcTranslation(*this, modification);
 }
 
-}  // namespace rex::graphics
+}  // namespace gpu
+}  // namespace xe

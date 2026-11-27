@@ -9,18 +9,19 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include "rex/graphics/pipeline/shader/translator.h"
+
 #include <cstdarg>
-#include <set>
-#include <string>
 
-#include <rex/graphics/pipeline/shader/translator.h>
-#include <rex/math.h>
+#include "rex/math.h"
 
-namespace rex::graphics {
+namespace rex {
+namespace graphics {
 
 using namespace ucode;
 
-void DisassembleResultOperand(const InstructionResult& result, string::StringBuffer* out) {
+void DisassembleResultOperand(const InstructionResult& result,
+                              rex::string::StringBuffer* out) {
   bool uses_storage_index = false;
   switch (result.storage_target) {
     case InstructionStorageTarget::kRegister:
@@ -72,7 +73,8 @@ void DisassembleResultOperand(const InstructionResult& result, string::StringBuf
   // present in the microcode.
   if (!result.original_write_mask) {
     out->Append("._");
-  } else if (result.original_write_mask != 0b1111 || result.components[0] != SwizzleSource::kX ||
+  } else if (result.original_write_mask != 0b1111 ||
+             result.components[0] != SwizzleSource::kX ||
              result.components[1] != SwizzleSource::kY ||
              result.components[2] != SwizzleSource::kZ ||
              result.components[3] != SwizzleSource::kW) {
@@ -87,7 +89,7 @@ void DisassembleResultOperand(const InstructionResult& result, string::StringBuf
   }
 }
 
-void DisassembleSourceOperand(const InstructionOperand& op, string::StringBuffer* out) {
+void DisassembleSourceOperand(const InstructionOperand& op, rex::string::StringBuffer* out) {
   if (op.is_negated) {
     out->Append('-');
   }
@@ -136,7 +138,7 @@ void DisassembleSourceOperand(const InstructionOperand& op, string::StringBuffer
   }
 }
 
-void ParsedExecInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedExecInstruction::Disassemble(rex::string::StringBuffer* out) const {
   switch (type) {
     case Type::kUnconditional:
       out->AppendFormat("      {}", opcode_name);
@@ -146,7 +148,8 @@ void ParsedExecInstruction::Disassemble(string::StringBuffer* out) const {
       out->AppendFormat("{}", opcode_name);
       break;
     case Type::kConditional:
-      out->AppendFormat("      {} {}b{}", opcode_name, condition ? "" : "!", bool_constant_index);
+      out->AppendFormat("      {} {}b{}", opcode_name, condition ? "" : "!",
+                        bool_constant_index);
       break;
   }
   if (is_yield) {
@@ -163,7 +166,7 @@ void ParsedExecInstruction::Disassemble(string::StringBuffer* out) const {
   out->Append('\n');
 }
 
-void ParsedLoopStartInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedLoopStartInstruction::Disassemble(rex::string::StringBuffer* out) const {
   out->Append("      loop ");
   out->AppendFormat("i{}, L{}", loop_constant_index, loop_skip_address);
   if (is_repeat) {
@@ -172,7 +175,7 @@ void ParsedLoopStartInstruction::Disassemble(string::StringBuffer* out) const {
   out->Append('\n');
 }
 
-void ParsedLoopEndInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedLoopEndInstruction::Disassemble(rex::string::StringBuffer* out) const {
   if (is_predicated_break) {
     out->Append(predicate_condition ? " (p0) " : "(!p0) ");
   } else {
@@ -182,7 +185,7 @@ void ParsedLoopEndInstruction::Disassemble(string::StringBuffer* out) const {
   out->Append('\n');
 }
 
-void ParsedCallInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedCallInstruction::Disassemble(rex::string::StringBuffer* out) const {
   switch (type) {
     case Type::kUnconditional:
       out->Append("      call ");
@@ -203,11 +206,11 @@ void ParsedCallInstruction::Disassemble(string::StringBuffer* out) const {
   out->Append('\n');
 }
 
-void ParsedReturnInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedReturnInstruction::Disassemble(rex::string::StringBuffer* out) const {
   out->Append("      ret\n");
 }
 
-void ParsedJumpInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedJumpInstruction::Disassemble(rex::string::StringBuffer* out) const {
   switch (type) {
     case Type::kUnconditional:
       out->Append("      jmp ");
@@ -228,7 +231,7 @@ void ParsedJumpInstruction::Disassemble(string::StringBuffer* out) const {
   out->Append('\n');
 }
 
-void ParsedAllocInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedAllocInstruction::Disassemble(rex::string::StringBuffer* out) const {
   out->Append("      alloc ");
   switch (type) {
     case AllocType::kNone:
@@ -250,12 +253,14 @@ void ParsedAllocInstruction::Disassemble(string::StringBuffer* out) const {
   out->Append('\n');
 }
 
-void ParsedVertexFetchInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedVertexFetchInstruction::Disassemble(rex::string::StringBuffer* out) const {
   static const struct {
     const char* name;
   } kVertexFetchDataFormats[0xff] = {
 #define TYPE(id) \
-  { #id }
+  {              \
+    #id          \
+  }
       {0},
       {0},
       {0},
@@ -341,8 +346,9 @@ void ParsedVertexFetchInstruction::Disassemble(string::StringBuffer* out) const 
     out->AppendFormat(", Offset={}", attributes.offset);
   }
   if (attributes.data_format != xenos::VertexFormat::kUndefined) {
-    out->AppendFormat(", DataFormat={}",
-                      kVertexFetchDataFormats[static_cast<int>(attributes.data_format)].name);
+    out->AppendFormat(
+        ", DataFormat={}",
+        kVertexFetchDataFormats[static_cast<int>(attributes.data_format)].name);
   }
   if (!is_mini_fetch && attributes.stride) {
     out->AppendFormat(", Stride={}", attributes.stride);
@@ -360,7 +366,7 @@ void ParsedVertexFetchInstruction::Disassemble(string::StringBuffer* out) const 
   out->Append('\n');
 }
 
-void ParsedTextureFetchInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedTextureFetchInstruction::Disassemble(rex::string::StringBuffer* out) const {
   static const char* kTextureFilterNames[] = {
       "point",
       "linear",
@@ -368,7 +374,8 @@ void ParsedTextureFetchInstruction::Disassemble(string::StringBuffer* out) const
       "keep",
   };
   static const char* kAnisoFilterNames[] = {
-      "disabled", "max1to1", "max2to1", "max4to1", "max8to1", "max16to1", "keep",
+      "disabled", "max1to1",  "max2to1", "max4to1",
+      "max8to1",  "max16to1", "keep",
   };
 
   out->Append("   ");
@@ -402,28 +409,34 @@ void ParsedTextureFetchInstruction::Disassemble(string::StringBuffer* out) const
     out->Append(", UnnormalizedTextureCoords=true");
   }
   if (attributes.mag_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", MagFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.mag_filter)]);
+    out->AppendFormat(
+        ", MagFilter={}",
+        kTextureFilterNames[static_cast<int>(attributes.mag_filter)]);
   }
   if (attributes.min_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", MinFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.min_filter)]);
+    out->AppendFormat(
+        ", MinFilter={}",
+        kTextureFilterNames[static_cast<int>(attributes.min_filter)]);
   }
   if (attributes.mip_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", MipFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.mip_filter)]);
+    out->AppendFormat(
+        ", MipFilter={}",
+        kTextureFilterNames[static_cast<int>(attributes.mip_filter)]);
   }
   if (attributes.aniso_filter != xenos::AnisoFilter::kUseFetchConst) {
-    out->AppendFormat(", AnisoFilter={}",
-                      kAnisoFilterNames[static_cast<int>(attributes.aniso_filter)]);
+    out->AppendFormat(
+        ", AnisoFilter={}",
+        kAnisoFilterNames[static_cast<int>(attributes.aniso_filter)]);
   }
   if (attributes.vol_mag_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", VolMagFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.vol_mag_filter)]);
+    out->AppendFormat(
+        ", VolMagFilter={}",
+        kTextureFilterNames[static_cast<int>(attributes.vol_mag_filter)]);
   }
   if (attributes.vol_min_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", VolMinFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.vol_min_filter)]);
+    out->AppendFormat(
+        ", VolMinFilter={}",
+        kTextureFilterNames[static_cast<int>(attributes.vol_min_filter)]);
   }
   if (!attributes.use_computed_lod) {
     out->Append(", UseComputedLOD=false");
@@ -451,7 +464,7 @@ void ParsedTextureFetchInstruction::Disassemble(string::StringBuffer* out) const
   out->Append('\n');
 }
 
-void ParsedAluInstruction::Disassemble(string::StringBuffer* out) const {
+void ParsedAluInstruction::Disassemble(rex::string::StringBuffer* out) const {
   bool is_vector_op_default_nop = IsVectorOpDefaultNop();
   bool is_scalar_op_default_nop = IsScalarOpDefaultNop();
   if (is_vector_op_default_nop && is_scalar_op_default_nop) {
@@ -504,4 +517,5 @@ void ParsedAluInstruction::Disassemble(string::StringBuffer* out) const {
   }
 }
 
-}  // namespace rex::graphics
+}  // namespace gpu
+}  // namespace xe

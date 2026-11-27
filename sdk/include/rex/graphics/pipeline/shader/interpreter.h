@@ -1,4 +1,3 @@
-#pragma once
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -10,35 +9,43 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#ifndef XENIA_GPU_SHADER_INTERPRETER_H_
+#define XENIA_GPU_SHADER_INTERPRETER_H_
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
-#include <rex/assert.h>
-#include <rex/graphics/format/ucode.h>
-#include <rex/graphics/pipeline/shader/shader.h>
-#include <rex/graphics/register_file.h>
-#include <rex/graphics/xenos.h>
-#include <rex/memory.h>
+#include "rex/graphics/register_file.h"
+#include "rex/graphics/pipeline/shader/shader.h"
+#include "rex/graphics/trace_writer.h"
+#include "rex/memory.h"
 
-namespace rex::graphics {
+namespace rex {
+namespace graphics {
 
 class ShaderInterpreter {
  public:
-  ShaderInterpreter(const RegisterFile& register_file, const memory::Memory& memory)
+  ShaderInterpreter(const RegisterFile& register_file, const rex::memory::Memory& memory)
       : register_file_(register_file), memory_(memory) {}
 
   class ExportSink {
    public:
     virtual ~ExportSink() = default;
-    virtual void AllocExport(ucode::AllocType /*type*/, uint32_t /*size*/) {}
-    virtual void Export(ucode::ExportRegister /*export_register*/, const float* /*value*/,
-                        uint32_t /*value_mask*/) {}
+    virtual void AllocExport(ucode::AllocType type, uint32_t size) {}
+    virtual void Export(ucode::ExportRegister export_register,
+                        const float* value, uint32_t value_mask) {}
   };
 
+  void SetTraceWriter(TraceWriter* new_trace_writer) {
+    trace_writer_ = new_trace_writer;
+  }
+
   ExportSink* GetExportSink() const { return export_sink_; }
-  void SetExportSink(ExportSink* new_export_sink) { export_sink_ = new_export_sink; }
+  void SetExportSink(ExportSink* new_export_sink) {
+    export_sink_ = new_export_sink;
+  }
 
   const float* temp_registers() const { return &temp_registers_[0][0]; }
   float* temp_registers() { return &temp_registers_[0][0]; }
@@ -88,10 +95,12 @@ class ShaderInterpreter {
       // Clamp to the real range specified in the IPR2015-00325 sequencer
       // specification.
       // https://portal.unifiedpatents.com/ptab/case/IPR2015-00325
-      return std::min(INT32_C(256),
-                      std::max(INT32_C(-256), int32_t(int32_t(loop_iterators[loop_stack_depth]) *
-                                                          loop_constant.step +
-                                                      loop_constant.start)));
+      return std::min(
+          INT32_C(256),
+          std::max(INT32_C(-256),
+                   int32_t(int32_t(loop_iterators[loop_stack_depth]) *
+                               loop_constant.step +
+                           loop_constant.start)));
     }
   };
 
@@ -111,15 +120,18 @@ class ShaderInterpreter {
   float* GetTempRegister(uint32_t address, bool is_relative) {
     return temp_registers_[GetTempRegisterIndex(address, is_relative)];
   }
-  const std::array<float, 4> GetFloatConstant(uint32_t address, bool is_relative,
-                                              bool relative_address_is_a0) const;
+  const std::array<float, 4> GetFloatConstant(
+      uint32_t address, bool is_relative, bool relative_address_is_a0) const;
 
   void ExecuteAluInstruction(ucode::AluInstruction instr);
-  void StoreFetchResult(uint32_t dest, bool is_dest_relative, uint32_t swizzle, const float* value);
+  void StoreFetchResult(uint32_t dest, bool is_dest_relative, uint32_t swizzle,
+                        const float* value);
   void ExecuteVertexFetchInstruction(ucode::VertexFetchInstruction instr);
 
   const RegisterFile& register_file_;
-  const memory::Memory& memory_;
+  const rex::memory::Memory& memory_;
+
+  TraceWriter* trace_writer_ = nullptr;
 
   ExportSink* export_sink_ = nullptr;
 
@@ -132,4 +144,7 @@ class ShaderInterpreter {
   State state_;
 };
 
-}  // namespace rex::graphics
+}  // namespace gpu
+}  // namespace xe
+
+#endif  // XENIA_GPU_SHADER_INTERPRETER_H_

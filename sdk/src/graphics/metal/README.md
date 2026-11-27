@@ -14,9 +14,8 @@ It is built next to `rexgpu-xenos` and loaded the same way.
   `licenses/mtld3d-LICENSE`.
 - `licenses/` holds every upstream notice; `provenance.json` records what came from where.
 - This copy is the `metal-renderer` branch of ryancircelli/rexglue-sdk, rebuilt for this repository's SDK fork.
-  `patches/` is regenerated against this fork's graphics sources: four hunks of `sdk-metal.patch` were fixed by hand
-  (`pipeline/shader/interpreter.cpp`, `primitive_processor.cpp`, and two in `command_processor.cpp`, where this fork
-  had already changed the same lines).
+  The former `patches/sdk-metal*.patch` (Metal's changes to the shared graphics sources) are applied to the SDK tree;
+  only `patches/sdk-metal-resolve-uint.patch` remains, for the XeniOS helper shaders.
 
 ## Building
 
@@ -33,13 +32,12 @@ What configure does:
 1. Downloads the pinned, hash-checked dependencies in `dependencies.json` (metal-cpp, the Metal Shader Converter
    runtime headers, XeniOS source for the built-in helper shaders) into the build directory.
 2. Copies `include/rex/graphics`, `src/graphics` and `thirdparty/dxbc` into `<build>/src/graphics/metal/sdk-private`
-   and applies `patches/*.patch` there. Only this plugin compiles that copy; the runtime and `rexgpu-xenos` keep
-   the stock sources. The copy is remade when any SDK graphics file or patch changes.
+   (a plain copy: the Metal changes to those sources are in the SDK tree itself). The copy is remade when any SDK
+   graphics file changes.
 3. Adds a build step that compiles the XeniOS helper shaders to metallib headers with the Xcode Metal toolchain
    (`tools/compile_metal_helpers.py`).
 
-The SDK changes every module must see the same way (in `xenos.h`, `texture/info.h`, `math.h`) are in the SDK
-itself, not in the patches.
+All SDK graphics changes the Metal renderer needs are in the SDK itself.
 
 This is the converter-free configuration (`FABLE2_NO_CONVERTER=1`): guest shaders are translated by the native
 Xenos to MSL translator only. The DXBC to DXIL to Metal Shader Converter wrapper sources were deleted (tag `rejected/msc-converter-sources`), so

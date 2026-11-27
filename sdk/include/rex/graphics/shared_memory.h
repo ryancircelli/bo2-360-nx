@@ -1,4 +1,3 @@
-#pragma once
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -10,15 +9,15 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
-#include <cstdint>
-#include <mutex>
-#include <utility>
-#include <vector>
+#ifndef XENIA_GPU_SHARED_MEMORY_H_
+#define XENIA_GPU_SHARED_MEMORY_H_
 
-#include <rex/memory.h>
-#include <rex/thread/mutex.h>
+#include <atomic>
 
-namespace rex::graphics {
+#include "rex/memory.h"
+
+namespace rex {
+namespace graphics {
 
 // Manages memory for unconverted textures, resolve targets, vertex and index
 // buffers that can be accessed from shaders with Xenon physical addresses, with
@@ -31,12 +30,13 @@ class SharedMemory {
   virtual ~SharedMemory();
   // Call in the implementation-specific ClearCache.
   virtual void ClearCache();
-  void SetSystemPageBlocksValidWithGpuDataWritten();
+  virtual void SetSystemPageBlocksValidWithGpuDataWritten();
+
   void InvalidateAllPages();
 
-  typedef void (*GlobalWatchCallback)(const std::unique_lock<std::recursive_mutex>& global_lock,
-                                      void* context, uint32_t address_first, uint32_t address_last,
-                                      bool invalidated_by_gpu);
+  typedef void (*GlobalWatchCallback)(
+      const global_unique_lock_type& global_lock, void* context,
+      uint32_t address_first, uint32_t address_last, bool invalidated_by_gpu);
   typedef void* GlobalWatchHandle;
   // Registers a callback invoked when something is invalidated in the GPU
   // memory copy by the CPU or (if triggered explicitly - such as by a resolve)
@@ -46,9 +46,10 @@ class SharedMemory {
   // the watched range.
   //
   // The callback is called within the global critical region.
-  GlobalWatchHandle RegisterGlobalWatch(GlobalWatchCallback callback, void* callback_context);
+  GlobalWatchHandle RegisterGlobalWatch(GlobalWatchCallback callback,
+                                        void* callback_context);
   void UnregisterGlobalWatch(GlobalWatchHandle handle);
-  typedef void (*WatchCallback)(const std::unique_lock<std::recursive_mutex>& global_lock,
+  typedef void (*WatchCallback)(const global_unique_lock_type& global_lock,
                                 void* context, void* data, uint64_t argument,
                                 bool invalidated_by_gpu);
   typedef void* WatchHandle;
@@ -69,24 +70,61 @@ class SharedMemory {
   // Called with the global critical region locked. Do NOT watch or unwatch
   // ranges from within it! The watch for the callback is cancelled after the
   // callback - the handle becomes invalid.
-  WatchHandle WatchMemoryRange(uint32_t start, uint32_t length, WatchCallback callback,
-                               void* callback_context, void* callback_data,
-                               uint64_t callback_argument);
+  WatchHandle WatchMemoryRange(uint32_t start, uint32_t length,
+                               WatchCallback callback, void* callback_context,
+                               void* callback_data, uint64_t callback_argument);
   // Unregisters previously registered watched memory range.
   void UnwatchMemoryRange(WatchHandle handle);
 
   // Checks if the range has been updated, uploads new data if needed and
   // ensures the host GPU memory backing the range are resident. Returns true if
   // the range has been fully updated and is usable.
-  bool RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, size_t count);
+  struct Range {
+    uint32_t start;
+    uint32_t length;
+  };
+  struct RequestRangeStats {
+    uint32_t input_ranges = 0;
+    uint32_t invalid_input_ranges = 0;
+    uint32_t upload_page_ranges_before_coalesce = 0;
+    uint32_t upload_page_ranges_after_coalesce = 0;
+    uint64_t upload_bytes = 0;
+  };
   bool RequestRange(uint32_t start, uint32_t length);
+  bool RequestRanges(const Range* ranges, uint32_t range_count,
+                     RequestRangeStats* stats = nullptr);
+  // Non-mutating residency check for paths that must not open transfer
+  // encoders. Returns true only if RequestRange would fast-path without upload.
+  bool IsRangeValid(uint32_t start, uint32_t length) const;
+  // Non-mutating check for CPU-backed upload paths. Returns true only if no
+  // page in the range is currently valid in the host GPU shared-memory copy.
+  bool IsRangeInvalid(uint32_t start, uint32_t length) const;
+  // Enables CPU write invalidation callbacks for a range without changing
+  // shared-memory residency. Used by paths that upload directly from CPU memory
+  // to a derived resource rather than to the shared-memory buffer.
+  void WatchRangeForCpuWrites(uint32_t start, uint32_t length);
+  uint64_t GetInvalidationEpoch() const {
+    return invalidation_epoch_.load(std::memory_order_relaxed);
+  }
+
+  void TryFindUploadRange(const uint32_t& block_first,
+                          const uint32_t& block_last,
+                          const uint32_t& page_first, const uint32_t& page_last,
+                          uint32_t& range_start,
+                          unsigned int& current_upload_range,
+                          std::pair<uint32_t, uint32_t>* uploads);
+
+  void TryGetNextUploadRange(uint32_t& range_start, uint64_t& block_valid,
+                             const uint32_t& i,
+                             unsigned int& current_upload_range,
+                             std::pair<uint32_t, uint32_t>* uploads);
 
   // Marks the range and, if not exact_range, potentially its surroundings
   // (to up to the first GPU-written page, as an access violation exception
   // count optimization) as modified by the CPU, also invalidating GPU-written
   // pages directly in the range.
-  std::pair<uint32_t, uint32_t> MemoryInvalidationCallback(uint32_t physical_address_start,
-                                                           uint32_t length, bool exact_range);
+  std::pair<uint32_t, uint32_t> MemoryInvalidationCallback(
+      uint32_t physical_address_start, uint32_t length, bool exact_range);
 
   // Marks the range as containing GPU-generated data (such as resolves),
   // triggering modification callbacks, making it valid (so pages are not
@@ -98,9 +136,9 @@ class SharedMemory {
   void RangeWrittenByGpu(uint32_t start, uint32_t length);
 
  protected:
-  SharedMemory(memory::Memory& memory);
+  SharedMemory(rex::memory::Memory& memory);
   // Call in implementation-specific initialization.
-  void InitializeCommon();
+  bool InitializeCommon();
   void InitializeSparseHostGpuMemory(uint32_t granularity_log2);
   // Call last in implementation-specific shutdown, also callable from the
   // destructor.
@@ -112,7 +150,7 @@ class SharedMemory {
   static constexpr uint32_t kHostGpuMemoryOptimalSparseAllocationLog2 = 22;
   static_assert(kHostGpuMemoryOptimalSparseAllocationLog2 <= kBufferSizeLog2);
 
-  memory::Memory& memory() const { return memory_; }
+  rex::memory::Memory& memory() const { return memory_; }
 
   uint32_t page_size_log2() const { return page_size_log2_; }
 
@@ -140,7 +178,24 @@ class SharedMemory {
   // ascending address order, so front and back can be used to determine the
   // overall bounds of pages to be uploaded.
   virtual bool UploadRanges(
-      const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) = 0;
+      const std::pair<uint32_t, uint32_t>* upload_page_ranges,
+      uint32_t num_upload_ranges) = 0;
+
+  const std::vector<std::pair<uint32_t, uint32_t>>& trace_download_ranges() {
+    return trace_download_ranges_;
+  }
+  uint32_t trace_download_page_count() const {
+    return trace_download_page_count_;
+  }
+  // Fills trace_download_ranges() and trace_download_page_count() with
+  // GPU-written ranges that need to be downloaded, and also invalidates
+  // non-GPU-written ranges so only the needed data - not the all the collected
+  // data - will be written in the trace. trace_download_page_count() will be 0
+  // if nothing to download.
+  void PrepareForTraceDownload();
+  // Release memory used for trace download ranges, to be called after
+  // downloading or in cases when download is dropped.
+  void ReleaseTraceDownloadRanges();
 
   // Called at the end of every successful RequestRanges with the merged (start, length) byte
   // ranges, after any uploads for them were recorded.
@@ -149,7 +204,7 @@ class SharedMemory {
   }
 
  private:
-  memory::Memory& memory_;
+  rex::memory::Memory& memory_;
 
   // Log2 of invalidation granularity (the system page size, but the dependency
   // on it is not hard - the access callback takes a range as an argument, and
@@ -164,28 +219,60 @@ class SharedMemory {
 
   void* memory_invalidation_callback_handle_ = nullptr;
   void* memory_data_provider_handle_ = nullptr;
+  static constexpr unsigned int MAX_UPLOAD_RANGES = 65536;
 
   // Ranges that need to be uploaded, generated by GetRangesToUpload (a
   // persistently allocated vector).
-  std::vector<std::pair<uint32_t, uint32_t>> upload_ranges_;
+  // std::vector<std::pair<uint32_t, uint32_t>> upload_ranges_;
+  FixedVMemVector<MAX_UPLOAD_RANGES * sizeof(std::pair<uint32_t, uint32_t>)>
+      upload_ranges_;
 
   // Mutex between the guest memory subsystem and the command processor, to be
   // locked when checking or updating validity of pages/ranges and when firing
   // watches.
-  rex::thread::global_critical_region global_critical_region_;
+  static constexpr rex::global_critical_region global_critical_region_{};
 
   // ***************************************************************************
   // Things below should be fully protected by global_critical_region.
   // ***************************************************************************
 
-  // Pages whose contents in the buffer are in sync with guest memory.
-  std::vector<uint64_t> system_page_flags_valid_;
-  // Subset of valid pages containing data written by the GPU.
-  std::vector<uint64_t> system_page_flags_valid_and_gpu_written_;
-  uint32_t num_system_page_flags_ = 0;
+  struct SystemPageFlagsBlock {
+    // Whether each page is up to date in the GPU buffer.
+    uint64_t valid;
+    // Subset of valid pages - whether each page in the GPU buffer contains data
+    // that was written on the GPU, thus should not be invalidated spuriously.
+    uint64_t valid_and_gpu_written;
+  };
 
+  // chrispy: todo, systempageflagsblock should be 3 different arrays
+  //  Flags for each 64 system pages, interleaved as blocks, so bit scan can be
+  //  used to quickly extract ranges.
+  // std::vector<SystemPageFlagsBlock> system_page_flags_;
+
+  // Double-buffered valid flags for lock-free reads during frame-end clears.
+  // Writers still use the lock for read-modify-write operations, but readers
+  // can access the active buffer without blocking.
+  uint64_t* valid_buffer_a_ = nullptr;
+  uint64_t* valid_buffer_b_ = nullptr;
+  std::atomic<uint64_t*> active_valid_flags_{nullptr};
+  std::atomic<uint64_t*> staging_valid_flags_{nullptr};
+
+  // Dirty flag to track if GPU-written data has changed since last copy.
+  // Avoids unnecessary 16KB copies when no GPU writes occurred.
+  std::atomic<bool> gpu_written_data_dirty_{false};
+
+  // Dirty blocks bitmap for partial copying optimization.
+  // Each bit tracks a 64-entry chunk (512 bytes) of the 2048-entry array.
+  // Total: 32 chunks requiring 32 bits. When GPU writes are localized,
+  // this reduces copy overhead by 80-95%.
+  std::atomic<uint32_t> dirty_blocks_{0};
+  std::atomic<uint64_t> invalidation_epoch_{0};
+
+  uint64_t* system_page_flags_valid_and_gpu_written_ = nullptr;
+  unsigned num_system_page_flags_ = 0;
   static std::pair<uint32_t, uint32_t> MemoryInvalidationCallbackThunk(
-      void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range);
+      void* context_ptr, uint32_t physical_address_start, uint32_t length,
+      bool exact_range);
 
   struct GlobalWatch {
     GlobalWatchCallback callback;
@@ -225,7 +312,8 @@ class SharedMemory {
     };
   };
   static constexpr uint32_t kWatchBucketSizeLog2 = 22;
-  static constexpr uint32_t kWatchBucketCount = 1 << (kBufferSizeLog2 - kWatchBucketSizeLog2);
+  static constexpr uint32_t kWatchBucketCount =
+      1 << (kBufferSizeLog2 - kWatchBucketSizeLog2);
   WatchNode* watch_buckets_[kWatchBucketCount] = {};
   // Allocation from pools - taking new WatchRanges and WatchNodes from the free
   // list, and if there are none, creating a pool if the current one is fully
@@ -238,12 +326,21 @@ class SharedMemory {
   uint32_t watch_node_current_pool_allocated_ = 0;
   WatchRange* watch_range_first_free_ = nullptr;
   WatchNode* watch_node_first_free_ = nullptr;
+
+  // GPU-written memory downloading for traces. <Start address, length>.
+  std::vector<std::pair<uint32_t, uint32_t>> trace_download_ranges_;
+  uint32_t trace_download_page_count_ = 0;
+
   // Triggers the watches (global and per-range), removing triggered range
   // watches.
-  void FireWatches(uint32_t page_first, uint32_t page_last, bool invalidated_by_gpu);
+  void FireWatches(uint32_t page_first, uint32_t page_last,
+                   bool invalidated_by_gpu);
   // Unlinks and frees the range and its nodes. Call this in the global critical
   // region.
   void UnlinkWatchRange(WatchRange* range);
 };
 
-}  // namespace rex::graphics
+}  // namespace gpu
+}  // namespace xe
+
+#endif  // XENIA_GPU_SHARED_MEMORY_H_

@@ -1,4 +1,3 @@
-#pragma once
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -9,6 +8,9 @@
  *
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
+
+#ifndef XENIA_GPU_PRIMITIVE_PROCESSOR_H_
+#define XENIA_GPU_PRIMITIVE_PROCESSOR_H_
 
 #include <algorithm>
 #include <climits>
@@ -21,23 +23,25 @@
 #include <unordered_map>
 #include <utility>
 
-#include <rex/assert.h>
-#include <rex/cvar.h>
-#include <rex/graphics/pipeline/shader/shader.h>
-#include <rex/graphics/register_file.h>
-#include <rex/graphics/shared_memory.h>
-#include <rex/graphics/xenos.h>
-#include <rex/math.h>
-#include <rex/memory.h>
-#include <rex/platform.h>
+#include "rex/assert.h"
+#include "rex/cvar.h"
+#include "rex/math.h"
+#include "rex/thread/mutex.h"
+#include "rex/platform.h"
+#include "rex/graphics/register_file.h"
+#include "rex/graphics/pipeline/shader/shader.h"
+#include "rex/graphics/shared_memory.h"
+#include "rex/graphics/trace_writer.h"
+#include "rex/graphics/xenos.h"
+#include "rex/memory.h"
 
-#if REX_ARCH_AMD64
+#if XE_ARCH_AMD64
 // 128-bit SSSE3-level (SSE2+ for integer comparison, SSSE3 for pshufb) or AVX
 // (256-bit AVX only got integer operations such as comparison in AVX2, which is
 // above the minimum requirements of Xenia).
 #include <tmmintrin.h>
 #define XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE 16
-#elif REX_ARCH_ARM64
+#elif XE_ARCH_ARM64
 #include <arm_neon.h>
 #define XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE 16
 #else
@@ -49,9 +53,10 @@
 // therefore this is supposed to be checked only by the host if it supports
 // indirection. It's pretty pointless to do only half of this on backends that
 // support full 32-bit indices unconditionally.
-REXCVAR_DECLARE(bool, ignore_32bit_vertex_index_support);
+DECLARE_bool(ignore_32bit_vertex_index_support);
 
-namespace rex::graphics {
+namespace rex {
+namespace graphics {
 
 // Normalizes primitive data in various ways for use with Direct3D 12 and Vulkan
 // (down to its minimum requirements plus the portability subset).
@@ -132,8 +137,11 @@ class PrimitiveProcessor {
     xenos::TessellationMode tessellation_mode;
     // TODO(Triang3l): If important, split into the index count and the actual
     // index buffer size, using zeros for out-of-bounds indices.
-    uint32_t guest_draw_vertex_count;
     uint32_t host_draw_vertex_count;
+    // Guest-side draw index count before host primitive expansion / conversion.
+    // Needed by shader-side bounds checks when loading guest indices from
+    // shared memory (VS expansion, full 32-bit index loads).
+    uint32_t guest_draw_vertex_count;
     uint32_t line_loop_closing_index;
     ProcessedIndexBufferType index_buffer_type;
     uint32_t guest_index_base;
@@ -154,24 +162,37 @@ class PrimitiveProcessor {
 
   virtual ~PrimitiveProcessor();
 
-  bool AreFull32BitVertexIndicesUsed() const { return full_32bit_vertex_indices_used_; }
-  bool IsConvertingTriangleFansToLists() const { return convert_triangle_fans_to_lists_; }
-  bool IsConvertingLineLoopsToStrips() const { return convert_line_loops_to_strips_; }
+  bool AreFull32BitVertexIndicesUsed() const {
+    return full_32bit_vertex_indices_used_;
+  }
+  bool IsConvertingTriangleFansToLists() const {
+    return convert_triangle_fans_to_lists_;
+  }
+  bool IsConvertingLineLoopsToStrips() const {
+    return convert_line_loops_to_strips_;
+  }
   // Quad lists may be emulated as line lists with adjacency and a geometry
   // shader, but geometry shaders must be supported for this.
   bool IsConvertingQuadListsToTriangleLists() const {
     return convert_quad_lists_to_triangle_lists_;
   }
-  bool IsExpandingPointSpritesInVS() const { return expand_point_sprites_in_vs_; }
-  bool IsExpandingRectangleListsInVS() const { return expand_rectangle_lists_in_vs_; }
+  bool IsConvertingTriangleStripsToLists() const {
+    return convert_triangle_strips_to_lists_;
+  }
+  bool IsExpandingPointSpritesInVS() const {
+    return expand_point_sprites_in_vs_;
+  }
+  bool IsExpandingRectangleListsInVS() const {
+    return expand_rectangle_lists_in_vs_;
+  }
 
   // Submission must be open to call (may request the index buffer in the shared
   // memory).
   bool Process(ProcessingResult& result_out);
 
   // Invalidates the cache within the range.
-  std::pair<uint32_t, uint32_t> MemoryInvalidationCallback(uint32_t physical_address_start,
-                                                           uint32_t length, bool exact_range);
+  std::pair<uint32_t, uint32_t> MemoryInvalidationCallback(
+      uint32_t physical_address_start, uint32_t length, bool exact_range);
 
  protected:
   // For host-side index buffer creation, the biggest possibly needed contiguous
@@ -193,11 +214,15 @@ class PrimitiveProcessor {
   // Also include padding for co-alignment of the source and the destination for
   // SIMD.
   static constexpr uint32_t kMinRequiredConvertedIndexBufferSize =
-      sizeof(uint32_t) * (UINT16_MAX - 2) * 3 * +XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE;
+      sizeof(uint32_t) * (UINT16_MAX - 2) * 3 *
+      +XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE;
 
-  PrimitiveProcessor(const RegisterFile& register_file, memory::Memory& memory,
-                     SharedMemory& shared_memory)
-      : register_file_(register_file), memory_(memory), shared_memory_(shared_memory) {}
+  PrimitiveProcessor(const RegisterFile& register_file, rex::memory::Memory& memory,
+                     TraceWriter& trace_writer, SharedMemory& shared_memory)
+      : register_file_(register_file),
+        memory_(memory),
+        trace_writer_(trace_writer),
+        shared_memory_(shared_memory) {}
 
   // Call from the backend-specific initialization function.
   // - full_32bit_vertex_indices_supported:
@@ -237,8 +262,9 @@ class PrimitiveProcessor {
   //     emulation. Overrides do not apply to these as hosts are not required to
   //     support the fallback paths since they require different vertex shader
   //     structure (for the fallback HostVertexShaderTypes).
-  bool InitializeCommon(bool full_32bit_vertex_indices_supported, bool triangle_fans_supported,
-                        bool line_loops_supported, bool quad_lists_supported,
+  bool InitializeCommon(bool full_32bit_vertex_indices_supported,
+                        bool triangle_fans_supported, bool line_loops_supported,
+                        bool quad_lists_supported,
                         bool point_sprites_supported_without_vs_expansion,
                         bool rectangle_lists_supported_without_vs_expansion);
   // If any primitive type conversion is needed for auto-indexed draws, called
@@ -247,8 +273,8 @@ class PrimitiveProcessor {
   // primitive type remapping. The backend must allocate a 4-byte-aligned buffer
   // with `size_bytes` and call fill_callback for its mapping if creation has
   // been successful.
-  virtual bool InitializeBuiltinIndexBuffer(size_t size_bytes,
-                                            std::function<void(void*)> fill_callback) = 0;
+  virtual bool InitializeBuiltinIndexBuffer(
+      size_t size_bytes, std::function<void(void*)> fill_callback) = 0;
   // Call last in implementation-specific shutdown, also callable from the
   // destructor.
   void ShutdownCommon();
@@ -265,7 +291,8 @@ class PrimitiveProcessor {
 
   // The destination allocation must have XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
   // excess bytes.
-  static ptrdiff_t GetSimdCoalignmentOffset(const void* host_index_ptr, uint32_t guest_index_base) {
+  static ptrdiff_t GetSimdCoalignmentOffset(const void* host_index_ptr,
+                                            uint32_t guest_index_base) {
 #if XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
     // Always moving the host pointer only forward into the allocation padding
     // space of XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE bytes. Without relying on
@@ -281,8 +308,9 @@ class PrimitiveProcessor {
     // }
     // return XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE -
     //        (host_subalignment - guest_subalignment);
-    return ptrdiff_t((guest_index_base - reinterpret_cast<uintptr_t>(host_index_ptr)) &
-                     (XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE - 1));
+    return ptrdiff_t(
+        (guest_index_base - reinterpret_cast<uintptr_t>(host_index_ptr)) &
+        (XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE - 1));
 #else
     return 0;
 #endif
@@ -297,14 +325,27 @@ class PrimitiveProcessor {
       xenos::IndexFormat format, uint32_t index_count, bool coalign_for_simd,
       uint32_t coalignment_original_address, size_t& backend_handle_out) = 0;
 
+ protected:
+  virtual bool RequestGuestIndexSharedMemoryRange(
+      uint32_t guest_index_base, uint32_t guest_index_buffer_needed_bytes,
+      ProcessedIndexBufferType index_buffer_type) {
+    (void)index_buffer_type;
+    return shared_memory_.RequestRange(guest_index_base,
+                                       guest_index_buffer_needed_bytes);
+  }
+
  private:
 #if XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
-#if REX_ARCH_AMD64
+#if XE_ARCH_AMD64
   // SSSE3 or AVX.
   using SimdVectorU16 = __m128i;
   using SimdVectorU32 = __m128i;
-  static SimdVectorU16 ReplicateU16(uint16_t value) { return _mm_set1_epi16(int16_t(value)); }
-  static SimdVectorU32 ReplicateU32(uint32_t value) { return _mm_set1_epi32(int32_t(value)); }
+  static SimdVectorU16 ReplicateU16(uint16_t value) {
+    return _mm_set1_epi16(int16_t(value));
+  }
+  static SimdVectorU32 ReplicateU32(uint32_t value) {
+    return _mm_set1_epi32(int32_t(value));
+  }
   static SimdVectorU16 LoadAlignedVectorU16(const uint16_t* source) {
     return _mm_load_si128(reinterpret_cast<const __m128i*>(source));
   }
@@ -317,26 +358,30 @@ class PrimitiveProcessor {
   static void StoreUnalignedVectorU32(uint32_t* dest, SimdVectorU32 source) {
     _mm_storeu_si128(reinterpret_cast<__m128i*>(dest), source);
   }
-#elif REX_ARCH_ARM64
+#elif XE_ARCH_ARM64
   // NEON.
   using SimdVectorU16 = uint16x8_t;
   using SimdVectorU32 = uint32x4_t;
-  static SimdVectorU16 ReplicateU16(uint16_t value) { return vdupq_n_u16(value); }
-  static SimdVectorU32 ReplicateU32(uint32_t value) { return vdupq_n_u32(value); }
+  static SimdVectorU16 ReplicateU16(uint16_t value) {
+    return vdupq_n_u16(value);
+  }
+  static SimdVectorU32 ReplicateU32(uint32_t value) {
+    return vdupq_n_u32(value);
+  }
   static SimdVectorU16 LoadAlignedVectorU16(const uint16_t* source) {
-#if REX_COMPILER_MSVC
+#if XE_COMPILER_MSVC
     return vld1q_u16_ex(source, sizeof(uint16x8_t) * CHAR_BIT);
 #else
-    return vld1q_u16(
-        reinterpret_cast<const uint16_t*>(__builtin_assume_aligned(source, sizeof(uint16x8_t))));
+    return vld1q_u16(reinterpret_cast<const uint16_t*>(
+        __builtin_assume_aligned(source, sizeof(uint16x8_t))));
 #endif
   }
   static SimdVectorU32 LoadAlignedVectorU32(const uint32_t* source) {
-#if REX_COMPILER_MSVC
+#if XE_COMPILER_MSVC
     return vld1q_u32_ex(source, sizeof(uint16x8_t) * CHAR_BIT);
 #else
-    return vld1q_u32(
-        reinterpret_cast<const uint32_t*>(__builtin_assume_aligned(source, sizeof(uint32x4_t))));
+    return vld1q_u32(reinterpret_cast<const uint32_t*>(
+        __builtin_assume_aligned(source, sizeof(uint32x4_t))));
 #endif
   }
   static void StoreUnalignedVectorU16(uint16_t* dest, SimdVectorU16 source) {
@@ -348,14 +393,18 @@ class PrimitiveProcessor {
 #else
 #error SIMD vector types and constant loads not specified.
 #endif  // XE_ARCH
-  static_assert(sizeof(SimdVectorU16) == XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE,
-                "XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE must reflect the vector size "
-                "actually used");
-  static_assert(sizeof(SimdVectorU32) == XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE,
-                "XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE must reflect the vector size "
-                "actually used");
-  static constexpr uint32_t kSimdVectorU16Elements = sizeof(SimdVectorU16) / sizeof(uint16_t);
-  static constexpr uint32_t kSimdVectorU32Elements = sizeof(SimdVectorU32) / sizeof(uint32_t);
+  static_assert(
+      sizeof(SimdVectorU16) == XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE,
+      "XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE must reflect the vector size "
+      "actually used");
+  static_assert(
+      sizeof(SimdVectorU32) == XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE,
+      "XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE must reflect the vector size "
+      "actually used");
+  static constexpr uint32_t kSimdVectorU16Elements =
+      sizeof(SimdVectorU16) / sizeof(uint16_t);
+  static constexpr uint32_t kSimdVectorU32Elements =
+      sizeof(SimdVectorU32) / sizeof(uint32_t);
 #endif  // XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
 
   static bool IsResetUsed(const uint16_t* source, uint32_t count,
@@ -364,14 +413,17 @@ class PrimitiveProcessor {
                                       uint16_t reset_index_guest_endian,
                                       bool& is_reset_index_used_out,
                                       bool& is_ffff_used_as_vertex_index_out);
-  static bool IsResetUsed(const uint32_t* source, uint32_t count, uint32_t reset_index_guest_endian,
+  static bool IsResetUsed(const uint32_t* source, uint32_t count,
+                          uint32_t reset_index_guest_endian,
                           uint32_t low_bits_mask_guest_endian);
-  static void ReplaceResetIndex16To16(uint16_t* dest, const uint16_t* source, uint32_t count,
+  static void ReplaceResetIndex16To16(uint16_t* dest, const uint16_t* source,
+                                      uint32_t count,
                                       uint16_t reset_index_guest_endian);
   // For use when the reset index is not 0xFFFF, and 0xFFFF is also used as a
   // valid index - keeps 0xFFFF as a real index and replaces the reset index
   // with 0xFFFFFFFF instead.
-  static void ReplaceResetIndex16To24(uint32_t* dest, const uint16_t* source, uint32_t count,
+  static void ReplaceResetIndex16To24(uint32_t* dest, const uint16_t* source,
+                                      uint32_t count,
                                       uint16_t reset_index_guest_endian);
   // The reset index and the low 24 bits mask are taken explicitly because this
   // function may be used two ways:
@@ -385,29 +437,35 @@ class PrimitiveProcessor {
   //   the PowerPC's big endianness to the host GPU little endianness that we
   //   assume, which matches the Xenos's little endianness.
   template <xenos::Endian HostSwap>
-  static void ReplaceResetIndex32To24(uint32_t* dest, const uint32_t* source, uint32_t count,
+  static void ReplaceResetIndex32To24(uint32_t* dest, const uint32_t* source,
+                                      uint32_t count,
                                       uint32_t reset_index_guest_endian,
                                       uint32_t low_bits_mask_guest_endian) {
     // The Xbox 360's GPU only uses the low 24 bits of the index - masking.
 #if XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
-    while (count &&
-           (reinterpret_cast<uintptr_t>(source) & (XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE - 1))) {
+    while (count && (reinterpret_cast<uintptr_t>(source) &
+                     (XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE - 1))) {
       --count;
       uint32_t index = *(source++) & low_bits_mask_guest_endian;
-      *(dest++) = index != reset_index_guest_endian ? xenos::GpuSwap(index, HostSwap) : UINT32_MAX;
+      *(dest++) = index != reset_index_guest_endian
+                      ? xenos::GpuSwapInline(index, HostSwap)
+                      : UINT32_MAX;
     }
     if (count >= kSimdVectorU32Elements) {
-      SimdVectorU32 reset_index_guest_endian_simd = ReplicateU32(reset_index_guest_endian);
-      SimdVectorU32 low_bits_mask_guest_endian_simd = ReplicateU32(low_bits_mask_guest_endian);
-#if REX_ARCH_AMD64
+      SimdVectorU32 reset_index_guest_endian_simd =
+          ReplicateU32(reset_index_guest_endian);
+      SimdVectorU32 low_bits_mask_guest_endian_simd =
+          ReplicateU32(low_bits_mask_guest_endian);
+#if XE_ARCH_AMD64
       __m128i host_swap_shuffle;
       if constexpr (HostSwap != xenos::Endian::kNone) {
-        host_swap_shuffle = _mm_set_epi32(int32_t(xenos::GpuSwap(uint32_t(0x0F0E0D0C), HostSwap)),
-                                          int32_t(xenos::GpuSwap(uint32_t(0x0B0A0908), HostSwap)),
-                                          int32_t(xenos::GpuSwap(uint32_t(0x07060504), HostSwap)),
-                                          int32_t(xenos::GpuSwap(uint32_t(0x03020100), HostSwap)));
+        host_swap_shuffle = _mm_set_epi32(
+            int32_t(xenos::GpuSwapInline(uint32_t(0x0F0E0D0C), HostSwap)),
+            int32_t(xenos::GpuSwapInline(uint32_t(0x0B0A0908), HostSwap)),
+            int32_t(xenos::GpuSwapInline(uint32_t(0x07060504), HostSwap)),
+            int32_t(xenos::GpuSwapInline(uint32_t(0x03020100), HostSwap)));
       }
-#endif  // REX_ARCH_AMD64
+#endif  // XE_ARCH_AMD64
       while (count >= kSimdVectorU32Elements) {
         count -= kSimdVectorU32Elements;
         // Comparison produces 0 or 0xFFFF on AVX and Neon - we need 0xFFFF as
@@ -416,22 +474,28 @@ class PrimitiveProcessor {
         SimdVectorU32 source_simd = LoadAlignedVectorU32(source);
         source += kSimdVectorU32Elements;
         SimdVectorU32 result_simd;
-#if REX_ARCH_AMD64
-        source_simd = _mm_and_si128(source_simd, low_bits_mask_guest_endian_simd);
-        result_simd =
-            _mm_or_si128(source_simd, _mm_cmpeq_epi32(source_simd, reset_index_guest_endian_simd));
+#if XE_ARCH_AMD64
+        source_simd =
+            _mm_and_si128(source_simd, low_bits_mask_guest_endian_simd);
+        result_simd = _mm_or_si128(
+            source_simd,
+            _mm_cmpeq_epi32(source_simd, reset_index_guest_endian_simd));
         if constexpr (HostSwap != xenos::Endian::kNone) {
           result_simd = _mm_shuffle_epi8(result_simd, host_swap_shuffle);
         }
-#elif REX_ARCH_ARM64
+#elif XE_ARCH_ARM64
         source_simd = vandq_u32(source_simd, low_bits_mask_guest_endian_simd);
-        result_simd = vorrq_u32(source_simd, vceqq_u32(source_simd, reset_index_guest_endian_simd));
+        result_simd = vorrq_u32(
+            source_simd, vceqq_u32(source_simd, reset_index_guest_endian_simd));
         if constexpr (HostSwap == xenos::Endian::k8in16) {
-          result_simd = vreinterpretq_u32_u8(vrev16q_u8(vreinterpretq_u8_u32(result_simd)));
+          result_simd = vreinterpretq_u32_u8(
+              vrev16q_u8(vreinterpretq_u8_u32(result_simd)));
         } else if constexpr (HostSwap == xenos::Endian::k8in32) {
-          result_simd = vreinterpretq_u32_u8(vrev32q_u8(vreinterpretq_u8_u32(result_simd)));
+          result_simd = vreinterpretq_u32_u8(
+              vrev32q_u8(vreinterpretq_u8_u32(result_simd)));
         } else if constexpr (HostSwap == xenos::Endian::k16in32) {
-          result_simd = vreinterpretq_u32_u16(vrev32q_u16(vreinterpretq_u16_u32(result_simd)));
+          result_simd = vreinterpretq_u32_u16(
+              vrev32q_u16(vreinterpretq_u16_u32(result_simd)));
         }
 #else
 #error SIMD ReplaceResetIndex32To24 not implemented.
@@ -443,7 +507,9 @@ class PrimitiveProcessor {
 #endif  // XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
     while (count--) {
       uint32_t index = *(source++) & low_bits_mask_guest_endian;
-      *(dest++) = index != reset_index_guest_endian ? xenos::GpuSwap(index, HostSwap) : UINT32_MAX;
+      *(dest++) = index != reset_index_guest_endian
+                      ? xenos::GpuSwapInline(index, HostSwap)
+                      : UINT32_MAX;
     }
   }
 
@@ -456,25 +522,31 @@ class PrimitiveProcessor {
     uint32_t operator()(uint32_t index) const { return index; }
   };
   struct To24NonSwappingIndexTransform {
-    uint32_t operator()(uint32_t index) const { return index & xenos::kVertexIndexMask; }
+    uint32_t operator()(uint32_t index) const {
+      return index & xenos::kVertexIndexMask;
+    }
   };
   struct To24Swapping8In16IndexTransform {
     uint32_t operator()(uint32_t index) const {
-      return xenos::GpuSwap(index, xenos::Endian::k8in16) & xenos::kVertexIndexMask;
+      return xenos::GpuSwapInline(index, xenos::Endian::k8in16) &
+             xenos::kVertexIndexMask;
     }
   };
   struct To24Swapping8In32IndexTransform {
     uint32_t operator()(uint32_t index) const {
-      return xenos::GpuSwap(index, xenos::Endian::k8in32) & xenos::kVertexIndexMask;
+      return xenos::GpuSwapInline(index, xenos::Endian::k8in32) &
+             xenos::kVertexIndexMask;
     }
   };
   struct To24Swapping16In32IndexTransform {
     uint32_t operator()(uint32_t index) const {
-      return xenos::GpuSwap(index, xenos::Endian::k16in32) & xenos::kVertexIndexMask;
+      return xenos::GpuSwapInline(index, xenos::Endian::k16in32) &
+             xenos::kVertexIndexMask;
     }
   };
 
-  static constexpr uint32_t GetTwoTriangleStripIndexCount(uint32_t strip_count) {
+  static constexpr uint32_t GetTwoTriangleStripIndexCount(
+      uint32_t strip_count) {
     // 4 vertices per strip, and primitive restarts between strips.
     return 4 * strip_count + (std::max(strip_count, UINT32_C(1)) - 1);
   }
@@ -490,11 +562,13 @@ class PrimitiveProcessor {
   // Triangle fans as triangle lists.
   // Ordered as (v1, v2, v0), (v2, v3, v0) in Direct3D.
   // https://docs.microsoft.com/en-us/windows/desktop/direct3d9/triangle-fans
-  static constexpr uint32_t GetTriangleFanListIndexCount(uint32_t fan_index_count) {
+  static constexpr uint32_t GetTriangleFanListIndexCount(
+      uint32_t fan_index_count) {
     return fan_index_count > 2 ? (fan_index_count - 2) * 3 : 0;
   }
   template <typename Index, typename IndexTransform>
-  static void TriangleFanToList(Index* dest, const Index* source, uint32_t source_index_count,
+  static void TriangleFanToList(Index* dest, const Index* source,
+                                uint32_t source_index_count,
                                 const IndexTransform& index_transform) {
     if (source_index_count <= 2) {
       // To match GetTriangleFanListIndexCount.
@@ -511,7 +585,8 @@ class PrimitiveProcessor {
     }
   }
 
-  static constexpr uint32_t GetLineLoopStripIndexCount(uint32_t loop_index_count) {
+  static constexpr uint32_t GetLineLoopStripIndexCount(
+      uint32_t loop_index_count) {
     // Even if 2 vertices are supplied, two lines are still drawn between them.
     // https://www.khronos.org/opengl/wiki/Primitive
     // "You get n lines for n input vertices"
@@ -519,7 +594,8 @@ class PrimitiveProcessor {
     return loop_index_count > 1 ? loop_index_count + 1 : 0;
   }
   template <typename Index, typename IndexTransform>
-  static void LineLoopToStrip(Index* dest, const Index* source, uint32_t source_index_count,
+  static void LineLoopToStrip(Index* dest, const Index* source,
+                              uint32_t source_index_count,
                               const IndexTransform& index_transform) {
     if (source_index_count <= 1) {
       // To match GetLineLoopStripIndexCount.
@@ -532,18 +608,22 @@ class PrimitiveProcessor {
     }
     dest[source_index_count] = index_first;
   }
-  static void LineLoopToStrip(uint16_t* dest, const uint16_t* source, uint32_t source_index_count,
+  static void LineLoopToStrip(uint16_t* dest, const uint16_t* source,
+                              uint32_t source_index_count,
                               const PassthroughIndexTransform& index_transform);
-  static void LineLoopToStrip(uint32_t* dest, const uint32_t* source, uint32_t source_index_count,
+  static void LineLoopToStrip(uint32_t* dest, const uint32_t* source,
+                              uint32_t source_index_count,
                               const PassthroughIndexTransform& index_transform);
 
   // Quad list test cases:
   // - 4D5307E6 - main menu - flying dust on the road - no index buffer.
-  static constexpr uint32_t GetQuadListTriangleListIndexCount(uint32_t quad_list_index_count) {
+  static constexpr uint32_t GetQuadListTriangleListIndexCount(
+      uint32_t quad_list_index_count) {
     return (quad_list_index_count / 4) * 6;
   }
   template <typename Index, typename IndexTransform>
-  static void QuadListToTriangleList(Index* dest, const Index* source, uint32_t source_index_count,
+  static void QuadListToTriangleList(Index* dest, const Index* source,
+                                     uint32_t source_index_count,
                                      const IndexTransform& index_transform) {
     uint32_t quad_count = source_index_count / 4;
     for (uint32_t i = 0; i < quad_count; ++i) {
@@ -558,6 +638,43 @@ class PrimitiveProcessor {
       *(dest++) = common_index_0;
       *(dest++) = common_index_2;
       *(dest++) = index_transform(*(source++));
+    }
+  }
+
+  // Triangle strip to triangle list conversion.
+  // A strip with N vertices produces (N-2) triangles, each needing 3 indices.
+  static constexpr uint32_t GetTriangleStripListIndexCount(
+      uint32_t strip_index_count) {
+    return strip_index_count > 2 ? (strip_index_count - 2) * 3 : 0;
+  }
+  template <typename Index, typename IndexTransform>
+  static void TriangleStripToList(Index* dest, const Index* source,
+                                  uint32_t source_index_count,
+                                  const IndexTransform& index_transform) {
+    if (source_index_count <= 2) {
+      // To match GetTriangleStripListIndexCount.
+      return;
+    }
+    // For triangle strips, the winding order alternates for each triangle.
+    // Even triangles: v0, v1, v2
+    // Odd triangles: v1, v0, v2 (swapped to maintain consistent winding)
+    Index v0 = index_transform(source[0]);
+    Index v1 = index_transform(source[1]);
+    for (uint32_t i = 2; i < source_index_count; ++i) {
+      Index v2 = index_transform(source[i]);
+      if ((i & 1) == 0) {
+        // Even triangle (0, 2, 4, ...): v0, v1, v2
+        *(dest++) = v0;
+        *(dest++) = v1;
+        *(dest++) = v2;
+      } else {
+        // Odd triangle (1, 3, 5, ...): v1, v0, v2 to maintain winding
+        *(dest++) = v1;
+        *(dest++) = v0;
+        *(dest++) = v2;
+      }
+      v0 = v1;
+      v1 = v2;
     }
   }
 
@@ -579,42 +696,55 @@ class PrimitiveProcessor {
   };
   static uint32_t GetMultiPrimitiveHostIndexCountAndRanges(
       std::function<uint32_t(uint32_t)> single_primitive_guest_to_host_count,
-      const uint16_t* source, uint32_t source_index_count, uint16_t reset_index_guest_endian,
+      const uint16_t* source, uint32_t source_index_count,
+      uint16_t reset_index_guest_endian,
       std::deque<SinglePrimitiveRange>& ranges_append_out);
   static uint32_t GetMultiPrimitiveHostIndexCountAndRanges(
       std::function<uint32_t(uint32_t)> single_primitive_guest_to_host_count,
-      const uint32_t* source, uint32_t source_index_count, uint32_t reset_index_guest_endian,
-      uint32_t low_bits_mask_guest_endian, std::deque<SinglePrimitiveRange>& ranges_append_out);
+      const uint32_t* source, uint32_t source_index_count,
+      uint32_t reset_index_guest_endian, uint32_t low_bits_mask_guest_endian,
+      std::deque<SinglePrimitiveRange>& ranges_append_out);
 
-  template <typename Index, typename IndexTransform, typename PrimitiveRangeIterator>
-  static void ConvertSinglePrimitiveRanges(Index* dest, const Index* source,
-                                           xenos::PrimitiveType source_primitive_type,
-                                           const IndexTransform& index_transform,
-                                           PrimitiveRangeIterator ranges_beginning,
-                                           PrimitiveRangeIterator ranges_end) {
+  template <typename Index, typename IndexTransform,
+            typename PrimitiveRangeIterator>
+  static void ConvertSinglePrimitiveRanges(
+      Index* dest, const Index* source,
+      xenos::PrimitiveType source_primitive_type,
+      const IndexTransform& index_transform,
+      PrimitiveRangeIterator ranges_beginning,
+      PrimitiveRangeIterator ranges_end) {
     Index* dest_write_ptr = dest;
     switch (source_primitive_type) {
       case xenos::PrimitiveType::kTriangleFan:
-        for (PrimitiveRangeIterator range_it = ranges_beginning; range_it != ranges_end;
-             ++range_it) {
+        for (PrimitiveRangeIterator range_it = ranges_beginning;
+             range_it != ranges_end; ++range_it) {
           TriangleFanToList(dest_write_ptr, source + range_it->guest_offset,
                             range_it->guest_index_count, index_transform);
           dest_write_ptr += range_it->host_index_count;
         }
         break;
       case xenos::PrimitiveType::kLineLoop:
-        for (PrimitiveRangeIterator range_it = ranges_beginning; range_it != ranges_end;
-             ++range_it) {
+        for (PrimitiveRangeIterator range_it = ranges_beginning;
+             range_it != ranges_end; ++range_it) {
           LineLoopToStrip(dest_write_ptr, source + range_it->guest_offset,
                           range_it->guest_index_count, index_transform);
           dest_write_ptr += range_it->host_index_count;
         }
         break;
       case xenos::PrimitiveType::kQuadList:
-        for (PrimitiveRangeIterator range_it = ranges_beginning; range_it != ranges_end;
-             ++range_it) {
-          QuadListToTriangleList(dest_write_ptr, source + range_it->guest_offset,
+        for (PrimitiveRangeIterator range_it = ranges_beginning;
+             range_it != ranges_end; ++range_it) {
+          QuadListToTriangleList(dest_write_ptr,
+                                 source + range_it->guest_offset,
                                  range_it->guest_index_count, index_transform);
+          dest_write_ptr += range_it->host_index_count;
+        }
+        break;
+      case xenos::PrimitiveType::kTriangleStrip:
+        for (PrimitiveRangeIterator range_it = ranges_beginning;
+             range_it != ranges_end; ++range_it) {
+          TriangleStripToList(dest_write_ptr, source + range_it->guest_offset,
+                              range_it->guest_index_count, index_transform);
           dest_write_ptr += range_it->host_index_count;
         }
         break;
@@ -624,13 +754,15 @@ class PrimitiveProcessor {
   }
 
   const RegisterFile& register_file_;
-  memory::Memory& memory_;
+  rex::memory::Memory& memory_;
+  TraceWriter& trace_writer_;
   SharedMemory& shared_memory_;
 
   bool full_32bit_vertex_indices_used_ = false;
   bool convert_triangle_fans_to_lists_ = false;
   bool convert_line_loops_to_strips_ = false;
   bool convert_quad_lists_to_triangle_lists_ = false;
+  bool convert_triangle_strips_to_lists_ = false;
   bool expand_point_sprites_in_vs_ = false;
   bool expand_rectangle_lists_in_vs_ = false;
 
@@ -638,6 +770,7 @@ class PrimitiveProcessor {
   size_t builtin_ib_offset_two_triangle_strips_ = SIZE_MAX;
   size_t builtin_ib_offset_triangle_fans_to_lists_ = SIZE_MAX;
   size_t builtin_ib_offset_quad_lists_to_triangle_lists_ = SIZE_MAX;
+  size_t builtin_ib_offset_triangle_strips_to_lists_ = SIZE_MAX;
 
   std::deque<SinglePrimitiveRange> single_primitive_ranges_;
 
@@ -647,9 +780,11 @@ class PrimitiveProcessor {
   // is slightly smaller than 256 KB, thus cache entries need store links within
   // at most 2 buckets.
   static constexpr uint32_t kCacheBucketSizeBytesLog2 = 18;
-  static constexpr uint32_t kCacheBucketSizeBytes = uint32_t(1) << kCacheBucketSizeBytesLog2;
+  static constexpr uint32_t kCacheBucketSizeBytes =
+      uint32_t(1) << kCacheBucketSizeBytesLog2;
   static constexpr uint32_t kCacheBucketCount =
-      rex::align(SharedMemory::kBufferSize, kCacheBucketSizeBytes) / kCacheBucketSizeBytes;
+      rex::align(SharedMemory::kBufferSize, kCacheBucketSizeBytes) /
+      kCacheBucketSizeBytes;
 
   union CacheKey {
     uint64_t key;
@@ -661,17 +796,13 @@ class PrimitiveProcessor {
       uint32_t is_reset_enabled : 1;  // 53
       // kNone if not changing the type (like only processing the reset index).
       xenos::PrimitiveType conversion_guest_primitive_type : 6;  // 59
-      // If set, entry is for forced 32-bit guest DMA to host-endian 24-bit
-      // index conversion used by non-kVertex host vertex shader types on
-      // backends not supporting full 32-bit index fetch in this path.
-      uint32_t non_vertex_32bit_dma_to_24bit : 1;  // 60
     };
 
     CacheKey() : key(0) { static_assert_size(*this, sizeof(key)); }
-    CacheKey(uint32_t base, uint32_t count, xenos::IndexFormat format, xenos::Endian endian,
-             bool is_reset_enabled,
-             xenos::PrimitiveType conversion_guest_primitive_type = xenos::PrimitiveType::kNone,
-             bool non_vertex_32bit_dma_to_24bit = false) {
+    CacheKey(uint32_t base, uint32_t count, xenos::IndexFormat format,
+             xenos::Endian endian, bool is_reset_enabled,
+             xenos::PrimitiveType conversion_guest_primitive_type =
+                 xenos::PrimitiveType::kNone) {
       // Clear unused bits, then set each field explicitly, not via the
       // initializer list (which causes `uint64_t key = 0;` to be ignored, and
       // also can't contain initializers for aliasing union members).
@@ -682,16 +813,20 @@ class PrimitiveProcessor {
       this->endian = endian;
       this->is_reset_enabled = is_reset_enabled;
       this->conversion_guest_primitive_type = conversion_guest_primitive_type;
-      this->non_vertex_32bit_dma_to_24bit = non_vertex_32bit_dma_to_24bit;
     }
 
     struct Hasher {
-      size_t operator()(const CacheKey& key) const { return std::hash<uint64_t>{}(key.key); }
+      size_t operator()(const CacheKey& key) const {
+        return std::hash<uint64_t>{}(key.key);
+      }
     };
-    bool operator==(const CacheKey& other_key) const { return key == other_key.key; }
+    bool operator==(const CacheKey& other_key) const {
+      return key == other_key.key;
+    }
 
     uint32_t GetSizeBytes() const {
-      return count * (format == xenos::IndexFormat::kInt16 ? sizeof(uint16_t) : sizeof(uint32_t));
+      return count * (format == xenos::IndexFormat::kInt16 ? sizeof(uint16_t)
+                                                           : sizeof(uint32_t));
     }
   };
 
@@ -700,6 +835,7 @@ class PrimitiveProcessor {
   // the reset index).
   struct CachedResult {
     uint32_t host_draw_vertex_count;
+    uint32_t guest_draw_vertex_count;
     ProcessedIndexBufferType index_buffer_type;
     xenos::IndexFormat host_index_format;
     xenos::Endian host_shader_index_endian;
@@ -708,11 +844,13 @@ class PrimitiveProcessor {
   };
 
   struct CacheEntry {
-    static_assert(UINT16_MAX * sizeof(uint32_t) <= (size_t(1) << kCacheBucketSizeBytesLog2),
-                  "Assuming that primitive processor cache entries need to store to the "
-                  "previous and to the next entries only within up to 2 buckets, so the "
-                  "size of the cache buckets must be not smaller than the maximum guest "
-                  "index buffer size");
+    static_assert(
+        UINT16_MAX * sizeof(uint32_t) <=
+            (size_t(1) << kCacheBucketSizeBytesLog2),
+        "Assuming that primitive processor cache entries need to store to the "
+        "previous and to the next entries only within up to 2 buckets, so the "
+        "size of the cache buckets must be not smaller than the maximum guest "
+        "index buffer size");
     union {
       size_t free_next;
       size_t buckets_prev[2];
@@ -721,9 +859,11 @@ class PrimitiveProcessor {
     CacheKey key;
     CachedResult result;
     static uint32_t GetBucketCount(CacheKey key) {
-      uint32_t count = ((key.base + (key.GetSizeBytes() - 1)) >> kCacheBucketSizeBytesLog2) -
-                       (key.base >> kCacheBucketSizeBytesLog2) + 1;
-      assert_true(count <= 2, "Cache entries only store list links within two buckets");
+      uint32_t count =
+          ((key.base + (key.GetSizeBytes() - 1)) >> kCacheBucketSizeBytesLog2) -
+          (key.base >> kCacheBucketSizeBytesLog2) + 1;
+      assert_true(count <= 2,
+                  "Cache entries only store list links within two buckets");
       return count;
     }
     uint32_t GetBucketCount() const { return GetBucketCount(key); }
@@ -785,7 +925,7 @@ class PrimitiveProcessor {
 
   void* memory_invalidation_callback_handle_ = nullptr;
 
-  std::mutex cache_mutex_;
+  rex::global_critical_region global_critical_region_;
   // Modified by both the processor and the invalidation callback.
   std::unordered_map<CacheKey, size_t, CacheKey::Hasher> cache_map_;
   // Conversions with primitive restart also depend on the value of their restart index.
@@ -806,14 +946,16 @@ class PrimitiveProcessor {
   // For even faster handling of memory invalidation - whether any bit is set in
   // each cache_buckets_non_empty_l1_.
   // Modified by both the processor and the invalidation callback.
-  uint64_t cache_buckets_non_empty_l2_[(kCacheBucketCount + (64 * 64 - 1)) / (64 * 64)] = {};
+  uint64_t cache_buckets_non_empty_l2_[(kCacheBucketCount + (64 * 64 - 1)) /
+                                       (64 * 64)] = {};
   // Must be called in a global critical region.
   void UpdateCacheBucketsNonEmptyL2(
       uint32_t bucket_index_div_64,
-      [[maybe_unused]] const std::lock_guard<std::mutex>& cache_lock) {
+      [[maybe_unused]] const global_unique_lock_type& global_lock) {
     uint64_t& cache_buckets_non_empty_l2_ref =
         cache_buckets_non_empty_l2_[bucket_index_div_64 >> 6];
-    uint64_t cache_buckets_non_empty_l2_bit = uint64_t(1) << (bucket_index_div_64 & 63);
+    uint64_t cache_buckets_non_empty_l2_bit = uint64_t(1)
+                                              << (bucket_index_div_64 & 63);
     if (cache_buckets_non_empty_l1_[bucket_index_div_64]) {
       cache_buckets_non_empty_l2_ref |= cache_buckets_non_empty_l2_bit;
     } else {
@@ -827,7 +969,11 @@ class PrimitiveProcessor {
   // Modified by both the processor and the invalidation callback.
   size_t cache_bucket_first_entries_[kCacheBucketCount];
   static std::pair<uint32_t, uint32_t> MemoryInvalidationCallbackThunk(
-      void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range);
+      void* context_ptr, uint32_t physical_address_start, uint32_t length,
+      bool exact_range);
 };
 
-}  // namespace rex::graphics
+}  // namespace gpu
+}  // namespace xe
+
+#endif  // XENIA_GPU_PRIMITIVE_PROCESSOR_H_

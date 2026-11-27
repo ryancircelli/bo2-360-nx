@@ -225,6 +225,16 @@ class CommandProcessor {
 
   uint32_t ExecutePrimaryBuffer(uint32_t start_index, uint32_t end_index);
   virtual void OnPrimaryBufferEnd() {}
+  // Fable II recomp, trace only (FABLE2_HLE_CENSUS, docs/hle-census-20261013.md): called for
+  // every PM4_DRAW_INDX / PM4_DRAW_INDX_2 packet before it runs (skipped = dropped by the bin
+  // predicate), with the host address of its header, and for every indirect buffer. The
+  // implementation checks its own switch; the base does nothing.
+  virtual void OnDrawPacketForCensus(const void* header, bool skipped) {}
+  // Returns true to skip the indirect buffer (diagnostic / tiling-collapse use only).
+  virtual bool OnIndirectBufferForCensus(uint32_t ptr, uint32_t count) { return false; }
+  // Every type-3 packet (header host address; skipped = dropped by the bin predicate).
+  virtual void OnType3PacketForCensus(uint32_t packet, const void* header, bool skipped) {}
+  bool hle_census_hooks_ = false;
   void ExecuteIndirectBuffer(uint32_t ptr, uint32_t length);
   bool ExecutePacket(memory::RingBuffer* reader);
   bool ExecutePacketUntraced(memory::RingBuffer* reader);

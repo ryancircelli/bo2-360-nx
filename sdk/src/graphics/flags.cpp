@@ -15,19 +15,7 @@
 
 REXCVAR_DEFINE_BOOL(gpu_allow_invalid_fetch_constants, false, "GPU",
                     "Allow invalid fetch constants");
-REXCVAR_DEFINE_BOOL(native_2x_msaa, true, "GPU", "Enable native 2x MSAA");
-REXCVAR_DEFINE_BOOL(depth_float24_round, false, "GPU", "Round float24 depth values");
-REXCVAR_DEFINE_BOOL(depth_float24_convert_in_pixel_shader, false, "GPU",
-                    "Convert float24 depth in pixel shader");
-REXCVAR_DEFINE_BOOL(depth_transfer_not_equal_test, true, "GPU",
-                    "Use not-equal test for depth transfer");
-REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
-                    "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
-    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
-REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
-                    "Use approximate compare for alpha test values to prevent "
-                    "flickering on NVIDIA graphics cards");
 REXCVAR_DEFINE_BOOL(gpu_debug_markers, false, "GPU",
                     "Insert debug markers into GPU command streams for tools "
                     "like PIX and RenderDoc. Automatically enabled when "
