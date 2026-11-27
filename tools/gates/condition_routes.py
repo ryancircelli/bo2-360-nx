@@ -178,9 +178,9 @@ class Runner:
             joined = ' '.join(w['text'] for w in current['words'])
             rule = next((r for r in self.recipe['navigation'] if re.search(r['text'], joined, re.I) and not r.get('_done')), None)
             if rule:
-                if rule.get('once'): rule['_done'] = True
                 if rule.get('reset'):
                     for r in self.recipe['navigation']: r.pop('_done', None)
+                if rule.get('once'): rule['_done'] = True
                 for cmd in rule['commands']:
                     self.command(cmd)
                 if rule.get('mark_on_seen'):
@@ -217,7 +217,7 @@ class Runner:
         self.trials.append(dict(kind=kind, command=command, before=before['path'], after=after['path'],
                                 started=before['at'], ended=after['at']))
         self.save()
-        for _ in range(2):  # one OCR dropout must not end a run; a real state loss persists
+        for _ in range(4):  # one OCR dropout must not end a run; a real state loss persists
             if after['state']: break
             after = self.snapshot()
         if not after['state']:

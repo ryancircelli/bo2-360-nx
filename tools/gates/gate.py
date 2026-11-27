@@ -518,16 +518,16 @@ def g_save(a, G):
             # The single-player menu defaults to New Campaign even when a save
             # exists. Explicitly select Continue during the reload half.
             # Never accept New Campaign in the reload half: back out of its prompts and re-pick Continue.
-            recipe['navigation'] = [dict(text=r'SELECT\s+DIFFICULTY|CHECKPOINT\s+OVERWRITE', commands=['press b 600'], reset=True),
+            recipe['navigation'] = [dict(text=r'SELECT\s+DIFFICULTY|CHECKPOINT\s+OVERWRITE', commands=['press b 600'], reset=True, once=True),
                                     dict(text=r'CONTINUE.{0,20}LOAD\s+PREV',
-                                         commands=['press down 250'], once=True)] + recipe['navigation']
+                                         commands=['press down 600'], once=True)] + recipe['navigation']
         state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()
         evidence['reload_state'] = state
         # The title may rewrite its checkpoint after loading it; a New Campaign
         # overwrite/difficulty prompt on screen is what disqualifies the reload.
         seen = ' '.join(w['text'] for o in state_obs(reload_out) for w in o['words'])
         evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes,
-                                               allow_rewrite=True)
+                                               allow_rewrite=not re.search(r'CHECKPOINT\s+OVERWRITE', seen, re.I))
         evidence['copied_written_bytes'] = all(reload_game.initial_saves.get(name) == value for name, value in writes.items())
         evidence['passed'] = bool(evidence['reopened'] and evidence['copied_written_bytes']
                                   and state['state'] and not CRASH.search(reload_game.log_text()))

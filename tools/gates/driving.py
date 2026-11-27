@@ -47,7 +47,7 @@ def play_state(game, words, log):
         distance_hud = any(re.fullmatch(r'DISTANCE',w['text'],re.I) and w['x'] < .2 and w['y'] < .2 for w in words)
         return unit or (map_hud and distance_hud)
     if game == 'ac1':
-        return bool(re.search(r'first person|vision|high profile|synchroni[sz]|interact|camera|tackle|gentle push|blend|sprint|jump|grab and throw|throw|walk|push', text, re.I))
+        return bool(re.search(r'first person|vision|high profile|synchroni[sz]|interact|camera|tackle|gentle push|blend|sprint|jump|grab and throw|throw|walk|push|\brun\b', text, re.I))
     if game == 'me2':
         choices = [w for w in words if w['x'] > .5 and w['y'] > .78 and re.search(r'[A-Za-z]{3}',w['text'])]
         if CONVERSATION.search(text) or (len(choices) >= 2 and max(w['y'] for w in choices)-min(w['y'] for w in choices) > .025):

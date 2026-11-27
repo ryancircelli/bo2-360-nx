@@ -11,9 +11,9 @@
       "mark": "nursery"
     },
     {
-      "text": "are you sure you want this",
+      "text": "sure you want|your character",
       "commands": [
-        "press down 250",
+        "press down 600",
         "press a 600"
       ]
     },
