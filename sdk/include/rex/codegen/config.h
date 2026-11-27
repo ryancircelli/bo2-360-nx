@@ -115,6 +115,12 @@ struct RecompilerConfig {
   /// non-volatile registers and poison the volatile ones dead at a return
   /// (rex/ppc/abi_poison.h).
   bool abiPoisonChecks = false;
+  /// Bit-exact Xenon vector float math (TOML `exact_vector_math`): vmaddfp/vnmsubfp (and their
+  /// 128 forms) round once like the console's fused multiply-add, and vmsum3fp128/vmsum4fp128 use
+  /// the console's truncating dot product adder (rex/ppc/dot_product.h). Off: a multiply then an
+  /// add, and a double-precision dot product (rex::ppc::VmxDot), which hand-written natives mirror.
+  /// The PPC instruction tests turn it on.
+  bool exactVectorMath = false;
 
   // === Analysis tuning (optional) ===
   uint32_t maxJumpExtension = 65536;  ///< Max bytes to extend function for jump table targets

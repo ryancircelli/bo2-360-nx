@@ -359,6 +359,7 @@ bool RecompileTests(std::string_view binDir, std::string_view asmDir, std::strin
 
     codegen::RecompilerConfig config;
     config.outDirectoryPath = std::string(outDir);
+    config.exactVectorMath = true;  // the cases hold console results
     auto ctx =
         codegen::CodegenContext::Create(codegen::BinaryView::fromModule(module), std::move(config));
 

@@ -120,6 +120,8 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
             hasBool("generate_exception_handlers"), "generate_exception_handlers");
   MergeBool(cfg.abiPoisonChecks, toml["abi_poison_checks"].value_or(false),
             hasBool("abi_poison_checks"), "abi_poison_checks");
+  MergeBool(cfg.exactVectorMath, toml["exact_vector_math"].value_or(false),
+            hasBool("exact_vector_math"), "exact_vector_math");
   if (hasBool("is_dll")) {
     cfg.isDll = toml["is_dll"].value_or(false);
   }

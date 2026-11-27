@@ -84,11 +84,15 @@ bool build_vmulfp128(BuilderContext& ctx) {
 }
 
 bool build_vmaddfp(BuilderContext& ctx) {
-  // Xenon VMX multiply-add rounds once (fused); arm64 lowers this to one fmla.
+  // Xenon VMX multiply-add rounds once (fused); arm64 lowers this to one fmla. Without
+  // exactVectorMath it stays a multiply and an add, which hand-written natives mirror.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), "
-      "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));",
+      ctx.config().exactVectorMath
+          ? "\tsimde_mm_store_ps({}.f32, simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), "
+            "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));"
+          : "\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+            "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));",
       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
       ctx.v(ctx.insn.operands[3]));
   return true;
@@ -99,11 +103,16 @@ bool build_vnmsubfp(BuilderContext& ctx) {
   // (simde_mm_fmsub_ps is not fused on arm64; negating vC is exact)
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, "
-      "simde_mm_xor_ps(simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32), "
-      "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
-      "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
-      "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
+      ctx.config().exactVectorMath
+          ? "\tsimde_mm_store_ps({}.f32, "
+            "simde_mm_xor_ps(simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32), "
+            "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
+            "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
+            "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));"
+          : "\tsimde_mm_store_ps({}.f32, "
+            "simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+            "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), "
+            "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
       ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
       ctx.v(ctx.insn.operands[3]));
   return true;
@@ -159,9 +168,9 @@ bool build_vmsum3fp128(BuilderContext& ctx) {
   // Preserve Xenon accumulation and overflow semantics, including lane reversal.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, rex::ppc::VmxDot<3>(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, rex::ppc::{}<3>(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+      ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot", ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
@@ -169,9 +178,9 @@ bool build_vmsum4fp128(BuilderContext& ctx) {
   // Preserve Xenon accumulation and overflow semantics, including lane reversal.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, rex::ppc::VmxDot<4>(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, rex::ppc::{}<4>(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+      ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot", ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
