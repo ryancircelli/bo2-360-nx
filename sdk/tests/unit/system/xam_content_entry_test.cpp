@@ -31,7 +31,7 @@ u32 XamContentCreateEnumerator_entry(u32, u32, u32, u32, u32, mapped_u32, mapped
 }  // namespace rex::kernel::xam
 
 using namespace rex::kernel::xam;
-using rex::X_STATUS;
+using namespace rex;
 using rex::system::XContentType;
 using rex::system::xam::XCONTENT_DATA;
 
@@ -79,13 +79,13 @@ struct Call {
     std::strncpy(root, root_name, sizeof(root) - 1);
     root[sizeof(root) - 1] = 0;
   }
-  uint32_t Create(uint32_t mode, rex::mapped_void overlapped = nullptr) {
-    return XamContentCreateEx_entry(0, rex::mapped_string(root, 0), rex::mapped_void(&data, 0), mode,
-                                    rex::mapped_u32(&disposition, 0), rex::mapped_u32(&license, 0), 0, 0,
+  uint32_t Create(uint32_t mode, mapped_void overlapped = nullptr) {
+    return XamContentCreateEx_entry(0, mapped_string(root, 0), mapped_void(&data, 0), mode,
+                                    mapped_u32(&disposition, 0), mapped_u32(&license, 0), 0, 0,
                                     overlapped);
   }
-  uint32_t Close() { return XamContentClose_entry(rex::mapped_string(root, 0), nullptr); }
-  uint32_t Delete() { return XamContentDelete_entry(0, rex::mapped_void(&data, 0), nullptr); }
+  uint32_t Close() { return XamContentClose_entry(mapped_string(root, 0), nullptr); }
+  uint32_t Delete() { return XamContentDelete_entry(0, mapped_void(&data, 0), nullptr); }
 };
 
 constexpr uint32_t kDispUnknown = 0, kDispCreate = 1, kDispOpen = 2;
@@ -238,7 +238,7 @@ TEST_CASE("Content enumeration lists user and common content with the host path"
   REQUIRE(b.Close() == X_ERROR_SUCCESS);
   rex::be<uint32_t> size = 0, handle = 0;
   REQUIRE(XamContentCreateEnumerator_entry(0, 1 /*HDD*/, uint32_t(XContentType::kSavedGame), 0, 8,
-                                           rex::mapped_u32(&size, 0), rex::mapped_u32(&handle, 0)) ==
+                                           mapped_u32(&size, 0), mapped_u32(&handle, 0)) ==
           X_ERROR_SUCCESS);
   CHECK(uint32_t(size) == sizeof(XCONTENT_DATA) * 8);
   REQUIRE(uint32_t(handle) != 0);
@@ -247,24 +247,24 @@ TEST_CASE("Content enumeration lists user and common content with the host path"
   CHECK(e->item_count() == 2);
   // Unknown device: invalid argument and the size is zeroed.
   size = 77;
-  CHECK(XamContentCreateEnumerator_entry(0, 99, 1, 0, 8, rex::mapped_u32(&size, 0),
-                                         rex::mapped_u32(&handle, 0)) == X_E_INVALIDARG);
+  CHECK(XamContentCreateEnumerator_entry(0, 99, 1, 0, 8, mapped_u32(&size, 0),
+                                         mapped_u32(&handle, 0)) == X_E_INVALIDARG);
   CHECK(uint32_t(size) == 0);
   // The optical drive has no content.
   rex::be<uint32_t> h2 = 0;
-  REQUIRE(XamContentCreateEnumerator_entry(0, 2 /*ODD*/, 1, 0, 8, rex::mapped_u32(&size, 0),
-                                           rex::mapped_u32(&h2, 0)) == X_ERROR_SUCCESS);
+  REQUIRE(XamContentCreateEnumerator_entry(0, 2 /*ODD*/, 1, 0, 8, mapped_u32(&size, 0),
+                                           mapped_u32(&h2, 0)) == X_ERROR_SUCCESS);
   CHECK(f.kernel()->object_table()->LookupObject<rex::system::XEnumerator>(h2)->item_count() == 0);
   // No such user.
-  CHECK(XamContentCreateEnumerator_entry(3, 1, 1, 0, 8, rex::mapped_u32(&size, 0), rex::mapped_u32(&h2, 0)) ==
+  CHECK(XamContentCreateEnumerator_entry(3, 1, 1, 0, 8, mapped_u32(&size, 0), mapped_u32(&h2, 0)) ==
         X_ERROR_NO_SUCH_USER);
 }
 
 TEST_CASE("Content calls with an invalid user fail without touching the disk", "[runtime][content][xam]") {
   Fixture f;
   Call c("SAVE", MakeData("slot1"));
-  const uint32_t r = XamContentCreateEx_entry(3, rex::mapped_string(c.root, 0), rex::mapped_void(&c.data, 0), 1,
-                                              rex::mapped_u32(&c.disposition, 0), rex::mapped_u32(&c.license, 0), 0, 0,
+  const uint32_t r = XamContentCreateEx_entry(3, mapped_string(c.root, 0), mapped_void(&c.data, 0), 1,
+                                              mapped_u32(&c.disposition, 0), mapped_u32(&c.license, 0), 0, 0,
                                               nullptr);
   CHECK(r == X_ERROR_NO_SUCH_USER);
   CHECK(f.manager()->GetOpenPackagePath("SAVE").empty());
@@ -277,19 +277,19 @@ TEST_CASE("Thumbnails round trip and a missing one reports not found with size 0
   REQUIRE(c.Close() == X_ERROR_SUCCESS);
   rex::be<uint32_t> size = 100;
   uint8_t buf[8] = {};
-  CHECK(XamContentGetThumbnail_entry(0, rex::mapped_void(&c.data, 0), rex::mapped_void(buf, 0),
-                                     rex::mapped_u32(&size, 0), nullptr) == X_ERROR_FILE_NOT_FOUND);
+  CHECK(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
+                                     mapped_u32(&size, 0), nullptr) == X_ERROR_FILE_NOT_FOUND);
   CHECK(uint32_t(size) == 0);
   const uint8_t png[4] = {0x89, 'P', 'N', 'G'};
-  REQUIRE(XamContentSetThumbnail_entry(0, rex::mapped_void(&c.data, 0), rex::mapped_void(const_cast<uint8_t*>(png), 0),
+  REQUIRE(XamContentSetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(const_cast<uint8_t*>(png), 0),
                                        4, nullptr) == X_ERROR_SUCCESS);
   size = 2;  // too small: reports the needed size and an error
-  CHECK(XamContentGetThumbnail_entry(0, rex::mapped_void(&c.data, 0), rex::mapped_void(buf, 0),
-                                     rex::mapped_u32(&size, 0), nullptr) == X_ERROR_INSUFFICIENT_BUFFER);
+  CHECK(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
+                                     mapped_u32(&size, 0), nullptr) == X_ERROR_INSUFFICIENT_BUFFER);
   CHECK(uint32_t(size) == 4);
   size = 8;
-  REQUIRE(XamContentGetThumbnail_entry(0, rex::mapped_void(&c.data, 0), rex::mapped_void(buf, 0),
-                                       rex::mapped_u32(&size, 0), nullptr) == X_ERROR_SUCCESS);
+  REQUIRE(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
+                                       mapped_u32(&size, 0), nullptr) == X_ERROR_SUCCESS);
   CHECK(std::memcmp(buf, png, 4) == 0);
 }
 
@@ -298,12 +298,12 @@ TEST_CASE("GetCreator: saves are the user's, other content has no creator, missi
   Call c("SAVE", MakeData("slot1"));
   rex::be<uint32_t> is_creator = 5;
   rex::be<uint64_t> creator = 5;
-  CHECK(XamContentGetCreator_entry(0, rex::mapped_void(&c.data, 0), rex::mapped_u32(&is_creator, 0),
-                                   rex::mapped_u64(&creator, 0), nullptr) == X_ERROR_PATH_NOT_FOUND);
+  CHECK(XamContentGetCreator_entry(0, mapped_void(&c.data, 0), mapped_u32(&is_creator, 0),
+                                   mapped_u64(&creator, 0), nullptr) == X_ERROR_PATH_NOT_FOUND);
   REQUIRE(c.Create(1) == X_ERROR_SUCCESS);
   REQUIRE(c.Close() == X_ERROR_SUCCESS);
-  REQUIRE(XamContentGetCreator_entry(0, rex::mapped_void(&c.data, 0), rex::mapped_u32(&is_creator, 0),
-                                     rex::mapped_u64(&creator, 0), nullptr) == X_ERROR_SUCCESS);
+  REQUIRE(XamContentGetCreator_entry(0, mapped_void(&c.data, 0), mapped_u32(&is_creator, 0),
+                                     mapped_u64(&creator, 0), nullptr) == X_ERROR_SUCCESS);
   CHECK(uint32_t(is_creator) == 1);
   CHECK(uint64_t(creator) == f.kernel()->user_profile(0)->xuid());
 }
@@ -315,22 +315,22 @@ TEST_CASE("Overlapped content calls complete through the overlapped block", "[ru
   REQUIRE(guest != 0);
   void* host = mem->TranslateVirtual(guest);
   std::memset(host, 0, 0x40);
-  rex::mapped_void overlapped(host, guest);
+  mapped_void overlapped(host, guest);
 
   // Close is completed immediately: IO_PENDING returned, the result is already in the block.
   Call c("SAVE", MakeData("slot1"));
   REQUIRE(c.Create(1) == X_ERROR_SUCCESS);
-  CHECK(XamContentClose_entry(rex::mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
+  CHECK(XamContentClose_entry(mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_SUCCESS);
   // Closing something not open completes with the error, length -1 (some games read length as failure).
-  CHECK(XamContentClose_entry(rex::mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
+  CHECK(XamContentClose_entry(mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_FILE_NOT_FOUND);
   CHECK(rex::system::XOverlappedGetLength(host) == 0xFFFFFFFFu);
   // Flush is always success.
-  CHECK(XamContentFlush_entry(rex::mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
+  CHECK(XamContentFlush_entry(mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_SUCCESS);
   // Invalid user completes immediately with the error.
-  CHECK(XamContentDelete_entry(3, rex::mapped_void(&c.data, 0), overlapped) == X_ERROR_IO_PENDING);
+  CHECK(XamContentDelete_entry(3, mapped_void(&c.data, 0), overlapped) == X_ERROR_IO_PENDING);
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_NO_SUCH_USER);
 }
 
@@ -343,7 +343,7 @@ TEST_CASE("Deferred overlapped create reports pending, then the disposition and 
   auto ev = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(f.kernel()));
   ev->Initialize(true, false);
   reinterpret_cast<rex::be<uint32_t>*>(host)[3] = ev->handle();  // overlapped.event
-  rex::mapped_void overlapped(host, guest);
+  mapped_void overlapped(host, guest);
 
   Call c("SAVE", MakeData("slot1"));
   c.disposition = 0x1234;
