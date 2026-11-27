@@ -67,7 +67,9 @@ class DeferredRenderEncoder {
   // Drains when the worker may still own an ended-or-open encoder of the
   // command buffer. Cheap no-op when nothing was recorded since the last one
   // and while the front end still has a pass open (mid-pass callers).
-  void Barrier();
+  // site (a string literal) only splits the drain counters; cmd is the command
+  // buffer the caller is about to touch (nullptr: assume the worker's one).
+  void Barrier(const char* site = "other", const MTL::CommandBuffer* cmd = nullptr);
   bool xpass() const { return xpass_; }
   void LogXpassStats();
 
@@ -193,6 +195,13 @@ class DeferredRenderEncoder {
     uint64_t sync_drains[size_t(SyncCaller::kCount)] = {};
     uint64_t sync_wait_us[size_t(SyncCaller::kCount)] = {};
     uint64_t nosync_uses[size_t(SyncCaller::kCount)] = {};
+    // [drain-sites] Barrier() drains per caller site (first kMaxSites sites,
+    // the rest pooled under "more"), and skips for another command buffer.
+    static constexpr size_t kMaxSites = 24;
+    struct Site {
+      const char* name = nullptr;
+      uint64_t drains = 0, wait_us = 0, skipped = 0;
+    } sites[kMaxSites + 1];
   };
   const Stats& stats() const { return stats_; }
 
@@ -220,6 +229,7 @@ class DeferredRenderEncoder {
   bool xpass_ = false;
   bool pass_open_ = false;       // Front end view: Begin recorded, no End yet.
   bool ended_undrained_ = false; // An End was queued since the last drain.
+  const MTL::CommandBuffer* xpass_cmd_ = nullptr;  // Of the last OpenXpass.
   Stats stats_;
 
   bool worker_waiting_ = false;  // Guarded by mutex_.

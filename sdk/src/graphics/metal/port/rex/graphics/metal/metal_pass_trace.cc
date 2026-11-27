@@ -413,11 +413,11 @@ void EndPass(PassRef pass, const char* end_reason) {
 }
 
 namespace {
-void (*g_encode_barrier)(MTL::CommandBuffer*) = nullptr;
+void (*g_encode_barrier)(MTL::CommandBuffer*, const char*) = nullptr;
 }
-void SetEncodeBarrier(void (*fn)(MTL::CommandBuffer*)) { g_encode_barrier = fn; }
-void EncodeBarrier(MTL::CommandBuffer* cmd) {
-  if (g_encode_barrier) g_encode_barrier(cmd);
+void SetEncodeBarrier(void (*fn)(MTL::CommandBuffer*, const char*)) { g_encode_barrier = fn; }
+void EncodeBarrier(MTL::CommandBuffer* cmd, const char* site) {
+  if (g_encode_barrier) g_encode_barrier(cmd, site);
 }
 
 MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site) {
@@ -427,7 +427,7 @@ MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site) {
 MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site,
                                     const char* key) {
   if (!cmd) return nullptr;
-  EncodeBarrier(cmd);
+  EncodeBarrier(cmd, site);
   if (!Enabled()) return cmd->computeCommandEncoder();
   auto& s = Get();
   std::unique_lock<std::mutex> lock(s.mutex);
@@ -455,7 +455,7 @@ MTL::ComputeCommandEncoder* Compute(MTL::CommandBuffer* cmd, const char* site,
 
 MTL::BlitCommandEncoder* Blit(MTL::CommandBuffer* cmd, const char* site) {
   if (!cmd) return nullptr;
-  EncodeBarrier(cmd);
+  EncodeBarrier(cmd, site);
   if (!Enabled()) return cmd->blitCommandEncoder();
   auto& s = Get();
   std::unique_lock<std::mutex> lock(s.mutex);

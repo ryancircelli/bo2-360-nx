@@ -10,6 +10,8 @@
 #include <cstring>
 
 #include "rex/graphics/swap_hook.h"
+#include "metal_flags.h"
+#include "rex/graphics/metal/metal_hitch.h"
 #include "rex/logging.h"
 
 #ifndef IR_RUNTIME_METALCPP
@@ -210,6 +212,7 @@ DeferredRenderEncoder* DeferredRenderEncoder::OpenXpass(
   BeginArg* arg = Record<BeginArg>(Op::kBegin);
   arg->cmd = cmd;
   arg->desc = copy;
+  xpass_cmd_ = cmd;
   Retain(cmd);
   Retain(copy);  // Held until the worker has replayed the begin.
   copy->release();
@@ -218,7 +221,8 @@ DeferredRenderEncoder* DeferredRenderEncoder::OpenXpass(
   return this;
 }
 
-void DeferredRenderEncoder::Barrier() {
+void DeferredRenderEncoder::Barrier(const char* site,
+                                    const MTL::CommandBuffer* cmd) {
   if (!xpass_) {
     return;
   }
@@ -226,8 +230,18 @@ void DeferredRenderEncoder::Barrier() {
   if (pass_open_ || !ended_undrained_) {
     return;
   }
+  // Linear search: a handful of literal sites, and only on a pending drain.
+  Stats::Site* s = &stats_.sites[Stats::kMaxSites];
+  for (size_t i = 0; i < Stats::kMaxSites; ++i) {
+    if (!stats_.sites[i].name || stats_.sites[i].name == site) {
+      s = &stats_.sites[i];
+      s->name = site;
+      break;
+    }
+  }
   ++stats_.xpass_barrier_drains;
-  Drain();
+  ++s->drains;
+  s->wait_us += Drain();
   ended_undrained_ = false;
 }
 
@@ -254,6 +268,14 @@ void DeferredRenderEncoder::LogXpassStats() {
       stats_.xpass_passes, stats_.xpass_barrier_calls,
       stats_.xpass_barrier_drains, stats_.xpass_sync_drains, stats_.drains,
       stats_.drain_wait_us);
+  std::string sites;
+  for (const Stats::Site& s : stats_.sites) {
+    if (!s.drains && !s.skipped) continue;
+    sites += fmt::format(" {}={}/{}us/{}", s.name ? s.name : "more", s.drains,
+                         s.wait_us, s.skipped);
+  }
+  // [drain-sites] site=drains/wait_us/skipped_other_cb
+  REXLOG_WARN("encode-thread drain sites:{}", sites);
 }
 
 void DeferredRenderEncoder::StartWorker() {
@@ -347,6 +369,8 @@ uint64_t DeferredRenderEncoder::Drain() {
 #endif
   }
   if (completed_.load(std::memory_order_acquire) != published_) {
+    // [drain-sites] blocked time shows as "enc" in [hitch] lines (was "other").
+    hitch::Scope hitch_scope(hitch::kEnc);
     std::unique_lock<std::mutex> lock(mutex_);
     done_cv_.wait(lock, [this]() {
       return completed_.load(std::memory_order_acquire) == published_;
