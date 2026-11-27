@@ -9303,10 +9303,28 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
     }
   }
 
+  // The queued draws were already reported to the guest command stream as
+  // issued, and the caller (the next draw, a resolve, a swap) is not the one
+  // that failed. So a draw that fails to encode is counted and the rest still
+  // run, instead of discarding every later draw and failing the caller.
+  uint32_t failed_draws = 0;
   for (const PreparedDrawPtr& draw : draws) {
     if (!EncodePreparedDraw(*draw)) {
-      flushing_prepared_draw_queue_ = previous_flushing;
-      return false;
+      ++failed_draws;
+    }
+  }
+  if (failed_draws) {
+    // Only the GPU command thread flushes the queue.
+    static uint64_t dropped_total = 0;
+    const uint64_t before = dropped_total;
+    dropped_total += failed_draws;
+    // Logged when the total crosses a power of two, so a steady failure
+    // cannot flood the log.
+    if (!before || (before ^ dropped_total) > before) {
+      REXLOG_ERROR(
+          "Metal: {} of {} queued draws failed to encode and were dropped "
+          "({} dropped so far)",
+          failed_draws, draws.size(), dropped_total);
     }
   }
 
