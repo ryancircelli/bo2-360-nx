@@ -1,9 +1,9 @@
 [project]
 name = "gears"
 sdk_version = "0.10.0"
-game_root = "/tmp/bo2/codegen-gap-prune/inputs/gears"
+game_root = "."
 
 [entrypoint]
-file_path = "/tmp/bo2/codegen-gap-prune/inputs/gears/default.xex"
+file_path = "work/default.xex"
 out_directory_path = "generated/default"
 includes = ["overrides.toml", "gaps.toml"]

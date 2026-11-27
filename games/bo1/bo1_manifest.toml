@@ -1,9 +1,9 @@
 [project]
 name = "bo1"
 sdk_version = "0.10.0"
-game_root = "/tmp/bo2/codegen-gap-prune/inputs/bo1"
+game_root = "."
 
 [entrypoint]
-file_path = "/tmp/bo2/codegen-gap-prune/inputs/bo1/default.xex"
+file_path = "default.xex"
 out_directory_path = "generated/default"
 includes = ["overrides.toml", "gaps.toml"]
