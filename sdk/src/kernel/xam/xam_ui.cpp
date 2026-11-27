@@ -9,7 +9,11 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <atomic>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <cstdlib>
 #include <chrono>
 #include <limits>
