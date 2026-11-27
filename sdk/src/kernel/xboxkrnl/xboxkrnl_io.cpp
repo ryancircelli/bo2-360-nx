@@ -1205,11 +1205,11 @@ u32 NtCreateSymbolicLinkObject_entry(mapped_u32 handle_out,
       util::TranslateAnsiPath(REX_KERNEL_MEMORY(), object_name));
   auto target = rex::string::utf8_canonicalize_guest_path(
       util::TranslateAnsiPath(REX_KERNEL_MEMORY(), target_ptr));
+  if (rex::string::utf8_starts_with(path, "\\??\\")) {
+    path = path.substr(4);  // Strip the full qualifier (IsValidPath rejects '?')
+  }
   if (!IsValidPath(path, false)) {
     return X_STATUS_OBJECT_NAME_INVALID;
-  }
-  if (rex::string::utf8_starts_with(path, "\\??\\")) {
-    path = path.substr(4);  // Strip the full qualifier
   }
   if (!REX_KERNEL_FS()->RegisterSymbolicLink(path, target)) {
     return X_STATUS_UNSUCCESSFUL;
