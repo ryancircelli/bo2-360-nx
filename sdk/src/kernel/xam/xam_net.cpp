@@ -384,22 +384,48 @@ u32 NetDll_WSAGetLastError_entry() {
   return XThread::GetLastError();
 }
 
-u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket, ppc_ptr_t<XWSABUF> buffers_ptr,
+#ifdef MSG_DONTWAIT
+constexpr int kPeekNoWait = MSG_DONTWAIT;
+#else
+constexpr int kPeekNoWait = 0;  // shortcut: Windows has no per-call non-blocking flag; relies on the socket's FIONBIO
+#endif
+
+u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers_ptr,
                              u32 buffer_count, mapped_u32 num_bytes_recv, mapped_u32 flags_ptr,
                              ppc_ptr_t<XSOCKADDR_IN> from_addr,
                              ppc_ptr_t<XWSAOVERLAPPED> overlapped_ptr,
                              mapped_void completion_routine_ptr) {
-  if (overlapped_ptr) {
-    // auto evt = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(
-    //    overlapped_ptr->event_handle);
-
-    // if (evt) {
-    //  //evt->Set(0, false);
-    //}
+  auto socket_obj = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket_obj) {
+    XThread::SetLastError(0x2736);  // WSAENOTSOCK
+    return -1;
   }
-
-  // we're not going to be receiving packets any time soon
-  // return error so we don't wait on that - Cancerous
+  // shortcut: never pends. A datagram already queued is taken into the first buffer and completes
+  // at once (overlapped event set); otherwise it fails with WSAEWOULDBLOCK. Upgrade if a title
+  // needs a receive that completes later.
+  if (buffer_count && buffers_ptr) {
+    N_XSOCKADDR_IN native_from;
+    uint32_t native_fromlen = sizeof(N_XSOCKADDR_IN);
+    uint8_t* dst = REX_KERNEL_MEMORY()->TranslateVirtual(buffers_ptr[0].buf_ptr);
+    int ret = socket_obj->RecvFrom(dst, buffers_ptr[0].len, kPeekNoWait, &native_from, &native_fromlen);
+    if (ret >= 0) {
+      if (from_addr) {
+        from_addr->sin_family = native_from.sin_family;
+        from_addr->sin_port = native_from.sin_port;
+        from_addr->sin_addr = native_from.sin_addr;
+        std::memset(from_addr->x_sin_zero, 0, sizeof(from_addr->x_sin_zero));
+      }
+      if (num_bytes_recv) *num_bytes_recv = uint32_t(ret);
+      if (flags_ptr) *flags_ptr = 0;
+      if (overlapped_ptr) {
+        overlapped_ptr->internal = 0;
+        overlapped_ptr->internal_high = uint32_t(ret);
+        if (auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped_ptr->event_handle)) ev->Set(0, false);
+      }
+      return 0;
+    }
+  }
+  XThread::SetLastError(0x2733);  // WSAEWOULDBLOCK
   return -1;
 }
 

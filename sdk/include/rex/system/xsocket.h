@@ -207,6 +207,8 @@ bool OnLan(uint32_t ip);
 // port moves up by net_system_port_offset on every peer, in binds, destinations and reported sources alike.
 uint16_t HostPort(uint16_t guest_port);
 uint16_t GuestPort(uint16_t host_port);
+// Port offset of instance 0 (net_system_port_offset less this process's 16-port instance stride).
+int InstancePortBase();
 // The net_system_link_trace lines (ip in host byte order, the title's port).
 void TraceSend(uint32_t ip, uint16_t guest_port, int bytes, int error);
 void TraceReceive(uint32_t ip, uint16_t guest_port, int bytes);
