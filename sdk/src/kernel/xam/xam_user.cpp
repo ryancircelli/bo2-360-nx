@@ -562,6 +562,39 @@ u32 XamUserGetCachedUserFlags_entry(u32 user_index) {
   return 0;
 }
 
+// Offline profiles carry no flags (matches XamUserGetCachedUserFlags above); xenia reads them from the profile.
+u32 XamUserGetUserFlags_entry(u32 user_index) { return 0; }
+u32 XamUserGetUserFlagsFromXUID_entry(u64 xuid) { return 0; }
+
+u32 XamUserGetOnlineLanguageFromXUID_entry(u64 xuid) { return REXCVAR_GET(user_language); }
+
+// Offline profiles are never parental controlled.
+u32 XamUserIsParentalControlled_entry(u32 user_index) { return 0; }
+
+// Tenure data is not stored for local profiles, so a signed-in user reports tenure 0 with no milestone.
+u32 XamUserGetUserTenure_entry(u32 user_index, mapped_u32 tenure_ptr, mapped_u32 milestone_ptr,
+                               mapped_u64 milestone_date_ptr, u32 overlapped_ptr) {
+  if (!REX_KERNEL_STATE()->user_profile(user_index)) return X_E_INVALIDARG;
+  if (tenure_ptr) *tenure_ptr = 0;
+  if (milestone_ptr) *milestone_ptr = 0;
+  if (milestone_date_ptr) *milestone_date_ptr = 0;
+  return X_E_SUCCESS;
+}
+
+// Kinect user binding does not exist here.
+u32 XamUserNuiGetUserIndex_entry(u32 unk, mapped_u32 index_ptr) { return X_E_NO_SUCH_USER; }
+
+u32 XamUserNuiGetUserIndexForSignin_entry(mapped_u32 index_ptr) {
+  if (!index_ptr) return X_E_INVALIDARG;
+  for (uint32_t i = 0; i < 4; ++i) {
+    if (REX_KERNEL_STATE()->user_profile(i)) {
+      *index_ptr = i;
+      return X_E_SUCCESS;
+    }
+  }
+  return X_ERROR_ACCESS_DENIED;
+}
+
 // TODO(gibbed): probably a FILETIME/LARGE_INTEGER, unknown currently
 struct X_ACHIEVEMENT_UNLOCK_TIME {
   rex::be<uint32_t> unk_0;
@@ -873,20 +906,20 @@ REX_EXPORT_STUB(__imp__XamUserCreateTitlesPlayedEnumerator);
 REX_EXPORT_STUB(__imp__XamUserFlushLogonQueue);
 REX_EXPORT_STUB(__imp__XamUserGetAge);
 REX_EXPORT_STUB(__imp__XamUserGetDeviceId);
-REX_EXPORT_STUB(__imp__XamUserGetOnlineLanguageFromXUID);
+REX_EXPORT(__imp__XamUserGetOnlineLanguageFromXUID, rex::kernel::xam::XamUserGetOnlineLanguageFromXUID_entry)
 REX_EXPORT_STUB(__imp__XamUserGetOnlineXUIDFromOfflineXUID);
 REX_EXPORT_STUB(__imp__XamUserGetReportingInfo);
 REX_EXPORT_STUB(__imp__XamUserGetRequestedUserIndexMask);
 REX_EXPORT_STUB(__imp__XamUserGetSubscriptionType);
-REX_EXPORT_STUB(__imp__XamUserGetUserFlags);
-REX_EXPORT_STUB(__imp__XamUserGetUserFlagsFromXUID);
+REX_EXPORT(__imp__XamUserGetUserFlags, rex::kernel::xam::XamUserGetUserFlags_entry)
+REX_EXPORT(__imp__XamUserGetUserFlagsFromXUID, rex::kernel::xam::XamUserGetUserFlagsFromXUID_entry)
 REX_EXPORT_STUB(__imp__XamUserGetUserIndexMask);
-REX_EXPORT_STUB(__imp__XamUserGetUserTenure);
+REX_EXPORT(__imp__XamUserGetUserTenure, rex::kernel::xam::XamUserGetUserTenure_entry)
 REX_EXPORT_STUB(__imp__XamUserGetUsersMissingAvatars);
 REX_EXPORT_STUB(__imp__XamUserGetXUIDForTFA);
 REX_EXPORT_STUB(__imp__XamUserInvalidateProfileSetting);
 REX_EXPORT_STUB(__imp__XamUserIsLogonPreviewModeEnabled);
-REX_EXPORT_STUB(__imp__XamUserIsParentalControlled);
+REX_EXPORT(__imp__XamUserIsParentalControlled, rex::kernel::xam::XamUserIsParentalControlled_entry)
 REX_EXPORT_STUB(__imp__XamUserIsPartial);
 REX_EXPORT_STUB(__imp__XamUserIsPartialProfile);
 REX_EXPORT_STUB(__imp__XamUserIsUnsafeProgrammingAllowed);
@@ -897,9 +930,9 @@ REX_EXPORT_STUB(__imp__XamUserLookupDevice);
 REX_EXPORT_STUB(__imp__XamUserNuiBind);
 REX_EXPORT_STUB_RETURN(__imp__XamUserNuiEnableBiometric, 0x32);
 REX_EXPORT_STUB_RETURN(__imp__XamUserNuiGetEnrollmentIndex, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamUserNuiGetUserIndex, 0x32);
+REX_EXPORT(__imp__XamUserNuiGetUserIndex, rex::kernel::xam::XamUserNuiGetUserIndex_entry)
 REX_EXPORT_STUB(__imp__XamUserNuiGetUserIndexForBind);
-REX_EXPORT_STUB(__imp__XamUserNuiGetUserIndexForSignin);
+REX_EXPORT(__imp__XamUserNuiGetUserIndexForSignin, rex::kernel::xam::XamUserNuiGetUserIndexForSignin_entry)
 REX_EXPORT_STUB(__imp__XamUserNuiIsBiometricEnabled);
 REX_EXPORT_STUB(__imp__XamUserNuiUnbind);
 REX_EXPORT_STUB(__imp__XamUserOverrideBindingCallbacks);
