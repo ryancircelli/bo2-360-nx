@@ -53,6 +53,7 @@ def strip_so(s):
     return re.sub(r"cr\d\.so = xer\.so;", "", s)
 
 
+CR_SAVE = re.compile(r"^([\w.]+?)\.u64 \|?= (cr[0-7])\.\w+ \? 0x[0-9A-Fa-f]+ : 0;$")
 LABEL = re.compile(r"^(loc_[0-9A-F]+):$")
 GOTO = re.compile(r"\bgoto (loc_[0-9A-F]+);")
 
@@ -61,6 +62,15 @@ def effect(s):
     """(reads, writes, is_save) of one statement, for the localized registers."""
     if s.startswith(("PPC", "uint", "REX_FUNC_PROLOGUE", "const auto s_")) or SELF_MOVE.match(s):
         return set(), set(), False
+    # setjmp_locals copies (the generator's setjmp protection) and mfcr/mfocrf copies of CR (a CR save):
+    # reads of a local only to put it back, like a prologue save.
+    if s.startswith("if (temp.s64 != 0) { ctx = env;"):  # the setjmp_locals restore after a longjmp
+        return set(), set(), False
+    if s.startswith("const auto sj_"):
+        return set(REG.findall(s.split("=", 1)[1])), set(), True
+    mcr = CR_SAVE.match(s)
+    if mcr:
+        return {mcr.group(2)}, ({mcr.group(1)} if REG.fullmatch(mcr.group(1)) else set()), True
     ms = STORE_TO_STACK.match(s)
     if ms and REG.fullmatch(ms.group(1)):
         return {ms.group(1)}, set(), True
