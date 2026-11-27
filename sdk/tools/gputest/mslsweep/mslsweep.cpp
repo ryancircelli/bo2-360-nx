@@ -7,6 +7,7 @@
  *   --domain quad|tri   translate vertex shaders as patch-indexed domain shaders (tessellated draws)
  *   --out DIR           write <name>.metal for every translated shader
  */
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -46,7 +47,7 @@ int main(int argc, char** argv) {
     fmt::print(stderr, "usage: rexgpu-mslsweep [--domain quad|tri] [--out DIR] FILE...\n");
     return 2;
   }
-  int bad = 0;
+  int bad = 0, skipped = 0;
   std::map<std::string, int> reasons;
   for (const std::string& path : files) {
     std::ifstream f(path, std::ios::binary);
@@ -59,6 +60,12 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> dwords(bytes.size() / 4);
     std::memcpy(dwords.data(), bytes.data(), bytes.size());
     std::string base = path.substr(path.find_last_of('/') + 1);
+    // A trace without the shader's memory dumps zeros, which translate to an empty shader: not a pass.
+    if (std::all_of(dwords.begin(), dwords.end(), [](uint32_t d) { return d == 0; })) {
+      fmt::print("SKIP {} {} dwords: all zero (shader memory missing from the trace)\n", base, dwords.size());
+      ++skipped;
+      continue;
+    }
     bool is_vs = base.rfind("ps_", 0) != 0;
     DxbcShader shader(is_vs ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel, 0, dwords.data(),
                       dwords.size(), std::endian::little);
@@ -105,7 +112,7 @@ int main(int argc, char** argv) {
   for (const auto& [reason, n] : reasons) {
     fmt::print("  {:5} {}\n", n, reason);
   }
-  fmt::print("{} shaders, {} failed\n", files.size(), bad);
+  fmt::print("{} shaders, {} failed, {} skipped (all zero)\n", files.size(), bad, skipped);
   return bad ? 1 : 0;
 }
 

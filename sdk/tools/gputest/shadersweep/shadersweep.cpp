@@ -3,6 +3,7 @@
  * named vs_<hash>.bin / ps_<hash>.bin) with the SDK SPIR-V translator. Prints one line per file and exits 1 if any
  * shader fails to translate or yields an empty binary. No GPU or Vulkan device needed.
  */
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -25,7 +26,7 @@ int main(int argc, char** argv) {
     fmt::print(stderr, "usage: rexgpu-shadersweep FILE...\n");
     return 2;
   }
-  int bad = 0;
+  int bad = 0, skipped = 0;
   for (int i = 1; i < argc; ++i) {
     std::string path = argv[i];
     std::ifstream f(path, std::ios::binary);
@@ -38,6 +39,12 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> dwords(bytes.size() / 4);
     std::memcpy(dwords.data(), bytes.data(), bytes.size());
     std::string base = path.substr(path.find_last_of('/') + 1);
+    // A trace without the shader's memory dumps zeros, which translate to an empty shader: not a pass.
+    if (std::all_of(dwords.begin(), dwords.end(), [](uint32_t d) { return d == 0; })) {
+      fmt::print("SKIP {} {} dwords: all zero (shader memory missing from the trace)\n", base, dwords.size());
+      ++skipped;
+      continue;
+    }
     bool is_vs = base.rfind("ps_", 0) != 0;
     SpirvShader shader(is_vs ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel, 0, dwords.data(),
                        dwords.size(), std::endian::little);
@@ -66,6 +73,6 @@ int main(int argc, char** argv) {
     }
     bad += !ok;
   }
-  fmt::print("{} shaders, {} failed\n", argc - 1, bad);
+  fmt::print("{} shaders, {} failed, {} skipped (all zero)\n", argc - 1, bad, skipped);
   return bad ? 1 : 0;
 }
