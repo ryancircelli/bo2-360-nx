@@ -90,11 +90,13 @@ void GetSubresourcesFromFetchConstant(const xenos::xe_gpu_texture_fetch_t& fetch
         std::max(std::min(uint32_t(fetch.mip_max_level), size_mip_max_level), mip_min_level);
   }
   if (mip_max_level != 0) {
+    // mip_min_level is sampler state: a nonzero one only drops the base when
+    // it shares the mip page.
+    if (mip_min_level != 0 && base_page == mip_page) {
+      base_page = 0;
+    }
     if (base_page == 0) {
       mip_min_level = std::max(mip_min_level, uint32_t(1));
-    }
-    if (mip_min_level != 0) {
-      base_page = 0;
     }
   } else {
     mip_page = 0;
