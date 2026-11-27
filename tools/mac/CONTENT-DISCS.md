@@ -20,10 +20,10 @@ content/0000000000000000/<title>/Headers/00000002/<package>.header
 ```
 
 The header is the SDK's 0x148-byte `XCONTENT_AGGREGATE_DATA` plus the package's
-licence mask. Licence entries are preserved, never fabricated. Other content
-Licence bits are retained even when their flags are zero (retail PIRS discs
-use this combination); flags are not an entry-present boolean.
-types (including title updates) are inventoried but not applied. SVOD packages
+licence mask. Licence entries are preserved, never fabricated. Licence bits are
+retained even when their flags are zero (retail PIRS discs use this combination);
+flags are not an entry-present boolean. Other content types (including title
+updates) are inventoried but not applied. SVOD packages
 are explicitly rejected; the supported payload format is STFS (CON/LIVE/PIRS).
 Each package is staged completely before publishing its directory. Existing
 packages are refused; rebuild into a fresh staging root to replace content.
