@@ -3030,6 +3030,7 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     bool force_swap_rb = has_swap_dest_swap && swap_dest_swap;
 
     if (!source_texture) {
+      rex::graphics::CountDrop("present_no_frontbuffer");
       static bool missing_swap_logged = false;
       if (!missing_swap_logged) {
         missing_swap_logged = true;
@@ -3075,6 +3076,7 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             if (copy_success && submission_id) {
               metal_context.SetSubmissionId(submission_id);
             }
+            if (!copy_success) rex::graphics::CountDrop("present_copy_failed");
             return copy_success;
           });
     }
@@ -4146,6 +4148,7 @@ bool MetalCommandProcessor::OnIndirectBufferForCensus(uint32_t ptr,
   if (hle_census::Collapse() == hle_census::CollapseMode::kSkipSecondTile &&
       (bin_select_ & 0xC) && !(bin_select_ & 0x80000003ull)) {
     ++hle_census::S().collapse_skipped_ibs;
+    rex::graphics::CountDrop("ib_collapse_skipped");
     return true;
   }
   if (!hle_census::Enabled()) {
@@ -4179,6 +4182,22 @@ void MetalCommandProcessor::OnType3PacketForCensus(uint32_t packet,
                        memory_->physical_membase()),
               opcode, count, packet & 1, skipped ? 1 : 0, data);
 }
+
+namespace {
+// Always-on: every draw that did not reach the GPU, by reason (rex::graphics::CountDrop). A draw that was
+// submitted is not counted; one that failed (logged per draw by the base class) counts as ds_failed, a failed
+// resolve as ds_copy_failed; a true return that named no reason as ds_other_true.
+void CountDrawOutcome(const char* reason, bool result) {
+  const bool copy = reason && std::strcmp(reason, "ds_copy") == 0;
+  if (!result) {
+    rex::graphics::CountDrop(copy ? "ds_copy_failed" : "ds_failed");
+  } else if (!reason) {
+    rex::graphics::CountDrop("ds_other_true");
+  } else if (std::strcmp(reason, "ds_submitted") != 0) {
+    rex::graphics::CountDrop(reason);
+  }
+}
+}  // namespace
 
 bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                       uint32_t index_count,
@@ -4231,16 +4250,15 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     draw_skip_reason_ = nullptr;
     bool result = IssueDrawImpl(primitive_type, index_count, index_buffer_info,
                                 major_mode_explicit);
+    CountDrawOutcome(draw_skip_reason_, result);
     ZpdNoteIssueDraw(true, dispatched_before);
     return result;
-  }
-  if (!DrawSkipTrace::Enabled()) {
-    return IssueDrawImpl(primitive_type, index_count, index_buffer_info,
-                         major_mode_explicit);
   }
   draw_skip_reason_ = nullptr;
   bool result = IssueDrawImpl(primitive_type, index_count, index_buffer_info,
                               major_mode_explicit);
+  CountDrawOutcome(draw_skip_reason_, result);
+  if (!DrawSkipTrace::Enabled()) return result;
   const char* reason = draw_skip_reason_;
   bool is_benign = false;
   if (reason) {
@@ -4292,19 +4310,20 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
   if (regs.Get<reg::RB_SURFACE_INFO>().surface_pitch == 0) {
     // Doesn't actually draw.
     draw_skip_reason_ = "ds_pitch0";
-    // CR-06 audit counter (FABLE2_DRAW_SKIP_TRACE=1): D3D12/Vulkan skip pitch-0
+    // CR-06 audit counter (always on): D3D12/Vulkan skip pitch-0
     // draws only when rasterization is done, so a memexport draw with
     // rasterization off still runs there. Count the ones dropped here.
-    if (Shader* vs = DrawSkipTrace::Enabled() ? active_vertex_shader() : nullptr) {
+    if (Shader* vs = active_vertex_shader()) {
       if (!vs->is_ucode_analyzed()) {
         vs->AnalyzeUcode(pipeline_cache_->ucode_disasm_buffer());
       }
       if (vs->memexport_eM_written()) {
         const bool rast = draw_util::IsRasterizationPotentiallyDone(
             regs, draw_util::IsPrimitivePolygonal(regs));
-        GetDrawSkipTrace().Add(rast ? "ds_pitch0_memexport_rast"
-                                    : "ds_pitch0_memexport_norast",
-                               false);
+        const char* why =
+            rast ? "ds_pitch0_memexport_rast" : "ds_pitch0_memexport_norast";
+        rex::graphics::CountDrop(why);
+        if (DrawSkipTrace::Enabled()) GetDrawSkipTrace().Add(why, false);
       }
     }
     return true;
@@ -9225,8 +9244,11 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
             static_cast<uint32_t>(ranges.size()))) {
       REXLOG_ERROR("Failed to request {} prepared-draw shared-memory ranges",
              ranges.size());
+      // The batch is dropped (its vertex data is not in place), but the
+      // caller's own work does not depend on it: it carries on.
+      rex::graphics::CountDrop("flush_shmem_failed", draws.size());
       flushing_prepared_draw_queue_ = previous_flushing;
-      return false;
+      return true;
     }
     EndSharedMemoryUploadBlitEncoder(
         SharedMemoryUploadEncoderEndReason::kMaterializationDrain);
@@ -9253,6 +9275,7 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
       EndRenderEncoder(RenderEncoderEndReason::kTextureUploadBeforeDrawPass);
     }
     if (!EnsureCommandBuffer()) {
+      rex::graphics::CountDrop("flush_no_command_buffer", draws.size());
       EndTexturePrecommit();
       flushing_prepared_draw_queue_ = previous_flushing;
       return false;
@@ -9298,8 +9321,11 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
       TexRenameAfterLoads(plans.data(), plans.size());
     }
     if (!texture_materialization_succeeded) {
+      // Drawing the batch with textures that failed to load would show
+      // garbage, so it is dropped; the caller's own work carries on.
+      rex::graphics::CountDrop("flush_texture_failed", draws.size());
       flushing_prepared_draw_queue_ = previous_flushing;
-      return false;
+      return true;
     }
   }
 
@@ -9314,10 +9340,9 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
     }
   }
   if (failed_draws) {
-    // Only the GPU command thread flushes the queue.
-    static uint64_t dropped_total = 0;
-    const uint64_t before = dropped_total;
-    dropped_total += failed_draws;
+    const uint64_t dropped_total =
+        rex::graphics::CountDrop("flush_encode_failed", failed_draws);
+    const uint64_t before = dropped_total - failed_draws;
     // Logged when the total crosses a power of two, so a steady failure
     // cannot flood the log.
     if (!before || (before ^ dropped_total) > before) {
@@ -10522,6 +10547,7 @@ void MetalCommandProcessor::TraceFillGpuMemory(uint32_t physical_address, uint32
 
 bool MetalCommandProcessor::IssueCopy() {
   if (!FlushPreparedDrawQueue(PreparedDrawFlushReason::kIssueCopy)) {
+    rex::graphics::CountDrop("resolve_flush_failed");
     return false;
   }
   TexRenameSettleOrphansNow();
@@ -10641,6 +10667,10 @@ bool MetalCommandProcessor::IssueCopy() {
       shared_memory_->NoteMemexportReadback(written_address, written_length,
                                             submission_current_);
     }
+  } else if (written_length) {
+    // Above metal_resolve_readback_max_bytes: the CPU keeps the old bytes.
+    rex::graphics::CountDrop("readback_over_cap");
+    rex::graphics::CountDrop("readback_over_cap_bytes", written_length);
   }
 
   return true;

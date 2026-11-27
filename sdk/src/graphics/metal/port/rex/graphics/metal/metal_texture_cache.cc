@@ -36,6 +36,7 @@ void TexTrace(const char* name) {
 }
 }  // namespace
 #include "rex/graphics/flags.h"
+#include <rex/graphics/swap_hook.h>
 #include "rex/graphics/metal/metal_heap_pool.h"
 
 #include <algorithm>
@@ -4802,6 +4803,7 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
   texture->MarkAsUsed();
   auto* metal_texture = static_cast<MetalTexture*>(texture);
   if (!metal_texture) {
+    rex::graphics::CountDrop("tex_blank_failed");
     return return_null_index_for_dimension();
   }
   metal_texture->tres_bind_serial_ = ++tres_bind_serial_counter_;
@@ -4810,6 +4812,9 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
       binding->host_swizzle, dimension, is_signed,
       texture_for_encoder_out ? &texture_for_encoder : nullptr, view_levels);
   if (srv_index == UINT32_MAX) {
+    // The view heap ran out or the view could not be made: a real failure
+    // (the unbound cases above are what the guest gets on other backends).
+    rex::graphics::CountDrop("tex_blank_failed");
     return return_null_index_for_dimension();
   }
   if (texture_for_encoder_out) {

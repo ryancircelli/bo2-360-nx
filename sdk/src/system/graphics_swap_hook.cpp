@@ -1,5 +1,7 @@
 #include <atomic>
 #include <cstdlib>
+#include <cstring>
+#include <map>
 
 #include <rex/graphics/swap_hook.h>
 #include <rex/graphics/metal_runtime.h>
@@ -32,6 +34,41 @@ std::atomic<GpuJobHook> g_job_hook{nullptr};
 PerfStats& GetPerfStats() {
   static PerfStats stats;
   return stats;
+}
+
+namespace {
+struct DropSlot {
+  std::atomic<const char*> name{nullptr};
+  std::atomic<uint64_t> count{0};
+};
+DropSlot g_drops[128];
+}  // namespace
+uint64_t CountDrop(const char* reason, uint64_t n) {
+  for (DropSlot& s : g_drops) {
+    const char* name = s.name.load(std::memory_order_acquire);
+    // An empty slot is claimed; a lost race leaves the winner's name in `name`.
+    if (!name && s.name.compare_exchange_strong(name, reason, std::memory_order_acq_rel)) name = reason;
+    // Same literal = same pointer (hot path); the plugin's copy of a literal is matched by text.
+    if (name == reason || std::strcmp(name, reason) == 0) {
+      return s.count.fetch_add(n, std::memory_order_relaxed) + n;
+    }
+  }
+  return 0;  // shortcut: table full (128 reasons, ~40 exist) drops the count; grow it if reasons multiply.
+}
+std::string DropCountersText() {
+  std::map<std::string, uint64_t> rows;  // merges a reason claimed twice in a race
+  for (DropSlot& s : g_drops) {
+    const char* name = s.name.load(std::memory_order_acquire);
+    if (!name) break;
+    rows[name] += s.count.load(std::memory_order_relaxed);
+  }
+  std::string out;
+  for (const auto& [name, count] : rows) {
+    if (!count) continue;
+    if (!out.empty()) out += ' ';
+    out += name + "=" + std::to_string(count);
+  }
+  return out.empty() ? "none" : out;
 }
 void SetGpuJobHook(GpuJobHook hook) { g_job_hook.store(hook, std::memory_order_release); }
 void NotifyGpuJob(uint64_t order, uint64_t ns, bool measured) {

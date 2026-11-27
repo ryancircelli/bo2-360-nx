@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 namespace rex::graphics {
 
@@ -22,6 +23,13 @@ struct PerfStats {
   std::atomic<uint64_t> ns_encode_wait{0};   // submit thread blocked draining the Metal encode thread (part of ns_working)
 };
 PerfStats& GetPerfStats();
+
+// Always-on counters of silently dropped draws, skipped resolves and blank bindings, keyed by reason (a string
+// literal: the pointer is kept). Thread-safe and lock-free; returns the reason's new total. Shown by the live
+// control command "drops", the "[drops]" log line at exit and the Report a Glitch folder (drops.txt).
+uint64_t CountDrop(const char* reason, uint64_t n = 1);
+// "reason=count reason=count ..." for every reason seen, sorted by name; "none" when nothing was counted.
+std::string DropCountersText();
 // Called from a command buffer completion handler: submission number, GPU time in ns.
 using GpuJobHook = void (*)(uint64_t order, uint64_t ns, bool measured);
 void SetGpuJobHook(GpuJobHook hook);

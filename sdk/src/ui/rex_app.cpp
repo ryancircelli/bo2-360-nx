@@ -18,6 +18,7 @@
 #include <rex/ui/flags.h>
 #include <rex/kernel/crt/heap.h>
 #include <rex/filesystem.h>
+#include <rex/graphics/swap_hook.h>
 #include <rex/logging/sink.h>
 #include <rex/logging.h>
 #include <rex/ui/overlay/achievement_toast.h>
@@ -817,6 +818,7 @@ void ReXApp::ReportGlitch() {
   WriteText(dir / "input.txt",
             rex::input::SamplesToText(rex::input::GlobalInputRing().Window(rex::input::ProcessMs(), 60000)));
   WriteText(dir / "settings.toml", rex::cvar::SerializeToTOML());
+  WriteText(dir / "drops.txt", rex::graphics::DropCountersText() + "\n");
 
   // Arm the trace now, so it records the frame after this call; collected by the worker below.
   const bool trace_armed = std::getenv("REX_GPU_TRACE_TRIGGER") != nullptr;
@@ -1154,6 +1156,7 @@ void ReXApp::OnRestored(ui::UIEvent& e) {
 }
 
 void ReXApp::OnDestroy() {
+  REXLOG_INFO("[drops] {}", rex::graphics::DropCountersText());
   // Notify subclass before cleanup
   OnShutdown();
 

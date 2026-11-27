@@ -216,3 +216,7 @@ target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(content_manager_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME content_manager_tests COMMAND content_manager_tests)
+
+add_executable(drop_counters_tests graphics/drop_counters_test.cpp)
+target_link_libraries(drop_counters_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME drop_counters_tests COMMAND drop_counters_tests)

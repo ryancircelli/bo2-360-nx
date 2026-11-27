@@ -39,6 +39,7 @@
 #include "fmt/format.h"
 #include "rex/assert.h"
 #include <rex/bit.h>
+#include <rex/graphics/swap_hook.h>
 #include "rex/logging.h"
 #include "rex/math.h"
 #include "rex/graphics/util/draw.h"
@@ -2093,9 +2094,11 @@ bool MetalRenderTargetCache::Update(
       UploadTrace().dc_dst_merged += uint32_t(__builtin_popcount(merged));
     }
     if (fallback_transfer_work) {
-      PerformTransfersAndResolveClears(
+      if (!PerformTransfersAndResolveClears(
           1 + xenos::kMaxColorRenderTargets, accumulated_targets,
-          fallback_transfers.data(), nullptr, nullptr, nullptr);
+          fallback_transfers.data(), nullptr, nullptr, nullptr)) {
+        rex::graphics::CountDrop("rt_transfer_failed");
+      }
     }
     if (ssm_inject) {
       // [ssm-merge] the stencil-only clear after the transfers.
@@ -2156,9 +2159,11 @@ bool MetalRenderTargetCache::Update(
       }
     }
   } else {
-    PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
+    if (!PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
                                      accumulated_targets, update_transfers,
-                                     nullptr, nullptr, nullptr);
+                                     nullptr, nullptr, nullptr)) {
+      rex::graphics::CountDrop("rt_transfer_failed");
+    }
   }
 
   // Only mark render pass descriptor as dirty if targets actually changed
@@ -5195,9 +5200,11 @@ bool MetalRenderTargetCache::UnifyResolveSourceScale(
       REXLOG_ERROR("[rt-shrink] growth failed before a tile conversion");
     }
     if (!transfers[slot].empty()) {
-      PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
+      if (!PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
                                        targets, transfers, nullptr, nullptr,
-                                       nullptr);
+                                       nullptr)) {
+        rex::graphics::CountDrop("rt_transfer_failed");
+      }
     }
   }
   unified_out = true;
@@ -5757,18 +5764,22 @@ bool MetalRenderTargetCache::TryStencilOnlyAliasClear(
       }
       uint64_t values[1 + xenos::kMaxColorRenderTargets] = {};
       values[0] = carried.clear_value;
-      PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
+      if (!PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
                                        targets, transfers,
                                        found ? values : nullptr,
                                        found ? &carried.rectangle : nullptr,
-                                       nullptr);
+                                       nullptr)) {
+        rex::graphics::CountDrop("rt_transfer_failed");
+      }
       if (found) {
         ++u.md_carried;
       }
     } else {
-      PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
+      if (!PerformTransfersAndResolveClears(1 + xenos::kMaxColorRenderTargets,
                                        targets, transfers, nullptr, nullptr,
-                                       nullptr);
+                                       nullptr)) {
+        rex::graphics::CountDrop("rt_transfer_failed");
+      }
     }
     u.md_stencil_xfer += uint32_t(transfer_count);
   } else if (carried_index != SIZE_MAX) {
@@ -6251,8 +6262,10 @@ bool MetalRenderTargetCache::CommitAliasClearSurface(
       ++u.ac_deferred;
     }
   } else {
-    PerformTransfersAndResolveClears(2, targets, transfers, values, &rect,
-                                     nullptr);
+    if (!PerformTransfersAndResolveClears(2, targets, transfers, values, &rect,
+                                     nullptr)) {
+      rex::graphics::CountDrop("rt_transfer_failed");
+    }
     ++u.ac_immediate;
   }
   if (AliasClearTraceEnabled() && ShadowTraceActive()) {
@@ -7107,6 +7120,7 @@ bool MetalRenderTargetCache::Resolve(rex::memory::Memory& memory, uint32_t& writ
         // Select the appropriate Metal pipeline for this shader.
         MTL::ComputePipelineState* pipeline =
             GetResolvePipeline(copy_shader, draw_resolution_scaled);
+        if (!pipeline) rex::graphics::CountDrop("resolve_no_pipeline");
         if (draw_resolution_scaled && !pipeline) {
           static uint32_t missing_scaled_pipeline_log_count = 0;
           if (missing_scaled_pipeline_log_count < 8) {

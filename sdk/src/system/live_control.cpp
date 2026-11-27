@@ -13,6 +13,7 @@
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/graphics/swap_hook.h>
 #include <rex/input/input_record.h>
 #include <rex/input/script/script_input_driver.h>
 #include <rex/system/patch.h>
@@ -139,6 +140,7 @@ std::string LiveControlCommand(const std::string& command, const std::string& ar
   if (command == "timescale") return Timescale(args);
   if (command == "savepoint") return Savepoint(args);
   if (command == "record") return Record(args);
+  if (command == "drops") return "ok " + rex::graphics::DropCountersText();
 #if !REX_PLATFORM_SWITCH
   if (std::string pad = input::script::LivePadCommand(command, args); !pad.empty()) return pad;
 #endif
