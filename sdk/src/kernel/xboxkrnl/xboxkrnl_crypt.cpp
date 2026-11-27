@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <vector>
 
 #include <rex/kernel/xboxkrnl/private.h>
@@ -866,6 +867,41 @@ void XeCryptBnQwNeModMul_entry(mapped_u64 qw_a, mapped_u64 qw_b, mapped_u64 qw_o
   }
 }
 
+// Xenia Canary RotSumSha, adapted to local SHA1 and mapped pointer helpers.
+void XeCryptRotSumSha_entry(mapped_void in1, u32 n1, mapped_void in2, u32 n2,
+                            mapped_void out, u32 out_size) {
+  std::array<be_u64, 4> state{};
+  const auto add = [&state](mapped_void data, u32 size) {
+    uint64_t sum[4];
+    std::copy(state.begin(), state.end(), sum);
+    for (u32 i = 0; i < size / 8; ++i) {
+      be_u64 word;
+      std::memcpy(&word, data.as<const uint8_t*>() + size_t{i} * 8, 8);
+      const uint64_t value = word;
+      sum[1] += value;
+      sum[3] -= value;
+      if (sum[1] < value) ++sum[0];
+      if (sum[3] > value) --sum[2];
+      sum[1] = std::rotl(sum[1], 29);
+      sum[3] = std::rotl(sum[3], 31);
+    }
+    std::copy(std::begin(sum), std::end(sum), state.begin());
+  };
+  add(in1, n1);
+  add(in2, n2);
+  sha1::SHA1 sha;
+  sha.processBytes(state.data(), sizeof(state));
+  sha.processBytes(state.data(), sizeof(state));
+  if (n1) sha.processBytes(in1.as<const uint8_t*>(), n1);
+  if (n2) sha.processBytes(in2.as<const uint8_t*>(), n2);
+  for (auto& word : state) word = ~static_cast<uint64_t>(word);
+  sha.processBytes(state.data(), sizeof(state));
+  sha.processBytes(state.data(), sizeof(state));
+  uint8_t digest[20];
+  sha.finalize(digest);
+  std::copy_n(digest, std::min<size_t>(sizeof(digest), out_size), out.as<uint8_t*>());
+}
+
 // Guest layouts from the credited ReXGlue v0.11 ABI. Host hash objects must
 // never be written directly into these smaller, big-endian state blocks.
 struct XECRYPT_MD5_STATE {
@@ -1089,7 +1125,7 @@ REX_EXPORT(__imp__XeCryptMd5Final, rex::kernel::xboxkrnl::XeCryptMd5Final_entry)
 REX_EXPORT(__imp__XeCryptMd5, rex::kernel::xboxkrnl::XeCryptMd5_entry)
 REX_EXPORT_STUB(__imp__XeCryptParveEcb);
 REX_EXPORT_STUB(__imp__XeCryptParveCbcMac);
-REX_EXPORT_STUB(__imp__XeCryptRotSumSha);
+REX_EXPORT(__imp__XeCryptRotSumSha, rex::kernel::xboxkrnl::XeCryptRotSumSha_entry)
 REX_EXPORT(__imp__XeCryptSha256, rex::kernel::xboxkrnl::XeCryptSha256_entry)
 REX_EXPORT(__imp__XeCryptSha384, rex::kernel::xboxkrnl::XeCryptSha384_entry)
 REX_EXPORT(__imp__XeCryptSha512, rex::kernel::xboxkrnl::XeCryptSha512_entry)
