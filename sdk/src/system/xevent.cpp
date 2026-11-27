@@ -21,6 +21,7 @@ XEvent::~XEvent() = default;
 
 void XEvent::Initialize(bool manual_reset, bool initial_state) {
   assert_false(event_);
+  manual_reset_ = manual_reset;
 
   this->CreateNative<X_KEVENT>();
 
