@@ -1,0 +1,38 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "nfsmw2012",
+  "status": "unproven",
+  "navigation_timeout_s": 900,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "continue|start game|accept|yes|autolog|sign in",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "MOST WANTED",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "a criterion game|electronic arts",
+      "commands": []
+    }
+  ],
+  "controls": {
+    "movement": "trigger r 1 1800",
+    "camera-left": "stick r -0.6 0",
+    "camera-right": "stick r 0.6 0",
+    "action": "press a 600",
+    "movement-alternate": "trigger l 1 1800"
+  }
+}
