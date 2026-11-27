@@ -16,6 +16,10 @@ void XeCryptBnDwLePkcs1Format_entry(mapped_void, u32, mapped_void, u32);
 u32 XeCryptBnDwLePkcs1Verify_entry(mapped_void, mapped_void, u32);
 u64 XeCryptBnQwNeModInv_entry(u64);
 void XeCryptBnQwNeModMul_entry(mapped_u64, mapped_u64, mapped_u64, u64, mapped_u64, u32);
+struct XECRYPT_AES_STATE;
+void XeCryptAesKey_entry(ppc_ptr_t<XECRYPT_AES_STATE>, mapped_void);
+void XeCryptAesCtr_entry(ppc_ptr_t<XECRYPT_AES_STATE>, mapped_void, u32, mapped_void, mapped_void);
+u32 XeCryptBnQwNeModExp_entry(mapped_u64, mapped_u64, mapped_u64, mapped_u64, u32);
 struct XECRYPT_MD5_STATE;
 struct XECRYPT_HMACMD5_STATE;
 void XeCryptMd5Init_entry(ppc_ptr_t<XECRYPT_MD5_STATE>);
@@ -485,4 +489,30 @@ TEST_CASE("Single DES known answer and in-place CBC chaining", "[kernel][crypt]"
   CHECK(uint64_t(blocks[0]) == uint64_t(plain));
   CHECK(uint64_t(blocks[1]) == uint64_t(plain));
   CHECK(uint64_t(feed) == last);
+}
+
+TEST_CASE("AES-CTR matches NIST SP 800-38A F.5.1 block 1 and advances the counter", "[kernel][crypt]") {
+  uint8_t key[16] = {0x2b,0x7e,0x15,0x16,0x28,0xae,0xd2,0xa6,0xab,0xf7,0x15,0x88,0x09,0xcf,0x4f,0x3c};
+  uint8_t ctr[16] = {0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9,0xfa,0xfb,0xfc,0xfd,0xfe,0xff};
+  uint8_t pt[16] = {0x6b,0xc1,0xbe,0xe2,0x2e,0x40,0x9f,0x96,0xe9,0x3d,0x7e,0x11,0x73,0x93,0x17,0x2a};
+  const uint8_t want[16] = {0x87,0x4d,0x61,0x91,0xb6,0x20,0xe3,0x26,0x1b,0xef,0x68,0x64,0x99,0x0d,0xb6,0xce};
+  uint8_t st[0x160], ct[16];
+  auto s = ppc_ptr_t<XECRYPT_AES_STATE>::from_host(reinterpret_cast<XECRYPT_AES_STATE*>(st));
+  XeCryptAesKey_entry(s, mapped_void::from_host(key));
+  XeCryptAesCtr_entry(s, mapped_void::from_host(pt), 16, mapped_void::from_host(ct), mapped_void::from_host(ctr));
+  CHECK(std::equal(ct, ct + 16, want));
+  CHECK(ctr[15] == 0x00);
+  CHECK(ctr[14] == 0xff);  // ...fe ff +1 carries
+  CHECK(ctr[13] == 0xfd);
+}
+
+TEST_CASE("ModExp small known answers", "[kernel][crypt]") {
+  std::vector<rex::be_u64> base{4}, ex{13}, mod{497}, out{0};
+  CHECK(XeCryptBnQwNeModExp_entry(mapped_u64::from_host(out.data()), mapped_u64::from_host(base.data()),
+                                  mapped_u64::from_host(ex.data()), mapped_u64::from_host(mod.data()), 1) == 1);
+  CHECK(uint64_t(out[0]) == 445);  // 4^13 mod 497
+  mod[0] = 496;                    // even modulus: refused, output zero
+  CHECK(XeCryptBnQwNeModExp_entry(mapped_u64::from_host(out.data()), mapped_u64::from_host(base.data()),
+                                  mapped_u64::from_host(ex.data()), mapped_u64::from_host(mod.data()), 1) == 0);
+  CHECK(uint64_t(out[0]) == 0);
 }
