@@ -56,6 +56,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | Xenia Canary `e20f26963` (SaveEditors) | GPU registers start at hardware reset defaults | `sdk/src/graphics/register_file.cpp` |
 | Xenia Canary `89609297c` (bomabomaboma) | tiled resolve destination offsets below 32bpp | `sdk/src/graphics/util/draw.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
 | Xenia Canary `d8731edc9` (goldislead) | volume resolve slice spacing from RB_COPY_SURFACE_SLICE | `sdk/src/graphics/util/draw.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
+| Xenia Canary `16e1eb8e2` (goldislead) | 64bpp clear values: RB_COLOR_CLEAR_LO is the low dword | `sdk/include/rex/graphics/util/draw.h`, `sdk/src/graphics/metal/port/rex/graphics/metal/metal_render_target_cache.cc`, `sdk/src/graphics/vulkan/render_target_cache.cpp`, `sdk/src/graphics/d3d12/render_target_cache.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
 
 ## Libraries
 
