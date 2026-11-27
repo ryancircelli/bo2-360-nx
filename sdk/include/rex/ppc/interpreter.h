@@ -22,6 +22,7 @@
 // Register layout follows PPCContext: a vector register's guest byte i is
 // host byte 15 - i, so guest word i is u32[3 - i].
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -29,6 +30,7 @@
 
 #include <rex/platform/fpscr.h>
 #include <rex/ppc/context.h>
+#include <rex/ppc/dot_product.h>
 #include <rex/ppc/reference.h>
 #include <rex/system/xmemory.h>
 
@@ -1474,24 +1476,14 @@ class Machine {
     return false;
   }
 
-  // Dot products in Xenon's order, (x + z) + y and (x + z) + (y + w), in
-  // double, narrowed once; an overflow of finite inputs gives QNaN and a
-  // denormal result flushes to a signed zero (hardware-verified in xenia).
+  // Dot products: the console's truncating fixed-point adder, as the generated code (dot_product.h).
   bool VmxDot(uint32_t vd, uint32_t va, uint32_t vb, int n) {
     const bool flush = config_.vmx_flush_denormals;
-    double p[4];
-    for (int i = 0; i < 4; ++i)
-      p[i] = double(Flush(BitsToFloat(GuestWord(V(va), i)), flush)) *
-             double(Flush(BitsToFloat(GuestWord(V(vb), i)), flush));
-    const double sum = n == 3 ? (p[0] + p[2]) + p[1] : (p[0] + p[2]) + (p[1] + p[3]);
-    float r = float(sum);
-    uint32_t bits = FloatToBits(r);
-    if (std::isinf(r) && !std::isinf(sum))
-      bits = VmxNaN();
-    else if (std::isnan(r))
-      bits = VmxNaN();
-    else if ((bits & 0x7F800000u) == 0)
-      bits &= 0x80000000u;
+    std::array<uint32_t, 4> a, b;
+    for (int i = 0; i < 4; ++i) a[i] = GuestWord(V(va), i), b[i] = GuestWord(V(vb), i);
+    const uint32_t bits =
+        n == 3 ? simd::detail::DotProductReference<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}, flush)
+               : simd::detail::DotProductReference<4>(a, b, flush);
     for (int i = 0; i < 4; ++i) V(vd).u32[i] = bits;
     return true;
   }
