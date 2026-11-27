@@ -177,6 +177,10 @@ struct ThreadSnap {
   bool in_syscall = false;
   uint64_t stack_lo = 0, stack_hi = 0;
   std::vector<uint8_t> stack;
+  // Head of the thread's pthread cleanup list. It is kept in the pthread structure above the stack, and its
+  // records are on the stack (pthread_cond_wait pushes one around its wait). Written back with the stack: a
+  // head left pointing at a later wait's record is called by pthread_exit when the thread ends.
+  __darwin_pthread_handler_rec* cleanup = nullptr;
   // PPCContext (guest registers) lives in the heap-allocated ThreadState, not on the host stack.
   void* ctx = nullptr;
   std::vector<uint8_t> ctx_data;
@@ -564,6 +568,7 @@ SavepointStats CaptureInProcessSavepoint() {
     ts.stack_lo = sp - 256;  // include the red zone
     ts.stack_hi = top;
     ts.stack.assign(reinterpret_cast<uint8_t*>(ts.stack_lo), reinterpret_cast<uint8_t*>(ts.stack_hi));
+    ts.cleanup = reinterpret_cast<pthread_t>(t->thread()->native_handle())->__cleanup_stack;
     if (auto* tstate = t->thread_state()) {
       ts.ctx = tstate->context();
       ts.ctx_data.assign(reinterpret_cast<uint8_t*>(ts.ctx),
@@ -817,6 +822,7 @@ SavepointStats RewindToInProcessSavepoint() {
                  restored + not_parked, ts.thread->thread_id(), int(ts.thread->is_guest_thread()), ts.port, int(ts.in_syscall), (long long)ts.gp.__x[16],
                  detached ? "ok" : "FAILED", Ms(td, Clock::now()));
     std::memcpy(reinterpret_cast<void*>(ts.stack_lo), ts.stack.data(), ts.stack.size());
+    reinterpret_cast<pthread_t>(ts.thread->thread()->native_handle())->__cleanup_stack = ts.cleanup;
     if (ts.ctx) std::memcpy(ts.ctx, ts.ctx_data.data(), ts.ctx_data.size());
     arm_thread_state64_t gp = ts.gp;
     if (ts.in_syscall) {
