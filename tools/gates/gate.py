@@ -835,7 +835,7 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli
