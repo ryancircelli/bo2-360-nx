@@ -14,6 +14,7 @@
 #include <rex/logging.h>
 #include <rex/hook.h>
 #include <rex/types.h>
+#include "title_id_utils.h"
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
@@ -32,6 +33,16 @@ namespace rex {
 namespace kernel {
 namespace xam {
 using namespace rex::system;
+
+u32 XamIsSystemExperienceTitleId_entry(u32 title_id) {
+  return IsSystemExperienceTitle(title_id);
+}
+u32 XamIsSystemTitleId_entry(u32 title_id) {
+  return IsSystemTitle(title_id);
+}
+u32 XamIsXbox1TitleId_entry(u32 title_id) {
+  return IsOriginalXboxTitle(title_id);
+}
 
 u32 XamFeatureEnabled_entry(u32 unk) {
   return 0;
@@ -411,3 +422,7 @@ REX_EXPORT(__imp__XamIsChildAccountSignedIn, rex::kernel::xam::XamIsChildAccount
 REX_EXPORT(__imp__XamIsIptvEnabled, rex::kernel::xam::XamIsIptvEnabled_entry)
 REX_EXPORT(__imp__XapiFormatTimeOut, rex::kernel::xam::XapiFormatTimeOut_entry)
 REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)
+
+REX_EXPORT(__imp__XamIsSystemExperienceTitleId, rex::kernel::xam::XamIsSystemExperienceTitleId_entry)
+REX_EXPORT(__imp__XamIsSystemTitleId, rex::kernel::xam::XamIsSystemTitleId_entry)
+REX_EXPORT(__imp__XamIsXbox1TitleId, rex::kernel::xam::XamIsXbox1TitleId_entry)

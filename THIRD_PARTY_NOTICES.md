@@ -97,3 +97,5 @@ Illinois/NCSA Open Source License, with LLVM's license terms).
 
 Call of Duty and Call of Duty: Black Ops II are trademarks of Activision Publishing, Inc. Nintendo Switch is a
 trademark of Nintendo. Xbox 360 is a trademark of Microsoft. GitHub and the GitHub mark are trademarks of GitHub, Inc. This project is not affiliated with or endorsed by any of them.
+
+XAM title classifiers in `sdk/src/kernel/xam/title_id_utils.h` and their wrappers in `xam_info.cpp` are adapted from the already credited Xenia Canary `title_id_utils.h` / `xam_info.cc` (BSD-3-Clause; original notices retained).

@@ -105,3 +105,8 @@ add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
 add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
+
+add_executable(xam_info_tests kernel/xam_info_test.cpp)
+target_include_directories(xam_info_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xam_info_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME xam_info_tests COMMAND xam_info_tests)
