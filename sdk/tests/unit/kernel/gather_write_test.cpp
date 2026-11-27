@@ -115,7 +115,7 @@ TEST_CASE("Gather write combines 32-bit segments into one write and one completi
   CHECK(backing->bytes[4128] == 0x34);
   CHECK(backing->bytes.back() == 0x34);
   CHECK(backing->writes == 1);
-  int64_t timeout = 0;
+  uint64_t timeout = 0;
   CHECK(event->Wait(0, 0, false, &timeout) == X_STATUS_SUCCESS);
   XIOCompletion::IONotification packet{};
   REQUIRE(port->WaitForNotification(0, &packet));

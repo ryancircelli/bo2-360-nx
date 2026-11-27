@@ -1609,7 +1609,7 @@ REX_EXPORT_QUIET_RETURN(__imp__KeInitializeDeviceQueue, 0);  // unknown: kernel 
 REX_EXPORT_QUIET_RETURN(__imp__KeInitializeInterrupt, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_QUIET_RETURN(__imp__KeInitializeQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
 // REX_EXPORT_STUB(__imp__KeInitializeTimerEx); -- implemented below
-REX_EXPORT_STUB(__imp__KeIpiGenericCall);
+REX_EXPORT_QUIET_RETURN(__imp__KeIpiGenericCall, 0);  // unknown: no guest-callback helper; 0 = routine not run
 REX_EXPORT_QUIET_RETURN(__imp__KeQueryBackgroundProcessors, 0);  // no APCs/background procs modelled
 REX_EXPORT_QUIET_RETURN(__imp__KeQueryInterruptTime, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_QUIET_RETURN(__imp__KeRegisterDriverNotification, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
@@ -1621,7 +1621,7 @@ REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSetBackgroundProcessors);  // no-op: singl
 REX_EXPORT_QUIET_RETURN(__imp__KeSetPriorityClassThread, 0);  // no APCs/background procs modelled
 REX_EXPORT_QUIET_RETURN(__imp__KeSetPriorityThread, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_STUB_RETURN(__imp__KeSetTimer, 0);
-REX_EXPORT_STUB(__imp__KeSetTimerEx);
+REX_EXPORT_QUIET_RETURN(__imp__KeSetTimerEx, 0);  // unknown: timer+DPC not modelled; 0 = was not set
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSweepDcacheRange);  // no-op: single coherent host cache/TB
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSweepIcacheRange);  // no-op: single coherent host cache/TB
 REX_EXPORT_QUIET_RETURN(__imp__KeTestAlertThread, 0);  // no APCs/background procs modelled
