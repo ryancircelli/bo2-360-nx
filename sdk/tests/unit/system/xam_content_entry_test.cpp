@@ -2,8 +2,6 @@
 // CreateDisposition flags (1 CREATE_NEW, 2 CREATE_ALWAYS, 3 OPEN_EXISTING ...), the delete-then-create
 // path NFSMW uses, a package mounted for the whole session (Forza), title id resolution, overlapped results.
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/interfaces/catch_interfaces_capture.hpp>
-#include <cstdio>
 
 #include <chrono>
 #include <cstring>
@@ -18,6 +16,7 @@
 #include <rex/system/xam/content_manager.h>
 #include <rex/system/xenumerator.h>
 #include <rex/system/xevent.h>
+#include <rex/system/xthread.h>
 #include <rex/system/xio.h>
 
 namespace rex::kernel::xam {
@@ -47,7 +46,6 @@ struct Fixture {
                                                                        .count()));
   std::unique_ptr<rex::Runtime> runtime;
   Fixture() {
-    std::fprintf(stderr, "FIXTURE begin %s\n", Catch::getResultCapture().getCurrentTestName().c_str());
     std::filesystem::create_directories(path);
     REQUIRE(rex::cvar::SetFlagFromCommandLine("content_backup_root", ""));
     runtime = std::make_unique<rex::Runtime>(path);
@@ -56,15 +54,26 @@ struct Fixture {
     REQUIRE(runtime->Setup(std::move(config)) == X_STATUS_SUCCESS);
   }
   ~Fixture() {
-    std::fprintf(stderr, "FIXTURE end\n");
     runtime.reset();
-    std::fprintf(stderr, "FIXTURE reset done\n");
     std::error_code ec;
     std::filesystem::remove_all(path, ec);
   }
   rex::system::KernelState* kernel() { return runtime->kernel_state(); }
   rex::system::xam::ContentManager* manager() { return kernel()->content_manager(); }
 };
+
+
+// Overlapped completion reads the current guest thread, so those entries run on a host thread.
+template <typename F> void RunOnHost(Fixture& f, F fn) {
+  auto* thread = new rex::system::XHostThread(f.kernel(), 128 * 1024, 0, [fn]() -> uint32_t {
+    fn();
+    return 0;
+  });
+  REQUIRE(thread->Create() == X_STATUS_SUCCESS);
+  uint64_t join = static_cast<uint64_t>(-100000000ll);
+  REQUIRE(thread->Wait(0, 0, 0, &join) == X_STATUS_SUCCESS);
+  thread->Release();
+}
 
 XCONTENT_DATA MakeData(const char* file, XContentType type = XContentType::kSavedGame) {
   XCONTENT_DATA d{};
@@ -278,36 +287,25 @@ TEST_CASE("Content calls with an invalid user fail without touching the disk", "
 
 TEST_CASE("Thumbnails round trip and a missing one reports not found with size 0", "[runtime][content][xam]") {
   Fixture f;
-  std::fprintf(stderr, "THUMB step 1\n");
   Call c("SAVE", MakeData("slot1"));
-  std::fprintf(stderr, "THUMB step 2\n");
   REQUIRE(c.Create(1) == X_ERROR_SUCCESS);
-  std::fprintf(stderr, "THUMB step 3\n");
   REQUIRE(c.Close() == X_ERROR_SUCCESS);
-  std::fprintf(stderr, "THUMB step 4\n");
   rex::be<uint32_t> size = 100;
-  std::fprintf(stderr, "THUMB step 5\n");
   uint8_t buf[8] = {};
-  std::fprintf(stderr, "THUMB step 6\n");
   CHECK(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
                                      mapped_u32(&size, 0), nullptr) == X_ERROR_FILE_NOT_FOUND);
   CHECK(uint32_t(size) == 0);
-  std::fprintf(stderr, "THUMB step 7\n");
   const uint8_t png[4] = {0x89, 'P', 'N', 'G'};
-  std::fprintf(stderr, "THUMB step 8\n");
   REQUIRE(XamContentSetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(const_cast<uint8_t*>(png), 0),
                                        4, nullptr) == X_ERROR_SUCCESS);
   size = 2;  // too small: reports the needed size and an error
   CHECK(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
                                      mapped_u32(&size, 0), nullptr) == X_ERROR_INSUFFICIENT_BUFFER);
   CHECK(uint32_t(size) == 4);
-  std::fprintf(stderr, "THUMB step 9\n");
   size = 8;
-  std::fprintf(stderr, "THUMB step 10\n");
   REQUIRE(XamContentGetThumbnail_entry(0, mapped_void(&c.data, 0), mapped_void(buf, 0),
                                        mapped_u32(&size, 0), nullptr) == X_ERROR_SUCCESS);
   CHECK(std::memcmp(buf, png, 4) == 0);
-  std::fprintf(stderr, "THUMB step 11\n");
 }
 
 TEST_CASE("GetCreator: saves are the user's, other content has no creator, missing is not found", "[runtime][content][xam]") {
@@ -334,9 +332,10 @@ TEST_CASE("Overlapped content calls complete through the overlapped block", "[ru
   std::memset(host, 0, 0x40);
   mapped_void overlapped(host, guest);
 
+  RunOnHost(f, [&] {
   // Close is completed immediately: IO_PENDING returned, the result is already in the block.
   Call c("SAVE", MakeData("slot1"));
-  REQUIRE(c.Create(1) == X_ERROR_SUCCESS);
+  CHECK(c.Create(1) == X_ERROR_SUCCESS);
   CHECK(XamContentClose_entry(mapped_string(c.root, 0), overlapped) == X_ERROR_IO_PENDING);
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_SUCCESS);
   // Closing something not open completes with the error, length -1 (some games read length as failure).
@@ -349,6 +348,7 @@ TEST_CASE("Overlapped content calls complete through the overlapped block", "[ru
   // Invalid user completes immediately with the error.
   CHECK(XamContentDelete_entry(3, mapped_void(&c.data, 0), overlapped) == X_ERROR_IO_PENDING);
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_NO_SUCH_USER);
+  });
 }
 
 TEST_CASE("Deferred overlapped create reports pending, then the disposition and signals the event", "[runtime][content][xam][overlapped]") {
@@ -362,9 +362,10 @@ TEST_CASE("Deferred overlapped create reports pending, then the disposition and 
   reinterpret_cast<rex::be<uint32_t>*>(host)[3] = ev->handle();  // overlapped.event
   mapped_void overlapped(host, guest);
 
+  RunOnHost(f, [&] {
   Call c("SAVE", MakeData("slot1"));
   c.disposition = 0x1234;
-  REQUIRE(c.Create(1, overlapped) == X_ERROR_IO_PENDING);
+  CHECK(c.Create(1, overlapped) == X_ERROR_IO_PENDING);
   CHECK(uint32_t(c.disposition) == 0);  // reset while pending
   CHECK(rex::system::XOverlappedGetResult(host) == X_ERROR_IO_PENDING);
   for (int i = 0; i < 500 && rex::system::XOverlappedGetResult(host) == X_ERROR_IO_PENDING; ++i)
@@ -375,4 +376,5 @@ TEST_CASE("Deferred overlapped create reports pending, then the disposition and 
   uint64_t timeout = 0;
   CHECK(ev->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS);
   CHECK(c.Close() == X_ERROR_SUCCESS);
+  });
 }
