@@ -17,6 +17,9 @@
 
 #include <rex/ppc/context.h>
 #include <rex/runtime.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/util/object_table.h>
+#include <rex/system/xevent.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread/fiber.h>
@@ -248,4 +251,32 @@ TEST_CASE("XThread::set_name is safe against the start-up name write", "[runtime
     thread->Wait(0, 0, 0, nullptr);
     for (auto& t : namers) t.join();
   }
+}
+
+// An object created after a save point's capture loses its handle slot on rewind but keeps the handle in
+// its own list; the slot's next owner must not be closed through it.
+TEST_CASE("An object that lost its handle slot cannot close the slot's next owner", "[runtime][object]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* table = runtime.kernel_state()->object_table();
+
+  auto saved = table->CaptureRewindState();
+  auto stale = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(runtime.kernel_state()));
+  stale->Initialize(true, false);
+  const auto handle = stale->handle();
+  table->Rewind(saved);
+
+  auto owner = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(runtime.kernel_state()));
+  owner->Initialize(true, false);
+  REQUIRE(owner->handle() == handle);
+
+  stale->ReleaseHandle();
+  CHECK(table->LookupObject<rex::system::XObject>(handle).get() == owner.get());
+
+  CHECK(table->ReleaseHandle(handle) == X_STATUS_SUCCESS);
+  CHECK(table->LookupObject<rex::system::XObject>(handle).get() == nullptr);
+  CHECK(table->ReleaseHandle(handle) == X_STATUS_INVALID_HANDLE);  // closed handles stay closed
+  CHECK(table->RetainHandle(handle) == X_STATUS_INVALID_HANDLE);
 }
