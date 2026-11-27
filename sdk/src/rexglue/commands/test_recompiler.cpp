@@ -423,6 +423,17 @@ bool RecompileTests(std::string_view binDir, std::string_view asmDir, std::strin
   templateData["functions"] = nlohmann::json::array();
   for (const auto& funcName : allFunctionNames)
     templateData["functions"].push_back({{"name", funcName}});
+  // Each case registers its file's functions, so an indirect call (bctr through a thunk) finds them.
+  templateData["stems"] = nlohmann::json::array();
+  for (const auto& [stem, addresses] : functionsByFile) {
+    std::vector<size_t> sortedAddresses(addresses.begin(), addresses.end());
+    std::sort(sortedAddresses.begin(), sortedAddresses.end());
+    nlohmann::json stemFunctions = nlohmann::json::array();
+    for (size_t address : sortedAddresses)
+      stemFunctions.push_back({{"name", fmt::format("{}_{:X}", stem, address)},
+                               {"address", fmt::format("{:X}", address)}});
+    templateData["stems"].push_back({{"stem", stem}, {"functions", std::move(stemFunctions)}});
+  }
   templateData["functions_code"] = functionsOut.str();
   templateData["image_base"] = "82010000";
   templateData["image_size"] = "100000";
