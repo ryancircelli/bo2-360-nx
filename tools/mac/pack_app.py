@@ -425,9 +425,20 @@ def game_manifest(game):
     if not path.is_file():
         raise SystemExit(f'no app manifest {path}')
     m = tomllib.loads(path.read_text())
-    for k in ('name', 'executable', 'bundle_id', 'support_folder', 'env_prefix'):
-        if not m.get(k):
-            raise SystemExit(f'{path}: {k} is missing')
+    if not m.get('name'):
+        raise SystemExit(f'{path}: name is missing')
+    # Every other field follows from the folder name unless app.toml says otherwise.
+    defaults = {
+        'executable': game,                                  # the game binary in the build folder
+        'bundle_id': f'io.github.ryancircelli.{game}-360',
+        'support_folder': f'{game}-360',                     # ~/Library/Application Support/<this> and ~/Library/Logs/<this>
+        'env_prefix': game.upper(),                          # <PREFIX>_DATA, <PREFIX>_SUPPORT_DIR, <PREFIX>_LOG_DIR, ...
+        'data_path': f'~/Games/Xbox360/{game}/disc',         # the extracted disc; never copied into the app
+        'settings': 'app_settings.toml',                     # first settings file; the live copy is in the support folder
+        'shaders': False,                                    # no Vulkan shader library: draws with Metal
+        'microphone': f"{m['name']} uses the microphone only if the game asks for it.",
+    }
+    m = defaults | m
     m['dir'] = path.parent
     return m
 
