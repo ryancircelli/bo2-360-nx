@@ -228,3 +228,36 @@ TEST_CASE("Guest heaps align reserve commit protect and release allocations", "[
   REQUIRE(heap->Release(address));
   CHECK(heap->unreserved_page_count() == free_pages);
 }
+
+TEST_CASE("Alertable waits return USER_APC when an APC is queued; non-alertable waits time out", "[runtime][apc]") {
+  Fixture f;
+  RunOnHost(f, [&] {
+    auto* self = rex::system::XThread::GetCurrentThread();
+    auto event = f.New<rex::system::XEvent>();
+    event->Initialize(true, false);
+    uint64_t timeout = static_cast<uint64_t>(-10 * 10000ll);  // 10 ms
+
+    // Non-alertable: a queued APC must not interrupt the wait.
+    self->EnqueueApc(0, 0, 0, 0);
+    CHECK(event->Wait(3, 1, 0, &timeout) == X_STATUS_TIMEOUT);
+
+    // Alertable: the pending APC wakes the wait immediately.
+    CHECK(event->Wait(3, 1, 1, &timeout) == X_STATUS_USER_APC);
+
+    // DeliverAPCs drains the user queue; with nothing pending the wait times out again.
+    self->DeliverAPCs();
+    CHECK(event->Wait(3, 1, 1, &timeout) == X_STATUS_TIMEOUT);
+  });
+}
+
+TEST_CASE("Alertable delay is interrupted by an APC", "[runtime][apc]") {
+  Fixture f;
+  RunOnHost(f, [&] {
+    auto* self = rex::system::XThread::GetCurrentThread();
+    uint64_t interval = static_cast<uint64_t>(-10 * 10000ll);
+    self->EnqueueApc(0, 0, 0, 0);
+    CHECK(self->Delay(1, 1, interval) == X_STATUS_USER_APC);
+    self->DeliverAPCs();
+    CHECK(self->Delay(1, 1, interval) == X_STATUS_SUCCESS);
+  });
+}
