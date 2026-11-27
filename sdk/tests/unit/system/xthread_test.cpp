@@ -411,3 +411,36 @@ TEST_CASE("A zero-timeout wait on several objects sees a signaled one while anot
   hammer.join();
   CHECK(timeouts == 0);
 }
+
+TEST_CASE("A thread created without a processor mask gets its creator's CPU number", "[runtime][thread][cpu]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+
+  std::atomic<int> child_cpu{-1};
+  const uint32_t pinned_to_3 = (uint32_t(1) << 3) << 24;  // processor mask lives in the top byte of the flags
+  auto parent = rex::system::object_ref<rex::system::XHostThread>(
+      new rex::system::XHostThread(ks, 128 * 1024, pinned_to_3, [&]() {
+        auto child = rex::system::object_ref<rex::system::XHostThread>(
+            new rex::system::XHostThread(ks, 128 * 1024, 0, []() { return 0; }));
+        if (child->Create() == X_STATUS_SUCCESS) {
+          child_cpu.store(child->active_cpu(), std::memory_order_release);
+          child->Wait(0, 0, 0, nullptr);
+        }
+        return 0;
+      }));
+  REQUIRE(parent->Create() == X_STATUS_SUCCESS);
+  CHECK(parent->active_cpu() == 3);
+  REQUIRE(parent->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+  CHECK(child_cpu.load(std::memory_order_acquire) == 3);
+
+  // Made by a host thread (as the title's main thread is): CPU 0, however many threads came before.
+  auto top = rex::system::object_ref<rex::system::XHostThread>(
+      new rex::system::XHostThread(ks, 128 * 1024, rex::system::X_CREATE_SUSPENDED, []() { return 0; }));
+  REQUIRE(top->Create() == X_STATUS_SUCCESS);
+  CHECK(top->active_cpu() == 0);
+  REQUIRE(top->Resume() == X_STATUS_SUCCESS);
+  REQUIRE(top->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+}
