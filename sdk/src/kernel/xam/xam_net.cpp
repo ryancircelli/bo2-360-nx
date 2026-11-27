@@ -703,6 +703,8 @@ u32 NetDll_XNetGetTitleXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
 u32 NetDll_XNetCreateKey_entry(u32 caller, mapped_void key_id, mapped_void key) {
   if (!key_id || !key) return 0x2726;  // WSAEINVAL
   NetDll_XNetRandom_entry(caller, key_id, 8);
+  // XNKID type lives in ab[0]'s high bits; 0 = system link, matching xgi_app session ids.
+  key_id.as<uint8_t*>()[0] = 0;
   NetDll_XNetRandom_entry(caller, key, 16);
   return 0;
 }
