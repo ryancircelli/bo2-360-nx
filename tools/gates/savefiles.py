@@ -34,7 +34,7 @@ def changed(before, after):
             if value['size'] > 0 and before.get(name) != value}
 
 
-def reopened(log, writes):
+def reopened(log, writes, allow_rewrite=False):
     """Require the title's successful content-open path, not mere file presence."""
     for name in writes:
         parts = Path(name).parts
@@ -44,7 +44,7 @@ def reopened(log, writes):
         for line in log.splitlines():
             relevant = (any(part.lower() in line.lower() for part in names)
                         and re.search(r'XamContentCreate', line, re.I))
-            if relevant and opened and re.search(r'mode\s*[=:]?\s*1\b.*create', line, re.I):
+            if relevant and opened and not allow_rewrite and re.search(r'mode\s*[=:]?\s*1\b.*create', line, re.I):
                 # A new campaign after probing old content is not a reload proof.
                 opened = False
                 break

@@ -20,8 +20,8 @@
   ],
   "controls": {
     "movement": "stick l 0 -1 1200",
-    "camera-left": "stick r -0.45 0 250",
-    "camera-right": "stick r 0.45 0 250",
+    "camera-left": "stick r -0.45 0 600",
+    "camera-right": "stick r 0.45 0 600",
     "action": "press y 500",
     "movement-alternate": "stick l 0 1 800"
   }

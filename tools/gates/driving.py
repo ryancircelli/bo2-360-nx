@@ -43,7 +43,7 @@ def play_state(game, words, log):
     if game == 'nfsmw2012':
         unit = any(re.fullmatch(r'MPH[I1|]?', w['text'].translate(str.maketrans('МРН','MPH')), re.I)
                    and w['x'] > .85 and w['y'] > .8 for w in words)
-        map_hud = any(re.fullmatch(r'FAIRHAV\w{0,2}',w['text'],re.I) and w['x'] < .2 and w['y'] > .6 for w in words)
+        map_hud = any(re.search(r'AIRHAV',w['text'],re.I) and w['x'] < .2 and w['y'] > .6 for w in words)
         distance_hud = any(re.fullmatch(r'DISTANCE',w['text'],re.I) and w['x'] < .2 and w['y'] < .2 for w in words)
         return unit or (map_hud and distance_hud)
     if game == 'ac1':

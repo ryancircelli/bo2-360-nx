@@ -57,6 +57,11 @@ GAMES = {
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
 # MISMATCH only as its own word and never as a zero counter: the Metal plugin logs `verify_mismatch=0` in every perf line.
+def state_obs(out):
+    with open(os.path.join(out, 'play.json')) as f:
+        return json.load(f)['observations']
+
+
 CRASH = re.compile(r'(Guest access violation|unregistered function|(?<![\w])MISMATCH(?![\w]*\s*[=:]\s*0\b)|verify_mismatch=[1-9]|lost wake|Assertion failed|fatal error|Segmentation|EXC_BAD)')
 
 
@@ -512,11 +517,15 @@ def g_save(a, G):
         if a.game == 'gears':
             # The single-player menu defaults to New Campaign even when a save
             # exists. Explicitly select Continue during the reload half.
-            recipe['navigation'] = [dict(text=r'NEW\s+CAMPAIGN.*CONTINUE\s+CAMPAIGN',
+            recipe['navigation'] = [dict(text=r'CONTINUE.{0,20}LOAD\s+PREV',
                                          commands=['press down 250'], once=True)] + recipe['navigation']
         state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()
         evidence['reload_state'] = state
-        evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes)
+        # The title may rewrite its checkpoint after loading it; a New Campaign
+        # overwrite/difficulty prompt on screen is what disqualifies the reload.
+        seen = ' '.join(w['text'] for o in state_obs(reload_out) for w in o['words'])
+        evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes,
+                                               allow_rewrite=not re.search(r'CHECKPOINT\s+OVERWRITE|SELECT\s+DIFFICULTY', seen, re.I))
         evidence['copied_written_bytes'] = all(reload_game.initial_saves.get(name) == value for name, value in writes.items())
         evidence['passed'] = bool(evidence['reopened'] and evidence['copied_written_bytes']
                                   and state['state'] and not CRASH.search(reload_game.log_text()))
