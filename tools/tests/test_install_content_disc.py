@@ -91,6 +91,21 @@ class InstallContentDisc(unittest.TestCase):
             self.run_install()
         self.assertFalse((self.source / "12345678").exists())
 
+    def test_iso_input_extracts_embedded_package(self):
+        image = bytearray(34 * 2048)
+        magic = b"MICROSOFT*XBOX*MEDIA"
+        image[32 * 2048:32 * 2048 + 20] = magic
+        image[33 * 2048 - 20:33 * 2048] = magic
+        struct.pack_into("<II", image, 32 * 2048 + 20, 33, 2048)
+        name = self.pkg.name.encode("ascii")
+        struct.pack_into("<HHIIBB", image, 33 * 2048, 0, 0, 34, self.pkg.stat().st_size, 0, len(name))
+        image[33 * 2048 + 14:33 * 2048 + 14 + len(name)] = name
+        image.extend(self.pkg.read_bytes())
+        iso = self.root / "disc.iso"
+        iso.write_bytes(image)
+        disc.main([str(iso), "--title-id", "12345678", "--out", str(self.out)])
+        self.assertEqual(next(self.out.rglob("addon.esm")).read_bytes(), b"synthetic DLC")
+
 
 if __name__ == "__main__":
     unittest.main()
