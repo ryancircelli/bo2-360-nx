@@ -741,119 +741,328 @@ REX_EXPORT(__imp__XamIsNuiUIActive, rex::kernel::xam::XamIsUIActive_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByTitle, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByXenonButton, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB_RETURN(__imp__XamIsUIThread, 0);  // FALSE: no guide/UI state emulated
-REX_EXPORT_STUB(__imp__XamNavigate);
-REX_EXPORT_STUB(__imp__XamNavigateBack);
-REX_EXPORT_STUB(__imp__XamOverrideHudOpenType);
-REX_EXPORT_STUB(__imp__XamShowAchievementDetailsUI);
+REX_EXPORT_STUB_RETURN(__imp__XamNavigate, 0x65B);
+REX_EXPORT_STUB_RETURN(__imp__XamNavigateBack, 0x65B);
+REX_EXPORT_STUB_RETURN(__imp__XamOverrideHudOpenType, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamShowAchievementDetailsUI, 0x4C7);
 REX_EXPORT(__imp__XamShowAchievementsUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB(__imp__XamShowAchievementsUIEx);
-REX_EXPORT_STUB(__imp__XamShowAndWaitForMessageBoxEx);
-REX_EXPORT_STUB(__imp__XamShowAvatarAwardGamesUI);
-REX_EXPORT_STUB(__imp__XamShowAvatarAwardsUI);
-REX_EXPORT_STUB(__imp__XamShowAvatarMiniCreatorUI);
-REX_EXPORT_STUB(__imp__XamShowBadDiscErrorUI);
-REX_EXPORT_STUB(__imp__XamShowBeaconsUI);
-REX_EXPORT_STUB(__imp__XamShowBrandedKeyboardUI);
-REX_EXPORT_STUB(__imp__XamShowChangeGamerTileUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowAchievementsUIEx, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowAndWaitForMessageBoxEx, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowAvatarAwardGamesUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowAvatarAwardsUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowAvatarMiniCreatorUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowBadDiscErrorUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowBeaconsUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowBrandedKeyboardUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowChangeGamerTileUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowComplaintUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowCreateProfileUI);
-REX_EXPORT_STUB(__imp__XamShowCreateProfileUIEx);
-REX_EXPORT_STUB(__imp__XamShowCsvTransitionUI);
-REX_EXPORT_STUB(__imp__XamShowCustomMessageComposeUI);
-REX_EXPORT_STUB(__imp__XamShowCustomPlayerListUI);
-REX_EXPORT_STUB(__imp__XamShowDirectAcquireUI);
-REX_EXPORT_STUB(__imp__XamShowEditProfileUI);
-REX_EXPORT_STUB(__imp__XamShowFirstRunWelcomeUI);
-REX_EXPORT_STUB(__imp__XamShowFitnessBodyProfileUI);
-REX_EXPORT_STUB(__imp__XamShowFitnessClearUI);
-REX_EXPORT_STUB(__imp__XamShowFitnessWarnAboutPrivacyUI);
-REX_EXPORT_STUB(__imp__XamShowFitnessWarnAboutTimeUI);
-REX_EXPORT_STUB(__imp__XamShowFofUI);
-REX_EXPORT_STUB(__imp__XamShowForcedNameChangeUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowCreateProfileUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowCreateProfileUIEx, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowCsvTransitionUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowCustomMessageComposeUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowCustomPlayerListUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowDirectAcquireUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowEditProfileUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFirstRunWelcomeUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessBodyProfileUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessClearUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessWarnAboutPrivacyUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessWarnAboutTimeUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFofUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowForcedNameChangeUI, 0x4C7);
 REX_EXPORT(__imp__XamShowFriendRequestUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowFriendsUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB(__imp__XamShowFriendsUIp);
+REX_EXPORT_STUB_RETURN(__imp__XamShowFriendsUIp, 0x4C7);
 REX_EXPORT(__imp__XamShowGameInviteUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowGameVoiceChannelUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB(__imp__XamShowGamerCardUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGamerCardUI, 0x4C7);
 REX_EXPORT(__imp__XamShowGamerCardUIForXUID, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB(__imp__XamShowGamerCardUIForXUIDp);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGamerCardUIForXUIDp, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGamesUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowGenericOnlineAppUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGenericOnlineAppUI, 0x4C7);
 REX_EXPORT(__imp__XamShowGoldUpgradeUI, rex::kernel::xam::XamShowGoldUpgradeUI_entry)
-REX_EXPORT_STUB(__imp__XamShowGraduateUserUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGraduateUserUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGuideUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowJoinPartyUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowJoinSessionByIdInProgressUI);
-REX_EXPORT_STUB(__imp__XamShowJoinSessionInProgressUI);
-REX_EXPORT_STUB(__imp__XamShowKeyboardUIMessenger);
+REX_EXPORT_STUB_RETURN(__imp__XamShowJoinSessionByIdInProgressUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowJoinSessionInProgressUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowKeyboardUIMessenger, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowLiveSignupUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowLiveUpsellUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowLiveUpsellUIEx, 0x32);  // offline: not supported
 REX_EXPORT(__imp__XamShowMarketplaceDownloadItemsUI,
            rex::kernel::xam::XamShowMarketplaceDownloadItemsUI_entry)
-REX_EXPORT_STUB(__imp__XamShowMarketplaceGetOrderReceipts);
-REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUI);
-REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUIEx);
+REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceGetOrderReceipts, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplacePurchaseOrderUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplacePurchaseOrderUIEx, 0x4C7);
 REX_EXPORT(__imp__XamShowMarketplaceUI, rex::kernel::xam::XamShowMarketplaceUI_entry)
 REX_EXPORT(__imp__XamShowMarketplaceUIEx, rex::kernel::xam::XamShowMarketplaceUIEx_entry)
-REX_EXPORT_STUB(__imp__XamShowMessageBox);
+REX_EXPORT_STUB_RETURN(__imp__XamShowMessageBox, 0x4C7);
 REX_EXPORT(__imp__XamShowMessageComposeUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowMessagesUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessengerUI, 0x32);  // offline: not supported
 REX_EXPORT(__imp__XamShowMultiplayerUpgradeUI, rex::kernel::xam::XamShowMultiplayerUpgradeUI_entry)
-REX_EXPORT_STUB(__imp__XamShowNetworkStorageSyncUI);
-REX_EXPORT_STUB(__imp__XamShowNuiAchievementsUI);
-REX_EXPORT_STUB(__imp__XamShowNuiCommunitySessionsUI);
-REX_EXPORT_STUB(__imp__XamShowNuiControllerRequiredUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNetworkStorageSyncUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiAchievementsUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiCommunitySessionsUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiControllerRequiredUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiDeviceSelectorUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowNuiDirtyDiscErrorUI);
-REX_EXPORT_STUB(__imp__XamShowNuiFriendRequestUI);
-REX_EXPORT_STUB(__imp__XamShowNuiFriendsUI);
-REX_EXPORT_STUB(__imp__XamShowNuiGameInviteUI);
-REX_EXPORT_STUB(__imp__XamShowNuiGamerCardUIForXUID);
-REX_EXPORT_STUB(__imp__XamShowNuiGamesUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiDirtyDiscErrorUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiFriendRequestUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiFriendsUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiGameInviteUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiGamerCardUIForXUID, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiGamesUI, 0x4C7);
 REX_EXPORT(__imp__XamShowNuiGuideUI, rex::kernel::xam::XamShowNuiGuideUI_entry)
 REX_EXPORT(__imp__XamShowNuiHardwareRequiredUI, rex::kernel::xam::XamShowNuiHardwareRequiredUI_entry)
-REX_EXPORT_STUB(__imp__XamShowNuiJoinSessionInProgressUI);
-REX_EXPORT_STUB(__imp__XamShowNuiMarketplaceDownloadItemsUI);
-REX_EXPORT_STUB(__imp__XamShowNuiMarketplaceUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiJoinSessionInProgressUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMarketplaceDownloadItemsUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMarketplaceUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMessageBoxUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowNuiMessagesUI);
-REX_EXPORT_STUB(__imp__XamShowNuiPartyUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMessagesUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiPartyUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiSigninUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowNuiVideoRichPresenceUI);
-REX_EXPORT_STUB(__imp__XamShowOptionalMediaUpdateRequiredUI);
-REX_EXPORT_STUB(__imp__XamShowOptionalMediaUpdateRequiredUIEx);
+REX_EXPORT_STUB_RETURN(__imp__XamShowNuiVideoRichPresenceUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowOptionalMediaUpdateRequiredUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowOptionalMediaUpdateRequiredUIEx, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowOptionsUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowPamUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPamUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowPartyInviteUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowPartyJoinInProgressUI);
-REX_EXPORT_STUB(__imp__XamShowPasscodeVerifyUI);
-REX_EXPORT_STUB(__imp__XamShowPasscodeVerifyUIEx);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPartyJoinInProgressUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPasscodeVerifyUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPasscodeVerifyUIEx, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowPaymentOptionsUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowPersonalizationUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPersonalizationUI, 0x4C7);
 REX_EXPORT(__imp__XamShowPlayerReviewUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowPlayersUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowPrivateChatInviteUI, 0x32);  // offline: not supported
 REX_EXPORT(__imp__XamShowQuickChatUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB(__imp__XamShowQuickChatUIp);
+REX_EXPORT_STUB_RETURN(__imp__XamShowQuickChatUIp, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowQuickLaunchUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowReputationUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowSigninUIEx);
-REX_EXPORT_STUB(__imp__XamShowSignupCreditCardUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowSigninUIEx, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowSignupCreditCardUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowSocialPostUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowStorePickerUI);
-REX_EXPORT_STUB(__imp__XamShowTFAUI);
-REX_EXPORT_STUB(__imp__XamShowTermsOfUseUI);
-REX_EXPORT_STUB(__imp__XamShowUpdaterUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowStorePickerUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowTFAUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowTermsOfUseUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamShowUpdaterUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowVideoChatInviteUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowVideoRichPresenceUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowVideoRichPresenceUI, 0x4C7);
 REX_EXPORT(__imp__XamShowVoiceMailUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB(__imp__XamShowVoiceSettingsUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowVoiceSettingsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowWhatsOnUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowWordRegisterUI);
-REX_EXPORT_STUB(__imp__XamSysUiDisableAutoClose);
+REX_EXPORT_STUB_RETURN(__imp__XamShowWordRegisterUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamSysUiDisableAutoClose, 0);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_Clear, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_Construct, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_Destruct, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_SetBool, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_SetColorFromUint, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_SetFloat, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_SetInt, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_SetString, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUIElementPropVal_SetUint, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XUITimeline_Run, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamLoaderIsKinectUIPreferredForLogonTitle, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamResumeUpdaterUI, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamTestShowNuiTroubleshooterUI, 0x4C7);
+REX_EXPORT_STUB_RETURN(__imp__XamUIThreadDisableFontPatching, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamUIThreadEnableFontPatching, 0);
+REX_EXPORT_STUB_RETURN(__imp__XuiAlloc, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiAnimRun, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiApplyLocale, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiAttachTextureBrush, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiBroadcastMessage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiBrushGetTexture, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiBubbleMessage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiClassDerivesFrom, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlAttachVisual, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlGetItemAssociation, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlGetNavigation, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlGetVisual, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlIsBackButton, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlIsNavButton, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlPlayOptionalVisual, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlSetItemAssociation, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiControlWantsUnfocusedInput, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiCopyString, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiCreateObject, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiCreateSolidBrush, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiCreateTextureBrush, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiDefault_EmptyString, 0);
+REX_EXPORT_STUB_RETURN(__imp__XuiDefault_False, 0);
+REX_EXPORT_STUB_RETURN(__imp__XuiDefault_IntegerZero, 0);
+REX_EXPORT_STUB_RETURN(__imp__XuiDefault_True, 0);
+REX_EXPORT_STUB_RETURN(__imp__XuiDestroyBrush, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiDestroyObject, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiDrawShape, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiDynamicCast, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiEditGetTextLimit, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiEditSetTextFormatInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiEditSetTextLimit, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementAddChild, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementBeginRender, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementDisallowRecursiveTimelineControl, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementDiscardResources, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementEnableInput, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementEndRender, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementFindNamedFrame, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetChildById, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetDescendantById, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetFirstChild, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetFocusUser, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetFullXForm, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetId, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetLastChild, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetNext, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetOpacity, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetParent, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetPivot, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetPosition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetPrev, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetScale, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetScreenPositionCenter, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetTimeline, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetUserData, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetUserFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementGetXForm, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementHasFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementInitFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementInitUserFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementInputEnabled, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementInsertChild, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementIsDescendant, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementLayoutTree, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementPlayNamedFrames, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementPlayTimeline, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementRenderChildren, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetBounds, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetHittable, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetOpacity, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetPivot, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetPosition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetRotation, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetScale, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetUserData, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementSetUserFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementTreeGetFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementTreeHasFocus, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiElementUnlink, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFigureClose, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFigureGetShape, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFigureSetFill, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFigureSetShape, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFigureSetTexture, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFillRect, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFindClass, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFree, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFreeStringTable, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFreeUnusedTextures, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiFreeVisuals, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiGetBaseClass, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiGetBaseObject, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiGetClass, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiGetObjectClass, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiGetOuter, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiHandleIsValid, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiImageElementGetImagePath, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiImageElementSetImagePath, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiInit, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiIsInstanceOf, 0);
+REX_EXPORT_STUB_RETURN(__imp__XuiKillTimer, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiListEnableItemOverride, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiListGetDefaultItemSize, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiLoadFromBinary, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiLoadStringTableFromFile, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiLoadVisualFromBinary, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiLookupStringTable, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiLookupStringTableByIndex, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiMatrixMultiply, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiNavButtonGetPressPath, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiObjectFromHandle, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiObjectGetProperty, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiObjectGetPropertyDef, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiObjectGetPropertyId, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiObjectSetProperty, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiPNGTextureLoader, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiProcessInput, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarGetRange, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarGetValue, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarSetRange, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarSetValue, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRealloc, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRegisterClass, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderBegin, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderCreateDC, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderDCDeviceChanged, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderDestroyDC, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderEnd, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderGetBackBufferSize, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderGetColorSpace, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderGetDevice, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderGetViewTransform, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderGetXuiDevice, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderInit, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderInitShared, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderPresent, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderRestoreState, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderSetViewTransform, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiRenderUninit, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceClose, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceComposeLocator, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceGetBuffer, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceGetPackageEntryCount, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceGetPackageEntryInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceGetTotalSize, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceLoadAll, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceLocatorIsAbsolute, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceOpen, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceOpenAndVerifyNoLoc, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceOpenNoLoc, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceOpenPackage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceRead, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceReleasePackage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiResourceSeek, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneCreate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneEnableTransitionDependency, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneInterruptTransitions, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneIsInTransition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneNavigateBack, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneNavigateBackToFirst, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneNavigateFirst, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSceneNavigateForward, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiScenePlayBackFromTransition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiScenePlayBackToTransition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiScenePlayFromTransition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiScenePlayToTransition, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSelectBrush, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSelectBrushEx, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSendMessage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSetLocale, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSetMessageFilter, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSetTimer, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSliderGetRange, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSliderGetStep, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSliderGetValue, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSliderSetRange, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSliderSetStep, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiSliderSetValue, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTabSceneGetCount, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTabSceneGetCurrentTab, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTabSceneGoto, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTextElementGetText, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTextElementMeasureText, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTextElementSetText, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiTimersRun, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiUninit, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiUnregisterClass, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiVec2TransformCoord, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiVisualCreateInstance, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiVisualGetBasePath, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XuiVisualSetBasePath, 0x80004005);

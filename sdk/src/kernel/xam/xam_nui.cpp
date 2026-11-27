@@ -112,16 +112,16 @@ u32 XamIsNatalPlaybackEnabled_entry(u32, u32) { return X_ERROR_SUCCESS; }
 REX_EXPORT(__imp__XamNuiGetDeviceStatus, rex::kernel::xam::XamNuiGetDeviceStatus_entry)
 REX_EXPORT(__imp__XamShowNuiTroubleshooterUI, rex::kernel::xam::XamShowNuiTroubleshooterUI_entry)
 
-REX_EXPORT_STUB(__imp__XamEnableNatalPlayback);
-REX_EXPORT_STUB(__imp__XamEnableNuiAutomation);
-REX_EXPORT_STUB(__imp__XamKinectGetHardwareType);
+REX_EXPORT_STUB_RETURN(__imp__XamEnableNatalPlayback, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamEnableNuiAutomation, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamKinectGetHardwareType, 0);
 REX_EXPORT_STUB(__imp__XamNatalDeviceAudioCalibrate);
-REX_EXPORT_STUB(__imp__XamNuiCameraAdjustTilt);
-REX_EXPORT_STUB(__imp__XamNuiCameraElevationAutoTilt);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraAdjustTilt, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationAutoTilt, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationGetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
-REX_EXPORT_STUB(__imp__XamNuiCameraElevationReverseAutoTilt);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationReverseAutoTilt, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
-REX_EXPORT_STUB(__imp__XamNuiCameraElevationSetCallback);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetCallback, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT(__imp__XamNuiCameraGetTiltControllerType, rex::kernel::xam::XamNuiCameraGetTiltControllerType_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
@@ -129,41 +129,41 @@ REX_EXPORT(__imp__XamNuiCameraSetFlags, rex::kernel::xam::XamNuiCameraSetFlags_e
 REX_EXPORT(__imp__XamNuiCameraTiltGetStatus, rex::kernel::xam::XamNuiCameraTiltGetStatus_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltReportStatus, 0x80004005);  // X_E_FAIL: no Kinect
 REX_EXPORT(__imp__XamNuiCameraTiltSetCallback, rex::kernel::xam::XamNuiCameraTiltSetCallback_entry)
-REX_EXPORT_STUB(__imp__XamNuiEnableChatMic);
-REX_EXPORT_STUB(__imp__XamNuiGetCameraIntrinsics);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiEnableChatMic, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetCameraIntrinsics, 0x80004005);
 REX_EXPORT(__imp__XamNuiGetDepthCalibration, rex::kernel::xam::XamNuiGetDepthCalibration_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiGetDeviceSerialNumber, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
-REX_EXPORT_STUB(__imp__XamNuiGetFanRate);
-REX_EXPORT_STUB(__imp__XamNuiGetLoadedDepthCalibration);
-REX_EXPORT_STUB(__imp__XamNuiGetSupportString);
-REX_EXPORT_STUB(__imp__XamNuiGetSystemGestureControl);
-REX_EXPORT_STUB(__imp__XamNuiGetTrueColorInfo);
-REX_EXPORT_STUB(__imp__XamNuiHudEnableInputFilter);
-REX_EXPORT_STUB(__imp__XamNuiHudGetEngagedEnrollmentIndex);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetFanRate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetLoadedDepthCalibration, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetSupportString, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetSystemGestureControl, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetTrueColorInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiHudEnableInputFilter, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiHudGetEngagedEnrollmentIndex, 0x80004005);
 REX_EXPORT(__imp__XamNuiHudGetEngagedTrackingID, rex::kernel::xam::XamNuiHudGetEngagedTrackingID_entry)
 REX_EXPORT(__imp__XamNuiHudGetInitializeFlags, rex::kernel::xam::XamNuiHudGetInitializeFlags_entry)
 REX_EXPORT(__imp__XamNuiHudGetVersions, rex::kernel::xam::XamNuiHudGetVersions_entry)
-REX_EXPORT_STUB(__imp__XamNuiHudInterpretFrame);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiHudInterpretFrame, 0x80004005);
 REX_EXPORT(__imp__XamNuiHudIsEnabled, rex::kernel::xam::XamNuiHudIsEnabled_entry)
 REX_EXPORT(__imp__XamNuiHudSetEngagedTrackingID, rex::kernel::xam::XamNuiHudSetEngagedTrackingID_entry)
 REX_EXPORT(__imp__XamNuiIdentityGetSessionId, rex::kernel::xam::XamNuiIdentityGetSessionId_entry)
 REX_EXPORT(__imp__XamNuiIdentityAbort, rex::kernel::xam::XamNuiIdentityAbort_entry)
 REX_EXPORT(__imp__XamNuiIdentityEnrollForSignIn, rex::kernel::xam::XamNuiIdentityEnrollForSignIn_entry)
-REX_EXPORT_STUB(__imp__XamNuiIdentityGetColorTexture);
-REX_EXPORT_STUB(__imp__XamNuiIdentityGetEnrollmentInfo);
-REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlags);
-REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlagsMessage);
-REX_EXPORT_STUB(__imp__XamNuiIdentityIdentifyWithBiometric);
-REX_EXPORT_STUB(__imp__XamNuiIdentityUnenroll);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetColorTexture, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetEnrollmentInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetQualityFlags, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityGetQualityFlagsMessage, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityIdentifyWithBiometric, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiIdentityUnenroll, 0x80004005);
 REX_EXPORT(__imp__XamNuiIsChatMicEnabled, rex::kernel::xam::XamNuiIsChatMicEnabled_entry)
 REX_EXPORT(__imp__XamNuiIsDeviceReady, rex::kernel::xam::XamNuiIsDeviceReady_entry)
-REX_EXPORT_STUB(__imp__XamNuiNatalCameraUpdateComplete);
-REX_EXPORT_STUB(__imp__XamNuiNatalCameraUpdateStarting);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiNatalCameraUpdateComplete, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiNatalCameraUpdateStarting, 0x80004005);
 REX_EXPORT(__imp__XamNuiPlayerEngagementUpdate, rex::kernel::xam::XamNuiPlayerEngagementUpdate_entry)
-REX_EXPORT_STUB(__imp__XamNuiSetForceDeviceOff);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiSetForceDeviceOff, 0);
 REX_EXPORT(__imp__XamNuiSkeletonGetBestSkeletonIndex, rex::kernel::xam::XamNuiSkeletonGetBestSkeletonIndex_entry)
-REX_EXPORT_STUB(__imp__XamNuiSkeletonScoreUpdate);
-REX_EXPORT_STUB(__imp__XamNuiStoreDepthCalibration);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiSkeletonScoreUpdate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiStoreDepthCalibration, 0x80004005);
 
 REX_EXPORT(__imp__XamIsNuiAutomationEnabled, rex::kernel::xam::XamIsNuiAutomationEnabled_entry)
 

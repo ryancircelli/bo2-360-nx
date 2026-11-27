@@ -80,3 +80,19 @@ TEST_CASE("Kinect export hooks retain the full guest return register", "[kernel]
   __imp__XamNuiSkeletonGetBestSkeletonIndex(context, nullptr);
   CHECK(context.r3.u64 == 0xFFFFFFFFFFFFFFFFull);
 }
+
+// Stub-family contract: deliberate returns, never a junk value (spec round 2).
+extern "C" void __imp__XamNavigate(PPCContext&, uint8_t*);
+extern "C" void __imp__XamShowGamerCardUI(PPCContext&, uint8_t*);
+extern "C" void __imp__XamNuiGetDeviceStatus(PPCContext&, uint8_t*);
+extern "C" void __imp__XamInputGetDeviceStats(PPCContext&, uint8_t*);
+TEST_CASE("Stub families return deliberate codes", "[kernel][stubs]") {
+  PPCContext ctx{};
+  uint8_t base[16]{};
+  __imp__XamNavigate(ctx, base);
+  CHECK(ctx.r3.u64 == 0x65B);
+  __imp__XamInputGetDeviceStats(ctx, base);
+  CHECK(ctx.r3.u64 == 0x48F);
+  __imp__XamShowGamerCardUI(ctx, base);
+  CHECK(ctx.r3.u64 == 0x4C7);
+}

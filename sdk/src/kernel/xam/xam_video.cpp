@@ -38,7 +38,7 @@ u32 XGetVideoCapabilities_entry() {
 REX_EXPORT(__imp__XGetVideoMode, rex::kernel::xam::XGetVideoMode_entry)
 REX_EXPORT(__imp__XGetVideoCapabilities, rex::kernel::xam::XGetVideoCapabilities_entry)
 
-REX_EXPORT_STUB(__imp__XGetVideoFlags);
-REX_EXPORT_STUB(__imp__XGetVideoStandard);
-REX_EXPORT_STUB(__imp__XamLoadExtraAVCodecs2);
-REX_EXPORT_STUB(__imp__XamUnloadExtraAVCodecs2);
+REX_EXPORT_STUB_RETURN(__imp__XGetVideoFlags, 0x0F);
+REX_EXPORT_STUB_RETURN(__imp__XGetVideoStandard, 1);
+REX_EXPORT_STUB_RETURN(__imp__XamLoadExtraAVCodecs2, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamUnloadExtraAVCodecs2, 0);

@@ -229,25 +229,25 @@ REX_EXPORT(__imp__XamInputGetKeystroke, rex::kernel::xam::XamInputGetKeystroke_e
 REX_EXPORT(__imp__XamInputGetKeystrokeEx, rex::kernel::xam::XamInputGetKeystrokeEx_entry)
 REX_EXPORT(__imp__XamUserGetDeviceContext, rex::kernel::xam::XamUserGetDeviceContext_entry)
 
-REX_EXPORT_STUB(__imp__XamInputControl);
-REX_EXPORT_STUB(__imp__XamInputEnableAutobind);
-REX_EXPORT_STUB(__imp__XamInputGetDeviceStats);
-REX_EXPORT_STUB(__imp__XamInputGetFailedConnectionOrBind);
-REX_EXPORT_STUB(__imp__XamInputGetKeyLocks);
-REX_EXPORT_STUB(__imp__XamInputGetKeystrokeHud);
-REX_EXPORT_STUB(__imp__XamInputGetKeystrokeHudEx);
-REX_EXPORT_STUB(__imp__XamInputGetUserVibrationLevel);
+REX_EXPORT_STUB_RETURN(__imp__XamInputControl, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputEnableAutobind, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetDeviceStats, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetFailedConnectionOrBind, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetKeyLocks, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetKeystrokeHud, 0x10D2);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetKeystrokeHudEx, 0x10D2);
+REX_EXPORT_STUB_RETURN(__imp__XamInputGetUserVibrationLevel, 0);
 REX_EXPORT(__imp__XamInputNonControllerGetRaw, rex::kernel::xam::XamInputNonControllerGetRaw_entry)
 REX_EXPORT(__imp__XamInputNonControllerGetRawEx, rex::kernel::xam::XamInputNonControllerGetRawEx_entry)
 REX_EXPORT(__imp__XamInputNonControllerSetRaw, rex::kernel::xam::XamInputNonControllerSetRaw_entry)
 REX_EXPORT(__imp__XamInputNonControllerSetRawEx, rex::kernel::xam::XamInputNonControllerSetRawEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamInputRawState, 0x48F);
-REX_EXPORT_STUB(__imp__XamInputResetLayoutKeyboard);
-REX_EXPORT_STUB(__imp__XamInputSendStayAliveRequest);
-REX_EXPORT_STUB(__imp__XamInputSendXenonButtonPress);
-REX_EXPORT_STUB(__imp__XamInputSetKeyLocks);
-REX_EXPORT_STUB(__imp__XamInputSetKeyboardTranslationHud);
-REX_EXPORT_STUB(__imp__XamInputSetLayoutKeyboard);
-REX_EXPORT_STUB(__imp__XamInputSetMinMaxAuthDelay);
-REX_EXPORT_STUB(__imp__XamInputSetTextMessengerIndicator);
-REX_EXPORT_STUB(__imp__XamInputToggleKeyLocks);
+REX_EXPORT_STUB_RETURN(__imp__XamInputResetLayoutKeyboard, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSendStayAliveRequest, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSendXenonButtonPress, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetKeyLocks, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetKeyboardTranslationHud, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetLayoutKeyboard, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetMinMaxAuthDelay, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputSetTextMessengerIndicator, 0);
+REX_EXPORT_STUB_RETURN(__imp__XamInputToggleKeyLocks, 0);
