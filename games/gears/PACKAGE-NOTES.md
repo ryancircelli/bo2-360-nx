@@ -13,7 +13,7 @@ A future `packages/gears` manifest needs:
   prefix `gears`. The supplied overrides and gaps are analysis-derived entries,
   rather than gameplay hooks. Include all executable sections, including Bink
   and the `.embsec_` sections, when checking coverage.
-- The generic manifest registration used by `src/main.cpp`, adapted to
+- The generic manifest registration from `rexglue_game_defaults(gears MAIN)`, adapted to
   metal360's package API and pinned SDK version. No native gameplay patch has
   been necessary to reach and run the opening prison campaign scene.
 - Metal as the default GPU plugin, with the shared renderer/runtime dependencies.

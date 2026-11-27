@@ -18,6 +18,9 @@
 #include "rex_game_manifest.h"  // rex::kGameManifest, from games/fh1/game.toml
 
 namespace {
+// Must match [renderer.settings] metal_shader_constants in games/fh1/game.toml.
+constexpr const char* kBlurThreshold = "ps E68FE55ECD482EC5 253 3 0.5";
+
 // The Guide's Game blade: the settings this port already has (games/fh1/app_settings.toml). Every item is a cvar,
 // so the change goes through the cvar path (no guest state is touched from the UI thread).
 void RegisterGuidePage() {
@@ -27,7 +30,7 @@ void RegisterGuidePage() {
   page.title = "Forza Horizon";
   page.description = "Settings for Forza Horizon.";
   page.items = {
-      guide::CvarToggle("metal_fh1_blur_threshold", "Speed Blur Fix",
+      guide::CvarChoice("metal_shader_constants", {kBlurThreshold, ""}, {"On", "Off"}, "Speed Blur Fix",
                         "Keeps the speed blur off the car and the parts of the scene it should not touch."),
       guide::CvarToggle("gpu_allow_invalid_fetch_constants", "Draw All Geometry",
                         "Draws objects the game marks oddly instead of dropping them. Off leaves holes in the world."),

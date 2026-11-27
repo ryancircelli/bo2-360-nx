@@ -1,19 +1,11 @@
 # The macOS app of this game: read by tools/mac/pack_app.py --game nfsmw (tools/mac/make_game_app.sh nfsmw).
 # Game facts the executable needs (title id, executable, renderer defaults) are in game.toml; this file only says how
-# the app around it is named, where it keeps saves and logs, and where it looks for the game data.
+# the app around it is named. Saves folder, data path, bundle id and the rest follow from the folder name
+# (tools/mac/pack_app.py game_manifest) unless set here.
 name = "Need for Speed Most Wanted"                         # the app's name and its launcher (CFBundleExecutable)
-executable = "nfsmw"                    # the game binary in the build folder
-bundle_id = "io.github.ryancircelli.nfsmw-360"
-version = "0.1.0"
-support_folder = "nfsmw-360"             # ~/Library/Application Support/<this> (saves, settings) and ~/Library/Logs/<this>
-env_prefix = "NFSMW"                 # NFSMW_DATA, NFSMW_SUPPORT_DIR, NFSMW_LOG_DIR, ...
-data_path = "~/Games/Xbox360/nfsmw/disc"       # the extracted disc (default.xex at its top); never copied into the app
-settings = "app_settings.toml"               # first settings file; the app keeps the live copy in the support folder
-shaders = false                              # no Vulkan shader library: draws with Metal
-microphone = "Need for Speed Most Wanted uses the microphone only if the game asks for it."
 
 # What tools/mac/build_app.py builds this app from. The recompiled code is made from these exact executables: another
 # version of the disc (or a title update, which patches the code) would need its own recompile, so the builder refuses it.
 [source]
 executables = { "default.xex" = "aebdf3c14d1e4e4ed2c130d94bc1a0e97bd6d5bf39bdfdef33c3909c9cc4ba4c" }
-codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # as tools/nfsmw_codegen.sh
+codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # run by tools/mac/build_app.py and tools/game_codegen.sh

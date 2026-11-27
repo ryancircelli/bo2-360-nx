@@ -1,9 +1,9 @@
-# Need for Speed Hot Pursuit for macOS: settings
+# A recompiled game for macOS: settings (the default for every game without its own games/<game>/app_settings.toml)
 #
-# The app copies this file to ~/Library/Application Support/nfshp-360/nfshp.toml the first time it starts and
+# The app copies this file to ~/Library/Application Support/<game>-360/<game>.toml the first time it starts and
 # reads that copy every time after; edit the copy. Each setting is one line, name = value; a line that starts with #
 # is a comment. The names are the same as the command-line options (--name=value). Options in
-# ~/Library/Application Support/nfshp-360/args.txt win over this file.
+# ~/Library/Application Support/<game>-360/args.txt win over this file.
 
 # Window (false) or full screen (true).
 fullscreen = false

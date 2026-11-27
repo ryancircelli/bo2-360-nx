@@ -7581,7 +7581,7 @@ bool MetalCommandProcessor::PrepareDrawConstants(
   // Override uploads are rebuilt per draw, including on removal, without
   // mutating guest registers. Existing payload deduplication still applies.
   if (!REXCVAR_GET(metal_shader_constant_overrides).empty() ||
-      REXCVAR_GET(metal_fh1_blur_threshold)) {
+      !pipeline_cache_->fixed_constant_overrides.empty()) {
     cbuffer_binding_float_vertex_.up_to_date = false;
     cbuffer_binding_float_pixel_.up_to_date = false;
   }
@@ -7590,12 +7590,8 @@ bool MetalCommandProcessor::PrepareDrawConstants(
     if (!map) return;
     const auto* shader = pixel ? pixel_shader : vertex_shader;
     if (!shader) return;
-    if (pixel && REXCVAR_GET(metal_fh1_blur_threshold)) {
-      static const std::vector<MetalConstantOverride> blur = {
-          {true, UINT64_C(0xE68FE55ECD482EC5), 253, 3, 0.5f}};
-      ApplyMetalConstantOverrides(blur, true, shader->ucode_data_hash(),
-          map->float_bitmap, data, size);
-    }
+    ApplyMetalConstantOverrides(pipeline_cache_->fixed_constant_overrides, pixel,
+        shader->ucode_data_hash(), map->float_bitmap, data, size);
     ApplyMetalConstantOverrides(pipeline_cache_->constant_overrides, pixel,
         shader->ucode_data_hash(), map->float_bitmap, data, size);
   };

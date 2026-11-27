@@ -3,5 +3,5 @@
 #include "generated/default/fh1_pch.h"
 #include <rex/system/patch.h>
 
-// sub_82416380: D3D draw function (contains the PinyonShiftD3dDrawExit hook site), called per draw.
+// sub_82416380: D3D draw function, called per draw.
 REX_PATCHABLE(sub_82416380)
