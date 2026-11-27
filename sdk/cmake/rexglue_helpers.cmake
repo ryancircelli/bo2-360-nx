@@ -342,3 +342,53 @@ function(rexglue_game_manifest target_name manifest_path)
     endif()
     target_include_directories(${target_name} PRIVATE "${_rexglue_dir}")
 endfunction()
+
+#==========================================================
+# rexglue_game_defaults(<name>)
+#
+# The setup every recompiled game shares, after rexglue_setup_target(<name>):
+#  - imgui/renderdoc/Vulkan headers on <name>: rex_app.cpp includes them, but
+#    rexruntime links them privately, so they do not reach a game build that
+#    adds the SDK as a subdirectory.
+#  - <name>_recomp and, for guest-DLL games, <name>_game_module: the generated
+#    PCH plus an empty REX_GUEST_BARRIER() appended as their precompiled header
+#    (<name>_guest_memory.h, written to the build dir), and -fasync-exceptions
+#    (guest SEH scopes emit __try/__except; clang spells the flag the GNU way).
+#  - macOS: generated/{default,game}/<name>_register.cpp at -O0 without the
+#    PCH. Apple clang takes ~forever on the registration table at -O3; at -O0
+#    it builds in seconds and runs as fast.
+#==========================================================
+function(rexglue_game_defaults name)
+    if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
+        target_include_directories(${name} PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
+        target_include_directories(${name} PRIVATE $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    if(TARGET Vulkan::Headers)
+        target_link_libraries(${name} PRIVATE Vulkan::Headers)
+    endif()
+    set(_header "${CMAKE_CURRENT_BINARY_DIR}/${name}_guest_memory.h")
+    # CONFIGURE rewrites only on change, so reconfiguring does not rebuild the PCH.
+    file(CONFIGURE OUTPUT "${_header}" CONTENT
+        "#pragma once\n#include \"${name}_pch.h\"\n#define REX_GUEST_BARRIER() ((void)0)\n" @ONLY)
+    foreach(_kind recomp game_module)
+        set(_target ${name}_${_kind})
+        if(NOT TARGET ${_target})
+            continue()
+        endif()
+        target_precompile_headers(${_target} PRIVATE "${_header}")
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${_target} PRIVATE -fasync-exceptions)
+        endif()
+        if(APPLE)
+            set(_dir default)
+            if(_kind STREQUAL "game_module")
+                set(_dir game)
+            endif()
+            set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/generated/${_dir}/${name}_register.cpp"
+                TARGET_DIRECTORY ${_target}
+                PROPERTIES COMPILE_OPTIONS "-O0;-fno-global-isel" SKIP_PRECOMPILE_HEADERS ON)
+        endif()
+    endforeach()
+endfunction()

@@ -23,35 +23,4 @@ add_executable(nfshp src/main.cpp)
 rexglue_setup_target(nfshp GPU_PLUGINS metal xenos)
 rexglue_game_manifest(nfshp "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
-if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
-    target_include_directories(nfshp PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
-endif()
-if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
-    target_include_directories(nfshp PRIVATE $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
-endif()
-if(TARGET Vulkan::Headers)
-    target_link_libraries(nfshp PRIVATE Vulkan::Headers)
-endif()
-
-# Guest memory + REX_GUEST_BARRIER, appended to each generated precompiled header.
-foreach(t nfshp_recomp nfshp_game_module)
-    if(TARGET ${t})
-        target_precompile_headers(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/nfshp_guest_memory.h")
-        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            target_compile_options(${t} PRIVATE -fasync-exceptions)
-        endif()
-    endif()
-endforeach()
-# macOS: the function registration table takes Apple clang ~forever at -O3; -O0 without the PCH builds in seconds.
-if(APPLE)
-    if(TARGET nfshp_recomp)
-        set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/generated/default/nfshp_register.cpp"
-                                    TARGET_DIRECTORY nfshp_recomp
-                                    PROPERTIES COMPILE_OPTIONS "-O0;-fno-global-isel" SKIP_PRECOMPILE_HEADERS ON)
-    endif()
-    if(TARGET nfshp_game_module)
-        set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/generated/game/nfshp_register.cpp"
-                                    TARGET_DIRECTORY nfshp_game_module
-                                    PROPERTIES COMPILE_OPTIONS "-O0;-fno-global-isel" SKIP_PRECOMPILE_HEADERS ON)
-    endif()
-endif()
+rexglue_game_defaults(nfshp)
