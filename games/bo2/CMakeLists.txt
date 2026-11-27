@@ -52,8 +52,6 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_player_projection.cpp
     ${BO2ZM_ROOT}/src/bo2zm_dvars.cpp
     ${BO2ZM_ROOT}/src/bo2zm_extras.cpp
-    # Internet play from the home menu: the menu side of the SDK's online_link (UPnP, STUN, join codes).
-    ${BO2ZM_ROOT}/src/bo2zm_online.cpp
     ${BO2ZM_ROOT}/../../core/bo2zm_pc_profiler.cpp
     ${BO2ZM_ROOT}/src/bo2zm_controllers.cpp
     ${BO2ZM_ROOT}/src/bo2zm_pad.cpp
@@ -119,6 +117,13 @@ set(BO2ZM_SOURCES
     # streamed texture data with them. These files belong to the Xenos GPU plugin, which the app does not link
     # (it is loaded at runtime on PC), so the native renderer compiles its own copy.
 )
+# Internet play from the home menu: the menu side of the SDK's online_link (UPnP, STUN, join codes). Engines without
+# internet play (metal360-v0.11-main after the GPL cleanup) get the bo2zm::online stubs instead.
+if(EXISTS "${REXSDK_DIR}/include/rex/xam/join_code.h")
+  list(APPEND BO2ZM_SOURCES ${BO2ZM_ROOT}/src/bo2zm_online.cpp)
+else()
+  list(APPEND BO2ZM_SOURCES ${BO2ZM_ROOT}/src/stubs/bo2zm_online_off.cpp)
+endif()
 
 option(BO2ZM_MIN "v0.11 port stage 1 (ON): manifest + native memcpy hooks only; default OFF = full glue" OFF)
 if(BO2ZM_MIN)
