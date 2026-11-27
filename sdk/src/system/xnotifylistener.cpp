@@ -116,6 +116,8 @@ object_ref<XNotifyListener> XNotifyListener::Restore(KernelState* kernel_state,
     pair.second = stream->Read<uint32_t>();
     notify->notifications_.push_back(pair);
   }
+  // Queued notifications must leave the wait handle signaled, as EnqueueNotification would have.
+  if (!notify->notifications_.empty()) notify->wait_handle_->Set();
 
   return object_ref<XNotifyListener>(notify);
 }
