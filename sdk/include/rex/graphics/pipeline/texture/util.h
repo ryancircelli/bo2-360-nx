@@ -274,21 +274,26 @@ void GetTextureTotalSize(xenos::DataDimension dimension, uint32_t base_pitch_tex
 int32_t GetTiledOffset2D(int32_t x, int32_t y, uint32_t pitch, uint32_t bytes_per_block_log2);
 int32_t GetTiledOffset3D(int32_t x, int32_t y, int32_t z, uint32_t pitch, uint32_t height,
                          uint32_t bytes_per_block_log2);
-// Because (0, 0, 0) within each 32x32x4-block tile is stored in memory first,
-// and the tiled address grows monotonically with Z/4, then Y/32, then X/32
-// blocks.
+// The tiled address grows monotonically between tiles with Z/4, then Y/32,
+// then X/32 blocks, and (0, 0) of a 2D tile is stored first.
 inline uint32_t GetTiledAddressLowerBound2D(uint32_t left, uint32_t top, uint32_t pitch,
                                             uint32_t bytes_per_block_log2) {
   return uint32_t(GetTiledOffset2D(int32_t(left & ~(xenos::kTextureTileWidthHeight - 1)),
                                    int32_t(top & ~(xenos::kTextureTileWidthHeight - 1)), pitch,
                                    bytes_per_block_log2));
 }
+// Within 3D tiles, the bank swap in odd Z/4 groups makes Y=8 the first stored
+// row, not Y=0.
 inline uint32_t GetTiledAddressLowerBound3D(uint32_t left, uint32_t top, uint32_t front,
                                             uint32_t pitch, uint32_t height,
                                             uint32_t bytes_per_block_log2) {
+  uint32_t front_aligned = front & ~(xenos::kTextureTileDepth - 1);
+  uint32_t top_aligned = top & ~(xenos::kTextureTileWidthHeight - 1);
+  if (front_aligned & xenos::kTextureTileDepth) {
+    top_aligned += 8;
+  }
   return uint32_t(GetTiledOffset3D(int32_t(left & ~(xenos::kTextureTileWidthHeight - 1)),
-                                   int32_t(top & ~(xenos::kTextureTileWidthHeight - 1)),
-                                   int32_t(front & ~(xenos::kTextureTileDepth)), pitch, height,
+                                   int32_t(top_aligned), int32_t(front_aligned), pitch, height,
                                    bytes_per_block_log2));
 }
 // Supporting the right > pitch and bottom > height (in tiles) cases also, for
