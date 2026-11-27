@@ -63,3 +63,15 @@ TEST_CASE("mip_min_level keeps a separate base page", "[texture_util]") {
   CHECK(base_page == 0);
   CHECK(mip_min == 1);
 }
+
+// Canary 344fca758: a 2x1 tail is laid out along X like a square texture.
+TEST_CASE("2x1 packed mips are laid out along X", "[texture_util]") {
+  uint32_t x, y, z;
+  REQUIRE(texture_util::GetPackedMipOffset(2, 1, 1, xenos::TextureFormat::k_8_8_8_8, 1, x, y, z));
+  CHECK(x == 8);
+  CHECK(y == 0);
+  // A 4x1 texture is still wide, so it goes down along Y.
+  REQUIRE(texture_util::GetPackedMipOffset(4, 1, 1, xenos::TextureFormat::k_8_8_8_8, 1, x, y, z));
+  CHECK(x == 0);
+  CHECK(y == 8);
+}
