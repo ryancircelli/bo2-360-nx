@@ -1,3 +1,4 @@
-# Drive only (throttle, a 4 s reverse-and-turn every 60 s so the car backs off a guard rail; pattern from fh1-roam10b): omit the Guide/pause-check inputs that left the old gate paused.
+# fh1-drive menus, then 10 min free roam: throttle, and every 60 s a 4 s reverse-and-turn so the car backs off whatever it hit.
+duration_s = 880
 players = 1
-pad1 = 60-61:start, 75-76:a, 85-86:a, 95-96:a, 105-106:a, 115-116:a, 170-176:rt, 178-181:lt, 185-186:x, 200-201:a, 215-216:a, 230-231:a, 245-246:a, 260-314:rt, 314-318:lt+stick_left, 318-320:rt+stick_right, 320-374:rt, 374-378:lt+stick_left, 378-380:rt+stick_right, 380-420:rt
+pad1 = 60-61:start, 75-76:a, 85-86:a, 95-96:a, 105-106:a, 115-116:a, 170-176:rt, 178-181:lt, 185-186:x, 200-201:a, 215-216:a, 230-231:a, 245-246:a, 260-314:rt, 314-318:lt+stick_left, 318-320:rt+stick_right, 320-374:rt, 374-378:lt+stick_left, 378-380:rt+stick_right, 380-434:rt, 434-438:lt+stick_left, 438-440:rt+stick_right, 440-494:rt, 494-498:lt+stick_left, 498-500:rt+stick_right, 500-554:rt, 554-558:lt+stick_left, 558-560:rt+stick_right, 560-614:rt, 614-618:lt+stick_left, 618-620:rt+stick_right, 620-674:rt, 674-678:lt+stick_left, 678-680:rt+stick_right, 680-734:rt, 734-738:lt+stick_left, 738-740:rt+stick_right, 740-794:rt, 794-798:lt+stick_left, 798-800:rt+stick_right, 800-854:rt, 854-858:lt+stick_left, 858-860:rt+stick_right
