@@ -326,7 +326,8 @@ class MetalCommandProcessor final : public CommandProcessor {
   void SetShmemPrecommitInTexturePrecommit(bool on);
   bool SharedMemoryRangeHasPendingGpuWrite(uint32_t start,
                                            uint32_t length) const;
-  MTL::CommandBuffer* EnsureCommandBuffer();
+  // site (string literal) names the caller in the encode-thread drain counters.
+  MTL::CommandBuffer* EnsureCommandBuffer(const char* site = "ensure_cb");
   void EndRenderEncoder();
   // [tile-resolve] The open render pass a resolve may run its tile function
   // in (docs/tile-resolve-20261013.md), and ending it for a resolve.
