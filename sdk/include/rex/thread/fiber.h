@@ -105,8 +105,8 @@ struct Fiber {
   // Save point file (savepoint_file.cpp): a suspended fiber's registers and stack, and rebuilding fibers
   // in a fresh process.
   ucontext_t* ucontext() { return &context_; }
-  uint8_t* stack_data() { return stack_.data(); }
-  size_t stack_size() const { return stack_.size(); }
+  uint8_t* stack_data() { return static_cast<uint8_t*>(stack_); }  // includes the low guard page
+  size_t stack_size() const { return stack_size_; }
   /// A thread fiber made for another thread; SwitchToFiber names it current when that thread switches away.
   static Fiber* ForThread();
   static void SetCurrent(Fiber* f) { tls_current_ = f; }
