@@ -171,7 +171,8 @@ foreach(_src
     port/rex/graphics/metal/metal_resolve_to_texture.cc
     port/rex/graphics/metal/metal_direct_host_resolve.cc
     port/rex/graphics/metal/metal_texture_cache.cc
-    port/rex/graphics/metal/metal_command_processor.cc)
+    port/rex/graphics/metal/metal_command_processor.cc
+    port/rex/graphics/metal/metal_command_processor_diag.cc)
     set_property(SOURCE ${_metal_dir}/${_src} APPEND PROPERTY
         OBJECT_DEPENDS ${_metal_helpers_stamp})
 endforeach()

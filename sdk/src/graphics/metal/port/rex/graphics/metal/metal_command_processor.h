@@ -1071,6 +1071,15 @@ class MetalCommandProcessor final : public CommandProcessor {
   void InvalidateFrameTransientBindings();
   void CloseFrameLifetime();
   void MaybeDumpBackendTelemetry(const char* reason, bool force = false);
+  // Draw-path diagnostics (metal_command_processor_diag.cc), env-gated.
+  void DiagLogMemexportFormats(const RegisterFile& regs, Shader* vertex_shader, bool memexport_used_vertex);
+  void DiagMainDepthDump(const RegisterFile& regs, Shader* vertex_shader);
+  void DiagAliasClearTrace(const RegisterFile& regs, xenos::PrimitiveType primitive_type, uint32_t index_count, Shader* vertex_shader, Shader* pixel_shader, bool is_rasterization_done, bool memexport_used_vertex);
+  void DiagTessDraw(const RegisterFile& regs, uint64_t vs_hash, Shader* pixel_shader, xenos::TessellationMode mode, bool tess_blended, bool tess_exact, bool have_factors, bool memexport_used_vertex, bool native_tess, bool native_tess_cpu, uint32_t blend0, reg::RB_DEPTHCONTROL normalized_depth_control, float factor_min, float factor_max, const PrimitiveProcessor::ProcessingResult& primitive_processing_result);
+  void DiagNsLogFetch(const RegisterFile& regs, Shader* pixel_shader, const DxbcShaderTranslator::Modification& pixel_shader_modification);
+  void DiagShmemCheck(Shader* vertex_shader, Shader* pixel_shader, const PrimitiveProcessor::ProcessingResult& primitive_processing_result, const VertexBindingRange* vertex_ranges, uint32_t vertex_range_count, bool guest_dma_index_buffer_read, bool shader_primitive_index_load);
+  void DiagDrawDump(const RegisterFile& regs, Shader* vertex_shader, Shader* pixel_shader, const PrimitiveProcessor::ProcessingResult& primitive_processing_result, const DxbcShaderTranslator::Modification& vertex_shader_modification, const DxbcShaderTranslator::Modification& pixel_shader_modification, const VertexBindingRange* vertex_ranges, uint32_t vertex_range_count, bool memexport_used_vertex);
+  void DiagShadowTrace(const RegisterFile& regs, xenos::PrimitiveType primitive_type, uint32_t index_count, IndexBufferInfo* index_buffer_info, Shader* vertex_shader, Shader* pixel_shader, uint32_t used_texture_mask);
   void ResetBackendTelemetry();
   void InitializeResidencySet();
   void ShutdownResidencySet();

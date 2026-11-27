@@ -62,6 +62,7 @@ set(REXGPU_METAL_SOURCES
   port/rex/graphics/metal/metal_primitive_processor.cc
   port/rex/graphics/metal/metal_backend_telemetry.cc
   port/rex/graphics/metal/metal_command_processor.cc
+  port/rex/graphics/metal/metal_command_processor_diag.cc
   port/rex/graphics/metal/metal_texture_cache.cc
   port/rex/ui/metal/metal_api.cc
   port/rex/ui/metal/metal_provider.cc
