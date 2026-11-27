@@ -65,7 +65,12 @@ class FunctionGraph {
 
   // Add a resolved import as a callable function with __imp__ name
   // Address is the thunk address that bl instructions target
-  FunctionNode* addImportFunction(uint32_t address, std::string_view resolvedName);
+  FunctionNode* addImportFunction(uint32_t address, std::string_view resolvedName, uint32_t size = 4);
+
+  // Adapted from rexglue e9c1a0f6: unknown targets conservatively may return.
+  void declareNoReturn(uint32_t address);
+  bool isDeclaredNoReturn(uint32_t address) const { return declaredNoReturn_.contains(address); }
+  bool isNoReturn(uint32_t entry) const;
 
   // Get function by entry point (O(1))
   FunctionNode* getFunction(uint32_t entryPoint);
@@ -198,6 +203,8 @@ class FunctionGraph {
   std::unordered_map<uint32_t, bool> functionHasXrefs_;  // entry -> hasXrefs
   std::vector<std::pair<uint32_t, uint32_t>> chunks_;    // base, size pairs
   MemoryReader memoryReader_;
+  std::unordered_set<uint32_t> declaredNoReturn_;
+  mutable std::optional<std::unordered_set<uint32_t>> noReturn_;
 
   // Notify all PENDING functions that a new function was added
   void notifyFunctionAdded(FunctionNode* newFunction);

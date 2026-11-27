@@ -98,6 +98,12 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
   auto result = discoverBlocks(decoded, funcAddr, *region, knownFunctions, pdataSize,
                                &ctx.Config().switchTables);
 
+  if (node->authority() == FunctionAuthority::GAP_FILL && pdataSize == 0) {
+    if (const auto cut = findReturnCut(result, funcAddr))
+      result = discoverBlocks(decoded, funcAddr, *region, knownFunctions, *cut - funcAddr,
+                              &ctx.Config().switchTables);
+  }
+
   if (result.blocks.empty()) {
     REXCODEGEN_WARN("Analyze: no blocks found for function 0x{:08X}", funcAddr);
     return;
@@ -106,6 +112,7 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
   // snooper the function with the discovered blocks and instructions
   node->discover(std::move(result.blocks), std::move(result.instructions),
                  std::move(result.labels));
+  node->setFallThroughs(std::move(result.fallThroughs));
 
   // Add jump tables (targets become labels in the function)
   for (const auto& jt : result.jumpTables) {

@@ -300,6 +300,54 @@ const CallTarget* BuilderContext::findCallTarget(uint32_t site) const {
   return nullptr;
 }
 
+void BuilderContext::emit_call_to_function(const FunctionNode* targetFn, bool isTail) {
+  const auto& cfg = config();
+  const auto& name = targetFn->name();
+
+  // Handle save/restore helpers. Gated on the global setting, not this
+  // function's: the helper bodies are emitted under it too, so once they
+  // spill to locals they are no-ops that scribble zeros on the caller's
+  // frame. A share_registers function still has to elide them.
+  if (cfg.nonVolatileRegistersAsLocalVariables &&
+      (name.find("__rest") == 0 || name.find("__save") == 0)) {
+    // print nothing - these are handled by local variable tracking
+    return;
+  }
+
+  // A reference copy (lockstep verify) inlines the helpers as they are,
+  // so their stack stores go through the logged macros and the copy can
+  // be rolled back; a call would write the frame behind the log's back.
+  // A tail branch's return; comes from the caller (build_b).
+  if (isReferenceCopy() && isSaveRestoreHelper(name)) {
+    inlineSaveRestoreHelper(*targetFn, "\t", false);
+    return;
+  }
+
+  // An SEH funclet runs on its owner's frame and reads whatever non-volatiles
+  // the owner left live, so hand it the localized copies through ctx and take
+  // them back afterwards. Only registers already localized here can be live at
+  // this point, so that set is the whole live-in the funclet can see.
+  if (targetFn->sharesRegisters() && localizesAnything()) {
+    emitCtx.reference(name);
+    // A bl comes back here and the caller goes on with its registers; a b (tail
+    // call) is followed by a return, so there is nothing to take back.
+    emit_call_sharing_registers(fmt::format("{}(ctx, base);", name), !isTail, "\t");
+    return;
+  }
+
+  // The save/restore helpers take the frame pointer in r12 and are not
+  // ABI calls, so the checks skip them.
+  const bool poison = cfg.abiPoisonChecks &&
+                      !(name.find("__rest") == 0 || name.find("__save") == 0);
+  emitCtx.reference(name);
+  if (poison)
+    println("\tREX_ABI_POISON_PRE(0x{:08X});", base);
+  println("\t{}(ctx, base);", name);
+  if (poison)
+    println("\tREX_ABI_POISON_POST(0x{:08X});", base);
+  return;
+}
+
 void BuilderContext::emit_function_call(uint32_t address) {
   const auto& cfg = config();
 
@@ -323,54 +371,11 @@ void BuilderContext::emit_function_call(uint32_t address) {
   // Try to use pre-resolved call target from FunctionGraph
   if (const auto* target = findCallTarget(base)) {
     if (target->isFunction()) {
-      auto* targetFn = target->asFunction();
-      const auto& name = targetFn->name();
-
-      // Handle save/restore helpers. Gated on the global setting, not this
-      // function's: the helper bodies are emitted under it too, so once they
-      // spill to locals they are no-ops that scribble zeros on the caller's
-      // frame. A share_registers function still has to elide them.
-      if (cfg.nonVolatileRegistersAsLocalVariables &&
-          (name.find("__rest") == 0 || name.find("__save") == 0)) {
-        // print nothing - these are handled by local variable tracking
-        return;
-      }
-
-      // A reference copy (lockstep verify) inlines the helpers as they are,
-      // so their stack stores go through the logged macros and the copy can
-      // be rolled back; a call would write the frame behind the log's back.
-      // A tail branch's return; comes from the caller (build_b).
-      if (isReferenceCopy() && isSaveRestoreHelper(name)) {
-        inlineSaveRestoreHelper(*targetFn, "\t", false);
-        return;
-      }
-
-      // An SEH funclet runs on its owner's frame and reads whatever non-volatiles
-      // the owner left live, so hand it the localized copies through ctx and take
-      // them back afterwards. Only registers already localized here can be live at
-      // this point, so that set is the whole live-in the funclet can see.
-      if (targetFn->sharesRegisters() && localizesAnything()) {
-        emitCtx.reference(name);
-        // A bl comes back here and the caller goes on with its registers; a b (tail
-        // call) is followed by a return, so there is nothing to take back.
-        bool isTail = false;
-        for (const auto& edge : fn.tailCalls())
-          if (edge.site == base)
-            isTail = true;
-        emit_call_sharing_registers(fmt::format("{}(ctx, base);", name), !isTail, "\t");
-        return;
-      }
-
-      // The save/restore helpers take the frame pointer in r12 and are not
-      // ABI calls, so the checks skip them.
-      const bool poison = cfg.abiPoisonChecks &&
-                          !(name.find("__rest") == 0 || name.find("__save") == 0);
-      emitCtx.reference(name);
-      if (poison)
-        println("\tREX_ABI_POISON_PRE(0x{:08X});", base);
-      println("\t{}(ctx, base);", name);
-      if (poison)
-        println("\tREX_ABI_POISON_POST(0x{:08X});", base);
+      bool isTail = false;
+      for (const auto& edge : fn.tailCalls())
+        if (edge.site == base)
+          isTail = true;
+      emit_call_to_function(target->asFunction(), isTail);
       return;
     }
 

@@ -248,6 +248,7 @@ struct BuilderContext {
    * Handles special cases like setjmp/longjmp and __restgprlr_N functions.
    */
   void emit_function_call(uint32_t address);
+  void emit_call_to_function(const FunctionNode* targetFn, bool isTail);
 
   /**
    * @brief Hand this function's localized registers to a callee that reads them from ctx.

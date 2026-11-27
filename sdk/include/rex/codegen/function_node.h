@@ -123,6 +123,9 @@ class FunctionNode {
   // Resolved tail calls (b instructions to other functions)
   const std::vector<CallEdge>& tailCalls() const { return tailCalls_; }
 
+  const std::set<uint32_t>& fallThroughs() const { return fallThroughs_; }
+  void setFallThroughs(std::set<uint32_t> targets) { fallThroughs_ = std::move(targets); }
+
   // Jump tables
   const std::vector<JumpTable>& jumpTables() const { return jumpTables_; }
 
@@ -196,6 +199,7 @@ class FunctionNode {
 
   std::vector<CallEdge> calls_;
   std::vector<CallEdge> tailCalls_;
+  std::set<uint32_t> fallThroughs_;
   std::vector<JumpTable> jumpTables_;
 
   std::vector<UnresolvedJump> unresolvedJumps_;

@@ -228,6 +228,8 @@ struct BlockDiscoveryResult {
   // Collected instruction pointers (for FunctionNode ownership)
   std::vector<rex::codegen::ppc::Instruction*> instructions;
 
+  std::set<uint32_t> fallThroughs;  // known entries reached by linear fall-through
+
   // External references found during discovery
   std::vector<uint32_t> externalCalls;  // bl to unknown targets
   std::vector<uint32_t> tailCalls;      // b to external targets
@@ -279,5 +281,8 @@ BlockDiscoveryResult discoverBlocks(
 std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAddr,
                                          const CodeRegion& containingRegion, uint32_t funcStart,
                                          uint32_t funcEnd);
+
+// Lowest return cut not crossed by a conditional/table edge or a backward edge.
+std::optional<uint32_t> findReturnCut(const BlockDiscoveryResult& result, uint32_t entryPoint);
 
 }  // namespace rex::codegen
