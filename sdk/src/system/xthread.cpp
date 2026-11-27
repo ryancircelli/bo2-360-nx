@@ -644,7 +644,7 @@ X_STATUS XThread::Create() {
 }
 
 X_STATUS XThread::Exit(int exit_code) {
-  REXSYS_INFO("[thread-lifecycle] exit this={} kernel={} code={}",
+  REXSYS_DEBUG("[thread-lifecycle] exit this={} kernel={} code={}",
               static_cast<void*>(this), static_cast<void*>(kernel_state_), exit_code);
   // This may only be called on the thread itself.
   assert_true(XThread::GetCurrentThread() == this);
@@ -802,10 +802,10 @@ void XThread::Execute() {
 
   // Execute the function
   REXSYS_NOISY_DEBUG("XThread::Execute - Calling function at {:08X}", address);
-  REXSYS_INFO("[thread-lifecycle] enter this={} kernel={} entry={:08X}",
+  REXSYS_DEBUG("[thread-lifecycle] enter this={} kernel={} entry={:08X}",
               static_cast<void*>(this), static_cast<void*>(kernel_state_), address);
   func(*ctx, base);
-  REXSYS_INFO("[thread-lifecycle] returned this={} kernel={} entry={:08X} code={:08X}",
+  REXSYS_DEBUG("[thread-lifecycle] returned this={} kernel={} entry={:08X} code={:08X}",
               static_cast<void*>(this), static_cast<void*>(kernel_state_), address, ctx->r3.u32);
 
   exit_code = static_cast<int>(ctx->r3.u32);
