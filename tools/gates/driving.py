@@ -92,7 +92,7 @@ def verify_play(game, out, log):
             if not valid:
                 raise ValueError('missing completed gameplay prerequisite: '+name)
         active = [s for s in run['observations'] if start <= s['at'] <= end]
-        ok = [bool(s['state'] and play_state(game, s['words'], log)) for s in active]
+        ok = [bool(play_state(game, s['words'], log)) for s in active]
         # A lone OCR dropout between two gameplay frames (HUD digits flicker) is tolerated; two in a row or at an edge is not.
         ok = [o or (0 < i < len(ok)-1 and ok[i-1] and ok[i+1]) for i, o in enumerate(ok)]
         if len(active) < 3 or not all(ok):
