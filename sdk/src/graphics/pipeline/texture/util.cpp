@@ -164,9 +164,12 @@ bool GetPackedMipOffset(uint32_t width, uint32_t height, uint32_t depth,
   uint32_t packed_mip_base = (log2_size > 4) ? (log2_size - 4) : 0;
   uint32_t packed_mip = mip - packed_mip_base;
 
+  // A 2x1 texture is packed along X, like a square texture.
+  bool is_wide = log2_width > std::max(log2_height, uint32_t(1));
+
   // Find the block offset of the mip.
   if (packed_mip < 3) {
-    if (log2_width > log2_height) {
+    if (is_wide) {
       // Wider than tall. Laid out vertically.
       x_blocks = 0;
       y_blocks = 16 >> packed_mip;
@@ -178,7 +181,7 @@ bool GetPackedMipOffset(uint32_t width, uint32_t height, uint32_t depth,
     z_blocks = 0;
   } else {
     uint32_t offset;
-    if (log2_width > log2_height) {
+    if (is_wide) {
       // Wider than tall. Laid out horizontally.
       offset = (1 << (log2_width - packed_mip_base)) >> (packed_mip - 2);
       x_blocks = offset;
@@ -278,8 +281,8 @@ TextureGuestLayout GetGuestTextureLayout(xenos::DataDimension dimension,
 
   // The loop counter can mean two things depending on whether the packed mip
   // tail is stored as mip 0, because in this case, it would be ambiguous since
-  // both the base and the mips would be on "level 0", but stored separately and
-  // possibly with a different layout.
+  // both the base and the mips would be on "level 0", but use separate layout
+  // entries for the base pitch and the mip strides.
   uint32_t loop_level_last;
   if (layout.packed_level == 0) {
     // Packed mip tail is the level 0 - may need to load mip tails for the base,
