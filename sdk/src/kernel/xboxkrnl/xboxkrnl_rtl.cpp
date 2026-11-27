@@ -662,21 +662,21 @@ REX_EXPORT(__imp__RtlAppendUnicodeStringToString, rex::kernel::xboxkrnl::RtlAppe
 REX_EXPORT(__imp__RtlAppendUnicodeToString, rex::kernel::xboxkrnl::RtlAppendUnicodeToString_entry)
 REX_EXPORT(__imp__RtlCompareUnicodeString, rex::kernel::xboxkrnl::RtlCompareUnicodeString_entry)
 REX_EXPORT(__imp__RtlCompareUnicodeStringN, rex::kernel::xboxkrnl::RtlCompareUnicodeStringN_entry)
-REX_EXPORT_STUB(__imp__RtlCompareUtf8ToUnicode);
+REX_EXPORT_QUIET_RETURN(__imp__RtlCompareUtf8ToUnicode, 0xC0000002);  // round-2 spec: deliberate return (unknown/not modelled)
 REX_EXPORT(__imp__RtlCreateUnicodeString, rex::kernel::xboxkrnl::RtlCreateUnicodeString_entry)
 REX_EXPORT(__imp__RtlGetCallersAddress, rex::kernel::xboxkrnl::RtlGetCallersAddress_entry)
-REX_EXPORT_STUB(__imp__RtlGetStackLimits);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__RtlGetStackLimits);  // round-2 spec: no-op (unwinding not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__RtlLookupFunctionEntry, 0);  // no unwind tables: 0 = no entry
 REX_EXPORT(__imp__RtlMultiByteToUnicodeSize, rex::kernel::xboxkrnl::RtlMultiByteToUnicodeSize_entry)
 REX_EXPORT(__imp__RtlUnicodeToMultiByteSize, rex::kernel::xboxkrnl::RtlUnicodeToMultiByteSize_entry)
 REX_EXPORT(__imp__RtlUnicodeToUtf8, rex::kernel::xboxkrnl::RtlUnicodeToUtf8_entry)
 REX_EXPORT(__imp__RtlUnicodeToUtf8Size, rex::kernel::xboxkrnl::RtlUnicodeToUtf8Size_entry)
-REX_EXPORT_STUB(__imp__RtlUnwind2);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__RtlUnwind2);  // round-2 spec: no-op (unwinding not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__RtlVirtualUnwind, 0);  // no unwind tables: 0 = no handler
-REX_EXPORT_STUB(__imp__RtlImageDirectoryEntryToData);
+REX_EXPORT_QUIET_RETURN(__imp__RtlImageDirectoryEntryToData, 0);  // round-2 spec: deliberate return (unknown/not modelled)
 REX_EXPORT(__imp__RtlCaptureStackBackTrace, rex::kernel::xboxkrnl::RtlCaptureStackBackTrace_entry)
-REX_EXPORT_STUB(__imp__RtlSetVectoredExceptionHandler);
-REX_EXPORT_STUB(__imp__RtlClearVectoredExceptionHandler);
+REX_EXPORT_QUIET_RETURN(__imp__RtlSetVectoredExceptionHandler, 0);  // round-2 spec: deliberate return (unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__RtlClearVectoredExceptionHandler, 0);  // round-2 spec: deliberate return (unknown/not modelled)
 
 
 // ---- round-2 Rtl string family (spec: stub-noref-research; behaviour per public NT docs) ----

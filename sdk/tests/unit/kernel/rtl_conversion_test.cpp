@@ -23,6 +23,18 @@ EXPORT(RtlCompareUnicodeStringN);
 EXPORT(RtlCreateUnicodeString);
 EXPORT(RtlUnicodeToUtf8);
 EXPORT(RtlUnicodeToUtf8Size);
+EXPORT(IoCallDriver);
+EXPORT(IoAllocateIrp);
+EXPORT(XexReserveCodeBuffer);
+EXPORT(XexGetModuleImportVersions);
+EXPORT(XexVerifyImageHeaders);
+EXPORT(NtQueryDirectoryObject);
+EXPORT(MmPersistPhysicalMemoryAllocation);
+EXPORT(XAudioRenderDriverInitialize);
+EXPORT(DumpWriteDump);
+EXPORT(NtSetSystemTime);
+EXPORT(ObTranslateSymbolicLink);
+EXPORT(KeAlertThread);
 EXPORT(NtWriteFileGather);
 EXPORT(NtCancelIoFile);
 EXPORT(XAudioEnableDucker);
@@ -196,4 +208,33 @@ TEST_CASE("RTL unicode string append, compare, create and UTF-8 conversion", "[k
   ctx.r3.u64 = g.address + 0x700; ctx.r4.u64 = g.address + 0x500; ctx.r5.u64 = 4;
   CHECK(g.call(__imp__RtlUnicodeToUtf8Size, ctx) == X_STATUS_SUCCESS);
   CHECK(*g.at<rex::be<uint32_t>>(0x700) == 5);
+}
+
+TEST_CASE("deliberate return values of the round-2 stub families", "[kernel][stubs]") {
+  Guest g;
+  PPCContext ctx{};
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__IoCallDriver, ctx) == 0xC0000010u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__IoAllocateIrp, ctx) == 0u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__XexReserveCodeBuffer, ctx) == 0xC00000BBu);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__XexGetModuleImportVersions, ctx) == 0xC0000225u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__XexVerifyImageHeaders, ctx) == 0u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__NtQueryDirectoryObject, ctx) == 0x8000001Au);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__MmPersistPhysicalMemoryAllocation, ctx) == 0u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__XAudioRenderDriverInitialize, ctx) == 0u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__DumpWriteDump, ctx) == 0xC0000002u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__NtSetSystemTime, ctx) == 0xC0000061u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__ObTranslateSymbolicLink, ctx) == 0xC0000002u);
+  ctx.r3.u64 = 0xDEADBEEF;
+  CHECK(g.call(__imp__KeAlertThread, ctx) == 0u);
 }
