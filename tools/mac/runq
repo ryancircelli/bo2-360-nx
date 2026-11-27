@@ -100,7 +100,6 @@ QUIET_WAIT_CAP_S = 300
 QUIET_MIN_ADAPTER_W = 90
 BUILD_INTERLEAVE_WINDOW_S = 12 * 60
 BUILD_WAIT_BEFORE_WINDOW_S = 5 * 60
-PERF_BATCH_AGE_S = 30 * 60
 COMPILE_CPU_DELTA_THRESHOLD_S = 0.05
 COMPILER_INVALID_CPU_S = 2.0
 COMPILER_INVALID_WALL_S = 5.0
@@ -861,7 +860,7 @@ def power_source():
 
 def adapter_hold_reason(job, power):
     """Return why a quiet/perf job must wait for power, or None when its gate is met."""
-    if not (job.get('quiet_machine') or job_class(job) == 4):
+    if not is_quiet(job):
         return None
     minimum = int((job.get('env') or {}).get('RUNQ_MIN_ADAPTER_W', QUIET_MIN_ADAPTER_W))
     if not power or power.get('error'):
@@ -1855,7 +1854,7 @@ class Daemon:
         if job.get('quiet_machine') or is_solo(job) or job_class(job) == CLASSES['perf']:
             # Class-perf always means a measured quiet-machine run, even if an older
             # queued manifest omitted --quiet-machine.
-            if job.get('quiet_machine') or job_class(job) == CLASSES['perf']:
+            if is_quiet(job):
                 job['quiet_machine'] = True
             fd = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
             try:   # never block the daemon loop: a stopped buildq holding it shared would hang reaping and cancels
@@ -1878,14 +1877,14 @@ class Daemon:
                 except (ProcessLookupError, PermissionError):
                     pass
 
-            if getattr(self, 'freeze_outside', False) and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
+            if getattr(self, 'freeze_outside', False) and is_quiet(job):
                 compiler_processes()   # refreshes PROCESS_SNAPSHOT
                 held = [p['pid'] for p in PROCESS_SNAPSHOT if is_build_activity_process(p)
                         and p['pid'] not in self.protected_pids]
                 for pid in held:
                     stop_build_pid(pid)
                 self.log(f'froze {len(held)} outside build process(es) for {job["id"]}')
-            if job.get('quiet_machine') or job_class(job) == CLASSES['perf']:
+            if is_quiet(job):
                 compiler_processes()
                 heavy = [p['pid'] for p in PROCESS_SNAPSHOT if is_freezable_heavy(p) and not process_is_stopped(p)
                          and p['pid'] not in self.protected_pids and p['pid'] != os.getpid()]
@@ -2713,7 +2712,7 @@ class Daemon:
         hb = laptop_state()
         qjobs = [(qf, j) for qf in self.queued() for j in [rjson(os.path.join(D['queue'], qf)) or {}] if mac_may_run(j, hb)]
         q = [qf for qf, _ in qjobs]
-        needs_power = any(j.get('quiet_machine') or job_class(j) == CLASSES['perf'] for _, j in qjobs)
+        needs_power = any(is_quiet(j) for _, j in qjobs)
         if needs_power and time.time() - self.power_checked_at >= 15:
             try:
                 self.power_status = power_source()
@@ -2740,15 +2739,13 @@ class Daemon:
             self.last_external_build_activity_source = 'outside'
         self.perf_hold = (perf_activity_hold_reason(os.path.exists(HOLD_PERF_FILE),
                                                    self.last_external_build_activity, now)
-                          if any(j.get('quiet_machine') or job_class(j) == CLASSES['perf']
-                                 for _, j in qjobs) else None)
+                          if any(is_quiet(j) for _, j in qjobs) else None)
         # Bounded wait: outside builds (cmake/ninja started without buildq) never go quiet on a busy day, so a
         # speed job held by one for perf_hold_max_s (default 900) runs anyway; launch() freezes those builds
         # for the run and resumes them after.
         self.freeze_outside = False
         if self.perf_hold == 'held: outside build':
-            oldest = max((now - j.get('submitted_t', now) for _, j in qjobs
-                          if j.get('quiet_machine') or job_class(j) == CLASSES['perf']), default=0)
+            oldest = max((now - j.get('submitted_t', now) for _, j in qjobs if is_quiet(j)), default=0)
             if oldest >= float(self.c.get('perf_hold_max_s', PERF_HOLD_MAX_S)):
                 self.perf_hold, self.freeze_outside = None, True
                 if not getattr(self, 'freeze_logged', False):
@@ -2757,12 +2754,10 @@ class Daemon:
                 self.freeze_logged = True
             else:
                 self.freeze_logged = False
-        qids = {j.get('id') for _, j in qjobs}
-        power_eligible = {j.get('id') for _, j in qjobs
-                          if not adapter_hold_reason(j, self.power_status)}
-        perf_eligible = {j.get('id') for _, j in qjobs if j.get('id') in power_eligible and
-                         (not (j.get('quiet_machine') or job_class(j) == CLASSES['perf']) or
-                          self.perf_hold is None)}
+        qby = {j.get('id'): j for _, j in qjobs}
+        qids = set(qby)
+        power_eligible = {j.get('id') for _, j in qjobs if not adapter_hold_reason(j, self.power_status)}
+        perf_eligible = {i for i in power_eligible if self.perf_hold is None or not is_quiet(qby[i])}
         # Held speed work must not keep a batch open and block builds or non-speed jobs.
         self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
         self.perf_batch.intersection_update(qids | set(self.jobs))
@@ -2828,7 +2823,7 @@ class Daemon:
                     continue
                 if adapter_hold_reason(job, self.power_status):
                     continue
-                if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
+                if self.perf_hold and is_quiet(job):
                     continue
                 if not allowed_during_perf_batch(job, self.perf_batch, interleave_active, starved):
                     continue
@@ -2922,6 +2917,11 @@ def parse_class(v):
         return int(v)
     except ValueError:
         sys.exit(f'runq: unknown class {v} (ship, harness, proof, sweep, perf or a number)')
+
+
+def is_quiet(j):
+    """A measured quiet-machine run: --quiet-machine, or class perf (which always means one)."""
+    return bool(j.get('quiet_machine')) or job_class(j) == CLASSES['perf']
 
 
 def job_class(j):
