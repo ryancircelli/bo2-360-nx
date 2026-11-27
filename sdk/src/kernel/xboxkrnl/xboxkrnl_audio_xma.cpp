@@ -177,7 +177,10 @@ u32 XMAInitializeContext_entry(mapped_void context_ptr, ppc_ptr_t<XMA_CONTEXT_IN
   context.output_buffer_ptr = output_buffer_physical_address;
   context.output_buffer_block_count = context_init->output_buffer_block_count;
 
-  // context.work_buffer = context_init->work_buffer;  // ?
+  // Stored unchecked, as in xenia-canary b6d392d8f.
+  if (context_init->work_buffer) {
+    context.work_buffer_ptr = REX_KERNEL_MEMORY()->GetPhysicalAddress(context_init->work_buffer);
+  }
   context.subframe_decode_count = context_init->subframe_decode_count;
   context.is_stereo = context_init->channel_count >= 1;
   context.sample_rate = context_init->sample_rate;
@@ -503,8 +506,8 @@ u32 XMADisableContext_entry(mapped_void context_ptr, u32 wait) {
 }
 
 u32 XMABlockWhileInUse_entry(mapped_void context_ptr) {
-  // xenia-canary 057f66e57 (BSD-3): wait on the context lock, not on input buffers that a
-  // disabled context never invalidates.
+  // Wait only for an in-flight decode (xenia-canary 057f66e57); polling the valid bits
+  // hangs once the work buffer is stored, since valid stays set while data is queued.
   static_cast<audio::AudioSystem*>(REX_KERNEL_STATE()->emulator()->audio_system())
       ->xma_decoder()
       ->BlockOnContext(context_ptr.guest_address(), false);

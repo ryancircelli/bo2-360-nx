@@ -224,6 +224,9 @@ class XmaContext {
   void Disable();
   void Release();
 
+  // FFmpeg float planar PCM of one frame to big-endian int16, interleaved when stereo.
+  static void ConvertFrame(const uint8_t** samples, bool is_two_channel, uint8_t* output_buffer);
+
   // Savepoint (same-process save/load): the host-side decode state that the guest context data
   // does not hold. Called only while every other thread is parked, so no lock is taken.
   struct SavepointState {
@@ -298,8 +301,6 @@ class XmaContext {
   uint32_t GetAmountOfBitsToRead(uint32_t remaining_stream_bits, uint32_t frame_size);
   const uint8_t* GetNextPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet_index,
                                uint32_t current_input_packet_count);
-  uint32_t GetNextPacketReadOffset(uint8_t* buffer, uint32_t next_packet_index,
-                                   uint32_t current_input_packet_count);
   uint8_t* GetCurrentInputBuffer(XMA_CONTEXT_DATA* data);
   void AdvanceInputPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet_index);
 
@@ -317,7 +318,6 @@ class XmaContext {
   void StoreContextMerged(const XMA_CONTEXT_DATA& data, const XMA_CONTEXT_DATA& initial_data,
                           uint8_t* context_ptr);
 
-  static void ConvertFrame(const uint8_t** samples, bool is_two_channel, uint8_t* output_buffer);
 
   memory::Memory* memory_ = nullptr;
   std::unique_ptr<rex::thread::Event> work_completion_event_;
