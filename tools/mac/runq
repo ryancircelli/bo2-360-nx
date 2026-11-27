@@ -1655,6 +1655,7 @@ class Daemon:
     def __init__(self):
         self.c = cfg()
         OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
+        set_aging(self.c)
         self.held = 0           # build tokens the daemon holds back while games run
         self.power_checked_at = 0.0
         self.power_status = None
@@ -1789,6 +1790,7 @@ class Daemon:
             o = job_owner(j['job'])
             rbo[o] = rbo.get(o, 0) + 1
         jobs = [(f, rjson(os.path.join(D['queue'], f)) or {}) for f in q]
+        jobs = owner_capped(jobs, rbo, int(self.c.get('slots', 3)))
         key = fair_key if jobs and all(is_solo(j) for _, j in jobs) else sched_key
         jobs.sort(key=lambda fj: key(fj[1], rbo, self.last_start))
         return jobs[0][0]
@@ -2700,6 +2702,7 @@ class Daemon:
             self.bad_pause = self.c['paused_until']
             self.log(f'paused_until {self.bad_pause!r} is not HH:MM or YYYY-MM-DD HH:MM: queue held until it is fixed')
         OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
+        set_aging(self.c)
         self.reap()
         want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
         if want_mode is not None and want_mode != getattr(self, 'power_mode', None):
@@ -2945,10 +2948,10 @@ SOLO_SHARE_RATIO = 2.0  # ordinary window >= 2x the previous solo window while o
 SOLO_PHASE_MAX_S = 1800 # a solo window ends after this long if ordinary jobs wait
 
 
-def fair_key(j, running_by_owner, last_start):
+def fair_key(j, running_by_owner, last_start, now=None):
     """Order inside a solo window: owners take turns across ALL solo classes (a chain of short proof-class solo jobs
     from one owner kept class-perf solo jobs from other owners waiting 25+ min, 11-23). Class does not rank."""
-    return sched_key(dict(j, **{'class': 0}), running_by_owner, last_start)
+    return sched_key(dict(j, **{'class': 0}), running_by_owner, last_start, now)
 
 
 LANE_LONG_S = 480   # an ordinary job estimated longer runs in the lane (config long_job_s; 0 turns the lane off)
@@ -2991,8 +2994,10 @@ def phase_step(ph, now, solos, ords, machine_empty, solo_running, c):
     if ph['phase'] == 'solo':
         if solo_running:
             return ph
+        # an aged ordinary job ends the window once one solo job has run (else two aged jobs of each kind would never alternate)
         over = ph.get('solo_started', 0) >= n or not solos or (
-            ords and now - ph['t0'] >= float(c.get('solo_phase_max_s', SOLO_PHASE_MAX_S)))
+            ords and now - ph['t0'] >= float(c.get('solo_phase_max_s', SOLO_PHASE_MAX_S))) or (
+            ph.get('solo_started', 0) >= 1 and any(is_aged(j, now) for j in ords))
         return dict(new_phase('ord', now), prev_solo_s=now - ph['t0']) if over else ph
     if not solos:
         return ph if not ph.get('closing') else dict(ph, closing=False)
@@ -3001,6 +3006,7 @@ def phase_step(ph, now, solos, ords, machine_empty, solo_running, c):
     age = now - ph['t0']
     floor = max(float(c.get('ord_min_s', ORD_MIN_S)), float(c.get('solo_share_ratio', SOLO_SHARE_RATIO)) * ph.get('prev_solo_s', 0.0))
     urgent = any(j.get('bump') or j.get('urgent') for j in solos) and age >= floor
+    urgent = urgent or any(is_aged(j, now) for j in solos)   # aged solo/bench job forces its window (no floor)
     closing = urgent or not ords or age >= max(floor, float(c.get('ord_window_s', ORD_WINDOW_S)))
     if closing and machine_empty:
         return new_phase('solo', now)
@@ -3031,13 +3037,39 @@ def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, inter
 
 
 OWNER_PRIORITY = []   # config.json owner_priority, copied here by the daemon: first pick, after bumped jobs
+MAX_WAIT_S = 5400     # runq-aging: a job waiting longer outranks everything but a manual bump (config max_wait_s)
+OWNER_SLOT_SHARE = 0.5   # runq-aging: while other owners wait, one owner holds at most this share of the slots
 
 
-def sched_key(j, running_by_owner, last_start):
+def set_aging(c):
+    global MAX_WAIT_S, OWNER_SLOT_SHARE
+    MAX_WAIT_S = float(c.get('max_wait_s', 5400))
+    OWNER_SLOT_SHARE = float(c.get('owner_slot_share', 0.5))
+
+
+def is_aged(j, now=None):
+    """Waited past max_wait_s. Class and owner priority never starve a job past this (11-27: bench jobs waited 6+ h behind
+    a steady stream of class 1-2 gate and live jobs, bumped or not: class ranks inside the bump tier)."""
+    return MAX_WAIT_S > 0 and (now or time.time()) - j.get('submitted_t', time.time()) > MAX_WAIT_S
+
+
+def sched_key(j, running_by_owner, last_start, now=None):
+    """Order: manual bump, then aged (oldest first, whatever class or owner), then owner priority, class, owners taking turns."""
     o = job_owner(j)
+    if is_aged(j, now):
+        return (0 if j.get('bump') else 1, 0, 0, 0, -j.get('bump_t', 0.0), 0, 0.0, j.get('submitted_t', 0.0))
     pri = OWNER_PRIORITY.index(o) if o in OWNER_PRIORITY else len(OWNER_PRIORITY)
-    return (0 if j.get('bump') else 1, pri, job_class(j), -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
+    return (0 if j.get('bump') else 1, 1, pri, job_class(j), -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
             last_start.get(o, 0.0), j.get('submitted_t', 0.0))
+
+
+def owner_capped(cands, running_by_owner, slots, share=None):
+    """[(qfile, job)] minus those held back by the per-owner share: an owner already holding max(1, slots*share) slots
+    waits while another owner has a candidate. Bumped and aged jobs are never held back; if that would leave nothing,
+    nothing is held back (the machine never idles for fairness)."""
+    cap = max(1, int(slots * (OWNER_SLOT_SHARE if share is None else share)))
+    out = [(f, j) for f, j in cands if j.get('bump') or is_aged(j) or running_by_owner.get(job_owner(j), 0) < cap]
+    return out or cands
 
 
 PERF_STARVE_S = 600   # checks may pass an open speed batch this long after speed work last ran; then they wait
@@ -3129,7 +3161,7 @@ def plan(queued, running, slots, last_start, now=None, hist=None, phase=None, c=
             rbo[o] = rbo.get(o, 0) + 1
         group = solos if ph['phase'] == 'solo' else plain
         key = fair_key if ph['phase'] == 'solo' else sched_key
-        group.sort(key=lambda qj: key(qj[1], rbo, ls))
+        group.sort(key=lambda qj: key(qj[1], rbo, ls, t))
         pick_ = group[0]
         pending.remove(pick_)
         qf, j = pick_

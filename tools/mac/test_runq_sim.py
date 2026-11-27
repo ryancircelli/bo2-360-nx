@@ -344,6 +344,35 @@ class Sim(unittest.TestCase):
         self.run_until(d, lambda: self.state_of(perf) == 'done', 1800, what='perf job runs beside a live session')
         self.run_until(d, lambda: all(self.state_of(i) == 'done' for i in ords), 3600, what='ordinary jobs drain')
 
+    # runq-aging (11-27: bench jobs waited 6 h behind a steady stream of higher-class jobs)
+    def test_aged_job_outranks_higher_class(self):
+        self.write_config(dict(slots=1))
+        d = self.daemon()
+        first = self.submit(secs=10, klass=q.CLASSES['ship'])
+        self.run_for(d, 3)
+        old = self.submit(secs=20, klass=q.CLASSES['bench'], submitted_t=self.clock.t - 6000)
+        fresh = [self.submit(secs=20, klass=q.CLASSES['harness']) for _ in range(4)]
+        self.run_until(d, lambda: self.state_of(first) == 'done', 60)
+        self.run_until(d, lambda: self.state_of(old) != 'queued', 60, what='aged bench job takes the next slot')
+        self.assertTrue(all(self.state_of(i) == 'queued' for i in fresh), 'a fresh harness job jumped the aged job')
+
+    def test_aged_solo_job_forces_its_window(self):
+        self.write_config(dict(slots=3, ord_min_s=3600, ord_window_s=3600))
+        d = self.daemon()
+        ords = [self.submit(secs=120) for _ in range(60)]
+        self.run_for(d, 30)
+        solo = self.submit(secs=30, klass=q.CLASSES['bench'], solo=True, quiet_machine=True, measured=True,
+                           submitted_t=self.clock.t - 6000)
+        self.run_until(d, lambda: self.state_of(solo) == 'done', 600, what='aged solo job runs inside 10 min, not after ord_min_s')
+
+    def test_one_owner_cannot_hold_most_slots(self):
+        d = self.daemon()
+        a = [self.submit(secs=100, klass=q.CLASSES['harness'], owner='ownerA') for _ in range(4)]
+        b = self.submit(secs=100, klass=q.CLASSES['sweep'], owner='ownerB')
+        self.run_for(d, 5)
+        self.assertEqual(self.state_of(b), 'running', 'owner B waited behind owner A\'s higher class jobs')
+        self.assertLessEqual(sum(self.state_of(i) == 'running' for i in a), 2)
+
     # laptop-only jobs must not hold the Mac's solo window or build cap
     def test_laptop_jobs_do_not_hold_mac(self):
         d = self.daemon()
