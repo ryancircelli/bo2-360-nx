@@ -13,6 +13,7 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_device.h>
@@ -178,10 +179,10 @@ REX_EXPORT(__imp__XamContentGetDeviceData, rex::kernel::xam::XamContentGetDevice
 REX_EXPORT(__imp__XamContentCreateDeviceEnumerator,
            rex::kernel::xam::XamContentCreateDeviceEnumerator_entry)
 
-REX_EXPORT_STUB(__imp__XamContentAddCacheDevice);
-REX_EXPORT_STUB(__imp__XamContentDeviceCheckUpdates);
-REX_EXPORT_STUB(__imp__XamContentGetDefaultDevice);
-REX_EXPORT_STUB(__imp__XamContentGetDeviceSerialNumber);
-REX_EXPORT_STUB(__imp__XamContentGetDeviceVolumePath);
-REX_EXPORT_STUB(__imp__XamContentGetLocalizedDeviceData);
-REX_EXPORT_STUB(__imp__XamContentRemoveCacheDevice);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentAddCacheDevice, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentDeviceCheckUpdates, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetDefaultDevice, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetDeviceSerialNumber, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetDeviceVolumePath, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetLocalizedDeviceData, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentRemoveCacheDevice, 0x80004005);

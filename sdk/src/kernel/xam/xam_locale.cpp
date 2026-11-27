@@ -15,6 +15,7 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/flags.h>
 #include <rex/system/kernel_state.h>
@@ -442,19 +443,19 @@ REX_EXPORT(__imp__XamGetCountryFromOnlineCountry,
            rex::kernel::xam::XamGetCountryFromOnlineCountry_entry)
 REX_EXPORT(__imp__XamGetLocaleEx, rex::kernel::xam::XamGetLocaleEx_entry)
 
-REX_EXPORT_STUB(__imp__XamFormatCurrency);
-REX_EXPORT_STUB(__imp__XamFormatMessage);
-REX_EXPORT_STUB(__imp__XamFormatSystemDateString);
+REX_EXPORT_QUIET_RETURN(__imp__XamFormatCurrency, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamFormatMessage, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamFormatSystemDateString, 0x80004005);
 REX_EXPORT(__imp__XamGetCountry, rex::kernel::xam::XamGetCountry_entry)
-REX_EXPORT_STUB(__imp__XamGetCurrencyFormat);
+REX_EXPORT_QUIET_RETURN(__imp__XamGetCurrencyFormat, 0x80004005);
 REX_EXPORT(__imp__XamGetLanguage, rex::kernel::xam::XamGetLanguage_entry)
 REX_EXPORT_STUB(__imp__XamGetLanguageLocaleFallbackString);
 REX_EXPORT_STUB(__imp__XamGetLanguageTypeface);
 REX_EXPORT(__imp__XamGetLanguageTypefacePatch, rex::kernel::xam::XamGetLanguageTypefacePatch_entry)
 REX_EXPORT(__imp__XamGetLocaleDateFormat, rex::kernel::xam::XamGetLocaleDateFormat_entry)
-REX_EXPORT_STUB(__imp__XamGetLocaleTimeFormat);
+REX_EXPORT_QUIET_RETURN(__imp__XamGetLocaleTimeFormat, 0);
 REX_EXPORT_STUB(__imp__XamGetOnlineCountryFeatures);
 REX_EXPORT(__imp__XamGetOnlineLanguageAndCountry, rex::kernel::xam::XamGetOnlineLanguageAndCountry_entry)
-REX_EXPORT_STUB(__imp__XamGetStoreFront);
-REX_EXPORT_STUB(__imp__XamUniSortCmpString);
-REX_EXPORT_STUB(__imp__XamValidateCountry);
+REX_EXPORT_QUIET_RETURN(__imp__XamGetStoreFront, 0x80151802);
+REX_EXPORT_QUIET_RETURN(__imp__XamUniSortCmpString, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamValidateCountry, 0);

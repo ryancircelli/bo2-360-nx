@@ -21,6 +21,7 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
@@ -897,54 +898,54 @@ REX_EXPORT(__imp__XamWriteGamerTile, rex::kernel::xam::XamWriteGamerTile_entry)
 REX_EXPORT(__imp__XamSessionCreateHandle, rex::kernel::xam::XamSessionCreateHandle_entry)
 REX_EXPORT(__imp__XamSessionRefObjByHandle, rex::kernel::xam::XamSessionRefObjByHandle_entry)
 
-REX_EXPORT_STUB(__imp__XamUserAddRecentPlayer);
-REX_EXPORT_STUB(__imp__XamUserAllowedToPostToSocialNetwork);
-REX_EXPORT_STUB(__imp__XamUserCreateAvatarAssetEnumerator);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserAddRecentPlayer, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserAllowedToPostToSocialNetwork, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserCreateAvatarAssetEnumerator, 0x65B);
 REX_EXPORT_STUB_RETURN(__imp__XamUserCreatePlayerEnumerator, 0x8007065B);
 REX_EXPORT(__imp__XamUserCreateStatsEnumerator, rex::kernel::xam::XamUserCreateStatsEnumerator_entry)
-REX_EXPORT_STUB(__imp__XamUserCreateTitlesPlayedEnumerator);
-REX_EXPORT_STUB(__imp__XamUserFlushLogonQueue);
-REX_EXPORT_STUB(__imp__XamUserGetAge);
-REX_EXPORT_STUB(__imp__XamUserGetDeviceId);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserCreateTitlesPlayedEnumerator, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserFlushLogonQueue, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetAge, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetDeviceId, 0x80004005);
 REX_EXPORT(__imp__XamUserGetOnlineLanguageFromXUID, rex::kernel::xam::XamUserGetOnlineLanguageFromXUID_entry)
-REX_EXPORT_STUB(__imp__XamUserGetOnlineXUIDFromOfflineXUID);
-REX_EXPORT_STUB(__imp__XamUserGetReportingInfo);
-REX_EXPORT_STUB(__imp__XamUserGetRequestedUserIndexMask);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetOnlineXUIDFromOfflineXUID, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetReportingInfo, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetRequestedUserIndexMask, 0x80004005);
 REX_EXPORT_STUB(__imp__XamUserGetSubscriptionType);
 REX_EXPORT(__imp__XamUserGetUserFlags, rex::kernel::xam::XamUserGetUserFlags_entry)
 REX_EXPORT(__imp__XamUserGetUserFlagsFromXUID, rex::kernel::xam::XamUserGetUserFlagsFromXUID_entry)
-REX_EXPORT_STUB(__imp__XamUserGetUserIndexMask);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetUserIndexMask, 0x80004005);
 REX_EXPORT(__imp__XamUserGetUserTenure, rex::kernel::xam::XamUserGetUserTenure_entry)
-REX_EXPORT_STUB(__imp__XamUserGetUsersMissingAvatars);
-REX_EXPORT_STUB(__imp__XamUserGetXUIDForTFA);
-REX_EXPORT_STUB(__imp__XamUserInvalidateProfileSetting);
-REX_EXPORT_STUB(__imp__XamUserIsLogonPreviewModeEnabled);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetUsersMissingAvatars, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetXUIDForTFA, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserInvalidateProfileSetting, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserIsLogonPreviewModeEnabled, 0);
 REX_EXPORT(__imp__XamUserIsParentalControlled, rex::kernel::xam::XamUserIsParentalControlled_entry)
-REX_EXPORT_STUB(__imp__XamUserIsPartial);
-REX_EXPORT_STUB(__imp__XamUserIsPartialProfile);
-REX_EXPORT_STUB(__imp__XamUserIsUnsafeProgrammingAllowed);
-REX_EXPORT_STUB(__imp__XamUserLockLogonPreviewMode);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserIsPartial, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserIsPartialProfile, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserIsUnsafeProgrammingAllowed, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserLockLogonPreviewMode, 0);
 REX_EXPORT_STUB(__imp__XamUserLogon);
 REX_EXPORT_STUB(__imp__XamUserLogonEx);
-REX_EXPORT_STUB(__imp__XamUserLookupDevice);
-REX_EXPORT_STUB(__imp__XamUserNuiBind);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserLookupDevice, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserNuiBind, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamUserNuiEnableBiometric, 0x80070057);  // canary: X_E_INVALIDARG
 REX_EXPORT_STUB_RETURN(__imp__XamUserNuiGetEnrollmentIndex, 0x80070525);
 REX_EXPORT(__imp__XamUserNuiGetUserIndex, rex::kernel::xam::XamUserNuiGetUserIndex_entry)
-REX_EXPORT_STUB(__imp__XamUserNuiGetUserIndexForBind);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserNuiGetUserIndexForBind, 0x80004005);
 REX_EXPORT(__imp__XamUserNuiGetUserIndexForSignin, rex::kernel::xam::XamUserNuiGetUserIndexForSignin_entry)
-REX_EXPORT_STUB(__imp__XamUserNuiIsBiometricEnabled);
-REX_EXPORT_STUB(__imp__XamUserNuiUnbind);
-REX_EXPORT_STUB(__imp__XamUserOverrideBindingCallbacks);
-REX_EXPORT_STUB(__imp__XamUserOverrideDeviceBindings);
-REX_EXPORT_STUB(__imp__XamUserOverrideGlobalState);
-REX_EXPORT_STUB(__imp__XamUserOverrideUserInfo);
-REX_EXPORT_STUB(__imp__XamUserPrefetchProfileSettings);
-REX_EXPORT_STUB(__imp__XamUserProfileSync);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserNuiIsBiometricEnabled, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserNuiUnbind, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserOverrideBindingCallbacks, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserOverrideDeviceBindings, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserOverrideGlobalState, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserOverrideUserInfo, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserPrefetchProfileSettings, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserProfileSync, 0x80004005);
 REX_EXPORT_STUB(__imp__XamUserReadUserPreference);
-REX_EXPORT_STUB(__imp__XamUserResetSubscriptionType);
-REX_EXPORT_STUB(__imp__XamUserUnlockLogonPreviewMode);
-REX_EXPORT_STUB(__imp__XamUserUpdateRecentPlayer);
-REX_EXPORT_STUB(__imp__XamUserValidateAvatarManifest);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserResetSubscriptionType, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserUnlockLogonPreviewMode, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserUpdateRecentPlayer, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserValidateAvatarManifest, 0);
 REX_EXPORT_STUB(__imp__XamUserWriteUserPreference);
-REX_EXPORT_STUB(__imp__XamVerifyPasscode);
+REX_EXPORT_QUIET_RETURN(__imp__XamVerifyPasscode, 0x65B);

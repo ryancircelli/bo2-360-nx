@@ -13,6 +13,7 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
@@ -88,16 +89,16 @@ REX_EXPORT(__imp__XamTaskSchedule, rex::kernel::xam::XamTaskSchedule_entry)
 REX_EXPORT(__imp__XamTaskShouldExit, rex::kernel::xam::XamTaskShouldExit_entry)
 REX_EXPORT(__imp__XamTaskCloseHandle, rex::kernel::xam::XamTaskCloseHandle_entry)
 
-REX_EXPORT_STUB(__imp__XamTaskCancel);
-REX_EXPORT_STUB(__imp__XamTaskCancelWaitAndCloseWaitTask);
-REX_EXPORT_STUB(__imp__XamTaskCreateQueue);
-REX_EXPORT_STUB(__imp__XamTaskCreateQueueEx);
-REX_EXPORT_STUB(__imp__XamTaskGetAttributes);
-REX_EXPORT_STUB(__imp__XamTaskGetCompletionStatus);
-REX_EXPORT_STUB(__imp__XamTaskGetCurrentTask);
-REX_EXPORT_STUB(__imp__XamTaskGetStatus);
-REX_EXPORT_STUB(__imp__XamTaskModify);
-REX_EXPORT_STUB(__imp__XamTaskQueryProperty);
-REX_EXPORT_STUB(__imp__XamTaskReschedule);
-REX_EXPORT_STUB(__imp__XamTaskSetCancelSubTasks);
-REX_EXPORT_STUB(__imp__XamTaskWaitOnCompletion);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskCancel, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskCancelWaitAndCloseWaitTask, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskCreateQueue, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskCreateQueueEx, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskGetAttributes, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskGetCompletionStatus, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskGetCurrentTask, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskGetStatus, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskModify, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskQueryProperty, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskReschedule, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskSetCancelSubTasks, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamTaskWaitOnCompletion, 0x80004005);

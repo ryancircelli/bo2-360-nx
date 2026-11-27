@@ -14,6 +14,7 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
@@ -468,38 +469,38 @@ REX_EXPORT(__imp__XamContentSetThumbnail, rex::kernel::xam::XamContentSetThumbna
 REX_EXPORT(__imp__XamContentDelete, rex::kernel::xam::XamContentDelete_entry)
 REX_EXPORT(__imp__XamContentDeleteInternal, rex::kernel::xam::XamContentDeleteInternal_entry)
 
-REX_EXPORT_STUB(__imp__XamContentClosePackageFile);
-REX_EXPORT_STUB(__imp__XamContentCopyInternal);
-REX_EXPORT_STUB(__imp__XamContentCreateAndMountPackage);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentClosePackageFile, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentCopyInternal, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentCreateAndMountPackage, 0x80004005);
 REX_EXPORT_STUB(__imp__XamContentCreateEnumeratorInternal);
-REX_EXPORT_STUB(__imp__XamContentDismountAndClosePackage);
-REX_EXPORT_STUB(__imp__XamContentDuplicateFileHandle);
-REX_EXPORT_STUB(__imp__XamContentExistsOnDeviceInternal);
-REX_EXPORT_STUB(__imp__XamContentFlushPackage);
-REX_EXPORT_STUB(__imp__XamContentGetAttributes);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentDismountAndClosePackage, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentDuplicateFileHandle, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentExistsOnDeviceInternal, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentFlushPackage, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetAttributes, 0x490);
 REX_EXPORT_STUB(__imp__XamContentGetAttributesInternal);
-REX_EXPORT_STUB(__imp__XamContentGetHeaderInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetHeaderInternal, 0x80004005);
 REX_EXPORT_STUB(__imp__XamContentGetLocalizedString);
 REX_EXPORT_STUB(__imp__XamContentGetMetaDataInternal);
-REX_EXPORT_STUB(__imp__XamContentGetMountedPackageByRootName);
-REX_EXPORT_STUB(__imp__XamContentGetOnlineCreator);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetMountedPackageByRootName, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetOnlineCreator, 0x65B);
 REX_EXPORT_STUB_RETURN(__imp__XamContentInstall, 0x32);
-REX_EXPORT_STUB(__imp__XamContentInstallInternal);
-REX_EXPORT_STUB(__imp__XamContentIsGameInstalledToHDD);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentInstallInternal, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentIsGameInstalledToHDD, 0);
 REX_EXPORT_STUB_RETURN(__imp__XamContentLaunchImage, 0x32);
-REX_EXPORT_STUB(__imp__XamContentLaunchImageFromFileInternal);
-REX_EXPORT_STUB(__imp__XamContentLaunchImageInternal);
-REX_EXPORT_STUB(__imp__XamContentLaunchImageInternalEx);
-REX_EXPORT_STUB(__imp__XamContentLockUnlockPackageHeaders);
-REX_EXPORT_STUB(__imp__XamContentMountInstalledGame);
-REX_EXPORT_STUB(__imp__XamContentMountPackage);
-REX_EXPORT_STUB(__imp__XamContentMoveInternal);
-REX_EXPORT_STUB(__imp__XamContentOpenFileInternal);
-REX_EXPORT_STUB(__imp__XamContentOpenPackageFile);
-REX_EXPORT_STUB(__imp__XamContentQueryLicenseInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentLaunchImageFromFileInternal, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentLaunchImageInternal, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentLaunchImageInternalEx, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentLockUnlockPackageHeaders, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentMountInstalledGame, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentMountPackage, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentMoveInternal, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentOpenFileInternal, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentOpenPackageFile, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentQueryLicenseInternal, 0x80004005);
 REX_EXPORT_STUB(__imp__XamContentRegisterChangeCallback);
 REX_EXPORT_STUB(__imp__XamContentResolveInternal);
-REX_EXPORT_STUB(__imp__XamContentSetAttributes);
-REX_EXPORT_STUB(__imp__XamContentSetMediaMetaDataInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentSetAttributes, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentSetMediaMetaDataInternal, 0x80004005);
 REX_EXPORT_STUB(__imp__XamContentSetThumbnailInternal);
-REX_EXPORT_STUB(__imp__XamContentWritePackageHeader);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentWritePackageHeader, 0x80004005);
