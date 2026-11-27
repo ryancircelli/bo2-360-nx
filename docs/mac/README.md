@@ -26,25 +26,27 @@ read from an external path (`data_path.txt` in Application Support, `BO2_DATA`, 
 Saves go to `~/Library/Application Support/bo2-360-nx`, logs to `~/Library/Logs/bo2-360-nx` (newest 20 kept).
 Extra command-line options for every launch go in `Application Support/bo2-360-nx/args.txt` (`name = value`).
 
-## Multiple local instances
+## Local multiplayer by instances (any game)
 
-`tools/mac/launch_instances.py K [--wait] [APP.app ...]` starts 2–4 native Mac app instances and assigns
-`BO2_INSTANCE=0..K-1` plus `BO2_INSTANCE_COUNT=K`. Each process sizes and positions its own SDL window in a main-display
-tile, without Accessibility access. The environment also enables in-game PNG captures in an instance-specific
-directory under `/tmp/bo2/syslink/captures/<time>/instance-N/captures`. Each process has isolated user data, caches,
-settings, logs, and network ports. Provide K app paths or set `BO2_MAC_APP` to the app bundle produced by
-`tools/mac/pack_app.py`. For example:
+`tools/mac/launch_instances.py K APP.app [--audio first|all] [--env I:NAME=VALUE]` runs K copies (2-8) of one game
+as a split-screen grid on the main display. Players meet through the game's own System Link / LAN mode, so a game
+without native split screen still gets local multiplayer. The launcher only sets `REX_INSTANCE=0..K-1` and
+`REX_INSTANCE_COUNT=K`; the engine does the rest for every game:
 
-    BO2_MAC_APP="$HOME/Games/Black Ops II.app" tools/mac/launch_instances.py 4
-    tools/mac/launch_instances.py 2 "$HOME/Games/BO2 copy A.app" "$HOME/Games/BO2 copy B.app"
+- folders: copy i keeps its profile, console id (so its XUID and network address differ), saves, settings and
+  caches under `<user data>/instances/<i>`; its settings start as a copy of the main ones;
+- network: copy i's fixed game ports and System Link port 3074 move to their own block
+  (`sdk/include/rex/system/instance_ports.h`), and broadcasts reach every local copy;
+- windows: a borderless tile of the main display's usable area (2 = side by side, 3-4 = 2x2, 5-8 = 3x3);
+- pads: first come, first kept; each copy keeps `instance_pads` pads (default 1; BO2 sets 4 in its game.toml, so
+  2 copies = 8 players). Connect the pads before launching; copy 0 claims first;
+- audio: `--audio first` (default) mutes every copy but the first, `--audio all` mixes them;
+- quitting: when one copy exits (Guide > Quit) the launcher closes the others.
 
-For scripted menu control, set `BO2_INSTANCE_BUTTONS_0`, `BO2_INSTANCE_BUTTONS_1` (and so on) to the standard
-`bo2zm_test_buttons` time/button sequences; `_P2` through `_P4` suffixes address local split-screen users.
+Example: `tools/mac/launch_instances.py 2 "$HOME/Games/Launchers/BO2 Zombies.app"`, then on each tile
+Zombies > System Link: one copy creates the game, the other joins it.
 
-The launcher refuses to start if runq state cannot be read or a measured FPS job is active. It reads running-job
-records under `~/Games/Xbox360/bo2-build/runq/running`; queued proof work does not block launch. Use `--wait` when
-running it as a runq job so that runq continues to track the copies until they exit. Run the job in a non-measured
-class and wait for measured FPS jobs to finish before starting an interactive System Link session.
+The launcher refuses to start while a runq speed run is active. As a runq job, use a non-measured class.
 
 ## Testing
 
