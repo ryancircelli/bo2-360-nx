@@ -106,6 +106,7 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
   // snooper the function with the discovered blocks and instructions
   node->discover(std::move(result.blocks), std::move(result.instructions),
                  std::move(result.labels));
+  node->setFallThroughs(std::move(result.fallThroughs));
 
   // Add jump tables (targets become labels in the function)
   for (const auto& jt : result.jumpTables) {

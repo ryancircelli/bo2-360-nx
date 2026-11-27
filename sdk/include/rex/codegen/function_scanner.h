@@ -228,6 +228,8 @@ struct BlockDiscoveryResult {
   // Collected instruction pointers (for FunctionNode ownership)
   std::vector<rex::codegen::ppc::Instruction*> instructions;
 
+  std::set<uint32_t> fallThroughs;  // known entries reached by linear fall-through
+
   // External references found during discovery
   std::vector<uint32_t> externalCalls;  // bl to unknown targets
   std::vector<uint32_t> tailCalls;      // b to external targets

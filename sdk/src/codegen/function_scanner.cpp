@@ -2064,6 +2064,14 @@ BlockDiscoveryResult discoverBlocks(
       }
 
       addr += 4;
+      // Upstream rexglue 11742bf4: preserve entry ownership during linear scans.
+      if (addr != entryPoint && knownFunctions.contains(addr)) {
+        block.size = addr - blockStart;
+        result.fallThroughs.insert(addr);
+        result.tailCalls.push_back(addr);
+        result.unresolvedBranches.push_back({addr, addr, false, false});
+        break;
+      }
     }
 
     // Log why loop exited if not due to terminator

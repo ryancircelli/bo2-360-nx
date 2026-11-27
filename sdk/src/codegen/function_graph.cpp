@@ -622,6 +622,12 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
       blockBase += 4;
       ++data;
     }
+    if (fallThroughs().contains(blockEnd)) {
+      BuilderContext builderCtx{body, ctx, *this, insn, blockEnd, data,
+                                localVariables, csrState, nullptr};
+      builderCtx.emit_function_call(blockEnd);
+      emit_println(body, "\treturn;");
+    }
   }
 
   // --- Close function body (or SEH try block) ---
