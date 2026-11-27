@@ -13,6 +13,7 @@
 #include <rex/logging.h>
 #include <rex/hook.h>
 
+// No debug monitor here: calls that must report a result fail with XBDM_UNDEFINED rather than claim success.
 REX_EXPORT_STUB(__imp__DmAllocatePool);
 REX_EXPORT_STUB(__imp__DmAllocatePoolWithTag);
 REX_EXPORT_STUB(__imp__DmCloseCounters);
@@ -22,13 +23,13 @@ REX_EXPORT_STUB(__imp__DmCloseNotificationSession);
 REX_EXPORT_STUB(__imp__DmClosePerformanceCounter);
 REX_EXPORT_STUB(__imp__DmContinueThread);
 REX_EXPORT_STUB(__imp__DmFreePool);
-REX_EXPORT_STUB(__imp__DmGetMemory);
+REX_EXPORT_STUB_RETURN(__imp__DmGetMemory, 0x82DA0000);
 REX_EXPORT_STUB(__imp__DmGetModuleLongName);
 REX_EXPORT_STUB(__imp__DmGetProcAddress);
 REX_EXPORT_STUB(__imp__DmGetThreadContext);
-REX_EXPORT_STUB(__imp__DmGetThreadList);
+REX_EXPORT_STUB_RETURN(__imp__DmGetThreadList, 0x82DA0000);
 REX_EXPORT_STUB(__imp__DmGetXbeInfo);
-REX_EXPORT_STUB(__imp__DmGetXboxName);
+REX_EXPORT_STUB_RETURN(__imp__DmGetXboxName, 0x82DA0000);
 REX_EXPORT_STUB(__imp__DmGo);
 REX_EXPORT_STUB(__imp__DmHaltThread);
 REX_EXPORT_STUB(__imp__DmIsDebuggerPresent);
@@ -43,18 +44,18 @@ REX_EXPORT_STUB(__imp__DmRegisterCommandProcessor);
 REX_EXPORT_STUB(__imp__DmRegisterNotificationProcessor);
 REX_EXPORT_STUB(__imp__DmRegisterPerformanceCounter);
 REX_EXPORT_STUB(__imp__DmRemoveBreakpoint);
-REX_EXPORT_STUB(__imp__DmResumeThread);
+REX_EXPORT_STUB_RETURN(__imp__DmResumeThread, 0x82DA0000);
 REX_EXPORT_STUB(__imp__DmSendNotificationString);
 REX_EXPORT_STUB(__imp__DmSetBreakpoint);
 REX_EXPORT_STUB(__imp__DmSetDataBreakpoint);
 REX_EXPORT_STUB(__imp__DmSetInitialBreakpoint);
-REX_EXPORT_STUB(__imp__DmSetMemory);
+REX_EXPORT_STUB_RETURN(__imp__DmSetMemory, 0x82DA0000);
 REX_EXPORT_STUB(__imp__DmSetThreadContext);
 REX_EXPORT_STUB(__imp__DmSetTitle);
 REX_EXPORT_STUB(__imp__DmSetXboxName);
 REX_EXPORT_STUB(__imp__DmStop);
 REX_EXPORT_STUB(__imp__DmStopOn);
-REX_EXPORT_STUB(__imp__DmSuspendThread);
+REX_EXPORT_STUB_RETURN(__imp__DmSuspendThread, 0x82DA0000);
 REX_EXPORT_STUB(__imp__DmThreadUserData);
 REX_EXPORT_STUB(__imp__DmUnloadExtension);
 REX_EXPORT_STUB_RETURN(__imp__DmWalkLoadedModules, 0x82DA0104);
