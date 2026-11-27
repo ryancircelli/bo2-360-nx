@@ -831,6 +831,54 @@ u32 NtCancelIoFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status
   return X_STATUS_SUCCESS;
 }
 
+// Writes `length` bytes, one 4 KB page per segment element, in order (Win32 WriteFileGather shape;
+// layout of the 360 element is checked at runtime: a 64-bit big-endian union has a zero high word).
+u32 NtWriteFileGather_entry(u32 file_handle, u32 event_handle, u32 apc_routine,
+                            mapped_void apc_context, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block,
+                            mapped_u32 segment_array, u32 length, mapped_u64 byte_offset_ptr) {
+  auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(event_handle);
+  auto file = REX_KERNEL_OBJECTS()->LookupObject<XFile>(file_handle);
+  X_STATUS result = X_STATUS_SUCCESS;
+  if ((event_handle && !ev) || !file) {
+    result = X_STATUS_INVALID_HANDLE;
+  }
+  uint32_t total = 0;
+  if (XSUCCEEDED(result)) {
+    constexpr uint32_t kPage = 4096;
+    uint32_t stride = (segment_array[0] == 0 && segment_array[1] != 0) ? 2 : 1;
+    uint32_t base_off = stride - 1;
+    uint64_t offset = byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : -1;
+    for (uint32_t i = 0; total < length; ++i) {
+      uint32_t n = std::min(kPage, length - total);
+      uint32_t written = 0;
+      uint64_t off = (offset != uint64_t(-1) && offset != uint64_t(-2)) ? offset + total : offset;
+      result = file->Write(segment_array[i * stride + base_off], n, off, &written,
+                           apc_context.guest_address());
+      total += written;
+      if (XFAILED(result) || written != n) {
+        break;
+      }
+    }
+    if (io_status_block) {
+      io_status_block->status = result;
+      io_status_block->information = total;
+    }
+    if (static_cast<uint32_t>(apc_routine) & ~1u && apc_context) {
+      XThread::GetCurrentThread()->EnqueueApc(apc_routine & ~1u, apc_context.guest_address(),
+                                              io_status_block.guest_address(), 0);
+    }
+    if (ev) {
+      ev->Set(0, false);
+    }
+    return result;
+  }
+  if (io_status_block) {
+    io_status_block->status = result;
+    io_status_block->information = 0;
+  }
+  return result;
+}
+
 u32 NtWriteFile_entry(u32 file_handle, u32 event_handle, u32 apc_routine, mapped_void apc_context,
                       ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block, mapped_void buffer,
                       u32 buffer_length, mapped_u64 byte_offset_ptr) {
@@ -1283,7 +1331,7 @@ REX_EXPORT_STUB(__imp__IoStartPacket);
 REX_EXPORT_STUB(__imp__IoSynchronousFsdRequest);
 REX_EXPORT_STUB(__imp__NtDeleteFile);
 REX_EXPORT_STUB(__imp__NtSetSystemTime);
-REX_EXPORT_STUB_RETURN(__imp__NtWriteFileGather, 0xC0000002);
+REX_EXPORT(__imp__NtWriteFileGather, rex::kernel::xboxkrnl::NtWriteFileGather_entry)
 REX_EXPORT_STUB(__imp__IoAcquireCancelSpinLock);
 REX_EXPORT_STUB(__imp__IoReleaseCancelSpinLock);
 REX_EXPORT(__imp__NtCancelIoFile, rex::kernel::xboxkrnl::NtCancelIoFile_entry)
