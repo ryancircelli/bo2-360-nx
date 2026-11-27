@@ -86,7 +86,6 @@ using BYTE = uint8_t;
 #endif
 
 DECLARE_bool(async_shader_compilation);
-DECLARE_bool(metal_draw_fastpath);
 DECLARE_bool(depth_float24_convert_in_pixel_shader);
 DECLARE_bool(depth_float24_round);
 
@@ -5076,7 +5075,7 @@ MetalPipelineCache::GetOrCreatePipelineState(
   // formats and the rendering key, so an identical input tuple maps to the same
   // cached handle: skip the description build, XXH3 and map lookup.  Handles
   // are never erased except by the full clear that resets last_fast_handle_.
-  const bool fastpath = draw_fastpath_all_ || REXCVAR_GET(metal_draw_fastpath);
+  const bool fastpath = draw_fastpath_all_;
   if (fastpath && last_fast_handle_ &&
       last_fast_vertex_translation_ == vertex_translation &&
       last_fast_pixel_translation_ == pixel_translation &&

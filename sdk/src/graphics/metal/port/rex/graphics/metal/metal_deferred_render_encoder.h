@@ -57,7 +57,7 @@ class DeferredRenderEncoder {
   // this encoder's lifetime. Returns this.
   DeferredRenderEncoder* Open(MTL::RenderCommandEncoder* real, bool deferred);
 
-  // Cross-pass mode (metal_encode_thread_xpass): the worker creates the
+  // Cross-pass mode (metal_cmdcost_all): the worker creates the
   // encoder from the command buffer and descriptor (copied here, by value),
   // endEncoding() only queues the end, and nothing drains at pass
   // boundaries. The front end must call Barrier() before it touches the
