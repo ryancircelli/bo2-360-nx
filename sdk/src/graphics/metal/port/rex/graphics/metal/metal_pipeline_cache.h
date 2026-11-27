@@ -102,6 +102,8 @@ PipelineRenderingKey ResolvePipelineRenderingKey(
 class MetalPipelineCache {
  public:
   std::vector<MetalConstantOverride> constant_overrides;
+  std::vector<MetalConstantOverride> fixed_constant_overrides;  // metal_shader_constants
+  std::string fixed_constants_text_;
   std::string constant_override_signature_;
   std::chrono::steady_clock::time_point constant_last_poll_{};
   static constexpr size_t kLayoutUIDEmpty = 0;
