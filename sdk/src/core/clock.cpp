@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <mutex>
 
@@ -18,6 +19,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/math.h>
+#include <rex/thread_spin.h>
 
 REXCVAR_DEFINE_BOOL(clock_no_scaling, false, "Clock",
                     "Disable clock scaling (inverted: false = scaling enabled)");
@@ -37,6 +39,10 @@ REXCVAR_DEFINE_INT32(clock_frame_lock_stall_ms, 1000, "Clock",
                      "runs with wall time again until the next frame, so nothing waits forever on a stopped clock.")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(clock_read_spin_backoff, false, "Clock",
+                    "Bench knob (off = old behaviour): a thread that reads the guest clock back to back (under 1 us "
+                    "apart, 256 reads in a row: a frame-limiter spin) goes through the guest poll backoff, so it "
+                    "sleeps instead of burning its core");
 REXCVAR_DEFINE_BOOL(clock_source_raw, false, "Clock", "Use raw clock source without scaling");
 
 namespace rex::chrono {
@@ -287,6 +293,17 @@ void Clock::set_guest_system_time_base(uint64_t time_base) {
 }
 
 uint64_t Clock::QueryGuestTickCount() {
+  if (REXCVAR_GET(clock_read_spin_backoff)) [[unlikely]] {
+    // shortcut: the first 256 reads of a spin run are not counted as spin; fine for the bench, upgrade if it matters.
+    static thread_local uint64_t last_ns = 0;
+    static thread_local uint32_t streak = 0;
+    const uint64_t now = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count());
+    streak = now - last_ns < 1000 ? streak + 1 : 0;
+    last_ns = now;
+    if (streak >= 256) rex::thread::GuestPoll();
+  }
   auto guest_tick_count = UpdateGuestClock();
   return guest_tick_count;
 }

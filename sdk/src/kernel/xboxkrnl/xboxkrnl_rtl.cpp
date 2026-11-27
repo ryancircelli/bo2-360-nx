@@ -32,6 +32,7 @@
 #include <rex/system/xevent.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
+#include <rex/thread_spin.h>
 #include <rex/thread/atomic.h>
 
 namespace rex::kernel::xboxkrnl {
@@ -345,6 +346,10 @@ REXCVAR_DEFINE_BOOL(cs_spin_test_first, false, "Kernel",
                     "Bench knob (off = old behaviour): the critical-section spin loop reads the lock word and tries the "
                     "compare-exchange only when it looks free, so waiting threads do not bounce the cache line");
 
+REXCVAR_DEFINE_BOOL(try_enter_fail_polls, false, "Kernel",
+                    "Bench knob (off = old behaviour): a failed RtlTryEnterCriticalSection counts as a guest poll "
+                    "(yield + spin backoff), so a guest loop that retries it back to back leaves its core");
+
 namespace {
 // lock_count lives in guest memory as a big endian word, so the atomics work on the swapped value
 // (rexglue-sdk a04d6fc). -1 and 0 are byte-order symmetric, 1 and up are not.
@@ -465,6 +470,7 @@ u32 RtlTryEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
   }
 
   // Failed to acquire lock.
+  if (REXCVAR_GET(try_enter_fail_polls)) rex::thread::GuestPoll();
   return 0;
 }
 
