@@ -298,8 +298,6 @@ class XmaContext {
   uint32_t GetAmountOfBitsToRead(uint32_t remaining_stream_bits, uint32_t frame_size);
   const uint8_t* GetNextPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet_index,
                                uint32_t current_input_packet_count);
-  uint32_t GetNextPacketReadOffset(uint8_t* buffer, uint32_t next_packet_index,
-                                   uint32_t current_input_packet_count);
   uint8_t* GetCurrentInputBuffer(XMA_CONTEXT_DATA* data);
   void AdvanceInputPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet_index);
 

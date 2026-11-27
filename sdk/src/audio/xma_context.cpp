@@ -866,25 +866,6 @@ const uint8_t* XmaContext::GetNextPacket(XMA_CONTEXT_DATA* data, uint32_t next_p
   return memory()->TranslatePhysical(next_buffer_address) + next_packet_index * kBytesPerPacket;
 }
 
-uint32_t XmaContext::GetNextPacketReadOffset(uint8_t* buffer, uint32_t next_packet_index,
-                                             uint32_t current_input_packet_count) {
-  while (next_packet_index < current_input_packet_count) {
-    uint8_t* next_packet = buffer + (next_packet_index * kBytesPerPacket);
-    const uint32_t packet_frame_offset = xma::GetPacketFrameOffset(next_packet);
-
-    // The helper already includes the 32-bit header. Compare with the packet size,
-    // not with its payload: a frame can start in the last bits and continue in the
-    // next packet (Decode handles that split header).
-    if (packet_frame_offset < kBitsPerPacket) {
-      return (next_packet_index * kBitsPerPacket) + packet_frame_offset;
-    }
-    next_packet_index++;
-  }
-
-  // 32 is a valid offset: the first frame of the first packet.
-  return UINT32_MAX;
-}
-
 void XmaContext::AdvanceInputPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet_index) {
   // At most the two available buffers are consumed. Keep pending skips when
   // crossing them and search after packets with no new frames.
@@ -897,17 +878,13 @@ void XmaContext::AdvanceInputPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet
       data->error_status = 4;
       return;
     }
-    if (next_packet_index < count) {
-      const uint32_t offset = GetNextPacketReadOffset(
-          GetCurrentInputBuffer(data), next_packet_index, count);
-      if (offset != UINT32_MAX) {
-        data->input_buffer_read_offset = offset;
-        return;
-      }
-      next_packet_index = 0;
-    } else {
-      next_packet_index -= count;
+    const uint32_t offset =
+        xma::FindNextFrameStart(GetCurrentInputBuffer(data), next_packet_index, count);
+    if (offset != UINT32_MAX) {
+      data->input_buffer_read_offset = offset;
+      return;
     }
+    next_packet_index -= count;  // a skip chain past this buffer continues in the next one
     SwapInputBuffer(data);
   }
 }
