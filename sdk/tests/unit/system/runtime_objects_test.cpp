@@ -146,6 +146,26 @@ TEST_CASE("Duplicate handles retain the object after the original handle closes"
   CHECK_FALSE(table->LookupObject<rex::system::XEvent>(0xFFFFFFFF));
 }
 
+TEST_CASE("A release too many never reaches the object that reuses the handle slot", "[runtime][handles]") {
+  Fixture f;
+  auto table = f.kernel()->object_table();
+  auto first = f.New<rex::system::XEvent>();
+  first->Initialize(false, false);
+  const auto handle = first->handle();
+  REQUIRE(table->ReleaseHandle(handle) == X_STATUS_SUCCESS);  // the only handle: the slot is free again
+  CHECK(table->ReleaseHandle(handle) == X_STATUS_INVALID_HANDLE);
+  CHECK(table->RetainHandle(handle) == X_STATUS_INVALID_HANDLE);
+
+  auto second = f.New<rex::system::XEvent>();
+  second->Initialize(false, false);
+  REQUIRE(second->handle() == handle);  // the slot was reused
+  CHECK_FALSE(first->ReleaseHandle());  // `first` has no handle left
+  first->RetainHandle();
+  CHECK(table->LookupObject<rex::system::XEvent>(handle).get() == second.get());
+  REQUIRE(table->ReleaseHandle(handle) == X_STATUS_SUCCESS);  // exactly one reference was on it
+  CHECK_FALSE(table->LookupObject<rex::system::XEvent>(handle));
+}
+
 TEST_CASE("Notification masks versions FIFO and selective dequeue preserve wait state", "[runtime][notify]") {
   Fixture f;
   auto listener = f.New<rex::system::XNotifyListener>();

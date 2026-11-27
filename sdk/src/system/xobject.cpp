@@ -134,11 +134,22 @@ XObject::Type XObject::type() const {
   return type_;
 }
 
+// An object whose last handle is gone has nothing to retain or release: handles_[0] would be the old handle value,
+// and its slot may belong to another object by now (Halo 3 releases one start-up worker thread twice; the worker's
+// own exit release then took a reference from an unrelated object).
 void XObject::RetainHandle() {
+  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
+  if (handles_.empty()) {
+    return;
+  }
   kernel_state_->object_table()->RetainHandle(handles_[0]);
 }
 
 bool XObject::ReleaseHandle() {
+  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
+  if (handles_.empty()) {
+    return false;
+  }
   // FIXME: Return true when handle is actually released.
   return kernel_state_->object_table()->ReleaseHandle(handles_[0]) == X_STATUS_SUCCESS;
 }

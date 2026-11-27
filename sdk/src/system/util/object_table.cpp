@@ -346,7 +346,7 @@ X_STATUS ObjectTable::RetainHandle(X_HANDLE handle) {
   auto global_lock = global_critical_region_.Acquire();
 
   ObjectTableEntry* entry = LookupTable(handle);
-  if (!entry) {
+  if (!entry || !entry->object) {  // an empty slot is not a handle
     return X_STATUS_INVALID_HANDLE;
   }
 
@@ -358,7 +358,7 @@ X_STATUS ObjectTable::ReleaseHandle(X_HANDLE handle) {
   auto global_lock = global_critical_region_.Acquire();
 
   ObjectTableEntry* entry = LookupTable(handle);
-  if (!entry) {
+  if (!entry || !entry->object) {  // an empty slot is not a handle (a second close of the same handle)
     return X_STATUS_INVALID_HANDLE;
   }
 
