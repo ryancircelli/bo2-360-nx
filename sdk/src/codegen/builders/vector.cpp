@@ -178,7 +178,8 @@ bool build_vmsum3fp128(BuilderContext& ctx) {
   ctx.println(
       "\tsimde_mm_store_ps({}.f32, rex::ppc::{}<3>(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)));",
-      ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot", ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+      ctx.v(ctx.insn.operands[0]), ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot",
+      ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
@@ -188,7 +189,8 @@ bool build_vmsum4fp128(BuilderContext& ctx) {
   ctx.println(
       "\tsimde_mm_store_ps({}.f32, rex::ppc::{}<4>(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)));",
-      ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot", ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+      ctx.v(ctx.insn.operands[0]), ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot",
+      ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
