@@ -4,15 +4,15 @@
 [project]
 name = "nfshp"
 sdk_version = "0.10.0"
-game_root = "."
+game_root = "/tmp/bo2/codegen-gap-prune/inputs/nfshp"
 
 [entrypoint]
-file_path = "work/default.xex"
+file_path = "/tmp/bo2/codegen-gap-prune/inputs/nfshp/default.xex"
 out_directory_path = "generated/default"
 includes = ["overrides.toml", "gaps.toml"]
 
 [[modules]]
 guest_path = "ALASKA.XEX.DLL"
-file_path = "work/game_module.xex"
+file_path = "/tmp/bo2/codegen-gap-prune/inputs/nfshp/game_module.xex"
 out_directory_path = "generated/game"
 includes = ["overrides-game.toml", "gaps-game.toml"]
