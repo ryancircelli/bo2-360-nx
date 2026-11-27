@@ -112,3 +112,10 @@ target_link_libraries(xevent_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(xevent_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME xevent_tests COMMAND xevent_tests)
+
+add_executable(content_manager_tests system/content_manager_test.cpp)
+target_include_directories(content_manager_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(content_manager_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME content_manager_tests COMMAND content_manager_tests)
