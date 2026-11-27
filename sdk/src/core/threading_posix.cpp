@@ -2864,9 +2864,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   }
 
   if (create_suspended) {
-    std::unique_lock<std::mutex> lock(thread->handle_.state_mutex_);
-    thread->handle_.state_signal_.wait(lock,
-                                       [thread] { return thread->handle_.suspend_count_ == 0; });
+    // Park on the suspend semaphore, not the condition variable: Resume() posts one token whenever
+    // the count reaches 0, and a token nobody takes makes the next Suspend() return at once.
+    thread->handle_.WaitSuspended();
   }
 
   start_routine();
