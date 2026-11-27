@@ -31,6 +31,13 @@ namespace rex {
 namespace graphics {
 namespace metal {
 
+// Patch-indexed domain shaders the native translator emits a
+// post-tessellation vertex function for (xe_native_ds / xe_native_ds_cpu).
+inline bool IsNativeDomainType(Shader::HostVertexShaderType type) {
+  return type == Shader::HostVertexShaderType::kQuadDomainPatchIndexed ||
+         type == Shader::HostVertexShaderType::kTriangleDomainPatchIndexed;
+}
+
 struct MslTranslatorConfig {
   uint32_t draw_resolution_scale_x = 1;
   uint32_t draw_resolution_scale_y = 1;
