@@ -627,7 +627,9 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
         last.isTrapAlways() ||
         ((last.opcode == ppc::Opcode::bclr || last.opcode == ppc::Opcode::bcctr) && last.XL.BO == 20) ||
         ((last.opcode == ppc::Opcode::bl || last.opcode == ppc::Opcode::bla) &&
-         last.branch_target && ctx.graph.isNoReturn(*last.branch_target));
+         last.branch_target && ctx.graph.isNoReturn(*last.branch_target)) ||
+        // After a call, only a fall-through the scanner recorded continues into another function.
+        (last.is_call() && !last.is_conditional() && !fallThroughs().contains(blockEnd));
     const auto* next = ctx.graph.getFunction(blockEnd);
     if ((fallThroughs().contains(blockEnd) || (!isWithinBounds(blockEnd) && next && !next->isImport())) && !terminal) {
       BuilderContext builderCtx{body, ctx, *this, insn, blockEnd, data,
@@ -925,6 +927,10 @@ class NoReturnSolver {
         case Opcode::bl:
         case Opcode::bla:
           if (insn.branch_target && !Returns(*insn.branch_target))
+            break;
+          // The function ends in this call and another function follows: the path ends here.
+          if (find(next) < 0 && graph_.getFunction(next) &&
+              !flow.node->fallThroughs().contains(next))
             break;
           if (go(next))
             return true;
