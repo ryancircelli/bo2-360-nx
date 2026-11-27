@@ -170,30 +170,6 @@ bool NativeRectsMode() {
   return on;
 }
 
-bool TerrainAdaptiveMode() {
-  static const bool on = [] {
-    if (!NativeTessMode()) {
-      return false;
-    }
-    const char* v = MetalDebugEnv("TERRAIN_ADAPTIVE");
-    return v && v[0] == '1';
-  }();
-  return on;
-}
-
-bool TerrainLayerMatchMode() {
-  static const bool on = [] {
-    if (!TerrainAdaptiveMode()) {
-      return false;
-    }
-    // Default on (docs/adaptive-terrain-flashes-20261014.md); =0 leaves the
-    // layers at the uniform maximum on Metal's tessellator, as before.
-    const char* v = MetalDebugEnv("TERRAIN_LAYER_MATCH");
-    return !(v && v[0] == '0');
-  }();
-  return on;
-}
-
 bool NativeTessBlendedMode() {
   static const bool on = [] {
     if (!NativeTessMode()) {

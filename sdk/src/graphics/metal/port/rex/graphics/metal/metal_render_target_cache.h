@@ -469,9 +469,6 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
       xenos::DepthRenderTargetFormat format) const override;
   // [native-scale] render targets kept at 1x while the draw resolution is
   // scaled (docs/resolution-scale.md section 16):
-  // - shadow maps (FABLE2_SHADOWS_NATIVE): depth-only passes on a depth
-  //   target (EDRAM base + pitch) learned as the source of a square depth
-  //   resolve of at least 512x512 and never bound with colour;
   // - effects (FABLE2_EFFECTS_NATIVE_TARGETS, experimental): colour-only
   //   1xMSAA passes at most half as wide as the widest depth-tested pass.
   uint32_t NativeScaleRenderTargets(uint32_t pitch_tiles_at_32bpp,
@@ -1106,13 +1103,6 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
     return resolve_scale_x_ > 1 || resolve_scale_y_ > 1;
   }
   static bool EffectsNativeEnabled();
-  static bool ShadowsNativeEnabled();
-  static bool TexSpaceNativeEnabled();
-  // [native-scale] Fable II texture-space pixel shaders (character morph,
-  // dog lighting and its seam dilation): draws with them render at 1x.
-  static bool IsTexSpacePixelShader(uint64_t ucode_hash);
-  // Set around RenderTargetCache::Update for such a draw.
-  void SetTexSpaceDrawHint(bool hint) { texspace_draw_hint_ = hint; }
   // Resolution scale of a render target (1 for native-scale targets).
   uint32_t RenderTargetScaleX(RenderTargetKey key) const {
     return key.native_scale ? 1u : draw_resolution_scale_x();
@@ -1169,14 +1159,6 @@ class MetalRenderTargetCache final : public graphics::RenderTargetCache {
   uint32_t effects_scene_pitch_tiles_ = 0;
   uint32_t resolve_scale_x_ = 1;
   uint32_t resolve_scale_y_ = 1;
-  // [native-scale] shadow-map depth targets: key (base_tiles << 16) | pitch.
-  static uint32_t ShadowTargetId(uint32_t base_tiles, uint32_t pitch_tiles) {
-    return (base_tiles << 16) | pitch_tiles;
-  }
-  std::vector<uint32_t> shadow_targets_;
-  std::vector<uint32_t> shadow_rejected_targets_;
-  void LearnShadowTarget(const draw_util::ResolveInfo& resolve_info);
-  bool texspace_draw_hint_ = false;
   // Mixed-scale depth transfers cannot use a host-depth source of another
   // scale (the EDRAM host-depth copy and the shaders address one scale); the
   // transfer then reads the guest-format depth of its source instead.

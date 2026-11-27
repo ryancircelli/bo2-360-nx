@@ -91,17 +91,10 @@ Debug, trace and tuning switches (about 200, for example `TILE_RESOLVE_VERIFY`, 
 
 ### Title quirks
 
-`metal_title_quirks=fable2` turns on Fable II-only behaviour, which is off for every other title:
+`metal_title_quirks=fable2` turns on the few Fable II-only behaviours left, which are off for every other title:
 
-- texture-space and shadow-map passes kept at native resolution (Fable II pixel shader hashes and shadow heuristic)
-- built-in shader lists for native-shader specialization, its skip list and the keep-plain list
-- the export-only memexport geometry path for Fable II's vertex shader
 - morph texture readback (`metal_fable_morph_readback`, copy destination 0x12704000) and keeping the morph draw
-- uniform terrain tessellation (`metal_fable_terrain_uniform_tessellation`)
-- transfer pipeline prewarm defaults, the automatic shader bank path, and the "Loading Fable II" startup text
-
-The matching debug switches (`SHADOWS_NATIVE`, `TEXSPACE_NATIVE`, `NS_SPECIALIZE_LIST`, ...) still override the
-quirk default when set explicitly.
+- the automatic shader bank path and the "Loading Fable II" startup text
 
 ## Known limits
 

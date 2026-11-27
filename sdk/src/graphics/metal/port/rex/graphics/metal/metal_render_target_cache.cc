@@ -9,7 +9,6 @@
  */
 
 #include "rex/graphics/metal/metal_hitch.h"
-#include "rex/graphics/metal/metal_xfer_keys_default.h"
 #include "rex/graphics/metal/metal_startup_parallel.h"
 #include "rex/graphics/metal/metal_render_target_cache.h"
 #include "rex/graphics/metal/metal_pass_trace.h"
@@ -5025,12 +5024,7 @@ bool MetalRenderTargetCache::PrepareResolvePlan(rex::memory::Memory& memory,
   plan_out.needs_render_encoder_end =
       plan_out.needs_copy_export || plan_out.needs_resolve_clear;
   if (plan_out.needs_copy_export && IsDrawResolutionScaled() &&
-      ShadowsNativeEnabled() && resolve_info.IsCopyingDepth()) {
-    LearnShadowTarget(resolve_info);
-  }
-  if (plan_out.needs_copy_export && IsDrawResolutionScaled() &&
-      (EffectsNativeEnabled() || ShadowsNativeEnabled() ||
-       TexSpaceNativeEnabled())) {
+      EffectsNativeEnabled()) {
     // [native-scale] resolves of native-scale targets are unscaled.
     bool unified = false;
     if (UnifyResolveSourceScale(resolve_info, unified)) {
@@ -5133,15 +5127,9 @@ bool MetalRenderTargetCache::UnifyResolveSourceScale(
       native_tiles += rect_tiles(rect);
     } else {
       full_tiles += rect_tiles(rect);
-      // A native target takes colour 1xMSAA keys (effects) or depth keys of
-      // a learned shadow-map target.
+      // A native target takes colour 1xMSAA keys (effects).
       const bool convertible =
-          key.is_depth
-              ? std::find(shadow_targets_.begin(), shadow_targets_.end(),
-                          ShadowTargetId(key.base_tiles,
-                                         key.pitch_tiles_at_32bpp)) !=
-                    shadow_targets_.end()
-              : key.msaa_samples == xenos::MsaaSamples::k1X;
+          !key.is_depth && key.msaa_samples == xenos::MsaaSamples::k1X;
       if (!convertible) {
         full_not_convertible = true;
       }
@@ -5221,91 +5209,6 @@ bool MetalRenderTargetCache::EffectsNativeEnabled() {
   return enabled;
 }
 
-bool MetalRenderTargetCache::ShadowsNativeEnabled() {
-  static const bool enabled = [] {
-    // Shadow maps at the console's own resolution when the draw resolution
-    // is scaled (section 16). =0 keeps them scaled (today's 2x/3x image).
-    // The detection heuristic was tuned on Fable II, so unset it follows the
-    // fable2 title quirk; =1 opts any title in.
-    const char* v = MetalDebugEnv("SHADOWS_NATIVE");
-    const bool on = v && v[0] ? v[0] != '0' : MetalFable2Quirks();
-    REXLOG_INFO(
-        "[native-scale] shadow maps at native 1x resolution when the draw "
-        "resolution is scaled: {} (FABLE2_SHADOWS_NATIVE={})",
-        on ? "on" : "off", v ? v : "unset");
-    return on;
-  }();
-  return enabled;
-}
-
-bool MetalRenderTargetCache::TexSpaceNativeEnabled() {
-  static const bool enabled = [] {
-    // Fable II texture-space passes at the console's 1x when the draw
-    // resolution is scaled (docs/resolution-scale.md section 23). Scaled, the
-    // dog's per-frame lighting texture is rasterized at 2x/3x and its seam
-    // dilation (fixed texel-offset fetches) no longer fills the gutters
-    // between UV islands, so the fur samples the clear colour there: a dark
-    // seam down the dog's chest. =0 keeps them scaled (old 2x/3x image).
-    // Fable II only: the passes are matched by Fable shader hashes, so unset
-    // it follows the fable2 title quirk.
-    const char* v = MetalDebugEnv("TEXSPACE_NATIVE");
-    const bool on = v && v[0] ? v[0] != '0' : MetalFable2Quirks();
-    REXLOG_INFO(
-        "[native-scale] texture-space passes (morph, dog lighting) at native "
-        "1x resolution when the draw resolution is scaled: {} "
-        "(FABLE2_TEXSPACE_NATIVE={})",
-        on ? "on" : "off", v ? v : "unset");
-    return on;
-  }();
-  return enabled;
-}
-
-bool MetalRenderTargetCache::IsTexSpacePixelShader(uint64_t ucode_hash) {
-  switch (ucode_hash) {
-    case UINT64_C(0xE2120FEAFA4CF565):  // morph (resolved to 0x12704000)
-    case UINT64_C(0x44B567635EB10620):  // dog lighting -> 0x13401000
-    case UINT64_C(0x39B39197B46ECA72):  // dog lighting, 2nd variant
-    case UINT64_C(0x1B52AA35A311938D):  // seam dilation -> 0x133E1000/F1000
-      return true;
-    default:
-      return false;
-  }
-}
-
-void MetalRenderTargetCache::LearnShadowTarget(
-    const draw_util::ResolveInfo& resolve_info) {
-  const uint32_t width = resolve_info.coordinate_info.width_div_8 * 8;
-  const uint32_t height = resolve_info.height_div_8 * 8;
-  if (width != height || width < 512) {
-    return;
-  }
-  uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
-  resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows,
-                                    dump_pitch);
-  std::vector<ResolveCopyDumpRectangle> rects;
-  GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows,
-                                 dump_pitch, rects);
-  for (const ResolveCopyDumpRectangle& rect : rects) {
-    if (!rect.render_target) continue;
-    const RenderTargetKey key = rect.render_target->key();
-    if (!key.is_depth) continue;
-    const uint32_t id = ShadowTargetId(key.base_tiles, key.pitch_tiles_at_32bpp);
-    if (std::find(shadow_targets_.begin(), shadow_targets_.end(), id) !=
-            shadow_targets_.end() ||
-        std::find(shadow_rejected_targets_.begin(),
-                  shadow_rejected_targets_.end(),
-                  id) != shadow_rejected_targets_.end()) {
-      continue;
-    }
-    shadow_targets_.push_back(id);
-    REXLOG_INFO(
-        "[native-scale] shadow map: depth target @ {}t <{}t> (depth resolve "
-        "{}x{} to 0x{:08X}) drawn at native 1x from now on",
-        key.base_tiles, key.pitch_tiles_at_32bpp, width, height,
-        resolve_info.copy_dest_base);
-  }
-}
-
 uint32_t MetalRenderTargetCache::NativeScaleRenderTargets(
     uint32_t pitch_tiles_at_32bpp, xenos::MsaaSamples msaa_samples,
     uint32_t used_rts_bits, const uint32_t* edram_bases) {
@@ -5325,41 +5228,7 @@ uint32_t MetalRenderTargetCache::NativeScaleRenderTargets(
             pitch_tiles_at_32bpp, pitch_tiles_at_32bpp / 2);
       }
     }
-    if (!ShadowsNativeEnabled()) {
-      return 0;
-    }
-    const uint32_t id = ShadowTargetId(edram_bases[0], pitch_tiles_at_32bpp);
-    auto it = std::find(shadow_targets_.begin(), shadow_targets_.end(), id);
-    if (color_used) {
-      // A depth target that is ever drawn together with colour is scene
-      // depth, not a shadow map: never native.
-      if (std::find(shadow_rejected_targets_.begin(),
-                    shadow_rejected_targets_.end(),
-                    id) == shadow_rejected_targets_.end()) {
-        shadow_rejected_targets_.push_back(id);
-        if (it != shadow_targets_.end()) {
-          shadow_targets_.erase(it);
-          REXLOG_INFO(
-              "[native-scale] depth target @ {}t <{}t> drawn with colour: no "
-              "longer a shadow map",
-              edram_bases[0], pitch_tiles_at_32bpp);
-        }
-      }
-      return 0;
-    }
-    if (it == shadow_targets_.end()) {
-      return 0;
-    }
-    ++UploadTrace().sh_draw;
-    return 1;
-  }
-  // Texture-space draws: one 1xMSAA colour target, no depth. Other draws on
-  // the same target (clear quads) stay scaled; the ownership transfer
-  // between the two keys carries their result.
-  if (texspace_draw_hint_ && msaa_samples == xenos::MsaaSamples::k1X &&
-      used_rts_bits == 0b10) {
-    ++UploadTrace().ts_draw;
-    return used_rts_bits;
+    return 0;
   }
   if (EffectsNativeEnabled() && msaa_samples == xenos::MsaaSamples::k1X &&
       effects_scene_pitch_tiles_ &&
@@ -11285,10 +11154,8 @@ void MetalRenderTargetCache::StartTransferPrewarm(
     std::error_code dir_ec;
     std::filesystem::create_directories(title_root, dir_ec);
   }
-  uint32_t from_default = 0;
-  // The cache's own keys first (this Mac's order of first use), then the
-  // built-in defaults (FABLE2_XFER_PREWARM_DEFAULTS=0: cache keys only).
-  auto parse = [&](std::istream& in, bool defaults) {
+  // The cache's own keys, in this Mac's order of first use.
+  auto parse = [&](std::istream& in) {
     std::string line;
     {
       constexpr size_t kColors = xenos::kMaxColorRenderTargets;
@@ -11328,7 +11195,6 @@ void MetalRenderTargetCache::StartTransferPrewarm(
         if (state->index.count(k)) continue;
         state->index.emplace(k, state->entries.size());
         state->entries.push_back({k, dest_is_uint});
-        from_default += defaults ? 1 : 0;
       }
     }
   };
@@ -11336,16 +11202,8 @@ void MetalRenderTargetCache::StartTransferPrewarm(
     std::ifstream in(state->path);
     std::string header;
     if (in && std::getline(in, header) && header == kXferKeysHeader) {
-      parse(in, false);
+      parse(in);
     }
-  }
-  // The built-in keys were captured from Fable II sessions: used by default
-  // only with the fable2 title quirk (=1 / =0 overrides).
-  const char* use_defaults = MetalDebugEnv("XFER_PREWARM_DEFAULTS");
-  if (use_defaults && use_defaults[0] ? use_defaults[0] != '0'
-                                      : MetalFable2Quirks()) {
-    std::istringstream in(kXferKeysDefault);
-    parse(in, true);
   }
   state->loaded = uint32_t(state->entries.size());
   xfer_prewarm_ = state;
@@ -11417,9 +11275,9 @@ void MetalRenderTargetCache::StartTransferPrewarm(
       }
     });
   }
-  REXLOG_INFO("[xfer-prewarm] building {} transfer pipelines ({} from the "
-              "built-in list) on {} background threads",
-              state->entries.size(), from_default, thread_count);
+  REXLOG_INFO("[xfer-prewarm] building {} transfer pipelines on {} "
+              "background threads",
+              state->entries.size(), thread_count);
 }
 
 uint32_t MetalRenderTargetCache::XferPrewarmPending() {

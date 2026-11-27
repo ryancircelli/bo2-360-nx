@@ -38,7 +38,6 @@ namespace {
 constexpr uint32_t kFable2MorphCopyDest = 0x12704000;
 constexpr uint64_t kFable2MorphPixelShader = UINT64_C(0xE2120FEAFA4CF565);
 // Fable II terrain vertex shader (uniform tessellation workaround).
-constexpr uint64_t kFable2TerrainVertexShader = UINT64_C(0x5003700B7C9B1C16);
 
 bool Fable2MorphReadback() {
   return MetalFable2Quirks() && REXCVAR_GET(metal_fable_morph_readback);
@@ -117,12 +116,6 @@ DEFINE_bool(metal_capture_labels, false,
             "Metal");
 REXCVAR_DEFINE_UINT32(metal_draw_trace_texture_base, 0, "Metal",
                      "Diagnostic: log up to32 unique draw bindings using this guest texture base.");
-
-DEFINE_bool(metal_fable_terrain_uniform_tessellation, true,
-            "Use the guest maximum tessellation factor for Fable II terrain "
-            "to reduce cracks at detail transitions. Needs "
-            "metal_title_quirks=fable2.",
-            "Metal");
 
 DEFINE_bool(
     metal_async_idle_submission, true,
@@ -485,9 +478,7 @@ void SampleThreadCpu() {
   frame_log::Record("tr_n_eff_xfer_scaled", f, u.eff_xfer_scaled);
   frame_log::Record("tr_n_eff_rsv_native", f, u.eff_rsv_native);
   frame_log::Record("tr_n_eff_rsv_unified", f, u.eff_rsv_unified);
-  frame_log::Record("tr_n_sh_draw", f, u.sh_draw);
   frame_log::Record("tr_n_sh_hostdepth_drop", f, u.sh_hostdepth_drop);
-  frame_log::Record("tr_n_ts_draw", f, u.ts_draw);
   frame_log::Record("tr_n_cbend_pbe", f, u.cbend_pbe);
   frame_log::Record("tr_n_cbend_idle", f, u.cbend_idle);
   frame_log::Record("tr_n_cbend_dep", f, u.cbend_dep);
@@ -4505,20 +4496,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
         }
       }
     }
-    // [native-scale] Fable II texture-space draws at 1x
-    // (FABLE2_TEXSPACE_NATIVE). The bound target's scale changes with the
-    // hint, so queued draws go out first when it flips.
-    const bool texspace_hint =
-        pixel_shader && texture_cache_ &&
-        texture_cache_->IsDrawResolutionScaled() &&
-        MetalRenderTargetCache::TexSpaceNativeEnabled() &&
-        MetalRenderTargetCache::IsTexSpacePixelShader(
-            pixel_shader->ucode_data_hash());
-    if (texspace_hint != last_texspace_hint_ && !prepared_draw_queue_.empty() &&
-        !FlushPreparedDrawQueue(PreparedDrawFlushReason::kRenderTargetUpdate)) {
-      return false;
-    }
-    last_texspace_hint_ = texspace_hint;
     // [alias-clear] diagnostic (FABLE2_ALIAS_CLEAR_TRACE=1 inside the
     // FABLE2_SHADOW_TRACE window): full state of clear-like draws.
     {
@@ -4598,11 +4575,9 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
         }
       }
     }
-    render_target_cache_->SetTexSpaceDrawHint(texspace_hint);
     const bool rt_updated = render_target_cache_->Update(
         is_rasterization_done, normalized_depth_control, normalized_color_mask,
         *vertex_shader);
-    render_target_cache_->SetTexSpaceDrawHint(false);
     if (!rt_updated) {
       REXLOG_ERROR(
           "MetalCommandProcessor::IssueDraw - RenderTargetCache::Update "
@@ -4706,9 +4681,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
     REXLOG_INFO(
         "[memexport-geom] mode {} (FABLE2_MEMEXPORT_GEOM_FALLBACK={}): {}",
         mode, v ? v : "unset",
-        mode == 1 ? "VS 695413A9 export-only (vertex pipeline, no fragment "
-                    "stage); other no-PS memexport geometry draws drop user "
-                    "clip planes"
+        mode == 1 ? "no-PS memexport geometry draws drop user clip planes"
         : mode == 3 ? "no-PS memexport geometry draws drop user clip planes; "
                       "plain-point fallback if the pipeline still fails"
         : mode == 2 ? "no-PS memexport geometry draws with clip planes are "
@@ -4727,17 +4700,8 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
            xenos::PrimitiveType::kRectangleList ||
        primitive_processing_result.host_primitive_type ==
            xenos::PrimitiveType::kQuadList);
-  // Mode 1 covers every VS 695413A9 draw, with or without clip planes (about
-  // half of them have none and used to go through geometry emulation too).
-  // VS 695413A9 is Fable II's tessellation-factor producer: fable2 quirk only
-  // (without it, mode 1 treats that hash like any other, as mode 3 does).
-  const bool memexport_export_only =
-      memexport_geometry_mode == 1 && memexport_no_ps_point_like &&
-      MetalFable2Quirks() &&
-      vertex_shader->ucode_data_hash() == UINT64_C(0x695413A9831D88DA);
-  if (memexport_export_only ||
-      (memexport_geometry_fallback && memexport_no_ps_point_like &&
-       vertex_shader_modification.vertex.user_clip_plane_count)) {
+  if (memexport_geometry_fallback && memexport_no_ps_point_like &&
+      vertex_shader_modification.vertex.user_clip_plane_count) {
     static std::atomic<uint64_t> handled{0};
     const uint64_t n = handled.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n == 1 || n % 100000 == 0) {
@@ -4746,12 +4710,10 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           "user clip plane(s): {} (#{})",
           vertex_shader->ucode_data_hash(),
           uint32_t(vertex_shader_modification.vertex.user_clip_plane_count),
-          memexport_export_only          ? "export-only"
-          : memexport_geometry_mode == 2 ? "plain points"
-                                         : "clip planes dropped",
+          memexport_geometry_mode == 2 ? "plain points" : "clip planes dropped",
           n);
     }
-    if (memexport_geometry_mode == 2 || memexport_export_only) {
+    if (memexport_geometry_mode == 2) {
       memexport_plain_points = true;
     }
     if (memexport_geometry_mode != 2) {
@@ -5042,13 +5004,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
             factor_max);
         have_factors = !tess_cp_scratch_.empty();
       }
-      // FABLE2_TERRAIN_ADAPTIVE: every pass over a terrain patch tessellates
-      // with the same factors on the same path (the layers inherit the
-      // opaque passes' per-patch factors).
-      const bool terrain_shared_path =
-          TerrainLayerMatchMode() && have_factors &&
-          MatchTerrainPatchFactors(regs, vs_hash, primitive_processing_result,
-                                   tess_cp_scratch_);
       if (emu_stats::Enabled()) {
         const uint32_t kind =
             mode == xenos::TessellationMode::kAdaptive
@@ -5127,7 +5082,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
         if (tess_blended) {
           // Only the tessellator order was accepted for blended draws.
           // No-converter build: there is no emulation to keep non-uniform
-          // blended draws on (FABLE2_TERRAIN_ADAPTIVE=1), so they take
+          // blended draws on, so they take
           // Metal's tessellator as in mode 2 instead of being refused.
           tess_exact = uniform || NoConverterForcesNative();
           if (!uniform && NoConverterForcesNative()) {
@@ -5143,17 +5098,6 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
         } else {
           tess_cpu = !uniform;
         }
-      }
-      // Terrain under FABLE2_TERRAIN_ADAPTIVE: the opaque passes and the
-      // blended layers all take the reference pattern path in modes 1 and 3
-      // (one vertex function type and one pattern per factor tuple, so the
-      // same patch gets bit-identical positions in every pass; mixing
-      // Metal's tessellator and the reference let a layer fail the
-      // GreaterEqual test against the prepass). Mode 2 keeps everything on
-      // Metal's tessellator, which is consistent as well.
-      if (terrain_shared_path && (tess_mode == 1 || tess_mode == 3)) {
-        tess_exact = true;
-        tess_cpu = true;
       }
       // The reference patterns are quad-domain only: triangles always take
       // Metal's tessellator (no emulation to fall back to in this build).
@@ -9444,16 +9388,6 @@ void MetalCommandProcessor::GetTessellationFactorRange(const RegisterFile& regs,
                                                        float& max_out) {
   min_out = regs.Get<float>(XE_GPU_REG_VGT_HOS_MIN_TESS_LEVEL) + 1.0f;
   max_out = regs.Get<float>(XE_GPU_REG_VGT_HOS_MAX_TESS_LEVEL) + 1.0f;
-  if (MetalFable2Quirks() &&
-      REXCVAR_GET(metal_fable_terrain_uniform_tessellation) &&
-      !TerrainAdaptiveMode() && active_vertex_shader() &&
-      active_vertex_shader()->ucode_data_hash() ==
-          kFable2TerrainVertexShader) {
-    // Work around terrain depth gaps seen with adaptive edge factors on Metal.
-    // Clamp this terrain shader to the guest maximum so neighboring patches
-    // use uniform subdivision; leave other tessellated geometry unchanged.
-    min_out = max_out;
-  }
 }
 
 bool MetalCommandProcessor::NativeTessTraceEnabled() {
@@ -9476,15 +9410,13 @@ void MetalCommandProcessor::NativeTessTrace(uint64_t vs, uint64_t ps,
     REXLOG_INFO(
         "[tess-trace] device {} apple7 {} apple8 {} apple9 {} apple10 {}; "
         "tessellator fractional-even, half factors, CCW output, max 64; "
-        "FABLE2_NATIVE_TESS={} blended={} terrain-adaptive={} "
-        "layer-match={} snap-uv={}",
+        "FABLE2_NATIVE_TESS={} blended={} snap-uv={}",
         device_->name()->utf8String(),
         device_->supportsFamily(MTL::GPUFamilyApple7) ? 1 : 0,
         device_->supportsFamily(MTL::GPUFamilyApple8) ? 1 : 0,
         device_->supportsFamily(MTL::GPUFamilyApple9) ? 1 : 0,
         device_->supportsFamily(MTL::GPUFamily(1010)) ? 1 : 0,
         NativeTessMode(), NativeTessBlendedMode() ? 1 : 0,
-        TerrainAdaptiveMode() ? 1 : 0, TerrainLayerMatchMode() ? 1 : 0,
         NativeTessSnapUvMode() ? 1 : 0);
   }
   static std::unordered_set<uint64_t> seen;
@@ -9517,128 +9449,6 @@ void MetalCommandProcessor::NativeTessTrace(uint64_t vs, uint64_t ps,
     counts.clear();
     window_start = frame_current_;
   }
-}
-
-bool MetalCommandProcessor::MatchTerrainPatchFactors(
-    const RegisterFile& regs, uint64_t vs_hash,
-    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-    std::vector<float>& factors) {
-  // Fable II terrain (guest ucode, docs/adaptive-terrain-flashes-20261014.md):
-  // the adaptive opaque terrain (depth prepass and colour passes) and the
-  // continuous material layers drawn over it with zfunc GreaterEqual. On the
-  // guest the layers tessellate at the uniform maximum; the game's adaptive
-  // factors are the maximum for every visible layered patch except those
-  // crossing the view's edge, where a layer then lands behind the prepass
-  // depth and the unlayered base (white or black) shows for a frame.
-  constexpr uint64_t kTerrainVs = UINT64_C(0x5003700B7C9B1C16);
-  constexpr uint64_t kLayerVsA = UINT64_C(0xC30A97D946FA2BE4);
-  constexpr uint64_t kLayerVsB = UINT64_C(0xFB68A7F2301210E1);
-  const xenos::TessellationMode mode =
-      primitive_processing_result.tessellation_mode;
-  const bool opaque =
-      vs_hash == kTerrainVs && mode == xenos::TessellationMode::kAdaptive;
-  const bool layer = (vs_hash == kLayerVsA || vs_hash == kLayerVsB) &&
-                     mode == xenos::TessellationMode::kContinuous;
-  if (!opaque && !layer) {
-    return false;
-  }
-  if (terrain_patch_factors_frame_ != frame_current_) {
-    terrain_patch_factors_frame_ = frame_current_;
-    terrain_patch_factors_.clear();
-  }
-  auto c = [&](uint32_t index, uint32_t component) {
-    return regs.Get<float>(XE_GPU_REG_SHADER_CONSTANT_000_X + index * 4 +
-                           component);
-  };
-  const uint32_t key_base[2] = {
-      regs[XE_GPU_REG_RB_DEPTH_INFO],
-      // Heightmap (tf16) base address.
-      regs.values[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + 16 * 6 + 1] &
-          0xFFFFF000u};
-  const uint32_t index_offset = regs[XE_GPU_REG_VGT_INDX_OFFSET];
-  const uint32_t index_min = regs[XE_GPU_REG_VGT_MIN_VTX_INDX];
-  const uint32_t index_max = regs[XE_GPU_REG_VGT_MAX_VTX_INDX];
-  // Patch -> ground key, as both domain shaders compute it: idx (+ c113.x
-  // for the opaque shader), row = floor(idx * c11.y), col = idx - row *
-  // c11.x, origin = (col, row) * size + offset.
-  auto key_of = [&](uint32_t vertex_index, float add, float size_x,
-                    float size_y, float off_x, float off_y) {
-    uint32_t idx = (vertex_index + index_offset) & 0x00FFFFFFu;
-    idx = std::min(std::max(idx, index_min), index_max);
-    const float x = float(idx) + add;
-    const float row = std::floor(x * c(11, 1));
-    const float col = x - row * c(11, 0);
-    const float key_data[3] = {col * size_x + off_x, row * size_y + off_y,
-                               size_x};
-    uint32_t words[5] = {key_base[0], key_base[1]};
-    std::memcpy(words + 2, key_data, sizeof(key_data));
-    return XXH3_64bits(words, sizeof(words));
-  };
-  const uint32_t patches = uint32_t(factors.size() / 4);
-  if (opaque) {
-    for (uint32_t p = 0; p < patches; ++p) {
-      std::array<float, 4>& f = terrain_patch_factors_[key_of(
-          p, c(113, 0), c(8, 0), c(8, 1), c(47, 0), c(47, 1))];
-      std::copy_n(factors.data() + size_t(p) * 4, 4, f.begin());
-    }
-    return true;
-  }
-  // Layers: one patch per index (or per draw position when auto-indexed).
-  const uint8_t* indices = nullptr;
-  bool indices_32 = false;
-  if (primitive_processing_result.index_buffer_type ==
-      PrimitiveProcessor::ProcessedIndexBufferType::kGuestDMA) {
-    indices = static_cast<const uint8_t*>(memory_->TranslatePhysical(
-        primitive_processing_result.guest_index_base));
-    indices_32 = primitive_processing_result.host_index_format ==
-                 xenos::IndexFormat::kInt32;
-    if (!indices) {
-      return true;
-    }
-  } else if (primitive_processing_result.index_buffer_type !=
-             PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
-    return true;  // the shared path, no factors to inherit
-  }
-  const xenos::Endian endian =
-      primitive_processing_result.host_shader_index_endian;
-  static uint64_t matched = 0, unmatched = 0;
-  for (uint32_t p = 0; p < patches; ++p) {
-    uint32_t v = p;
-    if (indices) {
-      if (indices_32) {
-        std::memcpy(&v, indices + size_t(p) * 4, 4);
-      } else {
-        uint16_t h;
-        std::memcpy(&h, indices + size_t(p) * 2, 2);
-        v = h;
-      }
-      if (endian == xenos::Endian::k8in16 || endian == xenos::Endian::k8in32) {
-        v = ((v & 0x00FF00FFu) << 8) | ((v >> 8) & 0x00FF00FFu);
-      }
-      if (endian == xenos::Endian::k8in32 || endian == xenos::Endian::k16in32) {
-        v = (v >> 16) | (v << 16);
-      }
-    }
-    auto it = terrain_patch_factors_.find(
-        key_of(v, 0.0f, c(46, 0), c(46, 1), c(113, 0), c(113, 1)));
-    if (it != terrain_patch_factors_.end()) {
-      std::copy(it->second.begin(), it->second.end(),
-                factors.data() + size_t(p) * 4);
-      ++matched;
-    } else {
-      ++unmatched;
-    }
-  }
-  if (NativeTessTraceEnabled()) {
-    static uint64_t last_frame = 0;
-    if (frame_current_ >= last_frame + 600) {
-      last_frame = frame_current_;
-      REXLOG_INFO("[tess-trace] terrain layers: {} patches took the opaque "
-                  "pass's factors, {} had no opaque patch (kept uniform)",
-                  matched, unmatched);
-    }
-  }
-  return true;
 }
 
 bool MetalCommandProcessor::ReadAdaptiveTessFactors(

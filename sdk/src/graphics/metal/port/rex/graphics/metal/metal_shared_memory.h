@@ -115,10 +115,9 @@ struct UploadTraceCounters {
            eff_xfer_mixed = 0, eff_rsv = 0, eff_rsv_mixed = 0;
   // [native-scale] transfers encoded between different scales, resolves
   // done at native scale, mixed resolves unified by ownership transfers,
-  // draws into native-scale shadow-map depth targets, host-depth sources
-  // dropped from mixed-scale depth transfers.
+  // host-depth sources dropped from mixed-scale depth transfers.
   uint32_t eff_xfer_scaled = 0, eff_rsv_native = 0, eff_rsv_unified = 0,
-           sh_draw = 0, sh_hostdepth_drop = 0, ts_draw = 0;
+           sh_hostdepth_drop = 0;
   // [cb-end] main command buffers ended, by cause (tr_n_cbend_*): PM4 primary buffer
   // end, worker idle (PrepareForWait), shared-memory read dependency, explicit wait.
   uint32_t cbend_pbe = 0, cbend_idle = 0, cbend_dep = 0, cbend_wait = 0;

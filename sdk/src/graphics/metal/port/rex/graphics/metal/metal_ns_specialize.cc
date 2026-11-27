@@ -99,20 +99,6 @@ bool Candidate(uint64_t ucode_hash) {
   };
   static const Lists lists = [] {
     Lists l;
-    // Built-in: the hottest guest pixel shaders at Bower Lake 3x and Old Tomb
-    // (docs/engine-options-20261011.md §9.1, docs/native-shaders.md). These
-    // are Fable II shaders: built in only with the fable2 title quirk.
-    if (MetalFable2Quirks()) l.list = {
-        UINT64_C(0xAF1E16EE57E4BB06), UINT64_C(0x0F99810F072BF0FC),
-        UINT64_C(0xF1EB2497108F159D), UINT64_C(0x577CB5267A8C92C3),
-        UINT64_C(0x7CD57B81550F19E3), UINT64_C(0x1B4B5AE12EF270CA),
-        UINT64_C(0x4BE4344C27016E04), UINT64_C(0x44B567635EB10620),
-        UINT64_C(0x04F23292B2F44077), UINT64_C(0x686DE15FC84D8B73),
-        UINT64_C(0x0542FFDF2B118509), UINT64_C(0x7928BAA7A6691A5D),
-        UINT64_C(0x06547412E4B72251), UINT64_C(0x648B965C200A5113),
-        UINT64_C(0x356E4E7B9E2B36E6), UINT64_C(0xCD2CE6D440B77BCE),
-        UINT64_C(0x28E202861D3E2411), UINT64_C(0xF2F103F16764043B),
-    };
     if (const char* v = MetalDebugEnv("NS_SPECIALIZE_LIST")) {
       if (std::strcmp(v, "all") == 0) {
         l.all = true;
@@ -120,11 +106,6 @@ bool Candidate(uint64_t ucode_hash) {
         l.list = ParseHashList(v);
       }
     }
-    // Built-in skip list: shaders whose specialized variant measured not
-    // faster than their normal pipeline (per-shader A/B).
-    // 4BE4344C27016E04: its own pass (2 draws/frame, Bower Lake) +5-6% at
-    // 1x/2x/3x with the variant.
-    if (MetalFable2Quirks()) l.skip = {UINT64_C(0x4BE4344C27016E04)};
     if (const char* v = MetalDebugEnv("NS_SPECIALIZE_SKIP")) {
       l.skip = ParseHashList(v);
     }
