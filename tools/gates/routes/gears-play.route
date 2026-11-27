@@ -6,6 +6,12 @@
   "play_timeout_s": 480,
   "navigation": [
     {
+      "text": "to follow dominic",
+      "commands": [],
+      "mark": "prison-controls",
+      "mark_on_seen": true
+    },
+    {
       "text": "press.*start",
       "commands": [
         "press start 600"
@@ -28,6 +34,7 @@
     "movement": "stick l 0 1 1500",
     "camera-left": "stick r -0.45 0 300",
     "camera-right": "stick r 0.45 0 300",
-    "action": "press a 600"
+    "action": "press a 600",
+    "movement-alternate": "stick l 0 -1 1500"
   }
 }

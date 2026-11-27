@@ -19,9 +19,10 @@
     }
   ],
   "controls": {
-    "movement": "stick l 0 1 1500",
-    "camera-left": "stick r -0.45 0 300",
-    "camera-right": "stick r 0.45 0 300",
-    "action": "press a 500"
+    "movement": "stick l 0 -1 1200",
+    "camera-left": "stick r -0.45 0",
+    "camera-right": "stick r 0.45 0",
+    "action": "press y 500",
+    "movement-alternate": "stick l 0 1 800"
   }
 }

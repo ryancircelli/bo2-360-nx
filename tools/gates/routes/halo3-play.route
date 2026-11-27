@@ -22,6 +22,12 @@
       "commands": [
         "stick r 0 1 2000"
       ]
+    },
+    {
+      "text": "look down",
+      "commands": [
+        "stick r 0 -1 2000"
+      ]
     }
   ],
   "controls": {

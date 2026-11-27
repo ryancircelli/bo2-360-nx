@@ -49,7 +49,7 @@ def horizontal_motion(a, b, game=None):
                  for x in range(128)] for y in range(72)]
     aa, bb = gray(a), gray(b)
     # The chase car is stationary in screen space; use the world above it.
-    rows = range(16, 34, 2) if game == 'nfsmw2012' else range(20, 53, 2)
+    rows = range(16, 34, 2) if game in ('nfsmw2012','ac1') else range(20, 53, 2)
     def error(dx):
         return sum(abs(aa[y][x] - bb[y][x+dx])
                    for y in rows for x in range(27, 101, 2))
@@ -64,8 +64,9 @@ class Runner:
         self.t0 = time.monotonic()
         self.capture_index = 0
         self.observations, self.events, self.trials = [], [], []
+        self.milestones = []
         self.proof = dict(version=1, game=recipe['game'], complete=False,
-                          observations=self.observations, events=self.events, trials=self.trials)
+                          observations=self.observations, events=self.events, trials=self.trials, milestones=self.milestones)
 
     def save(self):
         with open(os.path.join(self.out, 'play.json'), 'w') as f:
@@ -110,10 +111,12 @@ class Runner:
     def discard(self, sample):
         """Intermediate unchanged wait captures are not evidence; bound disk use."""
         self.observations.remove(sample)
-        for path in (sample['path'], os.path.splitext(sample['path'])[0] + '.png'):
-            os.unlink(path)
+        for path in (sample['path'], os.path.splitext(sample['path'])[0] + '.png',
+                     os.path.splitext(sample['path'])[0] + '.capture.json'):
+            if os.path.exists(path):
+                os.unlink(path)
 
-    def wait_for(self, before, *, timeout=12, change=6, text=None, log=None, motion_sign=None):
+    def wait_for(self, before, *, timeout=12, change=6, text=None, log=None, motion_sign=None, not_text=None, navigation=False):
         """Bounded event wait, always against the capture/log offset before input."""
         end = time.monotonic() + timeout
         offset = before['log_size']
@@ -123,14 +126,20 @@ class Runner:
                 self.discard(last)
             last = self.snapshot()
             joined = ' '.join(w['text'] for w in last['words'])
+            before_text = ' '.join(w['text'] for w in before['words'])
+            navigation_text = navigation and not not_text and joined != before_text and any(
+                re.search(rule['text'],joined,re.I) for rule in self.recipe['navigation'])
+            navigation_state = navigation and not not_text and last['state'] and not before['state']
             delta = self.driving.scene_change(before['path'], last['path'])
             motion_ok = True
             if motion_sign is not None:
                 shift, confidence = horizontal_motion(before['path'], last['path'], self.recipe['game'])
                 motion_ok = shift * motion_sign >= 1 and confidence >= 1.08
             if ((text and re.search(text, joined, re.I))
+                    or navigation_text or navigation_state
+                    or (not_text and not re.search(not_text,joined,re.I))
                     or (log and re.search(log, self.game.log_text()[offset:], re.I))
-                    or (not text and not log and delta is not None and delta >= change and motion_ok)):
+                    or (not text and not log and not not_text and delta is not None and delta >= change and motion_ok)):
                 self.events.append(dict(at=last['at'], wait_for=dict(text=text, log=log, change=change),
                                         matched=True, before=before['path'], after=last['path']))
                 return last
@@ -141,8 +150,11 @@ class Runner:
         deadline = time.monotonic() + self.recipe.get('navigation_timeout_s', 900)
         current = self.snapshot()
         unhandled, previous_text = 0, None
+        camera_failures = 0
         while self.game.alive() and time.monotonic() < deadline:
-            if current['state']:
+            completed = {m['name'] for m in self.milestones}
+            required = set(self.driving.REQUIRED_MILESTONES.get(self.recipe['game'], {}))
+            if current['state'] and required <= completed:
                 # Loading a campaign save is not the end of a cinematic. Do not
                 # start the two-minute interval until the camera answers both ways.
                 ready = True
@@ -160,18 +172,34 @@ class Runner:
                     current = after
                 if ready:
                     return current
+                camera_failures += 1
+                if camera_failures >= 10:
+                    raise RuntimeError('gameplay prerequisites seen but camera did not respond to ten paired probes')
             joined = ' '.join(w['text'] for w in current['words'])
             rule = next((r for r in self.recipe['navigation'] if re.search(r['text'], joined, re.I)), None)
             if rule:
                 for cmd in rule['commands']:
                     self.command(cmd)
+                if rule.get('mark_on_seen'):
+                    self.milestones.append(dict(name=rule['mark'],before=current['path'],after=current['path'],commands=rule['commands']))
+                    self.save()
                 unhandled = 0
             elif joined and not current['state']:
                 unhandled = unhandled + 1 if joined == previous_text else 0
                 if unhandled >= 12:
                     raise RuntimeError('unhandled stable navigation text: ' + joined[:240])
             previous_text = joined
-            current = self.wait_for(current, timeout=12, change=6)
+            before = current
+            current = self.wait_for(current, timeout=12, change=6, navigation=True, not_text=rule['text'] if rule and rule.get('mark') and not rule.get('mark_on_seen') else None)
+            if rule and rule.get('mark') and not rule.get('mark_on_seen') and not re.search(rule['text'],' '.join(w['text'] for w in current['words']),re.I):
+                self.milestones.append(dict(name=rule['mark'],before=before['path'],after=current['path'],commands=rule['commands']))
+                self.save()
+            if not rule and before in self.observations[2:]:
+                needed = {p for t in self.trials for p in (t['before'],t['after'])}
+                needed.update(p for m in self.milestones for p in (m['before'],m['after']))
+                if before['path'] not in needed:
+                    self.discard(before)
+                    self.save()
         raise RuntimeError('navigation timed out without a verified gameplay state')
 
     def trial(self, kind, command):
@@ -206,7 +234,8 @@ class Runner:
             last = start
             cycles = 0
             while last['at'] - start['at'] < 125 and time.monotonic() < deadline:
-                last = self.trial('movement', self.recipe['controls']['movement'])
+                movement = self.recipe['controls'].get('movement-alternate',self.recipe['controls']['movement']) if cycles % 2 else self.recipe['controls']['movement']
+                last = self.trial('movement', movement)
                 for direction in ('camera-left', 'camera-right'):
                     last = self.trial(direction, self.recipe['controls'][direction])
                 if cycles == 0:

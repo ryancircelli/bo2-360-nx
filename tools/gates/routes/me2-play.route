@@ -18,17 +18,27 @@
       ]
     },
     {
-      "text": "no time to argue|gave you an order|there.s no|wheel|They.*be here|They damn well",
+      "text": "no time to argue|gave you an order",
       "commands": [
         "stick l 1 0 2000",
         "press a 600"
-      ]
+      ],
+      "mark": "dialogue-first"
+    },
+    {
+      "text": "They.*be here|They damn well",
+      "commands": [
+        "stick l 1 0 2000",
+        "press a 600"
+      ],
+      "mark": "dialogue-second"
     }
   ],
   "controls": {
-    "movement": "stick l 0 1 1500",
+    "movement": "stick l 0 -1 1500",
     "camera-left": "stick r -0.45 0 300",
     "camera-right": "stick r 0.45 0 300",
-    "action": "press a 500"
+    "action": "press a 500",
+    "movement-alternate": "stick l 0 1 1500"
   }
 }

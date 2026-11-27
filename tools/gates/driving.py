@@ -18,7 +18,14 @@ GAMES = RACERS + SHOOTERS + ('fh1', 'nfshp') + tuple(LOG_MARKER) + tuple(TEXT_MA
 MENU = re.compile(r'safe\s*house|resume free roam|select car|career menu|pause menu|leave.*safe|main menu|photo mode|sponsor challenges|resume game|restart level|quit game', re.I)
 NEW_GAMES = ('gears', 'ac1', 'nfsmw2012', 'halo3', 'fallout3', 'me2')
 GAMES += ('halo3', 'fallout3', 'me2')
-FRONTEND = re.compile(r'press.*start|main menu|new game|new campaign|gene projection|select difficulty|achievements|resume game|memory paused|options', re.I)
+FRONTEND = re.compile(r'press.*start|main menu|new game|new campaign|\bgene\b|choose sex|S\.?P\.?E\.?C\.?I\.?A\.?L\.?|strength.*perception|select difficulty|achievements|resume game|memory paused|options', re.I)
+REQUIRED_MILESTONES = {
+    'gears': {'prison-controls': r'to follow dominic'},
+    'me2': {'dialogue-first': r'no time to argue|gave you an order',
+            'dialogue-second': r'they.*be here|they damn well'},
+    'fallout3': {'nursery': r'one year later|1 year later'},
+}
+CONVERSATION = re.compile(r'no time to argue|gave you an order|they.*be here|they damn well', re.I)
 CAMPAIGN = {
     'gears': re.compile(r'default_checkpoint\.sav', re.I),
     'ac1': re.compile(r'assassin\.(?:sav|dat)', re.I),
@@ -34,10 +41,19 @@ def play_state(game, words, log):
     if FRONTEND.search(text) or MENU.search(text):
         return False
     if game == 'nfsmw2012':
-        return any(re.fullmatch(r'MPH[I1|]?', w['text'], re.I)
+        unit = any(re.fullmatch(r'MPH[I1|]?', w['text'].translate(str.maketrans('МРН','MPH')), re.I)
                    and w['x'] > .85 and w['y'] > .8 for w in words)
-    if game == 'ac1' and re.search(r'first person|vision|high profile|synchroni[sz]|interact', text, re.I):
-        return True
+        map_hud = any(re.fullmatch(r'FAIRHAVEN',w['text'],re.I) and w['x'] < .2 and w['y'] > .6 for w in words)
+        distance_hud = any(re.fullmatch(r'DISTANCE',w['text'],re.I) and w['x'] < .2 and w['y'] < .2 for w in words)
+        return unit or (map_hud and distance_hud)
+    if game == 'ac1':
+        return bool(re.search(r'first person|vision|high profile|synchroni[sz]|interact|camera|tackle|gentle push|blend|sprint|jump', text, re.I))
+    if game == 'me2':
+        choices = [w for w in words if w['x'] > .5 and w['y'] > .78 and re.search(r'[A-Za-z]{3}',w['text'])]
+        if CONVERSATION.search(text) or (len(choices) >= 2 and max(w['y'] for w in choices)-min(w['y'] for w in choices) > .025):
+            return False
+    if game == 'halo3' and re.search(r'look up|look down', text, re.I):
+        return False
     if game == 'halo3' and any(w['x'] > .7 and w['y'] < .2 and re.search(r'\d{2,3}', w['text']) for w in words):
         return True
     return bool(game in CAMPAIGN and CAMPAIGN[game].search(log))
@@ -59,6 +75,22 @@ def verify_play(game, out, log):
         if end - start < 120:
             raise ValueError('less than 120 seconds of verified gameplay')
         observations = {s['path']: s for s in run['observations']}
+        for name,pattern in REQUIRED_MILESTONES.get(game, {}).items():
+            # Gears' movement tutorial is itself positive control-state evidence;
+            # it need not disappear before the player can move.
+            valid = game == 'gears' and any(s['at'] <= start and re.search(pattern,' '.join(w['text'] for w in s['words']),re.I)
+                                            for s in run['observations'])
+            for mark in run.get('milestones', []):
+                if mark.get('name') != name:
+                    continue
+                before, after = observations[mark['before']], observations[mark['after']]
+                before_text = ' '.join(w['text'] for w in before['words'])
+                after_text = ' '.join(w['text'] for w in after['words'])
+                if (before['at'] <= after['at'] <= start and re.search(pattern,before_text,re.I)
+                        and (game == 'gears' or (before['at'] < after['at'] and not re.search(pattern,after_text,re.I)))):
+                    valid = True
+            if not valid:
+                raise ValueError('missing completed gameplay prerequisite: '+name)
         active = [s for s in run['observations'] if start <= s['at'] <= end]
         if len(active) < 3 or any(not s['state'] or not play_state(game, s['words'], log) for s in active):
             raise ValueError('menu/cutscene/unknown state in the gameplay interval')

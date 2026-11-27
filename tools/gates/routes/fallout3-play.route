@@ -6,6 +6,11 @@
   "play_timeout_s": 480,
   "navigation": [
     {
+      "text": "one year later|1 year later",
+      "commands": [],
+      "mark": "nursery"
+    },
+    {
       "text": "press.*start",
       "commands": [
         "press start 600"
@@ -46,6 +51,7 @@
     "movement": "stick l 0 1 1500",
     "camera-left": "stick r -0.45 0 300",
     "camera-right": "stick r 0.45 0 300",
-    "action": "press a 500"
+    "action": "press y 500",
+    "movement-alternate": "stick l 0 -1 1500"
   }
 }

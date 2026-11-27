@@ -98,6 +98,8 @@ class ConditionRoutes(unittest.TestCase):
             events.append(dict(command=command,reply='ok'))
         if recording:
             events.append(dict(command='record '+str(root/'recorded.input.txt'),reply='ok recorded 16 samples'))
+        tutorial = root/'controls.ppm';self.image(tutorial)
+        observations.insert(0,dict(path=str(tutorial),at=-1,words=[dict(text='To follow Dominic, use LS',x=.2,y=.2)],state=True))
         run = dict(version=1,game='gears',complete=True,play_started=0,play_ended=elapsed,
                    observations=observations,trials=trials,events=events)
         (root/'play.json').write_text(json.dumps(run))
@@ -112,6 +114,27 @@ class ConditionRoutes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.fixture(root,cinematic=True)
             self.assertFalse(driving.verify('gears',root,'default_checkpoint.sav')['passed'])
+
+    def test_reversing_cinematic_without_completed_dialogue_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.fixture(root)
+            path=Path(root,'play.json');data=json.loads(path.read_text());data['game']='me2';path.write_text(json.dumps(data))
+            proof=driving.verify('me2',root,r'BIOGame\Movies\Opening_Seq.txt')
+            self.assertFalse(proof['passed'])
+            self.assertIn('dialogue-first',' '.join(proof['errors']))
+
+    def test_gears_interval_cannot_start_during_opening_cinematic(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.fixture(root)
+            path=Path(root,'play.json');data=json.loads(path.read_text());data['observations'][0]['at']=30;path.write_text(json.dumps(data))
+            proof=driving.verify('gears',root,'default_checkpoint.sav')
+            self.assertFalse(proof['passed'])
+            self.assertIn('prison-controls',' '.join(proof['errors']))
+
+    def test_character_creator_and_conversation_are_not_gameplay(self):
+        self.assertFalse(driving.play_state('fallout3',[dict(text='GENE Projector',x=.2,y=.2)],'XamShowKeyboardUI answered'))
+        self.assertFalse(driving.play_state('me2',[dict(text="They damn well better.",x=.5,y=.9)],r'BIOGame\Movies\Opening_Seq.txt'))
+        self.assertFalse(driving.play_state('ac1',[], 'assassin.dat'))
 
     def test_short_run_unknown_state_or_no_recording_cannot_pass(self):
         for changes in [dict(elapsed=60),dict(missing_state=True),dict(recording=False)]:

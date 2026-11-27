@@ -313,7 +313,10 @@ class Game:
             return None, None
         ppm = r[3:].strip()
         dst = os.path.join(self.out, 'shots', name + '.ppm')
-        shutil.copy(ppm, dst)
+        shutil.move(ppm, dst)  # consume the unique capture; do not keep a second PPM in control/
+        metadata = os.path.splitext(ppm)[0] + '.capture.json'
+        if os.path.exists(metadata):
+            shutil.move(metadata, os.path.splitext(dst)[0] + '.capture.json')
         return to_png(dst), image_stats(dst)
 
     def frames(self):
@@ -506,6 +509,11 @@ def g_save(a, G):
         if not reload_game.wait_ready(a.ready_timeout):
             raise RuntimeError('fresh reload control channel never answered')
         recipe = dict(recipe, navigation_timeout_s=300)
+        if a.game == 'gears':
+            # The single-player menu defaults to New Campaign even when a save
+            # exists. Explicitly select Continue during the reload half.
+            recipe['navigation'] = [dict(text=r'NEW\s+CAMPAIGN.*CONTINUE\s+CAMPAIGN',
+                                         commands=['press down 250','press a 600'])] + recipe['navigation']
         state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()
         evidence['reload_state'] = state
         evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes)

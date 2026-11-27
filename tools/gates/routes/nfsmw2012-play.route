@@ -28,6 +28,7 @@
     "movement": "trigger r 1 1800",
     "camera-left": "stick r -0.6 0",
     "camera-right": "stick r 0.6 0",
-    "action": "press a 600"
+    "action": "press a 600",
+    "movement-alternate": "trigger l 1 1800"
   }
 }
