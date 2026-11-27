@@ -134,13 +134,28 @@ XObject::Type XObject::type() const {
   return type_;
 }
 
+namespace {
+// handles_ can name a slot this object no longer owns: an object created after a save point's capture loses
+// its slot on rewind and the slot goes to someone else. Retaining or closing that handle by value would hit
+// the new owner. Call with the global critical region held.
+bool OwnsFirstHandle(KernelState* kernel_state, const XObject* object, const std::vector<X_HANDLE>& handles) {
+  return !handles.empty() &&
+         kernel_state->object_table()->LookupObject<XObject>(handles[0]).get() == object;
+}
+}  // namespace
+
 void XObject::RetainHandle() {
-  kernel_state_->object_table()->RetainHandle(handles_[0]);
+  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
+  if (OwnsFirstHandle(kernel_state_, this, handles_)) {
+    kernel_state_->object_table()->RetainHandle(handles_[0]);
+  }
 }
 
 bool XObject::ReleaseHandle() {
   // FIXME: Return true when handle is actually released.
-  return kernel_state_->object_table()->ReleaseHandle(handles_[0]) == X_STATUS_SUCCESS;
+  auto global_lock = rex::thread::global_critical_region::AcquireDirect();
+  return OwnsFirstHandle(kernel_state_, this, handles_) &&
+         kernel_state_->object_table()->ReleaseHandle(handles_[0]) == X_STATUS_SUCCESS;
 }
 
 void XObject::Retain() {
@@ -160,6 +175,10 @@ X_STATUS XObject::Delete() {
   } else {
     if (!name_.empty()) {
       kernel_state_->object_table()->RemoveNameMapping(name_);
+    }
+    auto global_lock = rex::thread::global_critical_region::AcquireDirect();
+    if (!OwnsFirstHandle(kernel_state_, this, handles_)) {
+      return X_STATUS_INVALID_HANDLE;
     }
     return kernel_state_->object_table()->RemoveHandle(handles_[0]);
   }
