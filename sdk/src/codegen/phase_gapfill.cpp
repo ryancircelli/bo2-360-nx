@@ -190,7 +190,7 @@ bool UsesNonvolatileFirst(const uint8_t* code) {
  *         is exception handler data, or never reaches a terminator inside the region.
  */
 bool IsDataWord(const CodegenContext& ctx, const BinaryView& binary, const CodeRegion& region,
-                uint32_t addr) {
+                const Coverage& coverage, uint32_t addr) {
   const uint8_t* first = binary.translate(addr);
   if (!first)
     return true;
@@ -200,6 +200,9 @@ bool IsDataWord(const CodegenContext& ctx, const BinaryView& binary, const CodeR
     return true;
 
   for (uint32_t cursor = addr; cursor < region.end; cursor += 4) {
+    // A short run that falls straight into known code is a stray literal word, not a function.
+    if (cursor - addr <= 4 && cursor != addr && coverage.CoveredUntil(cursor))
+      return true;
     const uint8_t* data = binary.translate(cursor);
     if (!data)
       return true;
@@ -254,7 +257,7 @@ void gapFillCodeRegions(CodegenContext& ctx) {
         addr = end;
         continue;
       }
-      if (IsDataWord(ctx, binary, region, addr)) {
+      if (IsDataWord(ctx, binary, region, coverage, addr)) {
         addr += 4;
         continue;
       }

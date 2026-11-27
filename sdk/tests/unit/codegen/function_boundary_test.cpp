@@ -206,3 +206,13 @@ TEST_CASE("Gap discovery accepts instructions supported by the emitter's decoder
     REQUIRE(fx.ctx->graph.getFunction(kBase + 4) != nullptr);
   }
 }
+
+TEST_CASE("Gap discovery skips a stray literal word that falls into known code", "[codegen][gapfill]") {
+  // Seen as 96 spurious one-word 'lbz' functions in FH1 speech; the word is data before a function.
+  Fixture fx{0x48000000, 0x88680000, 0x4E800020};
+  Discover(fx, kBase, 4, {kBase});
+  Discover(fx, kBase + 8, 4, {kBase + 8});
+  fx.ctx->scan.codeRegions = {{kBase, kBase + 12}};
+  REQUIRE(phases::GapFill(*fx.ctx, nullptr));
+  CHECK(fx.ctx->graph.getFunction(kBase + 4) == nullptr);
+}
