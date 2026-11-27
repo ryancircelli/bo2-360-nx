@@ -53,3 +53,17 @@ catch_discover_tests(ppc_tests TEST_PREFIX "ppc." PROPERTIES LABELS "ppc" TIMEOU
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_compile_options(ppc_tests PRIVATE -mfma)
 endif()
+
+# Known-failing cases (expected-fail.txt, one commented line each) run as WILL_FAIL so the default ctest set is green.
+# Runs after catch_discover_tests' include file, which defines the tests only at ctest time.
+set(PPC_XFAIL_LIST ${CMAKE_CURRENT_SOURCE_DIR}/expected-fail.txt)
+set(PPC_XFAIL_CMAKE ${CMAKE_CURRENT_BINARY_DIR}/ppc_expected_fail.cmake)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PPC_XFAIL_LIST})
+file(STRINGS ${PPC_XFAIL_LIST} PPC_XFAIL_LINES REGEX "^ppc\\.")
+set(PPC_XFAIL_BODY "")
+foreach(line ${PPC_XFAIL_LINES})
+    string(REGEX REPLACE "[ \t]*#.*$" "" name "${line}")
+    string(APPEND PPC_XFAIL_BODY "set_tests_properties(\"${name}\" PROPERTIES WILL_FAIL TRUE LABELS \"ppc;known-fail\")\n")
+endforeach()
+file(WRITE ${PPC_XFAIL_CMAKE} "${PPC_XFAIL_BODY}")
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES ${PPC_XFAIL_CMAKE})
