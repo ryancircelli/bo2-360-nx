@@ -17,7 +17,6 @@ set(BO2CP_SOURCES
     src/bo2cp_relaunch.cpp
     src/bo2cp_autoexec.cpp
     ../games/bo2/src/bo2zm_launch_options.cpp
-    ../core/bo2zm_heap_track.cpp
 )
 
 # The native renderer (B3): the Zombies program's renderer and its D3D marker, built from games/bo2/src and core unchanged, with the
@@ -45,7 +44,6 @@ if(BO2CP_NATIVE)
         ${BO2ZM_SRC}/native/bo2zm_render_stubs.cpp
         ${BO2ZM_SRC}/bo2zm_d3d_marker.cpp
         ${BO2ZM_CORE_SRC}/bo2zm_page_writes.cpp
-        ${BO2ZM_CORE_SRC}/bo2zm_memcpy_callers.cpp
         ${BO2ZM_CORE_SRC}/bo2zm_pc_profiler.cpp
         ${BO2ZM_SRC}/bo2zm_test_pad.cpp
         ${BO2ZM_SRC}/bo2zm_preset.cpp

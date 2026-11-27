@@ -440,7 +440,6 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_deferred_reports, true, "BO2",
 #include "bo2zm_microcode_versions.h"
 #include "../../bo2zm_preset.h"  // outside a match: the menu blur reuse
 #include "../../bo2zm_benchmark.h"
-#include "bo2zm_memcpy_callers.h"
 #include "bo2zm_page_writes.h"
 #include "bo2zm_pc_profiler.h"
 #include "../../bo2zm_perf_log.h"
@@ -1994,7 +1993,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   }
 
   int LoopRing() {
-    bo2zm::memcpy_callers::MarkThread();  // test build only (BO2ZM_MEMCPY_CALLERS)
     /*
      * The ring thread drops to 0x2D, because of the presenter.
      *
@@ -5287,7 +5285,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
   // shutdown ones (force), which are written right here so they are not lost.
 #define BO2ZM_REPORT_BY(defer, ...) do { if (defer) { BO2ZM_REPORT_RING(__VA_ARGS__); } else { REXLOG_INFO(__VA_ARGS__); } } while (0)
   void Report(bool force) {
-    bo2zm::memcpy_callers::Report();  // test build only (BO2ZM_MEMCPY_CALLERS)
     const auto now = Clock::now();
     if (!force &&
         now - last_report_ < std::chrono::seconds(REXCVAR_GET(bo2zm_native_diag_report_s))) {

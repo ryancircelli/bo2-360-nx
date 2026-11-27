@@ -53,8 +53,6 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_preset.cpp
     ${BO2ZM_ROOT}/src/bo2zm_benchmark.cpp
     ${BO2ZM_ROOT}/src/bo2zm_perf_log.cpp
-    ${BO2ZM_ROOT}/../../core/bo2zm_heap_track.cpp
-    ${BO2ZM_ROOT}/../../core/bo2zm_memcpy_callers.cpp
     ${BO2ZM_ROOT}/src/bo2zm_debug_options.cpp
     ${BO2ZM_ROOT}/src/bo2zm_test_waits.cpp
     ${BO2ZM_ROOT}/src/bo2zm_sound_mix.cpp

@@ -38,7 +38,6 @@
 #include "bo2zm_dlc.h"
 #include "bo2zm_dvars.h"
 #include "bo2zm_extras.h"
-#include "bo2zm_heap_track.h"
 #include "bo2zm_mode.h"
 #include "bo2zm_name.h"
 #include "bo2zm_ui.h"
@@ -328,7 +327,6 @@ REX_HOOK_RAW(sub_8240F058) {
   MaybeTriggerCapture(std::chrono::steady_clock::now());
   MaybeDumpMemory(std::chrono::steady_clock::now(), base);
   AnnotateBenchmark(base);
-  bo2zm::heap_track::EveryFrame();  // test build only (BO2ZM_HEAP_TRACK)
   ApplyStreamingRate();
   bo2zm::preset::EveryFrame(ctx, base);
   bo2zm::extras::EveryFrame(ctx, base);

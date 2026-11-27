@@ -50,7 +50,6 @@
 #include "bo2zm_cheats.h"
 #include "bo2zm_dvars.h"
 #include "bo2zm_extras.h"
-#include "bo2zm_heap_track.h"
 #include "bo2zm_name.h"
 #include "bo2zm_preset.h"
 #include "bo2zm_ui.h"
@@ -202,7 +201,6 @@ struct Timed {
 REX_HOOK_RAW(sub_822239E8) {
   bo2zm::extras::PaceFrame();  // FPS CAP and VSYNC wait here, before the frame (bo2zm_extras.cpp)
   __imp__sub_822239E8(ctx, base);
-  bo2zm::heap_track::EveryFrame();  // test build only (BO2CP_HEAP_TRACK)
   static bool direct_set = false;
   if (!direct_set) {
     direct_set = true;

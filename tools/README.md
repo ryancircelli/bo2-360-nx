@@ -10,7 +10,6 @@ from the game is ever written inside the repository.
 | `fetch_thirdparty.py` | Fetches the SDK's third-party sources from the ReXGlue v0.10.0 release, keeping this project's changes | `python tools/fetch_thirdparty.py` |
 | `apply_thirdparty_patches.sh` | Applies `patches/<library>-*.patch` under `$THIRDPARTY_ROOT` (default `sdk/thirdparty`), skipping patches already applied. The SDK configure runs it on its own per-build copy of SDL | `tools/apply_thirdparty_patches.sh` |
 | `build_host.sh` | Builds `rexglue.exe` (code generator) and `xexdump` | `tools/build_host.sh` |
-| `build_mesa.sh` | Builds NVK for the Switch from mesa-switch plus `patches/mesa-bo2zm.patch` | `tools/build_mesa.sh` (`MESA_DIR`, no spaces) |
 | `build_zstd_switch.sh` | A static zstd for the Switch, into the Mesa SDK | `tools/build_zstd_switch.sh` |
 | `switch/cmake/`, `mesa/` | The devkitA64 toolchain file; Meson's MSYS2 native file | used by the builds |
 | `linux/` | The ARM64 sysroot, toolchain, Dockerfile, package and QEMU smoke test | see [building-linux-arm64](../docs/building-linux-arm64.md) |
@@ -50,10 +49,6 @@ from the game is ever written inside the repository.
 
 | Tool | What it does | Run |
 |---|---|---|
-| `pgo_check.py` | How many trained functions still read a PGO profile's counts | `--build games/bo2/out/switch --pgo <profile> [--native]` |
-| `profile_sym.py` | Names the console profiler's addresses | `rex_profile.log <elf> out.txt` |
-| `profile_inline.py` | One thread's samples by inlined function or source line | `rex_profile.log <lines elf> [--thread NAME] [--lines]` |
-| `memcpy_callers_sym.py` | A copy-callers build's calls by call site | `<game log> <lines elf>` |
 | `pc_profile_report.py` | The PC profiler's hottest functions per thread | `<pc_profile_<pid>.txt>` |
 | `rdc_cost.py` | Draws and GPU time of RenderDoc captures (inside `qrenderdoc`) | `RDC_GLOB`, `RDC_OUT` |
 | `spot_flicker.py` | What blinks in a burst of test screenshots | `<captures folder> [--burst NAME]` |
