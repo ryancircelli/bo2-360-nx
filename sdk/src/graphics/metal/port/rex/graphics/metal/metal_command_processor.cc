@@ -5622,7 +5622,11 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       const bool preserve_morph_draw =
           Fable2MorphReadback() && pixel_shader &&
           pixel_shader->ucode_data_hash() == kFable2MorphPixelShader;
-      if (!pipeline && (preserve_morph_draw || pipeline_handle->startup_warmup)) {
+      // A memexport draw writes guest memory the CPU may poll or keep:
+      // skipping it while its pipeline compiles loses those writes for good
+      // (XeniOS 58281bd91/859e554b2: Battlefield 4 hung on a cold cache).
+      if (!pipeline && (preserve_morph_draw || pipeline_handle->startup_warmup ||
+                        memexport_used_vertex || memexport_used_pixel)) {
         // Cached startup draws must not disappear while the logos play or
         // when the player skips directly into gameplay.
         const uint64_t wait_start = frame_log::Enabled() ? frame_log::NowUs() : 0;
