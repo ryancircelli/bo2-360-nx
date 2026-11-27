@@ -518,7 +518,9 @@ def g_save(a, G):
             # The single-player menu defaults to New Campaign even when a save
             # exists. Explicitly select Continue during the reload half.
             # Never accept New Campaign in the reload half: back out of its prompts and re-pick Continue.
-            recipe['navigation'] = [dict(text=r'SELECT\s+DIFFICULTY|CHECKPOINT\s+OVERWRITE', commands=['press b 600'], reset=True, once=True),
+            # The hub screen needs exactly one A; repeats land on the single-player menu and start New Campaign.
+            recipe['navigation'] = [dict(text=r'SPLIT.?SCREEN', commands=['press a 600'], once=True),
+                                    dict(text=r'SPLIT.?SCREEN', commands=[])] + [dict(text=r'SELECT\s+DIFFICULTY|CHECKPOINT\s+OVERWRITE', commands=['press b 600'], reset=True, once=True),
                                     dict(text=r'CONTINUE.{0,20}LOAD\s+PREV',
                                          commands=['press down 600'], once=True)] + recipe['navigation']
         state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()

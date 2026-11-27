@@ -2,7 +2,7 @@
   "format": "gameplay-route-v1",
   "game": "fallout3",
   "status": "unproven",
-  "navigation_timeout_s": 1500,
+  "navigation_timeout_s": 2700,
   "play_timeout_s": 480,
   "navigation": [
     {
