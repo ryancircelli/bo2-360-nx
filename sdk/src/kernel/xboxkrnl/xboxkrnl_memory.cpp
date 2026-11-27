@@ -219,7 +219,7 @@ u32 NtProtectVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_siz
   }
 
   auto heap = REX_KERNEL_MEMORY()->LookupHeap(*base_addr_ptr);
-  if (heap->heap_type() != memory::HeapType::kGuestVirtual) {
+  if (!heap || heap->heap_type() != memory::HeapType::kGuestVirtual) {
     return X_STATUS_INVALID_PARAMETER;
   }
   // Adjust the base downwards to the nearest page boundary.
@@ -269,7 +269,7 @@ u32 NtFreeVirtualMemory_entry(mapped_u32 base_addr_ptr, mapped_u32 region_size_p
   }
 
   auto heap = REX_KERNEL_MEMORY()->LookupHeap(base_addr_value);
-  if (heap->heap_type() != memory::HeapType::kGuestVirtual) {
+  if (!heap || heap->heap_type() != memory::HeapType::kGuestVirtual) {
     return X_STATUS_INVALID_PARAMETER;
   }
   bool result = false;
@@ -419,13 +419,15 @@ void MmFreePhysicalMemory_entry(u32 type, u32 base_address) {
   assert_true((base_address & 0x1F) == 0);
 
   auto heap = REX_KERNEL_MEMORY()->LookupHeap(base_address);
-  heap->Release(base_address);
+  if (heap) {
+    heap->Release(base_address);
+  }
 }
 
 u32 MmQueryAddressProtect_entry(u32 base_address) {
   auto heap = REX_KERNEL_MEMORY()->LookupHeap(base_address);
   uint32_t access;
-  if (!heap->QueryProtect(base_address, &access)) {
+  if (!heap || !heap->QueryProtect(base_address, &access)) {
     access = 0;
   }
   access = !access ? 0 : ToXdkProtectFlags(access);
@@ -457,7 +459,7 @@ void MmSetAddressProtect_entry(mapped_void base_address, u32 region_size, u32 pr
 u32 MmQueryAllocationSize_entry(mapped_void base_address) {
   auto heap = REX_KERNEL_MEMORY()->LookupHeap(base_address.guest_address());
   uint32_t size;
-  if (!heap->QuerySize(base_address.guest_address(), &size)) {
+  if (!heap || !heap->QuerySize(base_address.guest_address(), &size)) {
     size = 0;
   }
 

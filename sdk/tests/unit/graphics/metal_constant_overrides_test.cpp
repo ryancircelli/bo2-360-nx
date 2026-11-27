@@ -8,6 +8,11 @@ int main() {
   std::vector<MetalConstantOverride> values;
   CHECK(ParseMetalConstantOverrides("# blur\nps E68FE55ECD482EC5 253 3 0.5\n", values));
   CHECK(values.size() == 1 && values[0].value == 0.5f);
+  // metal_shader_constants form: ';' separates entries.
+  CHECK(ParseMetalConstantOverrides("ps E68FE55ECD482EC5 253 3 0.5; vs 1 0 0 2", values));
+  CHECK(values.size() == 2 && values[0].pixel && !values[1].pixel && values[1].value == 2.0f);
+  CHECK(!ParseMetalConstantOverrides("ps 1 0 0 1; vs 1 0 0", values) && values.size() == 2);
+  CHECK(ParseMetalConstantOverrides("ps E68FE55ECD482EC5 253 3 0.5", values));
   uint32_t exact; std::memcpy(&exact, &values[0].value, sizeof(exact));
   CHECK(exact == 0x3F000000);
   for (const char* bad : {"ps xyz 253 3 .5", "ps -1 0 0 1", "ps 1 256 0 1", "ps 1 1 4 1", "cs 1 0 0 1", "ps 1 0 0 nan", "ps 1 0 0 1 extra", "ps 1 -1 0 1", "ps 1 0 0"}) {

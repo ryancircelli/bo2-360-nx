@@ -1007,6 +1007,10 @@ std::optional<KernelState::RecompiledModuleInfo> KernelState::FindRecompiledModu
   }
 
   auto normalized = NormalizeGuestPath(guest_path);
+  // rexglue 4dd9c9c (BSD-3): a title may name its module through the game partition path.
+  static const std::string partition =
+      NormalizeGuestPath("\\Device\\Harddisk0\\Partition1") + "/";
+  if (normalized.starts_with(partition)) normalized.erase(0, partition.size());
   for (const auto& info : modules) {
     if (info.guest_path == normalized) return info;
   }

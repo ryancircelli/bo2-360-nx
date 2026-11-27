@@ -1,0 +1,11 @@
+# The macOS app of this game: read by tools/mac/pack_app.py --game gears (tools/mac/make_game_app.sh gears).
+# Game facts the executable needs (title id, executable, renderer defaults) are in game.toml; this file only says how
+# the app around it is named. Saves folder, data path, bundle id and the rest follow from the folder name
+# (tools/mac/pack_app.py game_manifest) unless set here.
+name = "Gears of War"                         # the app's name and its launcher (CFBundleExecutable)
+
+# What tools/mac/build_app.py builds this app from. The recompiled code is made from these exact executables: another
+# version of the disc (or a title update, which patches the code) would need its own recompile, so the builder refuses it.
+[source]
+executables = { "default.xex" = "df1041da72d2b947e3bb2f701a19fde9e84488dc848fea2decd6d43434efe2d1" }
+codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]

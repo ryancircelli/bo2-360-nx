@@ -39,6 +39,10 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `a04d6fc` (Tom Clay) | critical section `lock_count` kept as a big endian guest word | `sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp` |
 | Xenia Canary `a4ef31cdf` (Adrian Cassar) | XMA drops a decode position's start subframes | `sdk/src/audio/xma_context.cpp`, `sdk/include/rex/audio/xma/context.h` |
 | ReXGlue SDK PR 628 (open upstream) | `dcbz` clears the full 128-byte cache line | `sdk/src/codegen/builders/system.cpp` |
+| ReXGlue SDK `b5c771f` | XeKeysConsolePrivateKeySign / SignatureVerification succeed | `sdk/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp` |
+| ReXGlue SDK `4dd9c9c` | Recompiled module found through the game partition path | `sdk/src/system/kernel_state.cpp` |
+| ReXGlue SDK `5b8e119` | Raw physical view stays read-write when an alias page is protected | `sdk/src/system/xmemory.cpp` |
+| Xenia Canary `057f66e57` | XMABlockWhileInUse waits on the context lock | `sdk/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp` |
 
 ## Libraries
 

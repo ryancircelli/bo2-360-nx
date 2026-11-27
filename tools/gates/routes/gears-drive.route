@@ -1,0 +1,4 @@
+# Gears: Start repeatedly (the title appears late under headless), then A through the campaign menus, then walk. Captures must show gameplay.
+duration_s = 330
+players = 1
+pad1 = 20-20.5:start,28-28.5:start,36-36.5:start,44-44.5:start,52-52.5:start,60-60.5:start,68-68.5:start,76-76.5:start,84-84.5:start,92-92.5:start,100-100.5:start,108-108.5:start,110-110.5:a,116-116.5:a,122-122.5:a,128-128.5:a,134-134.5:a,140-140.5:a,146-146.5:a,152-152.5:a,158-158.5:a,164-164.5:a,170-170.5:a,176-176.5:a,182-182.5:a,188-188.5:a,194-194.5:a,200-200.5:a,206-206.5:a,212-212.5:a,218-218.5:a,224-224.5:a,250-256:stick_up,260-261:look_right,270-276:stick_up

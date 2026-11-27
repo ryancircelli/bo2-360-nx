@@ -31,6 +31,7 @@ REXCVAR_DECLARE(int32_t, window_height);
 REXCVAR_DECLARE(bool, fullscreen);
 REXCVAR_DECLARE(int32_t, monitor);
 REXCVAR_DECLARE(bool, window_start_minimized);
+REXCVAR_DECLARE(bool, headless);  // defined in src/kernel/xam/xam_ui.cpp
 REXCVAR_DECLARE(std::string, video_driver);
 
 // Display (guest video mode; defined in src/ui/window.cpp)

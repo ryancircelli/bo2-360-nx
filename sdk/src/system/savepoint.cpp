@@ -4,6 +4,7 @@
  */
 
 #include <rex/system/savepoint.h>
+#include <rex/system/bench.h>
 
 #include <algorithm>
 #include <atomic>
@@ -965,6 +966,7 @@ void ServiceControlRequest(int frame) {
 
 void ServiceSavepointRequest() {
   int frame = g_frame.load(std::memory_order_relaxed);
+  rex::bench::ServiceRounds();
   ServiceControlRequest(frame);
   if (g_requested.load(std::memory_order_acquire)) {
     std::string path;

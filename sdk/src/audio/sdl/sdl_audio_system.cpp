@@ -13,7 +13,27 @@
 #include <rex/audio/sdl/sdl_audio_driver.h>
 #include <rex/audio/sdl/sdl_audio_system.h>
 
+#include <chrono>
+#include <thread>
+
 namespace rex::audio::sdl {
+
+namespace {
+// Stand-in when no SDL audio device opens (no output device, driver missing): the guest still gets its client and
+// frame pacing, the samples are dropped. Failing the client registration instead crashes titles that don't check it.
+class NullAudioDriver final : public AudioDriver {
+ public:
+  NullAudioDriver(memory::Memory* memory, rex::thread::Semaphore* semaphore)
+      : AudioDriver(memory), semaphore_(semaphore) {}
+  void SubmitFrame(uint32_t) override {
+    std::this_thread::sleep_for(std::chrono::microseconds(5333));  // one 256-sample frame at 48 kHz
+    semaphore_->Release(1, nullptr);
+  }
+
+ private:
+  rex::thread::Semaphore* semaphore_;
+};
+}  // namespace
 
 std::unique_ptr<AudioSystem> SDLAudioSystem::Create(
     runtime::FunctionDispatcher* function_dispatcher) {
@@ -29,14 +49,16 @@ void SDLAudioSystem::Initialize() {
   AudioSystem::Initialize();
 }
 
-X_STATUS SDLAudioSystem::CreateDriver([[maybe_unused]] size_t index,
+X_STATUS SDLAudioSystem::CreateDriver(size_t index,
                                       rex::thread::Semaphore* semaphore, AudioDriver** out_driver) {
   assert_not_null(out_driver);
   auto driver = new SDLAudioDriver(memory_, semaphore);
   if (!driver->Initialize()) {
     driver->Shutdown();
     delete driver;
-    return X_STATUS_UNSUCCESSFUL;
+    REXAPU_WARN("[audio] no SDL audio device: client {} gets a silent driver", index);
+    *out_driver = new NullAudioDriver(memory_, semaphore);
+    return X_STATUS_SUCCESS;
   }
 
   *out_driver = driver;
@@ -45,10 +67,12 @@ X_STATUS SDLAudioSystem::CreateDriver([[maybe_unused]] size_t index,
 
 void SDLAudioSystem::DestroyDriver(AudioDriver* driver) {
   assert_not_null(driver);
-  auto sdldriver = dynamic_cast<SDLAudioDriver*>(driver);
-  assert_not_null(sdldriver);
-  sdldriver->Shutdown();
-  delete sdldriver;
+  if (auto* sdldriver = dynamic_cast<SDLAudioDriver*>(driver)) {
+    sdldriver->Shutdown();
+    delete sdldriver;
+  } else {
+    delete driver;
+  }
 }
 
 }  // namespace rex::audio::sdl

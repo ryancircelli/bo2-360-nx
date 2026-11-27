@@ -1,0 +1,8 @@
+[game]
+name = "me2"
+title_ids = ["454108CE"]
+executable = 'game:\default.xex'
+local_data_root = "~/Games/Xbox360/me2/disc"
+
+[defaults]
+gpu_plugin = "metal"

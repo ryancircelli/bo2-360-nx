@@ -139,9 +139,26 @@ X_STATUS Entry::Rename(const std::filesystem::path& file_path) {
   // Store the string so split path string_views remain valid.
   const std::string path_str = rex::path_to_utf8(file_path);
   std::vector<std::string_view> path_parts = rex::string::utf8_split_path(path_str);
+  // XAPI MoveFile passes "\??\savegame:\x"; drop that DOS-devices prefix like NtCreateFile does.
+  if (!path_parts.empty() && (path_parts[0] == "??" ||
+                              rex::string::utf8_equal_case(path_parts[0], "System??"))) {
+    path_parts.erase(path_parts.begin());
+  }
   if (!path_parts.empty()) {
     // Drop root path (for example, "game:").
     path_parts.erase(path_parts.begin());
+  }
+  if (path_parts.empty()) {
+    return X_STATUS_OBJECT_NAME_INVALID;
+  }
+
+  const std::string guest_path = rex::string::utf8_join_guest_paths(path_parts);
+  // Take the name from the guest parts: on POSIX file_path.filename() is the whole "a:\b\c" string.
+  const std::string new_name(path_parts.back());
+  Entry* new_parent = device_->ResolvePath(rex::string::utf8_join_guest_paths(
+      std::vector<std::string_view>(path_parts.begin(), path_parts.end() - 1)));
+  if (!new_parent) {
+    return X_STATUS_NO_SUCH_FILE;
   }
 
   X_STATUS status = RenameEntryInternal(path_parts);
@@ -149,10 +166,30 @@ X_STATUS Entry::Rename(const std::filesystem::path& file_path) {
     return status;
   }
 
-  const std::string guest_path = rex::string::utf8_join_guest_paths(path_parts);
+  // Keep the tree in step with the host: the replaced target goes, and this entry moves under its
+  // new parent, so lookups and directory listings see exactly one file under the new name.
+  auto global_lock = global_critical_region_.Acquire();
+  auto& siblings = new_parent->children_;
+  siblings.erase(std::remove_if(siblings.begin(), siblings.end(),
+                                [&](const auto& child) {
+                                  return child.get() != this &&
+                                         rex::string::utf8_equal_case(child->name(), new_name);
+                                }),
+                 siblings.end());
+  if (parent_ && parent_ != new_parent) {
+    auto& old = parent_->children_;
+    auto it = std::find_if(old.begin(), old.end(),
+                           [&](const auto& child) { return child.get() == this; });
+    if (it != old.end()) {
+      siblings.push_back(std::move(*it));
+      old.erase(it);
+    }
+    parent_ = new_parent;
+  }
+
   absolute_path_ = rex::string::utf8_join_guest_paths(device_->mount_path(), guest_path);
   path_ = guest_path;
-  name_ = rex::path_to_utf8(file_path.filename());
+  name_ = new_name;
   return X_STATUS_SUCCESS;
 }
 

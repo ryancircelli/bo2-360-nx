@@ -16,6 +16,7 @@
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/logging.h>
 #include <rex/math.h>
 
 REXCVAR_DEFINE_BOOL(clock_no_scaling, false, "Clock",
@@ -209,6 +210,13 @@ bool Clock::frame_locked() {
   return frame_lock_step_ != 0;
 }
 uint64_t Clock::frame_lock_frames() { return frame_lock_frames_.load(std::memory_order_relaxed); }
+uint64_t Clock::frame_lock_base() { return frame_lock_base_; }
+void Clock::RewindFrameLock(uint64_t base) {
+  frame_lock_seq_.fetch_add(1, std::memory_order_acq_rel);
+  frame_lock_base_ = base;
+  frame_lock_host_ = Clock::QueryHostTickCount();
+  frame_lock_seq_.fetch_add(1, std::memory_order_release);
+}
 uint64_t Clock::frame_lock_stalls() { return frame_lock_stalls_.load(std::memory_order_relaxed); }
 
 // Offset of the current guest system file time relative to the guest base time.
@@ -365,3 +373,16 @@ void Clock::ScaleGuestDurationTimeval(int32_t* tv_sec, int32_t* tv_usec) {
 }
 
 }  // namespace rex::chrono
+
+// `runq live exec S cmd clock_status` (twice, some wall seconds apart): guest vs host seconds, to tell a slow guest
+// clock from a title that is waiting (ME2's "slow" opening cinematic was a dialogue wheel waiting for a choice).
+REXCVAR_DEFINE_COMMAND(
+    clock_status,
+    []() {
+      REXLOG_INFO("[clock] guest_s={:.3f} host_s={:.3f} scalar={} guest_hz={} frame_lock={}",
+                  double(rex::chrono::Clock::QueryGuestTickCount()) / double(rex::chrono::Clock::guest_tick_frequency()),
+                  double(rex::chrono::Clock::QueryHostTickCount()) / double(rex::chrono::Clock::QueryHostTickFrequency()),
+                  rex::chrono::Clock::guest_time_scalar(), rex::chrono::Clock::guest_tick_frequency(),
+                  rex::chrono::Clock::frame_locked());
+    },
+    "Clock", "Log guest and host clock seconds (call twice to compare rates)");

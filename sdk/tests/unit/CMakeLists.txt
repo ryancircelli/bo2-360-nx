@@ -2,6 +2,8 @@
 
 add_executable(codegen_branch_tests
     codegen/conditional_branch_test.cpp
+    codegen/jump_table_bounds_test.cpp
+    codegen/stack_access_test.cpp
 )
 
 target_include_directories(codegen_branch_tests PRIVATE
@@ -15,6 +17,23 @@ target_link_libraries(codegen_branch_tests PRIVATE
 )
 
 add_test(NAME codegen_branch_tests COMMAND codegen_branch_tests)
+
+add_executable(codegen_vector_tests
+    codegen/vector_test.cpp
+)
+
+target_include_directories(codegen_vector_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/thirdparty/simde
+)
+
+target_link_libraries(codegen_vector_tests PRIVATE
+    rexcodegen
+    Catch2::Catch2WithMain
+)
+
+add_test(NAME codegen_vector_tests COMMAND codegen_vector_tests)
 
 add_executable(chrono_steady_cast_tests
     chrono/chrono_steady_cast_test.cpp
@@ -31,14 +50,36 @@ target_link_libraries(chrono_steady_cast_tests PRIVATE
 
 add_test(NAME chrono_steady_cast_tests COMMAND chrono_steady_cast_tests)
 
+add_executable(thread_spin_tests core/thread_spin_test.cpp)
+target_include_directories(thread_spin_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(thread_spin_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME thread_spin_tests COMMAND thread_spin_tests)
+
 add_executable(slot_table_tests input/slot_table_test.cpp)
 target_link_libraries(slot_table_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME slot_table_tests COMMAND slot_table_tests)
+
+add_executable(guide_input_gate_tests ui/guide_input_gate_test.cpp)
+target_link_libraries(guide_input_gate_tests PRIVATE rexruntime imgui::imgui Catch2::Catch2WithMain)
+add_test(NAME guide_input_gate_tests COMMAND guide_input_gate_tests)
+
+add_executable(host_path_rename_tests filesystem/host_path_rename_test.cpp)
+target_link_libraries(host_path_rename_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME host_path_rename_tests COMMAND host_path_rename_tests)
+
+add_executable(live_pad_tests input/live_pad_test.cpp)
+target_link_libraries(live_pad_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME live_pad_tests COMMAND live_pad_tests)
 
 add_executable(metal_constant_overrides_tests graphics/metal_constant_overrides_test.cpp)
 target_include_directories(metal_constant_overrides_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
 add_test(NAME metal_constant_overrides_tests COMMAND metal_constant_overrides_tests)
+
+add_executable(metal_readback_merge_tests graphics/metal_readback_merge_test.cpp)
+target_include_directories(metal_readback_merge_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
+add_test(NAME metal_readback_merge_tests COMMAND metal_readback_merge_tests)
 
 add_executable(patch_loader_tests patch/patch_loader_test.cpp)
 target_include_directories(patch_loader_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
@@ -102,6 +143,11 @@ target_include_directories(bench_clock_tests PRIVATE ${PROJECT_SOURCE_DIR}/inclu
 target_link_libraries(bench_clock_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
 
+add_executable(clock_rate_tests chrono/clock_rate_test.cpp)
+target_include_directories(clock_rate_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(clock_rate_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME clock_rate_tests COMMAND clock_rate_tests)
+
 add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
@@ -114,3 +160,66 @@ target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(kernel_backfill_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
+add_executable(xmemory_heap_tests system/xmemory_heap_test.cpp)
+target_link_libraries(xmemory_heap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xmemory_heap_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
+)
+add_test(NAME xmemory_heap_tests COMMAND xmemory_heap_tests)
+
+add_executable(disc_swap_tests filesystem/disc_swap_test.cpp)
+target_include_directories(disc_swap_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(disc_swap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(disc_swap_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME disc_swap_tests COMMAND disc_swap_tests)
+
+add_executable(keyboard_answer_tests kernel/keyboard_answer_test.cpp)
+target_link_libraries(keyboard_answer_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(keyboard_answer_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
+)
+add_test(NAME keyboard_answer_tests COMMAND keyboard_answer_tests)
+
+add_executable(rsa_public_selfcheck crypto/rsa_public_test.cpp)
+target_include_directories(rsa_public_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME rsa_public_selfcheck COMMAND rsa_public_selfcheck)
+
+add_executable(xma_tests audio/xma_test.cpp)
+target_include_directories(xma_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xma_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xma_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME xma_tests COMMAND xma_tests)
+
+add_executable(guest_stack_range_tests runtime_stack_range_test.cpp)
+target_include_directories(guest_stack_range_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(guest_stack_range_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME guest_stack_range_tests COMMAND guest_stack_range_tests)
+
+add_executable(xevent_tests system/xevent_test.cpp)
+target_include_directories(xevent_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xevent_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xevent_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME xevent_tests COMMAND xevent_tests)
+
+add_executable(runtime_objects_tests system/runtime_objects_test.cpp)
+target_include_directories(runtime_objects_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(runtime_objects_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(runtime_objects_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME runtime_objects_tests COMMAND runtime_objects_tests)
+set_tests_properties(runtime_objects_tests PROPERTIES TIMEOUT 30)
+
+add_executable(vfs_devices_tests filesystem/devices_test.cpp)
+target_include_directories(vfs_devices_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(vfs_devices_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(vfs_devices_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME vfs_devices_tests COMMAND vfs_devices_tests)
+
+add_executable(content_manager_tests system/content_manager_test.cpp)
+target_include_directories(content_manager_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(content_manager_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME content_manager_tests COMMAND content_manager_tests)

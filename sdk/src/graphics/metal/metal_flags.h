@@ -107,4 +107,4 @@ DECLARE_string(metal_shader_live_dump);
 DECLARE_string(metal_shader_live_overrides);
 
 DECLARE_string(metal_shader_constant_overrides);
-DECLARE_bool(metal_fh1_blur_threshold);
+DECLARE_string(metal_shader_constants);

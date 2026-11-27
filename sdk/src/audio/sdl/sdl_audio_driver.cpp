@@ -13,12 +13,15 @@
 #include <rex/thread.h>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <thread>
 #include <vector>
 
 #include <rex/assert.h>
+#include <rex/chrono/clock.h>
 #include <rex/audio/conversion.h>
 #include <rex/audio/downmix.h>
 #include <rex/audio/flags.h>
@@ -87,7 +90,11 @@ void RecordOutput(const float* data, int bytes, uint32_t channels) {
     return;
   }
   dump_output.written = true;
-  const auto path_str = rex::filesystem::GetExecutableFolder() / "audio_output.wav";
+  // REX_AUDIO_DUMP_DIR keeps the file past a run whose app folder is a temporary copy.
+  const char* dump_dir = std::getenv("REX_AUDIO_DUMP_DIR");
+  const auto path_str = (dump_dir && *dump_dir ? std::filesystem::path(dump_dir)
+                                                : rex::filesystem::GetExecutableFolder()) /
+                        "audio_output.wav";
   std::ofstream file(path_str, std::ios::binary | std::ios::trunc);
   if (file) {
     const uint32_t bytes_data = uint32_t(dump_output.sample_count.size() * sizeof(float));
@@ -208,7 +215,14 @@ bool SDLAudioDriver::Initialize() {
 
   if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
     REXAPU_ERROR("SDL_InitSubSystem(SDL_INIT_AUDIO) failed: {}", SDL_GetError());
-    return false;
+    if (!REXCVAR_GET(audio_mute)) {
+      return false;
+    }
+    // Muted with no SDL output (e.g. headless asked for a "dummy" driver this SDL build lacks): a failed driver
+    // made some titles (Mass Effect 2) crash in their audio thread, so run a null sink: pump paces, Pump drains.
+    pump_active_ = true;
+    pump_ = std::thread([this]() { Pump(); });
+    return true;
   }
   sdl_initialized_ = true;
 
@@ -288,7 +302,29 @@ void SDLAudioDriver::Pump() {
   const auto interval =
       std::chrono::nanoseconds(1'000'000'000ll * channel_samples_ / frame_frequency_);
   auto deadline = Clock::now() + interval;
+  uint64_t guest_next = 0;  // frame-locked: next pump in guest ticks
   while (pump_active_.load(std::memory_order_relaxed)) {
+    if (rex::chrono::Clock::frame_locked()) {
+      // Bench: one mix per guest-time interval, whatever the wall clock does, so the mixing per frame is the same
+      // solo or beside other work. The game's own clock is frame-locked, so wall pacing would mix more when slower.
+      const uint64_t hz = rex::chrono::Clock::guest_tick_frequency();
+      const uint64_t step = hz * channel_samples_ / frame_frequency_;
+      const uint64_t now = rex::chrono::Clock::QueryGuestTickCount();
+      if (!guest_next || guest_next > now + 2 * step) guest_next = now + step;  // start, or the clock was rewound
+      if (now < guest_next) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+      guest_next += step;
+      size_t in_queue;
+      {
+        std::unique_lock<std::mutex> guard(frames_mutex_);
+        in_queue = frames_queued_.size();
+      }
+      if (in_queue <= 64) semaphore_->Release(1, nullptr);  // bound only: the device may play slower than mixed
+      continue;
+    }
+    guest_next = 0;
     const auto now = Clock::now();
     if (now < deadline) {
 #if defined(__APPLE__)
@@ -308,6 +344,13 @@ void SDLAudioDriver::Pump() {
     }
     if (in_queue < 2) {
       semaphore_->Release(1, nullptr);
+    }
+    if (!sdl_stream_) {  // null sink: nothing consumes queued frames
+      std::unique_lock<std::mutex> guard(frames_mutex_);
+      while (!frames_queued_.empty()) {
+        frames_unused_.push(frames_queued_.front());
+        frames_queued_.pop();
+      }
     }
     deadline += interval;
     if (now >= deadline) {
@@ -508,7 +551,10 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
     } else {
       auto buffer = driver->frames_queued_.front();
       driver->frames_queued_.pop();
-      if (REXCVAR_GET(audio_mute)) {
+      // Muted with audio_dump_output_s set: mix for real, dump the real samples, then send silence.
+      const bool mute = REXCVAR_GET(audio_mute);
+      bool dumped = false;
+      if (mute && REXCVAR_GET(audio_dump_output_s) <= 0) {
         std::memset(data, 0, len);
       } else {
         switch (driver->sdl_device_channels_) {
@@ -524,13 +570,20 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
             assert_unhandled_case(driver->sdl_device_channels_);
             break;
         }
+        if (mute) {
+          RecordOutput(data, len, driver->sdl_device_channels_);
+          dumped = true;
+          std::memset(data, 0, len);
+        }
       }
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
         driver->frames_unused_.push(buffer);
         break;
       }
-      RecordOutput(data, len, driver->sdl_device_channels_);
+      if (!dumped) {
+        RecordOutput(data, len, driver->sdl_device_channels_);
+      }
       CountFrame(false);
       driver->frames_unused_.push(buffer);
 

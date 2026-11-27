@@ -10,3 +10,8 @@ local_data_root = "~/Games/Xbox360/fh1/disc"  # read-only extracted disc; --game
 [defaults]
 gpu_plugin = "metal"                     # the native Metal renderer; --gpu_plugin or a config file still wins
 video_mode_refresh_rate = 120           # game presents every 2nd vblank: 60 Hz caps it at 30 fps, 120 Hz gives ~58 fps at correct sim speed (0->30 mph timing, /tmp/bo2/fh1-speed)
+
+[renderer.settings]
+# Speed-blur velocity shader: its c253.w threshold (0.50196838) sits above stencil 128 read as 128/255, so the
+# ground is classed as car and blurred. 0.5 separates classes 127 and 128 (reports/fh1-blur-mask.md).
+metal_shader_constants = "ps E68FE55ECD482EC5 253 3 0.5"

@@ -1,4 +1,3 @@
-# Phase 6 Forza pause check: the Horizon Heats route into a race (fh1-post-fix-stability route3), throttle held;
-# the Guide opens mid-race and closes, throttle still held after.
+# Drive only: omit the Guide/pause-check inputs that left the old gate paused.
 players = 1
-pad1 = 60-61:start, 75-76:a, 85-86:a, 95-96:a, 105-106:a, 115-116:a, 170-176:rt, 178-181:lt, 185-186:x, 200-201:a, 215-216:a, 230-231:a, 245-246:a, 260-420:rt, 320-320.4:guide, 323-323.4:rb, 326-326.4:lb, 336-336.4:guide
+pad1 = 60-61:start, 75-76:a, 85-86:a, 95-96:a, 105-106:a, 115-116:a, 170-176:rt, 178-181:lt, 185-186:x, 200-201:a, 215-216:a, 230-231:a, 245-246:a, 260-420:rt

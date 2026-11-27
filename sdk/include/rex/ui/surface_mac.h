@@ -24,6 +24,10 @@ class CAMetalLayerSurface final : public Surface {
   // borrowed and used only to query the current pixel size.
   CAMetalLayerSurface(SDL_Window* window, void* metal_view, const void* layer)
       : window_(window), metal_view_(metal_view), layer_(layer) {}
+  // Off-screen (headless) surface: takes one reference on a standalone `layer` and reports a fixed size.
+  CAMetalLayerSurface(const void* layer, uint32_t width, uint32_t height)
+      : window_(nullptr), metal_view_(nullptr), layer_(layer), owns_layer_(true), width_(width),
+        height_(height) {}
   ~CAMetalLayerSurface() override;
 
   TypeIndex GetType() const override { return kTypeIndex_CAMetalLayer; }
@@ -36,6 +40,9 @@ class CAMetalLayerSurface final : public Surface {
   SDL_Window* window_;
   void* metal_view_;
   const void* layer_;
+  bool owns_layer_ = false;
+  uint32_t width_ = 0;
+  uint32_t height_ = 0;
 };
 
 }  // namespace ui

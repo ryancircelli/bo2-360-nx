@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #include "rex/ui/metal/metal_test_control.h"
 #include "rex/ui/windowed_app_context.h"
+#include "rex/ui/window_sdl.h"
 #include "rex/ui/presenter.h"
 #include "rex/ui/metal/metal_presenter.h"
 #include "rex/graphics/metal/metal_trace.h"
@@ -70,7 +71,7 @@ bool BackgroundMode() {
 }
 bool SendKey(SDL_Scancode key, bool down) {
   int count = 0; SDL_Window** windows = SDL_GetWindows(&count);
-  Uint32 id = count ? SDL_GetWindowID(windows[0]) : 0;
+  Uint32 id = count ? SDL_GetWindowID(windows[0]) : rex::ui::WindowSDL::kHeadlessWindowId;  // headless: no SDL window
   SDL_free(windows);
   if (!id) return false;
   if (BackgroundMode()) {
@@ -95,20 +96,9 @@ bool SendKey(SDL_Scancode key, bool down) {
 constexpr Uint32 kTestPadEventType = 0xF2B6;
 constexpr Sint32 kTestPadDownBit = 0x10000;
 constexpr Sint32 kTestPadPrepareBit = 0x20000;
-constexpr Sint32 kTestPadAxisBit = 0x40000;  // code = SDL_GamepadAxis | this, user.data1 = value
-int PadAxis(const std::string& name) {
-  if (name == "lx") return SDL_GAMEPAD_AXIS_LEFTX;
-  if (name == "ly") return SDL_GAMEPAD_AXIS_LEFTY;
-  if (name == "rx") return SDL_GAMEPAD_AXIS_RIGHTX;
-  if (name == "ry") return SDL_GAMEPAD_AXIS_RIGHTY;
-  return -1;
-}
-bool SendPadAxis(int axis, int value) {
-  SDL_Event event{};
-  event.type = kTestPadEventType;
-  event.user.code = Sint32(axis) | kTestPadAxisBit;
-  event.user.data1 = reinterpret_cast<void*>(intptr_t(value));
-  return SDL_PushEvent(&event);
+// Verbs of the live virtual-pad layer (rex/input/script/script_input_driver.h LivePadCommand).
+bool LivePadVerb(const std::string& c) {
+  return c == "press" || c == "hold" || c == "release" || c == "stick" || c == "trigger" || c == "pad";
 }
 int PadButton(const std::string& name) {
   if (name == "share") return SDL_GAMEPAD_BUTTON_MISC1;
@@ -131,7 +121,7 @@ bool SendPad(int button, Sint32 flags) {
 constexpr SDL_JoystickID kFakePhysicalPad = 0x7FFFFFF0;
 bool SendPhysicalKey(SDL_Scancode key, bool down) {
   int count = 0; SDL_Window** windows = SDL_GetWindows(&count);
-  Uint32 id = count ? SDL_GetWindowID(windows[0]) : 0;
+  Uint32 id = count ? SDL_GetWindowID(windows[0]) : rex::ui::WindowSDL::kHeadlessWindowId;  // headless: no SDL window
   SDL_free(windows);
   if (!id) return false;
   if (down) {
@@ -271,19 +261,10 @@ void StartMetalTestControl(WindowedAppContext* context, Presenter* presenter) {
               [window makeKeyAndOrderFront:nil];
             });
             result = success ? "ok focused" : "error UI unavailable";
-          } else if (command == "stick") {
-            // stick lx|ly|rx|ry <value>: hold a virtual-pad stick axis at value (SDL units -32768..32767, ly/ry
-            // positive = down as SDL reports it; the game sees ly/ry inverted). It stays until set again.
-            const int axis = PadAxis(argument);
-            char* end = nullptr;
-            const long value = std::strtol(rest.c_str(), &end, 10);
-            if (axis < 0 || rest.empty() || *end || value < -32768 || value > 32767) {
-              result = "error usage: stick lx|ly|rx|ry <-32768..32767>";
-            } else {
-              bool sent = false;
-              context->CallInUIThreadSynchronous([&] { sent = SendPadAxis(axis, int(value)); });
-              result = sent ? "ok stick " + argument + " " + std::to_string(value) : "error pad event delivery failed";
-            }
+          } else if (std::string pad = LivePadVerb(command) ? rex::system::LiveControlCommand(
+                                         command, rest.empty() ? argument : argument + " " + rest) : std::string();
+                     !pad.empty()) {
+            result = pad;  // the game's virtual pads (rex/input/script/script_input_driver.h LivePadCommand)
           } else if ((command == "press" || command == "down" || command == "up") && PadButton(argument) >= 0) {
             const int button = PadButton(argument);
             if (command != "press") {
