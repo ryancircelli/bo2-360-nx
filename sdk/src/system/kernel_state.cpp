@@ -1258,10 +1258,13 @@ void KernelState::CompleteOverlappedEx(uint32_t overlapped_ptr, X_RESULT result,
                                        uint32_t extended_error, uint32_t length,
                                        X_HANDLE thread_handle) {
   auto ptr = memory()->TranslateVirtual(overlapped_ptr);
-  XOverlappedSetResult(ptr, result);
+  // The result goes last: a guest that polls it for "no longer pending" must not
+  // read the length or the extended error before they are written.
   XOverlappedSetExtendedError(ptr, extended_error);
   XOverlappedSetLength(ptr, length);
   XOverlappedSetContext(ptr, 0);
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  XOverlappedSetResult(ptr, result);
   uint32_t routine = XOverlappedGetCompletionRoutine(ptr);
   if (!routine) {
     X_HANDLE event_handle = XOverlappedGetEvent(ptr);
