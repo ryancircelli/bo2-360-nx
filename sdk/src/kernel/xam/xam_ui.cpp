@@ -713,7 +713,7 @@ REX_EXPORT(__imp__XamShowMessageBoxUIEx, rex::kernel::xam::XamShowMessageBoxUIEx
 
 REX_EXPORT_STUB_RETURN(__imp__XamIsGuideDisabled, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB_RETURN(__imp__XamIsMessageBoxActive, 0);  // FALSE: no guide/UI state emulated
-REX_EXPORT_STUB_RETURN(__imp__XamIsNuiUIActive, 0);  // FALSE: no guide/UI state emulated
+REX_EXPORT(__imp__XamIsNuiUIActive, rex::kernel::xam::XamIsUIActive_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByTitle, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByXenonButton, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB_RETURN(__imp__XamIsUIThread, 0);  // FALSE: no guide/UI state emulated

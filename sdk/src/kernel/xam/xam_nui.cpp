@@ -9,6 +9,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <rex/kernel/xam/nui.h>
+#include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
 #include <rex/runtime.h>
@@ -21,19 +23,10 @@ namespace xam {
 
 extern std::atomic<int> xam_dialogs_shown_;
 
-struct X_NUI_DEVICE_STATUS {
-  rex::be<uint32_t> unk0;
-  rex::be<uint32_t> unk1;
-  rex::be<uint32_t> unk2;
-  rex::be<uint32_t> status;
-  rex::be<uint32_t> unk4;
-  rex::be<uint32_t> unk5;
-};
-static_assert(sizeof(X_NUI_DEVICE_STATUS) == 24, "Size matters");
-
 u32 XamNuiGetDeviceStatus_entry(ppc_ptr_t<X_NUI_DEVICE_STATUS> status_ptr) {
+  if (!status_ptr) return X_E_INVALIDARG;
   status_ptr.Zero();
-  status_ptr->status = 0;  // Not connected.
+  status_ptr->status_bits = 0;  // Not connected.
   return 0xC0050006;       // No Kinect (Xenia's value); r3 used to keep the struct pointer.
 }
 
@@ -66,8 +59,35 @@ u32 XamShowNuiTroubleshooterUI_entry(u32 unk1, u32 unk2, u32 unk3) {
 }
 
 // Identifies the Kinect identity session; any non-zero id works with no sensor attached.
-u32 XamNuiIdentityGetSessionId_entry() {
-  return 0xDEADF00D;
+u64 XamNuiIdentityGetSessionId_entry() {
+  return 0xDEADF00DDEADF00Dull;
+}
+
+// No Kinect controller is initialized. These paths follow xenia-canary 2da2519
+// xam_nui.cc and the zero-initialized NUIController state (BSD-3-Clause).
+u32 XamNuiIsDeviceReady_entry() { return 0; }
+u32 XamNuiIsChatMicEnabled_entry() { return 0; }
+u32 XamNuiHudIsEnabled_entry() { return 0; }
+u32 XamNuiHudGetInitializeFlags_entry() { return 0; }
+u32 XamNuiCameraGetTiltControllerType_entry() { return 0; }
+u64 XamNuiHudGetEngagedTrackingID_entry() { return 0; }
+u64 XamNuiSkeletonGetBestSkeletonIndex_entry(i32) { return ~u64{0}; }
+u32 XamNuiHudSetEngagedTrackingID_entry(u32 id) {
+  return id ? X_E_FAIL : X_ERROR_SUCCESS;
+}
+u32 XamNuiCameraSetFlags_entry(u64, u32) { return X_E_DEVICE_NOT_CONNECTED; }
+void XamNuiHudGetVersions_entry(mapped_u64 xam_version, mapped_u64 xtl_version) {
+  if (xam_version) *xam_version = 0;
+  if (xtl_version) *xtl_version = 0;
+}
+u32 XamNuiGetDepthCalibration_entry(ppc_ptr_t<X_NUI_DEPTH_CALIBRATION> data) {
+  if (!data) return X_E_INVALIDARG;
+  data.Zero();
+  return 0xD000000F;  // STATUS_NO_SUCH_FILE | FACILITY_NT_BIT, as in Canary.
+}
+void XamNuiPlayerEngagementUpdate_entry(u32, u32,
+    ppc_ptr_t<X_NUI_PLAYER_ENGAGEMENT_UPDATE> data) {
+  if (data) data.Zero();
 }
 
 }  // namespace xam
@@ -88,15 +108,15 @@ REX_EXPORT_STUB(__imp__XamNuiCameraElevationReverseAutoTilt);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiCameraElevationSetCallback);
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
-REX_EXPORT_STUB(__imp__XamNuiCameraGetTiltControllerType);
+REX_EXPORT(__imp__XamNuiCameraGetTiltControllerType, rex::kernel::xam::XamNuiCameraGetTiltControllerType_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
-REX_EXPORT_STUB(__imp__XamNuiCameraSetFlags);
+REX_EXPORT(__imp__XamNuiCameraSetFlags, rex::kernel::xam::XamNuiCameraSetFlags_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltGetStatus, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltReportStatus, 0x80004005);  // X_E_FAIL: no Kinect
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltSetCallback, 0);  // canary stores cb, returns 0; no tilt events ever fire
 REX_EXPORT_STUB(__imp__XamNuiEnableChatMic);
 REX_EXPORT_STUB(__imp__XamNuiGetCameraIntrinsics);
-REX_EXPORT_STUB(__imp__XamNuiGetDepthCalibration);
+REX_EXPORT(__imp__XamNuiGetDepthCalibration, rex::kernel::xam::XamNuiGetDepthCalibration_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiGetDeviceSerialNumber, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiGetFanRate);
 REX_EXPORT_STUB(__imp__XamNuiGetLoadedDepthCalibration);
@@ -105,12 +125,12 @@ REX_EXPORT_STUB(__imp__XamNuiGetSystemGestureControl);
 REX_EXPORT_STUB(__imp__XamNuiGetTrueColorInfo);
 REX_EXPORT_STUB(__imp__XamNuiHudEnableInputFilter);
 REX_EXPORT_STUB(__imp__XamNuiHudGetEngagedEnrollmentIndex);
-REX_EXPORT_STUB(__imp__XamNuiHudGetEngagedTrackingID);
-REX_EXPORT_STUB(__imp__XamNuiHudGetInitializeFlags);
-REX_EXPORT_STUB(__imp__XamNuiHudGetVersions);
+REX_EXPORT(__imp__XamNuiHudGetEngagedTrackingID, rex::kernel::xam::XamNuiHudGetEngagedTrackingID_entry)
+REX_EXPORT(__imp__XamNuiHudGetInitializeFlags, rex::kernel::xam::XamNuiHudGetInitializeFlags_entry)
+REX_EXPORT(__imp__XamNuiHudGetVersions, rex::kernel::xam::XamNuiHudGetVersions_entry)
 REX_EXPORT_STUB(__imp__XamNuiHudInterpretFrame);
-REX_EXPORT_STUB(__imp__XamNuiHudIsEnabled);
-REX_EXPORT_STUB(__imp__XamNuiHudSetEngagedTrackingID);
+REX_EXPORT(__imp__XamNuiHudIsEnabled, rex::kernel::xam::XamNuiHudIsEnabled_entry)
+REX_EXPORT(__imp__XamNuiHudSetEngagedTrackingID, rex::kernel::xam::XamNuiHudSetEngagedTrackingID_entry)
 REX_EXPORT(__imp__XamNuiIdentityGetSessionId, rex::kernel::xam::XamNuiIdentityGetSessionId_entry)
 REX_EXPORT_STUB(__imp__XamNuiIdentityAbort);
 REX_EXPORT_STUB(__imp__XamNuiIdentityEnrollForSignIn);
@@ -120,12 +140,12 @@ REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlags);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlagsMessage);
 REX_EXPORT_STUB(__imp__XamNuiIdentityIdentifyWithBiometric);
 REX_EXPORT_STUB(__imp__XamNuiIdentityUnenroll);
-REX_EXPORT_STUB(__imp__XamNuiIsChatMicEnabled);
-REX_EXPORT_STUB(__imp__XamNuiIsDeviceReady);
+REX_EXPORT(__imp__XamNuiIsChatMicEnabled, rex::kernel::xam::XamNuiIsChatMicEnabled_entry)
+REX_EXPORT(__imp__XamNuiIsDeviceReady, rex::kernel::xam::XamNuiIsDeviceReady_entry)
 REX_EXPORT_STUB(__imp__XamNuiNatalCameraUpdateComplete);
 REX_EXPORT_STUB(__imp__XamNuiNatalCameraUpdateStarting);
-REX_EXPORT_STUB(__imp__XamNuiPlayerEngagementUpdate);
+REX_EXPORT(__imp__XamNuiPlayerEngagementUpdate, rex::kernel::xam::XamNuiPlayerEngagementUpdate_entry)
 REX_EXPORT_STUB(__imp__XamNuiSetForceDeviceOff);
-REX_EXPORT_STUB(__imp__XamNuiSkeletonGetBestSkeletonIndex);
+REX_EXPORT(__imp__XamNuiSkeletonGetBestSkeletonIndex, rex::kernel::xam::XamNuiSkeletonGetBestSkeletonIndex_entry)
 REX_EXPORT_STUB(__imp__XamNuiSkeletonScoreUpdate);
 REX_EXPORT_STUB(__imp__XamNuiStoreDepthCalibration);
