@@ -216,3 +216,10 @@ target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(content_manager_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME content_manager_tests COMMAND content_manager_tests)
+
+add_executable(xam_content_entry_tests system/xam_content_entry_test.cpp)
+target_include_directories(xam_content_entry_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xam_content_entry_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xam_content_entry_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME xam_content_entry_tests COMMAND xam_content_entry_tests)
