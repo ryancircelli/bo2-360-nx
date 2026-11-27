@@ -99,3 +99,22 @@ TEST_CASE("array and volume mip layout", "[texture_util]") {
   REQUIRE(texture_util::GetPackedMipOffset(128, 128, 256, k8888, 8, x, y, z));
   CHECK(z == 4);
 }
+
+// Canary 81e3deaee: a packed base level uses power-of-two height and depth for
+// its slice strides.
+TEST_CASE("packed base slice strides use rounded dimensions", "[texture_util]") {
+  constexpr auto k8888 = xenos::TextureFormat::k_8_8_8_8;
+  // 16x65: 128 rows (not 96) of 128 bytes.
+  texture_util::TextureGuestLayout tall = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k2DOrStacked, 1, 16, 65, 1, true, k8888, true, true, 0);
+  REQUIRE(tall.packed_level == 0);
+  CHECK(tall.base.array_slice_stride_bytes == 128 * 128);
+  // 16x16x9 volume: 16 slices (not 12) of 4 KB.
+  texture_util::TextureGuestLayout volume = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k3D, 1, 16, 16, 9, true, k8888, true, true, 0);
+  CHECK(volume.base.array_slice_stride_bytes == 4096 * 16);
+  // Unpacked base keeps the exact height.
+  texture_util::TextureGuestLayout unpacked = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k2DOrStacked, 1, 32, 65, 1, true, k8888, false, true, 0);
+  CHECK(unpacked.base.array_slice_stride_bytes == 128 * 96);
+}
