@@ -928,8 +928,8 @@ REX_EXPORT_STUB(__imp__XamUserLogon);
 REX_EXPORT_STUB(__imp__XamUserLogonEx);
 REX_EXPORT_STUB(__imp__XamUserLookupDevice);
 REX_EXPORT_STUB(__imp__XamUserNuiBind);
-REX_EXPORT_STUB_RETURN(__imp__XamUserNuiEnableBiometric, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamUserNuiGetEnrollmentIndex, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamUserNuiEnableBiometric, 0x80070057);  // canary: X_E_INVALIDARG
+REX_EXPORT_STUB_RETURN(__imp__XamUserNuiGetEnrollmentIndex, 0x80070525);
 REX_EXPORT(__imp__XamUserNuiGetUserIndex, rex::kernel::xam::XamUserNuiGetUserIndex_entry)
 REX_EXPORT_STUB(__imp__XamUserNuiGetUserIndexForBind);
 REX_EXPORT(__imp__XamUserNuiGetUserIndexForSignin, rex::kernel::xam::XamUserNuiGetUserIndexForSignin_entry)

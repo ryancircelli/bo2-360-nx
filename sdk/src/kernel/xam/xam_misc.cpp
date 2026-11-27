@@ -226,12 +226,12 @@ REX_EXPORT_STUB(__imp__XAutomationpUnbindController);
 REX_EXPORT_STUB(__imp__XCustomBroadcastActionEvent);
 REX_EXPORT_STUB(__imp__XCustomBroadcastGamercardEvent);
 REX_EXPORT_STUB(__imp__XCustomGetBannerImage);
-REX_EXPORT_STUB_RETURN(__imp__XCustomGetCurrentGamercard, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XCustomGetLastActionPress, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XCustomGetLastActionPressEx, 0x32);
-REX_EXPORT_STUB(__imp__XCustomSetAction);
-REX_EXPORT_STUB_RETURN(__imp__XCustomSetDynamicActions, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XCustomUnregisterDynamicActions, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XCustomGetCurrentGamercard, 0);  // spec: no gamercard action pending
+REX_EXPORT_STUB_RETURN(__imp__XCustomGetLastActionPress, 0);  // FALSE: no press, out untouched
+REX_EXPORT_STUB_RETURN(__imp__XCustomGetLastActionPressEx, 0);
+REX_EXPORT_STUB_RETURN(__imp__XCustomSetAction, 0);
+REX_EXPORT_STUB_RETURN(__imp__XCustomSetDynamicActions, 0);
+REX_EXPORT_STUB_RETURN(__imp__XCustomUnregisterDynamicActions, 0);
 REX_EXPORT_STUB(__imp__XDebugError);
 REX_EXPORT_STUB(__imp__XDebugWarning);
 REX_EXPORT_STUB(__imp__XDebugWarning_);
@@ -258,7 +258,7 @@ REX_EXPORT_STUB(__imp__XNetLogonGetExtendedStatus);
 REX_EXPORT_STUB(__imp__XNetLogonGetFlowToken);
 REX_EXPORT_STUB(__imp__XNetLogonGetLastUPnPStatus);
 REX_EXPORT_STUB(__imp__XNetLogonGetLoggedOnUsers);
-REX_EXPORT_STUB(__imp__XNetLogonGetMachineID);
+REX_EXPORT_STUB_RETURN(__imp__XNetLogonGetMachineID, 0x80151802);  // XONLINE_E_LOGON_NOT_LOGGED_ON, out unchanged
 REX_EXPORT_STUB(__imp__XNetLogonGetNatType);
 REX_EXPORT_STUB(__imp__XNetLogonGetServiceInfo);
 REX_EXPORT_STUB(__imp__XNetLogonGetServiceNetworkID);
@@ -689,7 +689,7 @@ REX_EXPORT_STUB(__imp__XamQueryLiveHiveA);
 REX_EXPORT_STUB(__imp__XamQueryTimeZoneInformation);
 REX_EXPORT_STUB(__imp__XamRamDriveCreate);
 REX_EXPORT_STUB(__imp__XamRamDriveDestroy);
-REX_EXPORT_STUB_RETURN(__imp__XamReadBiometricData, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamReadBiometricData, 0x80070525);  // no Kinect identity
 REX_EXPORT_STUB(__imp__XamReadGameTileImage);
 REX_EXPORT_STUB(__imp__XamReadImage);
 REX_EXPORT_STUB(__imp__XamReadString);
@@ -778,7 +778,7 @@ REX_EXPORT_STUB(__imp__XamWebInstrumentationGetURLEx);
 REX_EXPORT_STUB(__imp__XamWebInstrumentationSendReport);
 REX_EXPORT_STUB(__imp__XamWebInstrumentationSetUserVar);
 REX_EXPORT_STUB(__imp__XamWebInstrumentationSetUserVarNoEscape);
-REX_EXPORT_STUB_RETURN(__imp__XamWriteBiometricData, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamWriteBiometricData, 0x80070525);
 REX_EXPORT_STUB(__imp__XamWriteGamerTileEx);
 REX_EXPORT_STUB(__imp__XamWriteTile);
 REX_EXPORT_STUB_RETURN(__imp__XamXStudioRequest, 0x32);
