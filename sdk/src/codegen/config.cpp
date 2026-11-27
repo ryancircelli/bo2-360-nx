@@ -212,6 +212,7 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
       fcfg.name = (*table)["name"].value_or(std::string{});
       fcfg.parent = (*table)["parent"].value_or(0u);
       fcfg.shareRegisters = (*table)["share_registers"].value_or(false);
+      fcfg.keepLocals = (*table)["share_registers"].value<bool>() == false;
 
       if (fcfg.size && fcfg.end) {
         REXCODEGEN_ERROR("Function 0x{:08X}: cannot specify both 'size' and 'end'", address);

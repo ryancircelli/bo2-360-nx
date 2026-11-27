@@ -28,6 +28,7 @@ set(CODEGEN_CORE_SOURCES
     template_registry.cpp
     manifest.cpp
     project_recompiler.cpp
+    register_audit.cpp
 )
 
 # PPC architecture sources (merged from rexarch)

@@ -52,6 +52,9 @@ struct FunctionConfig {
   // funclet, which reads the registers its owner left live and would see a zero
   // from a local. Callers sync their localized copies across the call site.
   bool shareRegisters = false;
+  // share_registers = false, written out: keep the locals even though the generator's
+  // read-before-write audit flags the function (a reviewed false alarm, e.g. xor r30,r30,r30).
+  bool keepLocals = false;
 
   // Get effective size (prefers size over end)
   uint32_t getSize(uint32_t address) const {

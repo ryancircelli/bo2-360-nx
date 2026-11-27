@@ -34,6 +34,7 @@
 
 #include "codegen_logging.h"
 #include "file_io.h"
+#include "register_audit.h"
 #include "template_registry_internal.h"
 
 namespace {
@@ -413,9 +414,44 @@ bool CodegenWriter::write(bool force) {
   static const char* const kRefMacros[] = {"REX_REF_STORE_U8", "REX_REF_STORE_U16",
                                            "REX_REF_STORE_U32", "REX_REF_STORE_U64"};
 
+  // Read-before-write audit (tools/read_before_write.py, moved into the generator so every game
+  // gets it): a function whose localized registers can be read before it writes them is a piece
+  // of a split function, or reads its caller's registers; it keeps them in ctx (share_registers)
+  // and its callers pass their locals through ctx. Marking one does not change what another
+  // function reads, so one pass over the localized text is the fixed point.
+  const auto& cfg = config();
+  if (cfg.nonVolatileRegistersAsLocalVariables || cfg.crRegistersAsLocalVariables ||
+      cfg.ctrAsLocalVariable || cfg.xerAsLocalVariable || cfg.vectorScratchRegistersAsLocalVariables) {
+    size_t marked = 0, kept = 0;
+    for (const auto* fn : functions) {
+      if (fn->sharesRegisters())
+        continue;
+      const auto early = FindEarlyReads(fn->emitCpp(emitCtx));
+      if (early.empty())
+        continue;
+      const uint32_t addr = static_cast<uint32_t>(fn->base());
+      std::string regs;
+      for (const auto& e : early)
+        regs += (regs.empty() ? "" : " ") + e.reg;
+      if (auto it = cfg.functions.find(addr); it != cfg.functions.end() && it->second.keepLocals) {
+        ++kept;
+        REXCODEGEN_DEBUG("Read before write in {} ({}), kept local by share_registers = false: {}",
+                         fn->name(), regs, early.front().line);
+        continue;
+      }
+      graph().getFunction(addr)->setSharesRegisters(true);
+      ++marked;
+      REXCODEGEN_INFO("share_registers {}: reads {} before writing ({})", fn->name(), regs,
+                      early.front().line);
+    }
+    REXCODEGEN_INFO("Read-before-write audit: {} functions share registers, {} kept local", marked,
+                    kept);
+  }
+  referenced.clear();
+
   for (const auto* fn : functions) {
     referenced.clear();
-    std::string code = fn->emitCpp(emitCtx);
+    std::string code = ProtectSetjmpLocals(fn->emitCpp(emitCtx));
     if (referenceSet.count(static_cast<uint32_t>(fn->base())) &&
         fn->authority() != FunctionAuthority::IMPORT) {
       bool blocked = false;
