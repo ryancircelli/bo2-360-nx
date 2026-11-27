@@ -87,14 +87,18 @@ bool build_vmaddfp(BuilderContext& ctx) {
   // Xenon VMX multiply-add rounds once (fused); arm64 lowers this to one fmla. Without
   // exactVectorMath it stays a multiply and an add, which hand-written natives mirror.
   ctx.emit_set_flush_mode(true);
-  ctx.println(
-      ctx.config().exactVectorMath
-          ? "\tsimde_mm_store_ps({}.f32, simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), "
-            "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));"
-          : "\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
-            "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
-      ctx.v(ctx.insn.operands[3]));
+  if (ctx.config().exactVectorMath)
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
+  else
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
   return true;
 }
 
@@ -102,19 +106,23 @@ bool build_vnmsubfp(BuilderContext& ctx) {
   // vnmsubfp: vD = -(vA * vB - vC), fused like vmaddfp: fmadd(vA, vB, -vC) then negate by XOR
   // (simde_mm_fmsub_ps is not fused on arm64; negating vC is exact)
   ctx.emit_set_flush_mode(true);
-  ctx.println(
-      ctx.config().exactVectorMath
-          ? "\tsimde_mm_store_ps({}.f32, "
-            "simde_mm_xor_ps(simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32), "
-            "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
-            "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
-            "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));"
-          : "\tsimde_mm_store_ps({}.f32, "
-            "simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
-            "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), "
-            "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
-      ctx.v(ctx.insn.operands[3]));
+  if (ctx.config().exactVectorMath)
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, "
+        "simde_mm_xor_ps(simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32), "
+        "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
+        "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
+  else
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, "
+        "simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), "
+        "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
   return true;
 }
 
