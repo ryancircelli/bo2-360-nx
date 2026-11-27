@@ -472,16 +472,16 @@ REX_EXPORT(__imp__XamContentDeleteInternal, rex::kernel::xam::XamContentDeleteIn
 REX_EXPORT_QUIET_RETURN(__imp__XamContentClosePackageFile, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentCopyInternal, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentCreateAndMountPackage, 0x80004005);
-REX_EXPORT_STUB(__imp__XamContentCreateEnumeratorInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentCreateEnumeratorInternal, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamContentDismountAndClosePackage, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentDuplicateFileHandle, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentExistsOnDeviceInternal, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentFlushPackage, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentGetAttributes, 0x490);
-REX_EXPORT_STUB(__imp__XamContentGetAttributesInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetAttributesInternal, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamContentGetHeaderInternal, 0x80004005);
-REX_EXPORT_STUB(__imp__XamContentGetLocalizedString);
-REX_EXPORT_STUB(__imp__XamContentGetMetaDataInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetLocalizedString, 0x80004005);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XamContentGetMetaDataInternal, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamContentGetMountedPackageByRootName, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentGetOnlineCreator, 0x65B);
 REX_EXPORT_STUB_RETURN(__imp__XamContentInstall, 0x32);
@@ -498,9 +498,9 @@ REX_EXPORT_QUIET_RETURN(__imp__XamContentMoveInternal, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentOpenFileInternal, 0x65B);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentOpenPackageFile, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentQueryLicenseInternal, 0x80004005);
-REX_EXPORT_STUB(__imp__XamContentRegisterChangeCallback);
-REX_EXPORT_STUB(__imp__XamContentResolveInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentRegisterChangeCallback, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XamContentResolveInternal, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamContentSetAttributes, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamContentSetMediaMetaDataInternal, 0x80004005);
-REX_EXPORT_STUB(__imp__XamContentSetThumbnailInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XamContentSetThumbnailInternal, 0);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamContentWritePackageHeader, 0x80004005);

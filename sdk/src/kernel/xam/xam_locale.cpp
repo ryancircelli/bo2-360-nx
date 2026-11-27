@@ -449,12 +449,12 @@ REX_EXPORT_QUIET_RETURN(__imp__XamFormatSystemDateString, 0x80004005);
 REX_EXPORT(__imp__XamGetCountry, rex::kernel::xam::XamGetCountry_entry)
 REX_EXPORT_QUIET_RETURN(__imp__XamGetCurrencyFormat, 0x80004005);
 REX_EXPORT(__imp__XamGetLanguage, rex::kernel::xam::XamGetLanguage_entry)
-REX_EXPORT_STUB(__imp__XamGetLanguageLocaleFallbackString);
-REX_EXPORT_STUB(__imp__XamGetLanguageTypeface);
+REX_EXPORT_QUIET_RETURN(__imp__XamGetLanguageLocaleFallbackString, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XamGetLanguageTypeface, 0);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT(__imp__XamGetLanguageTypefacePatch, rex::kernel::xam::XamGetLanguageTypefacePatch_entry)
 REX_EXPORT(__imp__XamGetLocaleDateFormat, rex::kernel::xam::XamGetLocaleDateFormat_entry)
 REX_EXPORT_QUIET_RETURN(__imp__XamGetLocaleTimeFormat, 0);
-REX_EXPORT_STUB(__imp__XamGetOnlineCountryFeatures);
+REX_EXPORT_QUIET_RETURN(__imp__XamGetOnlineCountryFeatures, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT(__imp__XamGetOnlineLanguageAndCountry, rex::kernel::xam::XamGetOnlineLanguageAndCountry_entry)
 REX_EXPORT_QUIET_RETURN(__imp__XamGetStoreFront, 0x80151802);
 REX_EXPORT_QUIET_RETURN(__imp__XamUniSortCmpString, 0);

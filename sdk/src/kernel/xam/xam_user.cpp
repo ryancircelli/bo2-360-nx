@@ -911,7 +911,7 @@ REX_EXPORT(__imp__XamUserGetOnlineLanguageFromXUID, rex::kernel::xam::XamUserGet
 REX_EXPORT_QUIET_RETURN(__imp__XamUserGetOnlineXUIDFromOfflineXUID, 0x65B);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserGetReportingInfo, 0x65B);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserGetRequestedUserIndexMask, 0x80004005);
-REX_EXPORT_STUB(__imp__XamUserGetSubscriptionType);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserGetSubscriptionType, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT(__imp__XamUserGetUserFlags, rex::kernel::xam::XamUserGetUserFlags_entry)
 REX_EXPORT(__imp__XamUserGetUserFlagsFromXUID, rex::kernel::xam::XamUserGetUserFlagsFromXUID_entry)
 REX_EXPORT_QUIET_RETURN(__imp__XamUserGetUserIndexMask, 0x80004005);
@@ -925,8 +925,8 @@ REX_EXPORT_QUIET_RETURN(__imp__XamUserIsPartial, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserIsPartialProfile, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserIsUnsafeProgrammingAllowed, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserLockLogonPreviewMode, 0);
-REX_EXPORT_STUB(__imp__XamUserLogon);
-REX_EXPORT_STUB(__imp__XamUserLogonEx);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserLogon, 0x80004005);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XamUserLogonEx, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamUserLookupDevice, 0x65B);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserNuiBind, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XamUserNuiEnableBiometric, 0x80070057);  // canary: X_E_INVALIDARG
@@ -942,10 +942,10 @@ REX_EXPORT_QUIET_RETURN(__imp__XamUserOverrideGlobalState, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserOverrideUserInfo, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserPrefetchProfileSettings, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserProfileSync, 0x80004005);
-REX_EXPORT_STUB(__imp__XamUserReadUserPreference);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserReadUserPreference, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamUserResetSubscriptionType, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserUnlockLogonPreviewMode, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserUpdateRecentPlayer, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamUserValidateAvatarManifest, 0);
-REX_EXPORT_STUB(__imp__XamUserWriteUserPreference);
+REX_EXPORT_QUIET_RETURN(__imp__XamUserWriteUserPreference, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XamVerifyPasscode, 0x65B);

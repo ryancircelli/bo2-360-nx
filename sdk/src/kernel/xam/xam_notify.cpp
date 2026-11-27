@@ -121,7 +121,7 @@ REX_EXPORT(__imp__XNotifyDelayUI, rex::kernel::xam::XNotifyDelayUI_entry)
 REX_EXPORT(__imp__XNotifyPositionUI, rex::kernel::xam::XNotifyPositionUI_entry)
 
 REX_EXPORT_QUIET_RETURN(__imp__XNotifyBroadcast, 0x80004005);
-REX_EXPORT_STUB(__imp__XNotifyQueueUI);
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyQueueUI, 0x80004005);  // no reference; deliberate family default, behaviour unknown
 REX_EXPORT_QUIET_RETURN(__imp__XNotifyQueueUIEx, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XNotifyRegisterArea, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XNotifyUIGetOptions, 0x80004005);
