@@ -283,24 +283,17 @@ void XThread::set_name(const std::string_view name) {
   }
 }
 
-REXCVAR_DEFINE_INT32(guest_fake_cpu_start, 0, "Kernel",
-                     "Starting point of the round-robin CPU number handed to guest threads created "
-                     "without a processor mask. Games that index per-CPU state by CPU number can "
-                     "collide with threads they pin explicitly (BO1: main thread vs thread pinned to 1).");
-
-static uint8_t next_cpu = 0;
 static uint8_t GetFakeCpuNumber(uint8_t proc_mask) {
   // NOTE: proc_mask is logical processors, not physical processors or cores.
   if (!proc_mask) {
-    static const bool init = [] { next_cpu = uint8_t(REXCVAR_GET(guest_fake_cpu_start) % 6); return true; }();
-    (void)init;
-    next_cpu = (next_cpu + 1) % 6;
-    return next_cpu;  // is this reasonable?
-    // TODO(Triang3l): Does the following apply here?
     // https://docs.microsoft.com/en-us/windows/win32/dxtecharts/coding-for-multiple-cores
     // "On Xbox 360, you must explicitly assign software threads to a particular
     //  hardware thread by using XSetThreadProcessor. Otherwise, all child
     //  threads will stay on the same hardware thread as the parent."
+    // A round-robin number here could land an unpinned thread on a number the game pins another thread
+    // to (BO1 indexes script-parser state by CPU number). Threads made by the host start on 0.
+    XThread* creator = current_xthread_tls_;
+    return creator ? creator->active_cpu() : 0;
   }
   assert_false(proc_mask & 0xC0);
 
@@ -1033,6 +1026,9 @@ void XThread::SetPriority(int32_t increment) {
 }
 
 void XThread::SetAffinity(uint32_t affinity) {
+  if (!affinity) {
+    return;  // no processor named: stay put (an empty mask is not "inherit from the caller")
+  }
   SetActiveCpu(GetFakeCpuNumber(affinity));
 }
 

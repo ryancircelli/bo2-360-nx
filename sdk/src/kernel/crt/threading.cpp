@@ -12,6 +12,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <memory>
 
@@ -353,6 +354,14 @@ void SwitchToFiber_entry(mapped_void lpFiber) {
 #endif
   rex::thread::Fiber::SwitchTo(target_info->host_fiber);
   // Resumed: non-volatile regs and stack state already restored by the fiber that switched back.
+  // Generated code up this host stack still holds the register context of the thread that ran it before,
+  // so a fiber resumed by another guest thread shares that thread's registers.
+  if (XThread::GetCurrentThread() != thread) {
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true)) {
+      REXKRNL_ERROR("SwitchToFiber: a fiber moved between guest threads; its registers are shared");
+    }
+  }
 }
 
 }  // namespace rex::kernel::crt

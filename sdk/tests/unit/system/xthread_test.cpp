@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <utility>
 
@@ -17,6 +18,12 @@
 
 #include <rex/ppc/context.h>
 #include <rex/runtime.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/util/object_table.h>
+#include <rex/system/xevent.h>
+#include <rex/system/xio.h>
+#include <rex/system/xmemory.h>
+#include <rex/system/xsemaphore.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread/fiber.h>
@@ -96,6 +103,44 @@ TEST_CASE("Thread priority changes keep the user-interactive QoS class on macOS"
   priority_set.store(true, std::memory_order_release);
   REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
   CHECK(qos.load(std::memory_order_acquire) == QOS_CLASS_USER_INTERACTIVE);
+}
+#endif
+
+#if !defined(_WIN32)
+// Every guest thread is created suspended and then resumed (XThread::Create).
+TEST_CASE("A thread created suspended can be suspended again from outside", "[thread][suspend]") {
+  std::atomic<uint64_t> ticks{0};
+  std::atomic<bool> stop{false};
+  rex::thread::Thread::CreationParameters params;
+  params.create_suspended = true;
+  auto thread = rex::thread::Thread::Create(params, [&]() {
+    while (!stop.load(std::memory_order_acquire)) {
+      ticks.fetch_add(1, std::memory_order_relaxed);
+    }
+  });
+  REQUIRE(thread);
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  CHECK(ticks.load(std::memory_order_relaxed) == 0);  // not started yet
+  REQUIRE(thread->Resume());
+  auto moved = [&](uint64_t from) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (ticks.load(std::memory_order_relaxed) == from && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return ticks.load(std::memory_order_relaxed) != from;
+  };
+  REQUIRE(moved(0));
+  for (int round = 0; round < 3; ++round) {  // each resume must leave the next suspend working
+    REQUIRE(thread->Suspend());
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let the signal park it
+    uint64_t parked = ticks.load(std::memory_order_relaxed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK(ticks.load(std::memory_order_relaxed) == parked);
+    REQUIRE(thread->Resume());
+    CHECK(moved(parked));
+  }
+  stop.store(true, std::memory_order_release);
+  REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
 }
 #endif
 
@@ -210,4 +255,192 @@ TEST_CASE("XThread::set_name is safe against the start-up name write", "[runtime
     thread->Wait(0, 0, 0, nullptr);
     for (auto& t : namers) t.join();
   }
+}
+
+// An object created after a save point's capture loses its handle slot on rewind but keeps the handle in
+// its own list; the slot's next owner must not be closed through it.
+TEST_CASE("An object that lost its handle slot cannot close the slot's next owner", "[runtime][object]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* table = runtime.kernel_state()->object_table();
+
+  auto saved = table->CaptureRewindState();
+  auto stale = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(runtime.kernel_state()));
+  stale->Initialize(true, false);
+  const auto handle = stale->handle();
+  table->Rewind(saved);
+
+  // The table hands out free slots in its own order: make objects until one lands on the old slot.
+  std::vector<rex::system::object_ref<rex::system::XEvent>> made;
+  rex::system::object_ref<rex::system::XEvent> owner;
+  for (int i = 0; i < 64 && !owner; ++i) {
+    made.emplace_back(new rex::system::XEvent(runtime.kernel_state()));
+    made.back()->Initialize(true, false);
+    if (made.back()->handle() == handle) owner = made.back();
+  }
+  REQUIRE(owner.get() != nullptr);
+
+  stale->ReleaseHandle();
+  CHECK(table->LookupObject<rex::system::XObject>(handle).get() == owner.get());
+
+  CHECK(table->ReleaseHandle(handle) == X_STATUS_SUCCESS);
+  CHECK(table->LookupObject<rex::system::XObject>(handle).get() == nullptr);
+  CHECK(table->ReleaseHandle(handle) == X_STATUS_INVALID_HANDLE);  // closed handles stay closed
+  CHECK(table->RetainHandle(handle) == X_STATUS_INVALID_HANDLE);
+}
+
+TEST_CASE("Starting a deferred overlapped call clears the caller's event", "[runtime][overlapped]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+
+  auto event = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(ks));
+  event->Initialize(true, true);  // manual reset, still set from "the previous call"
+  const uint32_t overlapped = ks->memory()->SystemHeapAlloc(sizeof(rex::system::XAM_OVERLAPPED));
+  REQUIRE(overlapped != 0);
+  auto* ov = ks->memory()->TranslateVirtual<rex::system::XAM_OVERLAPPED*>(overlapped);
+  *ov = {};
+  ov->event = event->handle();
+
+  std::atomic<uint32_t> wait_status{0xFFFFFFFFu};
+  // The deferred call records the calling guest thread, so it has to be made from one.
+  auto caller = rex::system::object_ref<rex::system::XHostThread>(
+      new rex::system::XHostThread(ks, 128 * 1024, 0, [&]() {
+        ks->CompleteOverlappedDeferred([]() {}, overlapped, 0);
+        uint64_t no_wait = 0;
+        wait_status.store(event->Wait(0, 0, 0, &no_wait), std::memory_order_release);
+        return 0;
+      }));
+  REQUIRE(caller->Create() == X_STATUS_SUCCESS);
+  REQUIRE(caller->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+  CHECK(wait_status.load(std::memory_order_acquire) == uint32_t(X_STATUS_TIMEOUT));
+}
+
+TEST_CASE("A guest object body that is initialised again gets a fresh host object", "[runtime][object]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+  auto* table = ks->object_table();
+
+  const uint32_t body = ks->memory()->SystemHeapAlloc(sizeof(rex::system::X_KSEMAPHORE));
+  REQUIRE(body != 0);
+  auto* sem = ks->memory()->TranslateVirtual<rex::system::X_KSEMAPHORE*>(body);
+  // What KeInitializeSemaphore does to the body.
+  auto init = [&](uint32_t count) {
+    std::memset(static_cast<void*>(sem), 0, sizeof(*sem));
+    sem->header.type = 5;
+    sem->header.signal_state = count;
+    sem->limit = 1;
+    return rex::system::XObject::GetNativeObject<rex::system::XSemaphore>(ks, sem, 5);
+  };
+
+  auto first = init(1);  // left with one count that nobody takes
+  REQUIRE(first);
+  const auto first_handle = first->handle();
+  first.reset();
+
+  auto second = init(0);
+  REQUIRE(second);
+  uint64_t no_wait = 0;
+  CHECK(second->Wait(0, 0, 0, &no_wait) == X_STATUS_TIMEOUT);  // the old count is not inherited
+  // The first use's object is gone (its slot is free or already reused by the second), not leaked.
+  auto at_first = table->LookupObject<rex::system::XObject>(first_handle);
+  CHECK((!at_first || at_first.get() == second.get()));
+
+  const size_t before = table->GetAllObjects().size();
+  for (int i = 0; i < 50; ++i) {
+    REQUIRE(init(0));
+  }
+  CHECK(table->GetAllObjects().size() == before);
+}
+
+#if !defined(_WIN32)
+TEST_CASE("Waiting twice on a finished thread does not join a newer thread", "[thread][join]") {
+  using namespace std::chrono_literals;
+  auto first = rex::thread::Thread::Create({}, []() {});
+  REQUIRE(first);
+  REQUIRE(rex::thread::Wait(first.get(), false, 2000ms) == rex::thread::WaitResult::kSuccess);
+
+  std::atomic<bool> stop{false};
+  // Likely to reuse the finished thread's stack, and with it the pthread_t.
+  auto second = rex::thread::Thread::Create({}, [&]() {
+    while (!stop.load(std::memory_order_acquire)) {
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  REQUIRE(second);
+
+  std::atomic<bool> done{false};
+  std::thread waiter([&]() {
+    rex::thread::Wait(first.get(), false, 2000ms);
+    done.store(true, std::memory_order_release);
+  });
+  std::this_thread::sleep_for(300ms);
+  const bool returned = done.load(std::memory_order_acquire);
+  stop.store(true, std::memory_order_release);  // also frees a waiter stuck joining the second thread
+  waiter.join();
+  CHECK(returned);
+  REQUIRE(rex::thread::Wait(second.get(), false, 2000ms) == rex::thread::WaitResult::kSuccess);
+}
+#endif
+
+TEST_CASE("A zero-timeout wait on several objects sees a signaled one while another is busy",
+          "[thread][wait]") {
+  auto busy = rex::thread::Event::CreateManualResetEvent(false);
+  auto set = rex::thread::Event::CreateManualResetEvent(true);
+  std::atomic<bool> stop{false};
+  // Keeps the first object's mutex busy; the object itself stays unsignaled between passes.
+  std::thread hammer([&] {
+    while (!stop.load(std::memory_order_relaxed)) {
+      busy->Reset();
+    }
+  });
+  rex::thread::WaitHandle* handles[] = {busy.get(), set.get()};
+  int timeouts = 0;
+  for (int i = 0; i < 200000; ++i) {
+    auto result = rex::thread::WaitAny(handles, 2, false, std::chrono::milliseconds(0));
+    if (result.first != rex::thread::WaitResult::kSuccess) ++timeouts;
+  }
+  stop = true;
+  hammer.join();
+  CHECK(timeouts == 0);
+}
+
+TEST_CASE("A thread created without a processor mask gets its creator's CPU number", "[runtime][thread][cpu]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+
+  std::atomic<int> child_cpu{-1};
+  const uint32_t pinned_to_3 = (uint32_t(1) << 3) << 24;  // processor mask lives in the top byte of the flags
+  auto parent = rex::system::object_ref<rex::system::XHostThread>(
+      new rex::system::XHostThread(ks, 128 * 1024, pinned_to_3, [&]() {
+        auto child = rex::system::object_ref<rex::system::XHostThread>(
+            new rex::system::XHostThread(ks, 128 * 1024, 0, []() { return 0; }));
+        if (child->Create() == X_STATUS_SUCCESS) {
+          child_cpu.store(child->active_cpu(), std::memory_order_release);
+          child->Wait(0, 0, 0, nullptr);
+        }
+        return 0;
+      }));
+  REQUIRE(parent->Create() == X_STATUS_SUCCESS);
+  CHECK(parent->active_cpu() == 3);
+  REQUIRE(parent->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+  CHECK(child_cpu.load(std::memory_order_acquire) == 3);
+
+  // Made by a host thread (as the title's main thread is): CPU 0, however many threads came before.
+  auto top = rex::system::object_ref<rex::system::XHostThread>(
+      new rex::system::XHostThread(ks, 128 * 1024, rex::system::X_CREATE_SUSPENDED, []() { return 0; }));
+  REQUIRE(top->Create() == X_STATUS_SUCCESS);
+  CHECK(top->active_cpu() == 0);
+  REQUIRE(top->Resume() == X_STATUS_SUCCESS);
+  REQUIRE(top->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
 }

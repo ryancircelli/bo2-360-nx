@@ -1333,6 +1333,7 @@ class PosixConditionBase {
         locks[--lock_count] = std::unique_lock<std::mutex>();
       }
     };
+    bool inspected = false;
     while (true) {
       size_t first_signaled = std::numeric_limits<size_t>::max();
       bool condition_met = false;
@@ -1362,10 +1363,12 @@ class PosixConditionBase {
 
       if (!all_locked) {
         clear_locks();
-        // The timeout also expires when an object cannot be inspected.
-        // The earlier continue skipped the only timeout check.
+        // The timeout also expires when an object cannot be inspected, but not
+        // before one look: a busy mutex says nothing about the object's state,
+        // and a zero-timeout poll reported a signaled object as timed out. The
+        // 1 ms bound keeps a mutex whose holder died from spinning this forever.
         const auto now = std::chrono::steady_clock::now();
-        if (now >= end_time) {
+        if (now >= end_time && (inspected || now - start_time >= timeout + std::chrono::milliseconds(1))) {
           return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
         }
 #if defined(__SWITCH__)
@@ -1384,6 +1387,7 @@ class PosixConditionBase {
         continue;
       }
 
+      inspected = true;
       if (wait_all) {
         bool all_signaled = true;
         for (size_t i = 0; i < count; ++i) {
@@ -2266,6 +2270,11 @@ class PosixCondition<Thread> : public PosixConditionBase {
   void RestoreRewindValue(uint64_t value) override { signaled_ = value != 0; }
   inline bool signaled() const override { return signaled_; }
   inline void post_execution() override {
+    // Every successful wait runs this; join only once. A second pthread_join can attach to a newer thread
+    // that reuses the pthread_t and block until that thread ends.
+    if (joined_.exchange(true, std::memory_order_acq_rel)) {
+      return;
+    }
 #endif
     if (thread_) {
       pthread_join(thread_, nullptr);
@@ -2296,9 +2305,9 @@ class PosixCondition<Thread> : public PosixConditionBase {
   mutable std::condition_variable state_signal_;
   std::deque<std::function<void()>> user_callbacks_;
   std::atomic<bool> has_pending_user_callbacks_{false};
+  std::atomic<bool> joined_{false};
 #if REX_FAST_WAITS
   std::atomic<uint32_t> wake_word_{0};
-  std::atomic<bool> joined_{false};
 #endif
 #if REX_PLATFORM_ANDROID
   // Name accessible via name() on Android before API 26 which added
@@ -2864,9 +2873,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   }
 
   if (create_suspended) {
-    std::unique_lock<std::mutex> lock(thread->handle_.state_mutex_);
-    thread->handle_.state_signal_.wait(lock,
-                                       [thread] { return thread->handle_.suspend_count_ == 0; });
+    // Park on the suspend semaphore, not the condition variable: Resume() posts one token whenever
+    // the count reaches 0, and a token nobody takes makes the next Suspend() return at once.
+    thread->handle_.WaitSuspended();
   }
 
   start_routine();
