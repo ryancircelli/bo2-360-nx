@@ -257,7 +257,7 @@ u32 CreateFiber_entry(u32 dwStackSize, u32 lpStartAddress, mapped_void lpParamet
   }
 
   ks->RegisterFiber(buf_addr, FiberInfo{host_fiber, unique_fiber_count++, buf_addr, stack_top,
-                                        stack_bottom, false});
+                                        stack_bottom, false, lpStartAddress});
 
   REXKRNL_DEBUG("CreateFiber: fiber={:#010x} start={:#010x} stack={:#x} param={:#010x}", buf_addr,
                 lpStartAddress, guest_stack_size, lpParameter.guest_address());
@@ -293,6 +293,16 @@ void DeleteFiber_entry(mapped_void lpFiber) {
     ks->UnregisterFiber(fiber_addr);
   }
   mem->SystemHeapFree(fiber_addr);
+}
+
+// Save point load: a fiber the game created but never switched to, made again in this process.
+rex::thread::Fiber* RecreateGuestFiber(KernelState* ks, uint32_t start_address, uint32_t guest_fiber_addr,
+                                      size_t host_stack) {
+  auto args = std::make_unique<FiberEntryArgs>(
+      FiberEntryArgs{ks->function_dispatcher()->GetFunction(start_address), guest_fiber_addr, ks});
+  auto* f = rex::thread::Fiber::Create(host_stack, FiberEntryPoint, args.get());
+  if (f) args.release();
+  return f;
 }
 
 void SwitchToFiber_entry(mapped_void lpFiber) {
@@ -336,6 +346,11 @@ void SwitchToFiber_entry(mapped_void lpFiber) {
   }
 
   // Host fiber switch -- suspends here, resumes when switched back
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+  // Save into the fiber the guest says is running: after a save point load the thread-local names none.
+  if (auto* from = current_addr ? ks->LookupFiber(current_addr) : nullptr; from && from->host_fiber)
+    rex::thread::Fiber::SetCurrent(from->host_fiber);
+#endif
   rex::thread::Fiber::SwitchTo(target_info->host_fiber);
   // Resumed: non-volatile regs and stack state already restored by the fiber that switched back.
 }

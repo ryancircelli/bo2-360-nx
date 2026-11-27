@@ -24,6 +24,10 @@
 #include <rex/system/xtypes.h>
 #include <rex/thread/mutex.h>
 
+namespace rex::stream {
+class ByteStream;
+}  // namespace rex::stream
+
 namespace rex {
 namespace system {
 class KernelState;
@@ -120,7 +124,8 @@ static_assert_size(XCONTENT_AGGREGATE_DATA, 0x148);
 class ContentPackage {
  public:
   ContentPackage(KernelState* kernel_state, const std::string_view root_name,
-                 const XCONTENT_AGGREGATE_DATA& data, const std::filesystem::path& package_path);
+                 const XCONTENT_AGGREGATE_DATA& data, const std::filesystem::path& package_path,
+                 int device_id = 0);  // 0: next free \Device\Content\N
   ~ContentPackage();
 
   void LoadPackageLicenseMask(const std::filesystem::path header_path);
@@ -130,6 +135,9 @@ class ContentPackage {
   const std::filesystem::path& package_path() const { return package_path_; }
 
   uint32_t GetPackageLicense() const { return license_; }
+  void set_license(uint32_t license) { license_ = license; }
+  const std::string& root_name() const { return root_name_; }
+  int device_id() const { return device_id_; }
 
  private:
   KernelState* kernel_state_;
@@ -138,6 +146,7 @@ class ContentPackage {
   std::filesystem::path package_path_;
   XCONTENT_AGGREGATE_DATA content_data_;
   uint32_t license_ = 0;
+  int device_id_ = 0;
 };
 
 class ContentManager {
@@ -182,6 +191,11 @@ class ContentManager {
   // Extracts the package into root_path_/0000000000000000/{title_id}/00000002/{filename}/
   // and writes a .header file for XAM enumeration.
   X_RESULT InstallContent(const std::filesystem::path& package_path);
+
+  // Save points: open packages, plus the devices of closed ones (games keep files open on them), and the
+  // device counter, so restored files reopen on the same \Device\Content\N paths.
+  void SaveOpenContent(stream::ByteStream* stream);
+  void RestoreOpenContent(stream::ByteStream* stream);
 
  private:
   std::filesystem::path ResolvePackageRoot(uint64_t xuid, XContentType content_type,

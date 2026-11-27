@@ -78,6 +78,10 @@ enum class GammaRampType {
   kPWL,
 };
 
+// Last guest swap {frontbuffer_ptr, width, height, texture fetch constant 0 (6 dwords) as the swap read it},
+// kept for fresh-load save points: later draws overwrite fetch 0 before the save point.
+extern uint32_t g_last_swap[9];
+
 class CommandProcessor {
  public:
   enum class SwapPostEffect {

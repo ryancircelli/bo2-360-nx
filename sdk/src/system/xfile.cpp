@@ -356,7 +356,7 @@ object_ref<XFile> XFile::Restore(KernelState* kernel_state, stream::ByteStream* 
                                                    rex::filesystem::FileDisposition::kOpen, access,
                                                    is_directory, false, &vfs_file, &action);
   if (XFAILED(res)) {
-    REXSYS_ERROR("Failed to open XFile: error {:08X}", res);
+    REXSYS_ERROR("Failed to open XFile {:08X} ({}): error {:08X}", file->handle(), abs_path, res);
     return object_ref<XFile>(file);
   }
 

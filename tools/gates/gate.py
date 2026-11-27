@@ -9,6 +9,8 @@
   gate.py set     [GAME ...]                              boot gate for bo2 nfsmw fh1 at once (3 queue slots)
   gate.py speed   GAME --a APP --b APP [--pairs 3]        A/B speed pair(s) through runq perf class + abverdict
   gate.py install GAME --app NEW --repo WORKTREE          base rule, codesign, restore copy, refuses while the owner plays
+  gate.py save    GAME --scene NAME [--at S] [--ff 2]     drive route to a moment, write the save point SAVEPOINTS/GAME/NAME.sp
+  boot|shot|drive ... --savepoint NAME|FILE               start from a save point instead of booting (seconds, not minutes)
 
 GAME = bo2 | nfsmw | fh1 | nfshp | bo1 | gears.  APP defaults to the installed app in ~/Games/Launchers (it is cloned by runq, never
 changed). Every gate but install/set/speed is queued as a runq job (class harness; --class to change, --now runs it
@@ -33,6 +35,7 @@ SPOOL = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'runq')
 RUNQ = os.path.join(SPOOL, 'bin', 'runq')
 RUNQ_ROUTES = os.path.join(SPOOL, 'bin', 'routes')
 RUNS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'runs', 'gates')
+SAVEPOINTS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'savepoints')
 
 # app = installed app name; drive/guide routes are in tools/gates/routes (or the runq routes dir for bo2/bo1);
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
@@ -40,9 +43,11 @@ RUNS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'runs', 'gates')
 GAMES = {
     'me2': dict(app='Mass Effect 2.app', drive='me2-menu', scene_s=90, settle_s=60, seed='me2-360'),
     'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
-    'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
-    'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
-    'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
+    # save_log: `save` counts --at from this log line (boot time varies with machine load; a save on a loading screen is useless)
+    'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None,
+                  save_log='[cheats] guest memory in a match', save_after_s=30),
+    'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360', load_pads='pad1 = 0-3600:rt'),
+    'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360', load_pads='pad1 = 0-3600:rt'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
     # new games (boot + shot gates; drive needs a rule in driving.py and a route): nfsmw2012 has no drive route, so its drive gate FAILs closed
@@ -73,9 +78,11 @@ def _build_of(game):
     except OSError:
         return None
 
+LOADED = ''   # set when the run started from a save point: every result line says so
+
 
 def out_line(verdict, gate, game, facts, evidence, out=None):
-    line = f'{verdict} {gate} {game} {facts} | {evidence}'
+    line = f'{verdict} {gate} {game} {facts}{LOADED} | {evidence}'
     if out:
         os.makedirs(out, exist_ok=True)
         with open(os.path.join(out, 'gate.txt'), 'w') as f:
@@ -444,8 +451,16 @@ def g_drive(a, G):
     G.stop()
     new = baseline_diff(G, a.kinds_from, a.out)
     proof = verify_driving(a.game, a.out, text)
-    ok = alive and not crash and proof["passed"]
+    sd = os.path.join(G.out, 'shots')
+    first, last = (os.path.join(sd, f) for f in ('drive00.png', 'drive-end.png'))
+    # a drive that keeps a picture identical start to end has stopped (a fresh load can freeze a few frames in)
+    frozen = alive and os.path.exists(first) and os.path.exists(last) and open(first, 'rb').read() == open(last, 'rb').read()
+    # from a save point the scene was proven when it was saved; what the load must show is a live picture
+    # (the driving proof needs input-driven movement, which a car parked at a wall or idle players lack)
+    ok = alive and not crash and not frozen and (proof["passed"] or bool(a.savepoint))
     facts = f'gameplay {proof["passed"]} route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
+    if frozen:
+        facts += ' FROZEN (first and last shots identical)'
     if died is not None:
         facts += f' exited {died}'
     if crash:
@@ -529,6 +544,71 @@ def g_speedrun(a, G):
     return out_line('PASS' if ok else 'FAIL', 'speedrun', a.game, f'alive {alive} frames {n} csv {csv}', a.out, a.out)
 
 
+def savepoint_path(game, name):
+    return name if os.path.isfile(name) else os.path.join(SAVEPOINTS, game, name + '.sp')
+
+
+def savepoint_check(a, G):
+    """None once the game says it restored the save point, else the FAIL line (stale file -> how to remake it)."""
+    global LOADED
+    m, end = None, time.monotonic() + 90
+    while time.monotonic() < end and G.alive():
+        text = G.log_text()
+        m = re.search(r'\[savepoint\] restored .*', text)
+        if m:
+            LOADED = f' loaded {os.path.basename(a.savepoint)} {time.monotonic() - G.t0:.1f}s after start'
+            return None
+        m = re.search(r'\[savepoint\] load: .*', text)
+        if m:
+            break
+        time.sleep(0.5)
+    why = m.group(0) if m else 'no "[savepoint] restored" line'
+    meta = os.path.splitext(a.savepoint)[0] + '.json'
+    if os.path.exists(meta):
+        why += f' (remake: {json.load(open(meta)).get("remake", "")})'
+    return fail_start(a, G, 'save point did not load: ' + why)
+
+
+def g_save(a, G):
+    """Drive the route to --at guest seconds, write SAVEPOINTS/GAME/SCENE.sp (+ .json, .png)."""
+    if not G.wait_ready(a.ready_timeout):
+        return fail_start(a, G, 'control channel never answered')
+    cfg = GAMES[a.game]
+    log = cfg.get('save_log')
+    at, ff = a.at or cfg.get('save_after_s') or cfg['scene_s'], a.ff or 1
+    t_from = G.t0
+    if log:
+        if not G.wait_log(log, 900):
+            G.stop()
+            return out_line('FAIL', 'save', a.game, f'never logged "{log}"', a.out, a.out)
+        t_from = time.monotonic()
+    while time.monotonic() < t_from + at / ff and G.alive():
+        time.sleep(1)
+    if ff != 1:
+        G.ctl('timescale 1', 10)
+        time.sleep(3)
+    dest = savepoint_path(a.game, a.scene)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    t = time.monotonic()
+    r = G.ctl(f'savepoint file {dest}.tmp', 120) if G.alive() else 'game died'
+    took = time.monotonic() - t
+    png, st = G.shot('save') if G.alive() else (None, None)
+    alive = G.alive()
+    G.stop()
+    ok = alive and r.startswith('ok') and os.path.exists(dest + '.tmp')
+    if ok:
+        os.replace(dest + '.tmp', dest)
+        if png:
+            shutil.copy(png, os.path.splitext(dest)[0] + '.png')
+        hdr = open(dest, 'rb').read(32)
+        json.dump(dict(made=time.strftime('%Y-%m-%d %H:%M'), at=at, after_log=log, ff=ff, route=os.path.basename(a.route_file or ''),
+                       fingerprint=hdr[12:28].hex(),
+                       remake=f'gate.py save {a.game} --scene {a.scene} --at {at:g} --ff {ff:g} --app APP'),
+                  open(os.path.splitext(dest)[0] + '.json', 'w'), indent=1)
+    facts = f'scene {a.scene} at {at:g}s' + (' after the in-a-match line' if log else '') + f' (ff {ff:g}) {os.path.getsize(dest) >> 20 if ok else 0} MB in {took:.1f}s reply {r[:120]}'
+    return out_line('PASS' if ok else 'FAIL', 'save', a.game, facts, dest if ok else a.out, a.out)
+
+
 def fail_start(a, G, why):
     died = G.exit_code()
     tail = (G.log_text()[-300:] or '').replace('\n', ' ')
@@ -536,14 +616,35 @@ def fail_start(a, G, why):
     return out_line('FAIL', a.gate, a.game, f'{why} (exit {died}) log tail: {tail}', a.out, a.out)
 
 
-INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun)
+INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun, save=g_save)
 
 
 def run_inner(a):
     """Runs inside the runq job (or --now): start the game the way the gate needs, then the gate body."""
     os.makedirs(a.out, exist_ok=True)
     a.route_file = None
-    need_route = a.gate in ('shot', 'drive', 'speedrun')
+    env = dict(kv.split('=', 1) for kv in a.env)
+    if a.savepoint:   # the game starts at the saved moment: no route, no fast-forward
+        a.savepoint = savepoint_path(a.game, a.savepoint)
+        if not os.path.isfile(a.savepoint):
+            return out_line('FAIL', a.gate, a.game, f'no save point {a.savepoint} (make one: gate.py save {a.game} --scene NAME)', a.out, a.out)
+        env['REX_LOAD_SAVEPOINT'] = a.savepoint
+        a.route, a.ff, a.at = None, 0, a.at or 3
+        # Same pads and settings (god mode...) as the run that saved, minus its inputs and one-shot starts.
+        meta = os.path.splitext(a.savepoint)[0] + '.json'
+        route = json.load(open(meta)).get('route') if os.path.isfile(meta) else None
+        route = resolve_route(a.game, route) if route else None
+        if route:
+            os.makedirs(a.out, exist_ok=True)
+            for k, v in route_env(route).items():
+                if not k.startswith(('REX_BO2ZM_TEST_START', 'REX_BO2ZM_BENCHMARK', 'REX_HID_VIRTUAL_PAD_SCRIPT')):
+                    env.setdefault(k, v)
+            players = [l for l in open(route) if l.replace(' ', '').startswith('players=')]
+            pads = os.path.join(a.out, 'pads.route')
+            # racing games: hold the throttle so the drive proof sees movement (the saved route's inputs count from boot)
+            open(pads, 'w').write(''.join(players) + (GAMES[a.game].get('load_pads', '') + '\n' if GAMES[a.game].get('load_pads') else ''))
+            env.setdefault('REX_HID_VIRTUAL_PAD_SCRIPT', pads)
+    need_route = a.gate in ('shot', 'drive', 'speedrun', 'save') and not a.savepoint
     if need_route or a.route:
         a.route_file = resolve_route(a.game, a.route) if (a.route or GAMES[a.game]['drive']) else None
     if need_route and not a.route_file and a.gate != 'shot':
@@ -552,13 +653,19 @@ def run_inner(a):
         t = a.at or GAMES[a.game]['settle_s']
         a.route_file = os.path.join(a.out, 'guide.route')
         open(a.route_file, 'w').write(f'players = 1\npad1 = {t}-{t + 0.4}:guide, {t + 3}-{t + 3.4}:rb, {t + 6}-{t + 6.4}:lb, {t + 9}-{t + 9.4}:guide\n')
-    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun') and not a.no_seed
+    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun', 'save') and not a.no_seed
     try:
         G = Game(a.app, a.out, a.game, route=a.route_file, ff=a.ff,
-                 seed=seed, via_open=(a.gate == 'open'), env=dict(kv.split('=', 1) for kv in a.env))
+                 seed=seed, via_open=(a.gate == 'open'), env=env)
     except Exception as e:   # noqa: BLE001 - setup problem, report it
         return out_line('FAIL', a.gate, a.game, f'could not start: {e}', a.out, a.out)
     signal.signal(signal.SIGTERM, lambda *_: (G.stop(), sys.exit(3)))
+    if a.savepoint:
+        if not G.wait_ready(a.ready_timeout):
+            return fail_start(a, G, 'control channel never answered')
+        bad = savepoint_check(a, G)
+        if bad is not None:
+            return bad
     return INNER[a.gate](a, G)
 
 
@@ -592,7 +699,7 @@ def default_out(game, gate):
 
 def inner_args(a, out):
     x = ['python3', '-I', os.path.abspath(__file__), '--inner', a.gate, a.game, '--out', '{OUT}', '--app', '{APP}']
-    for k in ('route', 'at', 'ff', 'secs', 'kinds_from'):
+    for k in ('route', 'at', 'ff', 'secs', 'kinds_from', 'scene', 'savepoint'):
         if getattr(a, k, None) not in (None, ''):
             x += [f'--{k.replace("_", "-")}', str(getattr(a, k))]
     for e in a.env:
@@ -628,7 +735,7 @@ def queue_gate(a, gate=None, game=None):
     if a.now:
         b.app, b.out = app, out
         return run_inner(b)
-    timeout = {'boot': 300, 'shot': 900, 'drive': 1500, 'guide': 600, 'open': 400}.get(gate, 900)
+    timeout = {'boot': 300, 'shot': 900, 'drive': 1500, 'guide': 600, 'open': 400, 'save': 900}.get(gate, 900)
     args = ['--'] + inner_args(b, out)
     r = runq_submit(args, f'gate-{game}-{gate}', app, out, a.klass, timeout,
                     extra=['--window'] if gate == 'open' else [])   # open tests the real window: runq keeps it on-screen
@@ -896,7 +1003,7 @@ def game_word(game):
 # ----------------------------------------------------------------------------------------------- cli
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'selftest'])
+    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'save', 'selftest'])
     p.add_argument('game', nargs='*')
     p.add_argument('--app', help='app to test (default: the installed one); for install: the NEW app')
     p.add_argument('--out')
@@ -904,6 +1011,8 @@ def main():
     p.add_argument('--at', type=float, help='shot/guide: guest seconds to run before looking')
     p.add_argument('--ff', type=float, default=0, help='guest time scale until the scene (2 is safe for routes); 0 = off')
     p.add_argument('--secs', type=float, default=45)
+    p.add_argument('--scene', help='save: save point name (SAVEPOINTS/GAME/NAME.sp)')
+    p.add_argument('--savepoint', help='boot/shot/drive: start from this save point (name in SAVEPOINTS/GAME, or a file)')
     p.add_argument('--ready-timeout', type=float, default=240, dest='ready_timeout')
     p.add_argument('--kinds-from', dest='kinds_from', help='kinds.txt of an earlier run: report new warning/error kinds')
     p.add_argument('--env', action='append', default=[])
@@ -938,6 +1047,8 @@ def main():
         return g_speed(a)
     if a.gate == 'install':
         return g_install(a)
+    if a.gate == 'save' and not a.scene:
+        sys.exit('gate: save needs --scene NAME')
     if inner:
         return run_inner(a)
     return queue_gate(a)

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace rex::system {
 
@@ -46,5 +47,25 @@ SavepointStats RewindToInProcessSavepoint();
 // Returns "ok save frame=<f> mb=<n> ms=<t>", "ok load frame=<f> ms=<t> loads=<n>" or "error ...".
 // A load can be repeated any number of times; a new save replaces the old one.
 std::string ControlInProcessSavepoint(const std::string& op, int timeout_ms);
+
+// Fresh-process save points ("savepoint file PATH" in the test control folder, --load_savepoint=PATH).
+// The file (REXSP2, savepoint_file.cpp) holds the in-process capture plus the GPU state, and is only
+// valid for the same executable (LC_UUID checked on load).
+class IGraphicsSystem;
+// Implemented by the GPU plugin. op 0 (save, command-processor thread): waits for the GPU, fills `state`
+// (register file, ring and interrupt state, last swap) and `gpu_pages` ({u32 physical address, u32 size,
+// bytes}... for pages only the GPU copy holds). op 1 (load): applies `state`, invalidates GPU memory and
+// presents the saved last frame. op 2 / op 3 (load): hold / release the guest interrupt callback.
+using GraphicsFileHook = bool (*)(IGraphicsSystem* graphics, int op, std::vector<uint8_t>& state,
+                                  std::vector<uint8_t>& gpu_pages);
+void SetGraphicsFileHook(IGraphicsSystem* graphics, GraphicsFileHook hook);
+// Command-processor thread: capture in process, then write the file. Returns the control reply.
+std::string WriteSavepointFile(const std::string& path, int frame);
+// Fresh process, after the module is loaded and before its thread runs. Logs "[savepoint] restored ...".
+bool LoadSavepointFile(const std::string& path);
+// --load_savepoint at launch: 0 not requested, 1 loaded, -1 failed.
+int LoadSavepointAtLaunch();
+// Called on each guest thread as it starts: records its executable thread-local block for file save points.
+void NoteGuestThreadStart(uint32_t handle);
 
 }  // namespace rex::system

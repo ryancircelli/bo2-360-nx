@@ -156,6 +156,9 @@ std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig();
 
 /// Create a default InputSystem with SDL + NOP drivers.
 /// In tool mode, only the NOP driver is added.
+// Restart the virtual pad scripts' clock now (a save point load jumps guest time forward).
+void RebaseVirtualPadScripts();
+
 std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode);
 
 }  // namespace rex::input

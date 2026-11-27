@@ -10,6 +10,7 @@
  */
 
 #include <csignal>
+#include <execinfo.h>
 #include <iostream>
 #include <mutex>
 
@@ -59,6 +60,9 @@ bool IsDebuggerAttached() {
 }
 
 void Break() {
+  // Who broke: the second Break kills the process, often with no crash report.
+  void* frames[32];
+  backtrace_symbols_fd(frames, backtrace(frames, 32), 2);
   static std::once_flag flag;
   std::call_once(flag, []() {
     // Install handler for sigtrap only once

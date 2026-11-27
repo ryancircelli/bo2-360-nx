@@ -82,6 +82,15 @@ bool XModule::Save(stream::ByteStream* stream) {
   return true;
 }
 
+bool XModule::RestoreLoaded(stream::ByteStream* stream) {
+  hmodule_ptr_ = stream->Read<uint32_t>();
+  // A handle this load-time DLL got may already be a restored object's saved handle (Forza: event F8000030).
+  auto* table = kernel_state()->object_table();
+  for (auto h : std::vector<X_HANDLE>(handles()))
+    if (table->LookupObject<XObject>(h).get() == this) table->RemoveHandle(h);
+  return RestoreObject(stream);
+}
+
 object_ref<XModule> XModule::Restore(KernelState* kernel_state, stream::ByteStream* stream) {
   if (stream->Read<uint32_t>() != kModuleSaveSignature) {
     return nullptr;

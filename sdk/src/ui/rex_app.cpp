@@ -46,6 +46,7 @@
 #include <rex/system/achievement_manager.h>
 #include <rex/system/gpu_plugin.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/savepoint.h>
 #include <rex/system/user_module.h>
 #include <rex/system/xex_module.h>
 #include <rex/system/xthread.h>
@@ -995,6 +996,17 @@ void ReXApp::LaunchModule() {
         REXLOG_INFO("Initializing shader storage for title {:08X}...", title_id);
         graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, true);
       }
+    }
+
+    if (int loaded = system::LoadSavepointAtLaunch()) {
+      if (loaded < 0) {
+        app_context().QuitFromUIThread();
+        return;
+      }
+      // shortcut: stage 1 restores memory + GPU and shows the saved frame only; guest threads stay parked
+      // until thread restore lands.
+      (void)main_thread.release();
+      return;
     }
 
     OnPostLaunchModule(main_thread.get());

@@ -574,6 +574,8 @@ class Memory {
   // Returns false if guest_address is outside every registered module range.
   bool SetFunction(uint32_t guest_address, PPCFunc* host_function);
   bool HasAnyFunctionTable() const;
+  // {guest base, size} of every function table: host pointers, never carried across processes.
+  std::vector<std::pair<uint32_t, uint32_t>> FunctionTableRanges() const;
 
  private:
 #if REX_PLATFORM_MAC

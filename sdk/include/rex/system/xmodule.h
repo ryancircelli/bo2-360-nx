@@ -82,6 +82,9 @@ class XModule : public XObject {
 
   virtual bool Save(stream::ByteStream* stream) override;
   static object_ref<XModule> Restore(KernelState* kernel_state, stream::ByteStream* stream);
+  // Save point load of a module this process loaded again: take the saved hmodule and handles. The stream is
+  // positioned after the signature and path.
+  bool RestoreLoaded(stream::ByteStream* stream);
 
  protected:
   void OnLoad();

@@ -56,7 +56,7 @@ set(REXSYSTEM_SOURCES
 
 # Savepoints use Mach thread suspend: macOS only, no-op stubs elsewhere.
 if(APPLE)
-    list(APPEND REXSYSTEM_SOURCES savepoint.cpp)
+    list(APPEND REXSYSTEM_SOURCES savepoint.cpp savepoint_file.cpp)
 else()
     list(APPEND REXSYSTEM_SOURCES savepoint_stub.cpp)
 endif()

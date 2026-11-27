@@ -24,6 +24,11 @@ void ClearGraphicsSavepointHooks(IGraphicsSystem*) {}
 void ServiceSavepointRequest() {}
 SavepointStats CaptureInProcessSavepoint() { return Unsupported(); }
 SavepointStats RewindToInProcessSavepoint() { return Unsupported(); }
-std::string ControlInProcessSavepoint(const std::string&, int) { return "error savepoints are only supported on macOS"; }
+std::string ControlInProcessSavepoint(const std::string&, int) { return "error save points need macOS"; }
+void SetGraphicsFileHook(IGraphicsSystem*, GraphicsFileHook) {}
+std::string WriteSavepointFile(const std::string&, int) { return "error save points need macOS"; }
+bool LoadSavepointFile(const std::string&) { return false; }
+int LoadSavepointAtLaunch() { return 0; }
+void NoteGuestThreadStart(uint32_t) {}
 
 }  // namespace rex::system

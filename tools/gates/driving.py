@@ -120,8 +120,9 @@ def verify(game, out, log):
     log_ok = game not in LOG_MARKER or bool(LOG_MARKER[game].search(log))
     paths = sorted(glob.glob(os.path.join(out, 'shots', 'drive*.ppm')), key=os.path.getmtime)
     shooter = game in ('bo2', 'bo1')
-    in_match = game == 'bo2' and any("the game's client is in a match" in line
-                  and not re.search(r"waiting|timed out|wait_log", line, re.I) for line in log.splitlines())
+    # a BO2 save point is only made in a match (gate save waits for it), so a load counts as in a match
+    in_match = game == 'bo2' and ('[savepoint] restored' in log or any("the game's client is in a match" in line
+                  and not re.search(r"waiting|timed out|wait_log", line, re.I) for line in log.splitlines()))
     bo1_loaded = bool(re.search(r'\[zone\] open .*zombie_theater\.ff', log, re.I))
     for path in paths:
         sample = {'path': path, 'speed': None, 'hud_present': False, 'race_progress': None}

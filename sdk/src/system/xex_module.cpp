@@ -14,6 +14,7 @@
 #include "crypto/rijndael-alg-fst.h"
 #include "pe/pe_image.h"
 
+#include <atomic>
 #include <algorithm>
 #include <unordered_map>
 

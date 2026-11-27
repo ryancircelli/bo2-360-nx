@@ -97,6 +97,10 @@ class ByteStream {
     Write(str.data(), str.length() * sizeof(char));
   }
 
+  // Without these, Write(std::string) picks the template above and writes the object's raw bytes.
+  void Write(const std::string& str) { Write(std::string_view(str)); }
+  void Write(const std::u16string& str) { Write(std::u16string_view(str)); }
+
   void Write(const std::u16string_view str) {
     Write(uint32_t(str.length()));
     Write(str.data(), str.length() * sizeof(char16_t));

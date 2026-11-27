@@ -1033,6 +1033,58 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
   return X_STATUS_SUCCESS;
 }
 
+bool XSocket::Save(stream::ByteStream* stream) {
+  if (!SaveObject(stream)) return false;
+  stream->Write<uint32_t>(uint32_t(af_));
+  stream->Write<uint32_t>(uint32_t(type_));
+  stream->Write<uint32_t>(uint32_t(proto_));
+  stream->Write<bool>(secure_);
+  stream->Write<bool>(bound_);
+  stream->Write<uint16_t>(bound_port_);
+  stream->Write<bool>(broadcast_socket_);
+  stream->Write<bool>(nonblocking_);
+  return true;
+}
+
+object_ref<XSocket> XSocket::Restore(KernelState* kernel_state, stream::ByteStream* stream) {
+  auto socket = new XSocket(nullptr);
+  socket->kernel_state_ = kernel_state;
+  if (!socket->RestoreObject(stream)) {
+    delete socket;
+    return nullptr;
+  }
+  auto af = AddressFamily(stream->Read<uint32_t>());
+  auto type = Type(stream->Read<uint32_t>());
+  auto proto = Protocol(stream->Read<uint32_t>());
+  socket->secure_ = stream->Read<bool>();
+  const bool bound = stream->Read<bool>();
+  const uint16_t port = stream->Read<uint16_t>();
+  const bool broadcast = stream->Read<bool>();
+  const bool nonblocking = stream->Read<bool>();
+  if (XFAILED(socket->Initialize(af, type, proto))) {
+    REXSYS_WARN("XSocket {:08X}: restore could not create the host socket", socket->handle());
+    return object_ref<XSocket>(socket);
+  }
+  if (broadcast) {
+    int on = 1;
+    setsockopt(int(socket->native_handle_), SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
+    socket->broadcast_socket_ = true;
+  }
+  if (nonblocking) {
+    uint8_t one[4] = {0, 0, 0, 1};
+    socket->IOControl(0x8004667Eu, one);
+  }
+  if (bound) {
+    N_XSOCKADDR_IN name{};
+    name.sin_family = uint16_t(af);
+    name.sin_port = port;
+    name.sin_addr = 0;
+    if (XFAILED(socket->Bind(&name, sizeof(name))))
+      REXSYS_WARN("XSocket {:08X}: restore could not bind port {}", socket->handle(), port);
+  }
+  return object_ref<XSocket>(socket);
+}
+
 X_STATUS XSocket::Close() {
   if (broadcast_helper_) {
     rex::net::socket_close(broadcast_helper_);

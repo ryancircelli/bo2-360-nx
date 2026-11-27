@@ -180,6 +180,7 @@ struct FiberInfo {
   uint32_t guest_stack_base;       ///< Top of guest kernel stack (0 for thread fibers)
   uint32_t guest_stack_bottom;     ///< Bottom of guest kernel stack (0 for thread fibers)
   bool is_thread_fiber;            ///< true = ConvertThreadToFiber (don't free guest stack)
+  uint32_t start_address = 0;      ///< Guest start function (CreateFiber), for save points
 };
 
 class KernelState {
@@ -299,6 +300,7 @@ class KernelState {
   FiberInfo* LookupFiber(uint32_t guest_addr);
   void RegisterFiber(uint32_t guest_addr, const FiberInfo& info);
   void UnregisterFiber(uint32_t guest_addr);
+  std::unordered_map<uint32_t, FiberInfo>& fibers() { return fiber_map_; }  // save point save/load
 
   /// Returns a fiber name for profiling
   const char* GetOrCreateFiberName(uint32_t guest_addr, const char* thread_name);

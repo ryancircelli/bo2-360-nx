@@ -10,6 +10,7 @@
  */
 
 #include <array>
+#include <map>
 #include <cstring>
 #include <queue>
 #include <string>
@@ -59,6 +60,7 @@ static const char* kThumbnailFileName = "__thumbnail.png";
 static const char* kGameContentHeaderDirName = "Headers";
 
 static int content_device_id_ = 0;
+static std::map<int, std::filesystem::path> g_content_devices;  // every device made, for save points
 
 namespace {
 
@@ -216,9 +218,11 @@ void CopyForUser(uint64_t owner, uint64_t primary_owner, const std::string_view 
 
 ContentPackage::ContentPackage(KernelState* kernel_state, const std::string_view root_name,
                                const XCONTENT_AGGREGATE_DATA& data,
-                               const std::filesystem::path& package_path)
+                               const std::filesystem::path& package_path, int device_id)
     : kernel_state_(kernel_state), root_name_(root_name), package_path_(package_path), license_(0) {
-  device_path_ = fmt::format("\\Device\\Content\\{0}\\", ++content_device_id_);
+  device_id_ = device_id ? device_id : ++content_device_id_;
+  g_content_devices[device_id_] = package_path;
+  device_path_ = fmt::format("\\Device\\Content\\{0}\\", device_id_);
   content_data_ = data;
 
   auto fs = kernel_state_->file_system();
@@ -778,6 +782,59 @@ static X_RESULT ExtractEntry(rex::filesystem::Entry* entry,
   fclose(out_file);
   in_file->Destroy();
   return X_ERROR_SUCCESS;
+}
+
+void ContentManager::SaveOpenContent(stream::ByteStream* stream) {
+  auto global_lock = global_critical_region_.Acquire();
+  stream->Write<int32_t>(content_device_id_);
+  stream->Write<uint32_t>(uint32_t(open_packages_.size()));
+  for (auto& [key, pkg] : open_packages_) {
+    stream->Write<int32_t>(pkg->device_id());
+    stream->Write(pkg->root_name());
+    stream->Write(rex::path_to_utf8(pkg->package_path()));
+    stream->Write(&pkg->GetPackageContentData(), sizeof(XCONTENT_AGGREGATE_DATA));
+    stream->Write<uint32_t>(pkg->GetPackageLicense());
+  }
+  std::vector<std::pair<int, std::filesystem::path>> closed;
+  for (auto& [id, path] : g_content_devices)
+    if (std::none_of(open_packages_.begin(), open_packages_.end(),
+                     [id = id](auto& kv) { return kv.second->device_id() == id; }))
+      closed.emplace_back(id, path);
+  stream->Write<uint32_t>(uint32_t(closed.size()));
+  for (auto& [id, path] : closed) {
+    stream->Write<int32_t>(id);
+    stream->Write(rex::path_to_utf8(path));
+  }
+}
+
+void ContentManager::RestoreOpenContent(stream::ByteStream* stream) {
+  auto global_lock = global_critical_region_.Acquire();
+  // Drop what this boot opened: the saved packages take their device numbers back.
+  for (auto& [key, pkg] : open_packages_) delete pkg;
+  open_packages_.clear();
+  g_content_devices.clear();
+  const int counter = stream->Read<int32_t>();
+  for (uint32_t n = stream->Read<uint32_t>(); n; --n) {
+    const int id = stream->Read<int32_t>();
+    const auto root = stream->Read<std::string>();
+    const auto path = rex::to_path(stream->Read<std::string>());
+    XCONTENT_AGGREGATE_DATA data;
+    stream->Read(&data, sizeof(data));
+    auto* pkg = new ContentPackage(kernel_state_, root, data, path, id);
+    pkg->set_license(stream->Read<uint32_t>());
+    open_packages_.insert({string::string_key_case::create(root), pkg});
+  }
+  auto fs = kernel_state_->file_system();
+  for (uint32_t n = stream->Read<uint32_t>(); n; --n) {
+    const int id = stream->Read<int32_t>();
+    const auto path = rex::to_path(stream->Read<std::string>());
+    g_content_devices[id] = path;
+    auto device = std::make_unique<rex::filesystem::HostPathDevice>(
+        fmt::format("\\Device\\Content\\{0}\\", id), path, false, /*allow_share_delete=*/true);
+    device->Initialize();
+    fs->RegisterDevice(std::move(device));  // no symlink: the game closed it, only its open files remain
+  }
+  content_device_id_ = counter;
 }
 
 X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_path) {

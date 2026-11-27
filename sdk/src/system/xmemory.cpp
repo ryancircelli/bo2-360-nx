@@ -13,6 +13,8 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -869,6 +871,13 @@ bool Memory::InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uin
   return true;
 }
 
+std::vector<std::pair<uint32_t, uint32_t>> Memory::FunctionTableRanges() const {
+  std::lock_guard lock(function_tables_mutex_);
+  std::vector<std::pair<uint32_t, uint32_t>> out;
+  for (auto& t : function_tables_) out.push_back({t.table_base, (t.code_size + t.thunk_reserve) * 2});
+  return out;
+}
+
 bool Memory::DestroyFunctionTable(uint32_t code_base) {
   uint32_t table_base = 0;
   uint32_t table_size = 0;
@@ -1231,8 +1240,22 @@ BaseHeap::RewindState BaseHeap::CaptureRewindState() {
   return state;
 }
 
+namespace {
+// diag REX_HEAP_WATCH=ADDR: backtrace of every page-table wipe/release that covers ADDR
+void HeapWatch(const char* what, uint32_t lo, uint64_t size) {
+  static const char* w = std::getenv("REX_HEAP_WATCH");
+  if (!w) return;
+  const uint32_t a = uint32_t(std::strtoul(w, nullptr, 16));
+  if (a < lo || a - lo >= size) return;
+  std::fprintf(stderr, "[heap-watch] %s %08X size %llX covers %08X\n", what, lo, (unsigned long long)size, a);
+  void* bt[24];
+  backtrace_symbols_fd(bt, backtrace(bt, 24), 2);
+}
+}  // namespace
+
 void BaseHeap::Rewind(const RewindState& state) {
   std::lock_guard<std::recursive_mutex> heap_lock(heap_mutex_);
+  HeapWatch("Rewind", heap_base_, uint64_t(page_table_.size()) << page_size_shift_);
   assert_true(state.pages.size() == page_table_.size());
   for (size_t i = 0; i < page_table_.size(); ++i) {
     page_table_[i].qword = state.pages[i];
@@ -1346,6 +1369,7 @@ bool BaseHeap::Restore(stream::ByteStream* stream) {
 
 void BaseHeap::Reset() {
   // TODO(DrChat): protect pages.
+  HeapWatch("Reset", heap_base_, uint64_t(page_table_.size()) << page_size_shift_);
   std::memset(page_table_.data(), 0, sizeof(PageEntry) * page_table_.size());
   // TODO(Triang3l): Remove access callbacks from pages if this is a physical
   // memory heap.
@@ -1743,6 +1767,16 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
 
   // Perform table change.
   uint32_t end_page_number = base_page_number + base_page_entry.region_page_count - 1;
+  if (const char* w = std::getenv("REX_HEAP_WATCH")) {  // diag: who releases the region holding this address
+    const uint32_t a = uint32_t(std::strtoul(w, nullptr, 16));
+    const uint32_t lo = heap_base_ + (base_page_number << page_size_shift_);
+    if (a >= lo && a - lo < (base_page_entry.region_page_count << page_size_shift_)) {
+      std::fprintf(stderr, "[heap-watch] Release %08X size %X covers %08X\n", lo,
+                   base_page_entry.region_page_count << page_size_shift_, a);
+      void* bt[24];
+      backtrace_symbols_fd(bt, backtrace(bt, 24), 2);
+    }
+  }
   for (uint32_t page_number = base_page_number; page_number <= end_page_number; ++page_number) {
     auto& page_entry = page_table_[page_number];
     page_entry.qword = 0;
