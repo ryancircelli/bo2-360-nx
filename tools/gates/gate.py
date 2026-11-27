@@ -42,8 +42,8 @@ GAMES = {
     # save_log: `save` counts --at from this log line (boot time varies with machine load; a save on a loading screen is useless)
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None,
                   save_log='[cheats] guest memory in a match', save_after_s=30),
-    'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
-    'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
+    'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360', load_pads='pad1 = 0-3600:rt'),
+    'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360', load_pads='pad1 = 0-3600:rt'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
     # No drive route yet: boot and install only.
@@ -612,7 +612,8 @@ def run_inner(a):
                     env.setdefault(k, v)
             players = [l for l in open(route) if l.replace(' ', '').startswith('players=')]
             pads = os.path.join(a.out, 'pads.route')
-            open(pads, 'w').write(''.join(players))
+            # racing games: hold the throttle so the drive proof sees movement (the saved route's inputs count from boot)
+            open(pads, 'w').write(''.join(players) + (GAMES[a.game].get('load_pads', '') + '\n' if GAMES[a.game].get('load_pads') else ''))
             env.setdefault('REX_HID_VIRTUAL_PAD_SCRIPT', pads)
     need_route = a.gate in ('shot', 'drive', 'speedrun', 'save') and not a.savepoint
     if need_route or a.route:

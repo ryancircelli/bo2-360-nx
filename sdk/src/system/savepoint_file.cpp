@@ -658,6 +658,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   uint64_t ticks = 0, time_base = 0;
   std::string why;
   int tries = 0;
+  const auto retry_start = Clock::now();
   g_capture_parked_hook = [&] {
     threads.clear(), why.clear();
     if (std::getenv("REX_SAVEPOINT_VERIFY")) {
@@ -680,8 +681,9 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
       }
       // A thread stopped mid game code, or in a native wait whose frame spilled executable pointers, resumes
       // with host pointers the load cannot move (BO2's main then called an unregistered function, twice):
-      // retry for a moment where every thread sits in a kernel wait; accept the rest after ~1.2 s.
-      if (e.empty() && rec.blocked != 1 && tries < 60) e = rec.blocked ? "woken in a native wait" : "running in game code";
+      // retry for a moment where every thread sits in a kernel wait; accept the rest after 15 s (by time: one
+      // capture of a big game takes seconds, and Forza saving its profile keeps a thread busy for minutes).
+      if (e.empty() && rec.blocked != 1 && tries < 60 && Clock::now() - retry_start < std::chrono::seconds(15)) e = rec.blocked ? "woken in a native wait" : "running in game code";
       if (!e.empty()) why = fmt::format("thread {:08X}: {}", t->handle(), e);
       threads.push_back(std::move(rec));
     });
