@@ -19,8 +19,8 @@ if(NOT TARGET nfshp_codegen)
 endif()
 include(generated/rexglue.cmake)
 
-add_executable(nfshp src/main.cpp)
+add_executable(nfshp)
 rexglue_setup_target(nfshp GPU_PLUGINS metal xenos)
 rexglue_game_manifest(nfshp "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
-rexglue_game_defaults(nfshp)
+rexglue_game_defaults(nfshp MAIN)

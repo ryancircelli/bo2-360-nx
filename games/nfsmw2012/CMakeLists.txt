@@ -20,8 +20,8 @@ if(NOT TARGET nfsmw2012_codegen)
     add_custom_target(nfsmw2012_codegen)
 endif()
 
-add_executable(nfsmw2012 src/main.cpp)
+add_executable(nfsmw2012)
 rexglue_setup_target(nfsmw2012 GPU_PLUGINS metal xenos)
 rexglue_game_manifest(nfsmw2012 "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
-rexglue_game_defaults(nfsmw2012)
+rexglue_game_defaults(nfsmw2012 MAIN)

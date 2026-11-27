@@ -20,8 +20,8 @@ if(NOT TARGET ac1_codegen)
     add_custom_target(ac1_codegen)
 endif()
 
-add_executable(ac1 src/main.cpp)
+add_executable(ac1)
 rexglue_setup_target(ac1 GPU_PLUGINS metal xenos)
 rexglue_game_manifest(ac1 "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
-rexglue_game_defaults(ac1)
+rexglue_game_defaults(ac1 MAIN)

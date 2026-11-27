@@ -13,8 +13,8 @@ if(NOT TARGET gears_codegen)
     add_custom_target(gears_codegen)
 endif()
 
-add_executable(gears src/main.cpp)
+add_executable(gears)
 rexglue_setup_target(gears GPU_PLUGINS metal xenos)
 rexglue_game_manifest(gears "${CMAKE_CURRENT_SOURCE_DIR}/game.toml")
 
-rexglue_game_defaults(gears)
+rexglue_game_defaults(gears MAIN)
