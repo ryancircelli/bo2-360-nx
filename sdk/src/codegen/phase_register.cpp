@@ -510,10 +510,11 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
         unresolvedCount++;
       }
 
-      // Upstream e9c1a0f6 export list, keyed by library and ordinal, plus KeBugCheck (0x52),
-      // KeBugCheckEx (0x53) and XamLoaderTerminateTitle (0x1A9).
+      // Upstream e9c1a0f6 export list, keyed by library and ordinal: ExTerminateThread (0x19),
+      // HalReturnToFirmware (0x28), KeBugCheck (0x52), KeBugCheckEx (0x53), XamLoaderLaunchTitle
+      // (0x1A4), XamLoaderLaunchTitleEx (0x1A5), XamLoaderTerminateTitle (0x1A9).
       if (((lib_name == "xboxkrnl" || lib_name == "xboxkrnl.exe" || lib_name == "xboxkrnl.xex") &&
-           (ordinal == 0x19 || ordinal == 0x52 || ordinal == 0x53)) ||
+           (ordinal == 0x19 || ordinal == 0x28 || ordinal == 0x52 || ordinal == 0x53)) ||
           ((lib_name == "xam" || lib_name == "xam.xex") &&
            (ordinal == 0x1A4 || ordinal == 0x1A5 || ordinal == 0x1A9)))
         graph.declareNoReturn(sym.address);
