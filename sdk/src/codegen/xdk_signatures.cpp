@@ -25,6 +25,19 @@ constexpr XdkSignature kSignatures[] = {
     {"XMemSet", 104, {0x7D8802A6, 0x48000001, 0x7C6A1B78, 0x2B050010}, 0x70B4DD8B12A5D5F0ULL},
 };
 
+// setjmp and longjmp, in the two forms the XDK shipped: the early one (Most Wanted 2005, Gears of War) and the
+// later one with the VMX registers (BO1, BO2, Forza Horizon, Fallout 3, Mass Effect 2, Hot Pursuit, Most Wanted
+// 2012, Assassin's Creed). Each matches exactly once in those images, at the addresses BO1, BO2, Forza Horizon
+// and Most Wanted 2005 used to name by hand.
+constexpr XdkSignature kSetjmp[] = {
+    {"setjmp", 179, {0x3C800000, 0x80040000, 0x2C000000, 0x7C0903A6}, 0xA5478B79EE2D52B8ULL},
+    {"setjmp", 51, {0x3C800000, 0x80040000, 0x2C000000, 0x7C0903A6}, 0x54A02BA464E576F8ULL},
+};
+constexpr XdkSignature kLongjmp[] = {
+    {"longjmp", 187, {0x7C0802A6, 0x9421FFB0, 0x90010008, 0x7C862378}, 0x7E27A9C5285F3084ULL},
+    {"longjmp", 59, {0x7C0802A6, 0x9421FFB0, 0x90010008, 0x7C862378}, 0x16381A01EBFC63A4ULL},
+};
+
 uint32_t LoadBE(const uint8_t* p) {
   return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
 }
@@ -91,23 +104,61 @@ std::vector<uint32_t> FindXdkSignature(const uint8_t* data, uint32_t size, uint3
   return hits;
 }
 
+namespace {
+
+// The routine's address when it is in the executable sections exactly once, else 0.
+// shortcut: a routine linked in twice is left recompiled; give rexcrt keys a suffix if a game needs both.
+uint32_t FindOnce(const BinaryView& binary, const XdkSignature& sig) {
+  std::vector<uint32_t> hits;
+  for (const auto& section : binary.sections()) {
+    if (!section.executable || !section.data)
+      continue;
+    auto h = FindXdkSignature(section.data, section.size, section.baseAddress, sig);
+    hits.insert(hits.end(), h.begin(), h.end());
+  }
+  if (hits.size() > 1)
+    REXCODEGEN_WARN("[xdk] {} found {} times, left recompiled", sig.key, hits.size());
+  return hits.size() == 1 ? hits[0] : 0;
+}
+
+bool HasDirectCall(const BinaryView& binary, uint32_t target) {
+  for (const auto& section : binary.sections()) {
+    if (!section.executable || !section.data)
+      continue;
+    for (uint32_t i = 0; i + 4 <= section.size; i += 4) {
+      const uint32_t w = LoadBE(section.data + i);
+      if ((w & 0xFC000003) == 0x48000001 &&  // bl
+          section.baseAddress + i + (int32_t((w & 0x03FFFFFC) << 6) >> 6) == target)
+        return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 std::vector<std::pair<std::string, uint32_t>> FindXdkLibraryFunctions(const BinaryView& binary) {
   std::vector<std::pair<std::string, uint32_t>> found;
-  for (const auto& sig : kSignatures) {
-    std::vector<uint32_t> hits;
-    for (const auto& section : binary.sections()) {
-      if (!section.executable || !section.data)
-        continue;
-      auto h = FindXdkSignature(section.data, section.size, section.baseAddress, sig);
-      hits.insert(hits.end(), h.begin(), h.end());
-    }
-    // shortcut: a routine linked in twice is left recompiled; give rexcrt keys a suffix if a game needs both.
-    if (hits.size() == 1)
-      found.emplace_back(sig.key, hits[0]);
-    else if (hits.size() > 1)
-      REXCODEGEN_WARN("[xdk] {} found {} times, left recompiled", sig.key, hits.size());
-  }
+  for (const auto& sig : kSignatures)
+    if (uint32_t addr = FindOnce(binary, sig))
+      found.emplace_back(sig.key, addr);
   return found;
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> FindXdkSetjmp(const BinaryView& binary) {
+  uint32_t set = 0, jump = 0;
+  for (const auto& sig : kSetjmp)
+    if (!set)
+      set = FindOnce(binary, sig);
+  for (const auto& sig : kLongjmp)
+    if (!jump)
+      jump = FindOnce(binary, sig);
+  // Both or neither: the codegen turns direct calls of the two into the host's setjmp/longjmp, and a longjmp
+  // with no host setjmp behind it aborts. Assassin's Creed only calls setjmp through a pointer, so it stays
+  // recompiled there.
+  if (!set || !jump || !HasDirectCall(binary, set))
+    return std::nullopt;
+  return std::pair{set, jump};
 }
 
 }  // namespace rex::codegen

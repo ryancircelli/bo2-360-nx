@@ -1,8 +1,5 @@
 # FH1 manual declarations (our own analysis, evidence per entry).
-# setjmp/longjmp pair from Pinyon main-xex.toml (0x82A81E80 / 0x82A81950),
-# to be verified against our analyser like NFSMW did.
-setjmp_address = 0x82A81E80
-longjmp_address = 0x82A81950
+# setjmp (0x82A81E80) and longjmp (0x82A81950) are found by the codegen's XDK signatures.
 
 [functions]
 

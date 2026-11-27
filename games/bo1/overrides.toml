@@ -1,8 +1,5 @@
 # Base default.xex: title 41560855, media 0AEB2159, version 0.0.0.3.
-# Addresses verified against cod_bo1-nx's config for this exact pressing and
-# bo1-recomp's 0.0.0.8 config shifted by the corresponding function deltas.
-setjmp_address = 0x825FB3A0
-longjmp_address = 0x825FB7A0
+# setjmp (0x825FB3A0) and longjmp (0x825FB7A0) are found by the codegen's XDK signatures.
 
 # Keep register-local optimizations off for the first recompile. In particular,
 # setjmp reads the condition registers to save them, which fails the strict

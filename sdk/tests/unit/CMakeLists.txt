@@ -216,6 +216,7 @@ target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(content_manager_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME content_manager_tests COMMAND content_manager_tests)
+
 add_executable(codegen_xdk_signature_tests codegen/xdk_signatures_test.cpp)
 target_include_directories(codegen_xdk_signature_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(codegen_xdk_signature_tests PRIVATE rexcodegen Catch2::Catch2WithMain)

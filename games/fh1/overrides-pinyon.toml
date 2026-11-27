@@ -2,8 +2,6 @@
 # Pinyon Shift contributors). Retain this notice with any source or binary
 # distribution of derived material.
 
-setjmp_address = 0x82A81E80
-longjmp_address = 0x82A81950
 cr_as_local = true
 ctr_as_local = true
 xer_as_local = true
