@@ -107,7 +107,8 @@ TEST_CASE("Virtual pad policy names parse and anything else is rejected", "[inpu
   CHECK(ParseVirtualPadPolicy("after") == VirtualPadPolicy::kAfterPhysical);
   CHECK(ParseVirtualPadPolicy("normal") == VirtualPadPolicy::kNormal);
   CHECK(ParseVirtualPadPolicy("ignore") == VirtualPadPolicy::kIgnore);
-  CHECK_FALSE(ParseVirtualPadPolicy("Ignore ").has_value());
+  CHECK(ParseVirtualPadPolicy(" Ignore ") == VirtualPadPolicy::kIgnore);  // config text is case- and space-tolerant
+  CHECK_FALSE(ParseVirtualPadPolicy("never").has_value());
   CHECK_FALSE(ParseVirtualPadPolicy("").has_value());
 }
 
