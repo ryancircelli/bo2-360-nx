@@ -87,6 +87,8 @@ def set_power_mode(mode):
     except (OSError, subprocess.SubprocessError):
         return False
 HERE = os.path.dirname(os.path.realpath(__file__))
+IDLE_STOP_GRACE_S = 10   # a live session gets this long to stop itself after the idle stop file
+FROZEN_KILL_GRACE_S = 5   # TERM-to-KILL deadline for a job that was frozen when it was stopped
 DEFAULTS = {'live_idle_stop_s': 600, 'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'run_cap': 12, 'port_base': 60000, 'kill_grace_s': 15}
 COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift|swiftc|swift-frontend|'
                        r'metal|metallib|dxc|rustc|cc|c\+\+|ninja(?:-build)?|sccache|ccache)$')
@@ -1808,6 +1810,16 @@ class Daemon:
                 # Prohibited policy lands (the bundle is not re-signed; direct launches don't check the plist seal)
                 subprocess.run(['plutil', '-replace', 'LSUIElement', '-bool', 'YES',
                                 os.path.join(app, 'Contents', 'Info.plist')], capture_output=True)
+            if not job.get('shared_metal_cache'):
+                # own throwaway Metal cache: macOS keys ~/C/<bundle id>/com.apple.metal(+gpuarchiver) by bundle id, so a
+                # unique id per job keeps ~3 GB/launch out of the installed game's cache; removed when the job ends
+                plist = os.path.join(app, 'Contents', 'Info.plist')
+                r = subprocess.run(['plutil', '-extract', 'CFBundleIdentifier', 'raw', plist], capture_output=True, text=True)
+                if r.returncode == 0 and r.stdout.strip():
+                    nid = '%s.rq%s' % (r.stdout.strip(), re.sub(r'[^A-Za-z0-9]', '', job['id']))
+                    if subprocess.run(['plutil', '-replace', 'CFBundleIdentifier', '-string', nid, plist],
+                                      capture_output=True).returncode == 0:
+                        job['metal_cache_id'] = nid
         port = str(self.c['port_base'] + 2000 * slot)
         subst = {'{APP}': app, '{OUT}': out, '{PORT}': port, '{SLOT}': str(slot), '{IN}': os.path.join(out, 'in')}
         if job.get('inputs'):   # same layout the laptop worker builds: {IN}/<basename> (symlinks here, nothing to copy)
@@ -1964,7 +1976,7 @@ class Daemon:
             self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
                                     'next_sample': 0.0, 'load_start': la, 'killing': 0.0,
                                     'games_start': len(self.fg_jobs()) + 1 + len(self.outside), 'quiet_pids': quiet_pids,
-                                    'lane': bool(not is_solo(job) and lane_safe(job) and is_lane_est(estimate_s(job, getattr(self, 'hist', ({}, {}))), self.c)),
+                                    'lane': bool(not is_solo(job) and (is_live_session_job(job) or (lane_safe(job) and is_lane_est(estimate_s(job, getattr(self, 'hist', ({}, {}))), self.c)))),
                                     'agent_frozen': agent_pids, 'agent_deadline': agent_deadline,
                                     'compiler_cpu_prev': {p['pid']: p['cpu_s'] for p in compiler_baseline},
                                     'compiler_activity': {},
@@ -2188,7 +2200,7 @@ class Daemon:
         j.update(info)
         if not info or info['live_idle_s'] < info['live_idle_stop_s'] or j.get('idle_stopped'):
             return
-        j['idle_stopped'] = True
+        j['idle_stopped'] = t
         msg = (f"{j['job']['id']} ({j['job'].get('name')}) stopped: no live control command for "
                f"{info['live_idle_s']:.0f} s (limit {info['live_idle_stop_s']:.0f} s)")
         out = j['job']['out']
@@ -2237,13 +2249,18 @@ class Daemon:
             j['killing'] = time.time()
             j['why'] = why
             self.log(f'stop {j["job"]["id"]} pgid {pid}: {why}')
+            j['grace_s'] = self.c['kill_grace_s']
+            if j.get('lane_pids'):   # frozen for a solo window: a stopped group never acts on TERM, so thaw it first
+                j['grace_s'] = min(j['grace_s'], FROZEN_KILL_GRACE_S)
+                self.lane_resume(j['job']['id'], j)
             try:
+                os.killpg(pid, signal.SIGCONT)   # also thaws a group stopped by anything else (agent/build freezes)
                 os.killpg(pid, signal.SIGTERM)   # the job's own process group (start_new_session), nothing else
             except ProcessLookupError:
                 pass
-        elif time.time() - j['killing'] > self.c['kill_grace_s']:
+        elif time.time() - j['killing'] > j.get('grace_s', self.c['kill_grace_s']):
             try:
-                os.killpg(pid, signal.SIGKILL)
+                os.killpg(pid, signal.SIGKILL)   # works on stopped processes too
             except ProcessLookupError:
                 pass
 
@@ -2450,6 +2467,10 @@ class Daemon:
                 elif not j['killing']:
                     self.live_idle_guard(j, t)
                     self.screen_guard(j, t)
+                    if j.get('idle_stopped') and t - j['idle_stopped'] > IDLE_STOP_GRACE_S:
+                        self.kill_job(j, 'live idle stop')   # the session did not stop itself (frozen or hung)
+                    elif j.get('idle_stopped') and j.get('lane_pids'):
+                        self.lane_resume(jid, j)   # thaw it so it can read its stop file
                 continue
             status = {'cancelled': 'cancelled', VISIBLE_WINDOW: 'failed'}.get(j.get('why', ''), 'timeout' if j.get('why') else 'done')
             if code < 0:
@@ -2474,6 +2495,8 @@ class Daemon:
                     pass
             if j['job'].get('clone_app', True) and j['job'].get('app'):
                 shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
+            if j['job'].get('metal_cache_id'):
+                shutil.rmtree(os.path.join(os.confstr('CS_DARWIN_USER_CACHE_DIR'), j['job']['metal_cache_id']), ignore_errors=True)
             for suf in ('.json', '.run.json', '.cancel', '.lanestop'):
                 try:
                     os.unlink(os.path.join(D['running'], jid + suf))
@@ -2541,7 +2564,7 @@ class Daemon:
         uses no CPU, so the measured run stays clean); the stopped time is not charged to their timeout."""
         solo = self.phase['phase'] == 'solo'
         for jid, v in self.jobs.items():
-            if not v.get('lane') or v['killing']:
+            if not v.get('lane') or v['killing'] or v.get('idle_stopped'):
                 continue
             f = os.path.join(D['running'], jid + '.lanestop')
             cap = cfg().get('lane_pause_max_s', 1800)
@@ -2608,7 +2631,7 @@ class Daemon:
                                             'load_start': rec.get('load_start'), 'killing': 0.0,
                                             'games_start': rec.get('games_start'), 'adopted': True,
                                             'quiet_pids': rec.get('quiet_pids', [])}
-                    if not is_solo(job) and is_lane_est(estimate_s(job, history_wall()), self.c):
+                    if not is_solo(job) and (is_live_session_job(job) or is_lane_est(estimate_s(job, history_wall()), self.c)):
                         self.jobs[job['id']]['lane'] = True   # a restart must not turn a lane job back into a window-blocker
                     lp = rjson(os.path.join(D['running'], job['id'] + '.lanestop'))
                     if lp:
@@ -2862,6 +2885,14 @@ def lane_safe(job):
     cmd = job.get('cmd') or []
     return not (job.get('app') or job.get('scene') or job_uses_boot_test(job)
                 or any(str(a).endswith('.route') for a in ([cmd] if isinstance(cmd, str) else cmd)))
+
+
+def is_live_session_job(job):
+    """A live session is driven by an agent on conditions, not a wall-timed route, so it may be paused through a
+    solo window like a lane job. Without this an actively driven session kept 'machine_empty' false and the whole
+    queue sat in a closing window (11-27 04:20: 25 jobs behind one Halo 3 session)."""
+    cmd = job.get('cmd') or []
+    return any(os.path.basename(str(x)) == 'live_session.py' for x in ([cmd] if isinstance(cmd, str) else cmd))
 
 
 def is_lane_est(est_s, c):
@@ -3290,6 +3321,7 @@ def cmd_submit(argv):
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--window', action='store_true',
                     help='the job tests a real window: no off-screen mode (REX_HEADLESS=false), screen guard off')
+    ap.add_argument('--shared-metal-cache', action='store_true', help='keep the app bundle id, so Metal caches are shared with the installed game')
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
     ap.add_argument('--golden', help='scene runs: golden dir override')
     ap.add_argument('--no-diff', action='store_true')
@@ -3326,7 +3358,7 @@ def cmd_submit(argv):
     if a.quiet_machine:
         solo = True
     job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
-           'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'env': env}
+           'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'shared_metal_cache': a.shared_metal_cache, 'env': env}
     if a.window:
         job['allow_window'] = True
     if a.urgent:
@@ -3549,7 +3581,9 @@ def find_done(jid):
     return os.path.join(D['done'], jid + '.json')
 
 
-def cmd_wait(ids):
+def cmd_wait(ids, timeout=None):
+    """timeout (s): give up and return 124 with jobs still pending."""
+    deadline = time.monotonic() + timeout if timeout else None
     ensure_daemon(fatal=False)
     ids = [i for i in ids if i]
     pending = set(ids)
@@ -3574,7 +3608,10 @@ def cmd_wait(ids):
                 pending.discard(jid)
                 worst = max(worst, 2)
         if pending:
-            kq.control([ev], 1, 60)   # wakes when done/ changes; 60 s as a safety net
+            if deadline and time.monotonic() >= deadline:
+                os.close(dfd)
+                return 124
+            kq.control([ev], 1, min(60, max(0.1, deadline - time.monotonic())) if deadline else 60)   # wakes when done/ changes; 60 s safety net
             ensure_daemon(fatal=False)
     os.close(dfd)
     return worst

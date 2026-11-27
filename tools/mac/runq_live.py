@@ -246,7 +246,12 @@ def cmd_live(argv):
         open(os.path.join(rec['out'], 'stop'), 'w').close()
         if live_job_status(rec['job']) == 'queued':
             cmd_cancel([rec['job']])
-        rc = cmd_wait([rec['job']])
+        rc = cmd_wait([rec['job']], 4)   # a healthy session stops itself; a frozen or hung one is cancelled (daemon thaws + kills)
+        if rc == 124:
+            cmd_cancel([rec['job']])
+            rc = cmd_wait([rec['job']], 6)
+            if rc == 124:
+                print(f'{rec["job"]}: still stopping after 10 s (the daemon is killing it)', flush=True)
         return rc
     sys.exit(LIVE_HELP)
 

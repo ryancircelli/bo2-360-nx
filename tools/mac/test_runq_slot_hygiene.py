@@ -89,5 +89,40 @@ class SlotHygiene(unittest.TestCase):
         self.assertTrue((self.out / 'last-control').exists())
 
 
+class StopWhileFrozen(unittest.TestCase):
+    def frozen_job(self, lane):
+        import signal, subprocess, sys
+        proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'], start_new_session=True)
+        os.kill(proc.pid, signal.SIGSTOP)
+        d = object.__new__(q.Daemon)
+        d.c = dict(kill_grace_s=15)
+        d.log = lambda m: None
+        j = dict(job=dict(id='frz'), proc=proc, killing=0.0)
+        if lane:
+            j['lane_pids'], j['lane_t'] = [proc.pid], __import__('time').time()
+            d.lane_resume = lambda jid, v: (v.pop('lane_pids'), os.killpg(proc.pid, signal.SIGCONT))
+        self.addCleanup(lambda: (proc.poll() is None) and (os.killpg(proc.pid, signal.SIGKILL), proc.wait()))
+        return d, j
+
+    def test_cancel_kills_lane_frozen_job_within_deadline(self):
+        import time
+        d, j = self.frozen_job(lane=True)
+        t0 = time.time()
+        while j['proc'].poll() is None and time.time() - t0 < 10:
+            d.kill_job(j, 'cancelled')
+            time.sleep(0.2)
+        self.assertIsNotNone(j['proc'].poll())
+        self.assertLess(time.time() - t0, 3)   # thaw + TERM: no need to wait for the grace
+
+    def test_unflagged_frozen_job_dies_by_kill_after_grace(self):
+        import time
+        d, j = self.frozen_job(lane=False)
+        d.c['kill_grace_s'] = 1
+        t0 = time.time()
+        while j['proc'].poll() is None and time.time() - t0 < 10:
+            d.kill_job(j, 'timeout')
+            time.sleep(0.2)
+        self.assertIsNotNone(j['proc'].poll())
+
 if __name__ == '__main__':
     unittest.main()
