@@ -1,5 +1,5 @@
 // MD5 and HMAC-MD5 for XeCryptMd5* / XeCryptHmacMd5*. Written for this project from RFC 1321 and
-// RFC 2104. The state is a plain host-order struct; titles only pass the block back to us.
+// RFC 2104. Host working state; export wrappers convert the fixed guest ABI explicitly.
 #pragma once
 #include <algorithm>
 #include <cstddef>

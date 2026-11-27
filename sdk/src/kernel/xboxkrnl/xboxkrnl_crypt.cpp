@@ -220,52 +220,53 @@ void XeCryptSha256Final_entry(ppc_ptr_t<XECRYPT_SHA256_STATE> sha_state, ppc_ptr
 }
 
 
-// SHA-384/512 keep their running state in the guest's 0xC8-byte state block. Titles only pass the
-// block back to us, so it is stored as an opaque host-order blob: state[8], count (bit 63 = SHA-384),
-// buffer[128].
-static Sha512 LoadSha512(const uint8_t* blob) {
+// SHA-384 and SHA-512 share the guest ABI: byte count, reserved word,
+// eight big-endian state words and a 128-byte pending block.
+struct XECRYPT_SHA512_STATE {
+  be_u32 count;
+  be_u32 reserved;
+  be_u64 state[8];
+  uint8_t buffer[128];
+};
+static_assert_size(XECRYPT_SHA512_STATE, 0xC8);
+static Sha512 LoadSha512(const uint8_t* blob, bool sha384 = false) {
+  XECRYPT_SHA512_STATE guest;
+  std::memcpy(&guest, blob, sizeof(guest));
   Sha512 sha;
-  std::memcpy(sha.state, blob, 64);
-  uint64_t count;
-  std::memcpy(&count, blob + 64, 8);
-  sha.is384 = (count >> 63) != 0;
-  sha.count = count & ~(1ull << 63);
-  std::memcpy(sha.buffer, blob + 72, 128);
+  sha.count = guest.count;
+  sha.is384 = sha384;
+  std::copy(std::begin(guest.state), std::end(guest.state), sha.state);
+  std::copy(std::begin(guest.buffer), std::end(guest.buffer), sha.buffer);
   return sha;
 }
-
 static void StoreSha512(const Sha512& sha, uint8_t* blob) {
-  std::memcpy(blob, sha.state, 64);
-  const uint64_t count = sha.count | (sha.is384 ? 1ull << 63 : 0);
-  std::memcpy(blob + 64, &count, 8);
-  std::memcpy(blob + 72, sha.buffer, 128);
+  XECRYPT_SHA512_STATE guest{};
+  guest.count = static_cast<uint32_t>(sha.count);
+  std::copy(std::begin(sha.state), std::end(sha.state), guest.state);
+  std::copy(std::begin(sha.buffer), std::end(sha.buffer), guest.buffer);
+  std::memcpy(blob, &guest, sizeof(guest));
 }
-
 static void ShaWideInit(ppc_ptr_t<uint8_t> blob, bool sha384) {
   Sha512 sha;
   sha.Init(sha384);
-  std::memset(static_cast<uint8_t*>(blob), 0, 0xC8);
   StoreSha512(sha, static_cast<uint8_t*>(blob));
 }
-
 static void ShaWideUpdate(ppc_ptr_t<uint8_t> blob, mapped_void input, u32 size) {
   Sha512 sha = LoadSha512(static_cast<uint8_t*>(blob));
   if (input && size) sha.Update(input.as<const uint8_t*>(), size);
   StoreSha512(sha, static_cast<uint8_t*>(blob));
 }
-
-static void ShaWideFinal(ppc_ptr_t<uint8_t> blob, ppc_ptr_t<uint8_t> out, u32 out_size) {
-  Sha512 sha = LoadSha512(static_cast<uint8_t*>(blob));
+static void ShaWideFinal(ppc_ptr_t<uint8_t> blob, ppc_ptr_t<uint8_t> out, u32 out_size, bool sha384) {
+  Sha512 sha = LoadSha512(static_cast<uint8_t*>(blob), sha384);
   sha.Final(static_cast<uint8_t*>(out), out_size);
   StoreSha512(sha, static_cast<uint8_t*>(blob));
 }
-
 void XeCryptSha384Init_entry(ppc_ptr_t<uint8_t> s) { ShaWideInit(s, true); }
 void XeCryptSha384Update_entry(ppc_ptr_t<uint8_t> s, mapped_void in, u32 n) { ShaWideUpdate(s, in, n); }
-void XeCryptSha384Final_entry(ppc_ptr_t<uint8_t> s, ppc_ptr_t<uint8_t> out, u32 n) { ShaWideFinal(s, out, n); }
+void XeCryptSha384Final_entry(ppc_ptr_t<uint8_t> s, ppc_ptr_t<uint8_t> out, u32 n) { ShaWideFinal(s, out, n, true); }
 void XeCryptSha512Init_entry(ppc_ptr_t<uint8_t> s) { ShaWideInit(s, false); }
 void XeCryptSha512Update_entry(ppc_ptr_t<uint8_t> s, mapped_void in, u32 n) { ShaWideUpdate(s, in, n); }
-void XeCryptSha512Final_entry(ppc_ptr_t<uint8_t> s, ppc_ptr_t<uint8_t> out, u32 n) { ShaWideFinal(s, out, n); }
+void XeCryptSha512Final_entry(ppc_ptr_t<uint8_t> s, ppc_ptr_t<uint8_t> out, u32 n) { ShaWideFinal(s, out, n, false); }
 
 // Byteswaps each 8 bytes
 void XeCryptBnQw_SwapDwQwLeBe_entry(ppc_ptr_t<uint64_t> qw_inp, ppc_ptr_t<uint64_t> qw_out,
@@ -865,20 +866,45 @@ void XeCryptBnQwNeModMul_entry(mapped_u64 qw_a, mapped_u64 qw_b, mapped_u64 qw_o
   }
 }
 
-// ---- MD5 / HMAC-MD5: opaque host-order state blocks (see md5.h). ----
-static_assert(sizeof(Md5) <= 0x60);  // guest XECRYPT_MD5_STATE blocks are at least this big
-static_assert(sizeof(HmacMd5) <= 0xC0);
-void XeCryptMd5Init_entry(ppc_ptr_t<Md5> st) {
+// Guest layouts from the credited ReXGlue v0.11 ABI. Host hash objects must
+// never be written directly into these smaller, big-endian state blocks.
+struct XECRYPT_MD5_STATE {
+  be_u32 count;
+  be_u32 state[4];
+  uint8_t buffer[64];
+};
+static_assert_size(XECRYPT_MD5_STATE, 0x54);
+struct XECRYPT_HMACMD5_STATE {
+  XECRYPT_MD5_STATE md5[2];
+};
+static_assert_size(XECRYPT_HMACMD5_STATE, 0xA8);
+
+static Md5 LoadMd5(const XECRYPT_MD5_STATE& guest) {
+  Md5 host;
+  host.count = guest.count;
+  std::copy(std::begin(guest.state), std::end(guest.state), host.state);
+  std::copy(std::begin(guest.buffer), std::end(guest.buffer), host.buffer);
+  return host;
+}
+static void StoreMd5(const Md5& host, XECRYPT_MD5_STATE& guest) {
+  guest.count = static_cast<uint32_t>(host.count);
+  std::copy(std::begin(host.state), std::end(host.state), guest.state);
+  std::copy(std::begin(host.buffer), std::end(host.buffer), guest.buffer);
+}
+void XeCryptMd5Init_entry(ppc_ptr_t<XECRYPT_MD5_STATE> st) {
   Md5 m;
   m.Init();
-  *st = m;
+  StoreMd5(m, *st);
 }
-void XeCryptMd5Update_entry(ppc_ptr_t<Md5> st, mapped_void in, u32 n) {
-  if (in && n) st->Update(in.as<const uint8_t*>(), n);
+void XeCryptMd5Update_entry(ppc_ptr_t<XECRYPT_MD5_STATE> st, mapped_void in, u32 n) {
+  Md5 m = LoadMd5(*st);
+  if (in && n) m.Update(in.as<const uint8_t*>(), n);
+  StoreMd5(m, *st);
 }
-void XeCryptMd5Final_entry(ppc_ptr_t<Md5> st, mapped_void out, u32 n) {
-  Md5 m = *st;  // keep the guest block usable if a title finals twice
+void XeCryptMd5Final_entry(ppc_ptr_t<XECRYPT_MD5_STATE> st, mapped_void out, u32 n) {
+  Md5 m = LoadMd5(*st);
   m.Final(out.as<uint8_t*>(), n);
+  StoreMd5(m, *st);
 }
 void XeCryptMd5_entry(mapped_void in1, u32 n1, mapped_void in2, u32 n2, mapped_void in3, u32 n3,
                       mapped_void out, u32 out_size) {
@@ -889,17 +915,24 @@ void XeCryptMd5_entry(mapped_void in1, u32 n1, mapped_void in2, u32 n2, mapped_v
   if (in3 && n3) m.Update(in3.as<const uint8_t*>(), n3);
   m.Final(out.as<uint8_t*>(), out_size);
 }
-void XeCryptHmacMd5Init_entry(ppc_ptr_t<HmacMd5> st, mapped_void key, u32 key_size) {
+void XeCryptHmacMd5Init_entry(ppc_ptr_t<XECRYPT_HMACMD5_STATE> st, mapped_void key, u32 key_size) {
   HmacMd5 h;
   h.Init(key.as<const uint8_t*>(), key_size);
-  *st = h;
+  StoreMd5(h.inner, st->md5[0]);
+  StoreMd5(h.outer, st->md5[1]);
 }
-void XeCryptHmacMd5Update_entry(ppc_ptr_t<HmacMd5> st, mapped_void in, u32 n) {
-  if (in && n) st->Update(in.as<const uint8_t*>(), n);
+void XeCryptHmacMd5Update_entry(ppc_ptr_t<XECRYPT_HMACMD5_STATE> st, mapped_void in, u32 n) {
+  Md5 m = LoadMd5(st->md5[0]);
+  if (in && n) m.Update(in.as<const uint8_t*>(), n);
+  StoreMd5(m, st->md5[0]);
 }
-void XeCryptHmacMd5Final_entry(ppc_ptr_t<HmacMd5> st, mapped_void out, u32 n) {
-  HmacMd5 h = *st;
+void XeCryptHmacMd5Final_entry(ppc_ptr_t<XECRYPT_HMACMD5_STATE> st, mapped_void out, u32 n) {
+  HmacMd5 h;
+  h.inner = LoadMd5(st->md5[0]);
+  h.outer = LoadMd5(st->md5[1]);
   h.Final(out.as<uint8_t*>(), n);
+  StoreMd5(h.inner, st->md5[0]);
+  StoreMd5(h.outer, st->md5[1]);
 }
 void XeCryptHmacMd5_entry(mapped_void key, u32 key_size, mapped_void in1, u32 n1, mapped_void in2,
                           u32 n2, mapped_void in3, u32 n3, mapped_void out, u32 out_size) {

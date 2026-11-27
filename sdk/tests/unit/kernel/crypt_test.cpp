@@ -16,6 +16,21 @@ void XeCryptBnDwLePkcs1Format_entry(mapped_void, u32, mapped_void, u32);
 u32 XeCryptBnDwLePkcs1Verify_entry(mapped_void, mapped_void, u32);
 u64 XeCryptBnQwNeModInv_entry(u64);
 void XeCryptBnQwNeModMul_entry(mapped_u64, mapped_u64, mapped_u64, u64, mapped_u64, u32);
+struct XECRYPT_MD5_STATE;
+struct XECRYPT_HMACMD5_STATE;
+void XeCryptMd5Init_entry(ppc_ptr_t<XECRYPT_MD5_STATE>);
+void XeCryptMd5Update_entry(ppc_ptr_t<XECRYPT_MD5_STATE>, mapped_void, u32);
+void XeCryptMd5Final_entry(ppc_ptr_t<XECRYPT_MD5_STATE>, mapped_void, u32);
+void XeCryptHmacMd5Init_entry(ppc_ptr_t<XECRYPT_HMACMD5_STATE>, mapped_void, u32);
+void XeCryptHmacMd5Update_entry(ppc_ptr_t<XECRYPT_HMACMD5_STATE>, mapped_void, u32);
+void XeCryptHmacMd5Final_entry(ppc_ptr_t<XECRYPT_HMACMD5_STATE>, mapped_void, u32);
+void XeCryptSha384Init_entry(ppc_ptr_t<uint8_t>);
+void XeCryptSha384Update_entry(ppc_ptr_t<uint8_t>, mapped_void, u32);
+void XeCryptSha384Final_entry(ppc_ptr_t<uint8_t>, ppc_ptr_t<uint8_t>, u32);
+void XeCryptSha512Init_entry(ppc_ptr_t<uint8_t>);
+void XeCryptSha512Update_entry(ppc_ptr_t<uint8_t>, mapped_void, u32);
+void XeCryptSha512Final_entry(ppc_ptr_t<uint8_t>, ppc_ptr_t<uint8_t>, u32);
+
 }
 using namespace rex::kernel::xboxkrnl;
 
@@ -268,4 +283,99 @@ TEST_CASE("Montgomery multiply matches independent integer oracle and aliases", 
         mapped_u64::from_host(a.data()), inverse, mapped_u64::from_host(m.data()), 4);
     for (size_t i = 0; i < 4; ++i) CHECK(uint64_t(a[i]) == expected[i]);
   }
+}
+
+TEST_CASE("MD5 streaming uses exactly the 84 byte guest state", "[kernel][crypt]") {
+  alignas(8) std::array<uint8_t, 92> block;
+  block.fill(0xa5);
+  auto st = ppc_ptr_t<XECRYPT_MD5_STATE>::from_host(
+      reinterpret_cast<XECRYPT_MD5_STATE*>(block.data() + 4));
+  XeCryptMd5Init_entry(st);
+  const std::array<uint8_t, 8> initial = {0,0,0,0, 0x67,0x45,0x23,0x01};
+  CHECK(std::equal(initial.begin(), initial.end(), block.begin() + 4));
+  char message[] = "abc";
+  XeCryptMd5Update_entry(st, mapped_void::from_host(message), 1);
+  XeCryptMd5Update_entry(st, mapped_void::from_host(message + 1), 2);
+  CHECK(block[7] == 3);
+  const std::array<uint8_t, 16> expected = {0x90,0x01,0x50,0x98,0x3c,0xd2,0x4f,0xb0,
+                                          0xd6,0x96,0x3f,0x7d,0x28,0xe1,0x7f,0x72};
+  std::array<uint8_t, 17> digest;
+  digest.fill(0xa5);
+  XeCryptMd5Final_entry(st, mapped_void::from_host(digest.data()), 16);
+  CHECK(std::equal(expected.begin(), expected.end(), digest.begin()));
+  CHECK(digest.back() == 0xa5);
+  for (size_t i : {0u,1u,2u,3u,88u,89u,90u,91u}) CHECK(block[i] == 0xa5);
+}
+
+TEST_CASE("HMAC MD5 streaming uses exactly the 168 byte guest state", "[kernel][crypt]") {
+  alignas(8) std::array<uint8_t, 176> block;
+  block.fill(0xa5);
+  auto st = ppc_ptr_t<XECRYPT_HMACMD5_STATE>::from_host(
+      reinterpret_cast<XECRYPT_HMACMD5_STATE*>(block.data() + 4));
+  std::array<uint8_t, 16> key;
+  key.fill(0x0b);
+  XeCryptHmacMd5Init_entry(st, mapped_void::from_host(key.data()), key.size());
+  CHECK(block[7] == 64);
+  CHECK(block[91] == 64);
+  char message[] = "Hi There";
+  XeCryptHmacMd5Update_entry(st, mapped_void::from_host(message), 3);
+  XeCryptHmacMd5Update_entry(st, mapped_void::from_host(message + 3), 5);
+  std::array<uint8_t, 17> digest;
+  digest.fill(0xa5);
+  XeCryptHmacMd5Final_entry(st, mapped_void::from_host(digest.data()), 16);
+  const std::array<uint8_t, 16> expected = {0x92,0x94,0x72,0x7a,0x36,0x38,0xbb,0x1c,
+                                          0x13,0xf4,0x8e,0xf8,0x15,0x8b,0xfc,0x9d};
+  CHECK(std::equal(expected.begin(), expected.end(), digest.begin()));
+  CHECK(digest.back() == 0xa5);
+  for (size_t i : {0u,1u,2u,3u,172u,173u,174u,175u}) CHECK(block[i] == 0xa5);
+}
+
+TEST_CASE("SHA384 guest layout and incremental digest", "[kernel][crypt]") {
+  std::array<uint8_t, 202> block;
+  block.fill(0xa5);
+  auto st = ppc_ptr_t<uint8_t>::from_host(block.data() + 1);
+  XeCryptSha384Init_entry(st);
+  const std::array<uint8_t, 8> iv = {0xcb,0xbb,0x9d,0x5d,0xc1,0x05,0x9e,0xd8};
+  CHECK(std::equal(iv.begin(), iv.end(), block.begin() + 9));
+  char message[] = "abc";
+  XeCryptSha384Update_entry(st, mapped_void::from_host(message), 1);
+  XeCryptSha384Update_entry(st, mapped_void::from_host(message + 1), 2);
+  CHECK(block[4] == 3);
+  std::array<uint8_t, 49> digest;
+  digest.fill(0xa5);
+  XeCryptSha384Final_entry(st, ppc_ptr_t<uint8_t>::from_host(digest.data()), 48);
+  std::string hex;
+  for (size_t i = 0; i < 48; ++i) {
+    hex += "0123456789abcdef"[digest[i] >> 4];
+    hex += "0123456789abcdef"[digest[i] & 15];
+  }
+  CHECK(hex == "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
+  CHECK(digest.back() == 0xa5);
+  CHECK(block.front() == 0xa5);
+  CHECK(block.back() == 0xa5);
+}
+
+TEST_CASE("SHA512 guest layout and incremental digest", "[kernel][crypt]") {
+  std::array<uint8_t, 202> block;
+  block.fill(0xa5);
+  auto st = ppc_ptr_t<uint8_t>::from_host(block.data() + 1);
+  XeCryptSha512Init_entry(st);
+  const std::array<uint8_t, 8> iv = {0x6a,0x09,0xe6,0x67,0xf3,0xbc,0xc9,0x08};
+  CHECK(std::equal(iv.begin(), iv.end(), block.begin() + 9));
+  char message[] = "abc";
+  XeCryptSha512Update_entry(st, mapped_void::from_host(message), 1);
+  XeCryptSha512Update_entry(st, mapped_void::from_host(message + 1), 2);
+  CHECK(block[4] == 3);
+  std::array<uint8_t, 65> digest;
+  digest.fill(0xa5);
+  XeCryptSha512Final_entry(st, ppc_ptr_t<uint8_t>::from_host(digest.data()), 64);
+  std::string hex;
+  for (size_t i = 0; i < 64; ++i) {
+    hex += "0123456789abcdef"[digest[i] >> 4];
+    hex += "0123456789abcdef"[digest[i] & 15];
+  }
+  CHECK(hex == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+  CHECK(digest.back() == 0xa5);
+  CHECK(block.front() == 0xa5);
+  CHECK(block.back() == 0xa5);
 }
