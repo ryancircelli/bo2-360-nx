@@ -312,9 +312,8 @@ MslTranslationResult MslShaderTranslator::Translate(DxbcShader& shader,
   result.source.assign(bytes.begin(), bytes.end());
   result.entry_point =
       shader.type() == xenos::ShaderType::kVertex
-          ? (Modification(modification)
-                         .vertex.host_vertex_shader_type ==
-                     Shader::HostVertexShaderType::kQuadDomainPatchIndexed
+          ? (IsNativeDomainType(Modification(modification)
+                                        .vertex.host_vertex_shader_type)
                  ? (config_.domain_cpu_pattern ? "xe_native_ds_cpu"
                                                : "xe_native_ds")
                  : (config_.points_mesh ? "xe_native_ms_points" :
@@ -1417,15 +1416,23 @@ void MslShaderTranslator::DeclareMemExport() {
 
 void MslShaderTranslator::StartVertexShader() {
   Modification m = modification();
-  // Domain shaders: the quad domain with patch indexing only, the only kind
-  // Fable II draws (docs/native-translator.md, "Geometry and tessellation
-  // emulation"). The entry supplies xe_patch_index and xe_uv.
+  // Domain shaders with patch indexing: quads (Fable II terrain) and
+  // triangles (Halo 3 water, 4D5307E6) (docs/native-translator.md, "Geometry
+  // and tessellation emulation"). The entry supplies xe_patch_index and
+  // xe_uv (quads) or xe_bary (triangles).
   const bool domain_quad = m.vertex.host_vertex_shader_type ==
                            Shader::HostVertexShaderType::kQuadDomainPatchIndexed;
+  const bool domain_tri =
+      m.vertex.host_vertex_shader_type ==
+      Shader::HostVertexShaderType::kTriangleDomainPatchIndexed;
   if (m.vertex.host_vertex_shader_type !=
           Shader::HostVertexShaderType::kVertex &&
-      !domain_quad) {
+      !domain_quad && !domain_tri) {
     Fail("host vertex shader type (domain / emulated primitive)");
+  }
+  if (domain_tri && config_.domain_cpu_pattern) {
+    // The reference tessellator's patterns are quad-domain only.
+    Fail("reference tessellator pattern for a triangle domain");
   }
   if (m.vertex.output_point_size && !config_.expand_points &&
       !config_.points_mesh) {
@@ -1438,7 +1445,7 @@ void MslShaderTranslator::StartVertexShader() {
     Fail("mesh point expansion with clip planes");
   }
   if ((config_.expand_points || config_.expand_rects || config_.points_mesh) &&
-      domain_quad) {
+      (domain_quad || domain_tri)) {
     Fail("point/rectangle expansion of a domain shader");
   }
   if (config_.expand_rects &&
@@ -1471,6 +1478,17 @@ void MslShaderTranslator::StartVertexShader() {
     }
     if (register_count() >= 2) {
       Line("r1.x = 0.0f;");
+    }
+  } else if (domain_tri) {
+    // DxbcShaderTranslator::StartDomainShader, kTriangleDomainPatchIndexed:
+    // r0.xyz = domain location ZYX, r1.x = patch index, r1.y = 0 (identity
+    // barycentric swizzle: the host tessellator orders them consistently).
+    if (register_count() >= 1) {
+      Line("r0.xyz = xe_bary.zyx;");
+    }
+    if (register_count() >= 2) {
+      Line("r1.x = xe_patch_index;");
+      Line("r1.y = 0.0f;");
     }
   } else if (register_count() >= 1) {
     // DxbcShaderTranslator::StartVertexShader_LoadVertexIndex.
@@ -3739,10 +3757,16 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
       s += fmt::format("  float clip [[clip_distance]] [{}];\n", clips);
     }
     s += "};\n";
-    const bool domain_quad =
+    const bool domain =
+        IsNativeDomainType(m.vertex.host_vertex_shader_type);
+    // Triangles: barycentric xe_bary (float3) instead of xe_uv (float2).
+    const bool domain_tri =
         m.vertex.host_vertex_shader_type ==
-        Shader::HostVertexShaderType::kQuadDomainPatchIndexed;
-    if (domain_quad) {
+        Shader::HostVertexShaderType::kTriangleDomainPatchIndexed;
+    const char* domain_patch = domain_tri ? "triangle" : "quad";
+    const char* domain_vec = domain_tri ? "float3" : "float2";
+    const char* domain_var = domain_tri ? "xe_bary" : "xe_uv";
+    if (domain) {
       // Post-tessellation vertex function (FABLE2_NATIVE_TESS). The patch
       // index is the adaptive hull shader's control-point phase:
       // (primitive + vertex_index_offset) & 0xFFFFFF, clamped to the index
@@ -3765,18 +3789,17 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
         s += "  float2 xe_uv = xe_tv[xe_vid & 0xFFFFFu];\n";
         s += "  uint xe_patch_id = xe_inst + (xe_vid >> 20u);\n";
       } else {
+        const char* hw = config_.snap_domain_uv ? "_hw" : "";
+        s += fmt::format(
+            "[[patch({})]] vertex XeVOut xe_native_ds(uint xe_patch_id "
+            "[[patch_id]], {} {}{} [[position_in_patch]], constant XeTop& "
+            "xe_tl [[buffer(2)]], constant XeTessDraw& xe_td [[buffer(3)]]) "
+            "{{\n",
+            domain_patch, domain_vec, domain_var, hw);
         if (config_.snap_domain_uv) {
-          s += "[[patch(quad)]] vertex XeVOut xe_native_ds(uint xe_patch_id "
-               "[[patch_id]], float2 xe_uv_hw [[position_in_patch]], constant "
-               "XeTop& xe_tl [[buffer(2)]], constant XeTessDraw& xe_td "
-               "[[buffer(3)]]) {\n";
-          s += "  float2 xe_uv = rint(xe_uv_hw * 65536.0f) * "
-               "0.0000152587890625f;\n";
-        } else {
-          s += "[[patch(quad)]] vertex XeVOut xe_native_ds(uint xe_patch_id "
-               "[[patch_id]], float2 xe_uv [[position_in_patch]], constant "
-               "XeTop& xe_tl [[buffer(2)]], constant XeTessDraw& xe_td "
-               "[[buffer(3)]]) {\n";
+          s += fmt::format(
+              "  {0} {1} = rint({1}_hw * 65536.0f) * 0.0000152587890625f;\n",
+              domain_vec, domain_var);
         }
       }
       s += "  uint xe_pi = xe_patch_id;\n";
@@ -3844,7 +3867,7 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
     s += "  XeVOut xe_out;\n";
     s += body_;
     s += "  return xe_out;\n}\n";
-    if (config_.points_mesh && !domain_quad) {
+    if (config_.points_mesh && !domain) {
       // A mesh function alone (no object stage): 64 points per threadgroup,
       // each thread runs the guest VS once for its point and emits the
       // sprite's corners TL, TR, BL, BR (the geometry shader's strip) as
@@ -3898,7 +3921,7 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
       s += "  xe_m.set_index(i0 + 3u, b + 2u); xe_m.set_index(i0 + 4u, b + 1u); "
            "xe_m.set_index(i0 + 5u, b + 3u);\n}\n";
     }
-    if (config_.expand_rects && !domain_quad) {
+    if (config_.expand_rects && !domain) {
       // dxbc_geometry_shader.cc, kRectangleList, in the same operation order.
       s += "struct XePointDraw { device const uchar* index; uint format; uint "
            "pad; };\n";
