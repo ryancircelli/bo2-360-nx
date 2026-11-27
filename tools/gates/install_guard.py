@@ -3,7 +3,7 @@
 Used by gate.py install. Pure functions over app bundles (no game, no runq), so tests use fake bundles.
 Incident 2026-11-26: a merge wave replaced Black Ops.app (bo1 + bo1_mp) with a build holding only bo1; nobody noticed for 31 h.
 """
-import hashlib, json, os, plistlib, tomllib
+import hashlib, json, os, plistlib
 
 MANIFEST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'games')
 
@@ -56,6 +56,7 @@ def load_manifest(game, games_dir=MANIFEST_DIR):
     p = os.path.join(games_dir, game, 'install_manifest.toml')
     if not os.path.isfile(p):
         return None
+    import tomllib  # lazy: runq runs gate.py --inner under /usr/bin/python3 3.9, which has no tomllib
     with open(p, 'rb') as f:
         return tomllib.load(f)
 
