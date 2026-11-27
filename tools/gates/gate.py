@@ -200,6 +200,8 @@ class Game:
         if ff and ff != 1:
             e['REX_GUEST_TIME_SCALE'] = str(ff)
             e['REX_HID_VIRTUAL_PAD_GUEST_TIME'] = 'true'   # the route keeps its pace in guest time
+        # off-screen engine mode; `open` tests the real window; a job's own REX_HEADLESS=false (runq --window) wins
+        e['REX_HEADLESS'] = 'false' if via_open else os.environ.get('REX_HEADLESS', 'true')
         e.update(env or {})
         self.env, self.t0 = e, time.monotonic()
         self.proc = None
@@ -572,7 +574,8 @@ def queue_gate(a, gate=None, game=None):
         return run_inner(b)
     timeout = {'boot': 300, 'shot': 900, 'drive': 1500, 'guide': 600, 'open': 400}.get(gate, 900)
     args = ['--'] + inner_args(b, out)
-    r = runq_submit(args, f'gate-{game}-{gate}', app, out, a.klass, timeout)
+    r = runq_submit(args, f'gate-{game}-{gate}', app, out, a.klass, timeout,
+                    extra=['--window'] if gate == 'open' else [])   # open tests the real window: runq keeps it on-screen
     txt = os.path.join(out, 'gate.txt')
     if os.path.exists(txt):
         line = open(txt).read().strip()

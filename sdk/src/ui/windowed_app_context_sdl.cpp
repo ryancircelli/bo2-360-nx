@@ -23,6 +23,11 @@
 #include <rex/ui/flags.h>
 #include <rex/ui/window_sdl.h>
 
+#if REX_PLATFORM_MAC
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
+
 namespace rex::ui {
 
 SDLWindowedAppContext::~SDLWindowedAppContext() {
@@ -57,6 +62,20 @@ bool SDLWindowedAppContext::Initialize() {
   if (!requested_driver.empty()) {
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, requested_driver.c_str());
   }
+#if REX_PLATFORM_MAC
+  const bool headless = REXCVAR_GET(headless);
+  if (headless) {
+    // Off-screen test mode: SDL must not make the app a regular (Dock + menu bar) app, and audio goes to SDL's
+    // dummy driver, which consumes samples at the real-time rate without opening a CoreAudio device.
+    SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "1");
+    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
+    // Prohibited before SDL's finishLaunching: no Dock icon (not even a flash), no menu bar, never activated.
+    using SetPolicyFn = bool (*)(id, SEL, long);
+    id app = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend)(
+        reinterpret_cast<id>(objc_getClass("NSApplication")), sel_registerName("sharedApplication"));
+    reinterpret_cast<SetPolicyFn>(objc_msgSend)(app, sel_registerName("setActivationPolicy:"), 2);
+  }
+#endif
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
     REXLOG_ERROR("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: {}", SDL_GetError());
     return false;
