@@ -16,6 +16,8 @@ extern "C" void __imp__XexPcToFileHeader(PPCContext&, uint8_t*);
 extern "C" void __imp__NtCreateSymbolicLinkObject(PPCContext&, uint8_t*);
 extern "C" void __imp__NtQueryDirectoryObject(PPCContext&, uint8_t*);
 extern "C" void __imp__NtClose(PPCContext&, uint8_t*);
+extern "C" void __imp__FscGetCacheElementCount(PPCContext&, uint8_t*);
+extern "C" void __imp__FscSetCacheElementCount(PPCContext&, uint8_t*);
 
 namespace {
 using namespace rex;
@@ -130,4 +132,19 @@ TEST_CASE("NtCreateSymbolicLinkObject registers the link and returns a closable 
   __imp__NtQueryDirectoryObject(ctx, base);
   CHECK(ctx.r3.u32 == X_STATUS_NO_MORE_ENTRIES);
   CHECK(*reinterpret_cast<uint32_t*>(base + ret_len) == 0);
+}
+
+TEST_CASE("FscGetCacheElementCount returns the last count set", "[kernel][fsc]") {
+  Runtime runtime{std::filesystem::current_path()};
+  RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  PPCContext ctx{};
+  ctx.r3.u64 = 0;
+  ctx.r4.u64 = 256;
+  __imp__FscSetCacheElementCount(ctx, runtime.virtual_membase());
+  CHECK(ctx.r3.u32 == X_STATUS_SUCCESS);
+  ctx = {};
+  __imp__FscGetCacheElementCount(ctx, runtime.virtual_membase());
+  CHECK(ctx.r3.u32 == 256);
 }

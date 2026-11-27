@@ -1238,13 +1238,18 @@ u32 NtQuerySymbolicLinkObject_entry(u32 handle, ppc_ptr_t<X_ANSI_STRING> target)
   return X_STATUS_SUCCESS;
 }
 
+// No file-system cache is modelled; the count is only remembered so Get returns the last Set
+// (stub-noref research spec row 12).
+static std::atomic<uint32_t> fsc_cache_element_count{0};
+
 u32 FscGetCacheElementCount_entry(u32 r3) {
-  return 0;
+  return fsc_cache_element_count.load();
 }
 
 u32 FscSetCacheElementCount_entry(u32 unk_0, u32 unk_1) {
   // unk_0 = 0
   // unk_1 looks like a count? in what units? 256 is a common value
+  fsc_cache_element_count = unk_1;
   return X_STATUS_SUCCESS;
 }
 

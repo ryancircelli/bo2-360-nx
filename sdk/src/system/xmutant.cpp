@@ -28,6 +28,9 @@ void XMutant::Initialize(bool initial_owner) {
 
   mutant_ = rex::thread::Mutant::Create(initial_owner);
   assert_not_null(mutant_);
+  if (initial_owner) {
+    owning_thread_ = XThread::GetCurrentThread();
+  }
 }
 
 void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
