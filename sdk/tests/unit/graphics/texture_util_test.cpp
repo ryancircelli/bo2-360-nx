@@ -75,3 +75,27 @@ TEST_CASE("2x1 packed mips are laid out along X", "[texture_util]") {
   CHECK(x == 0);
   CHECK(y == 8);
 }
+
+// Canary bc6b7a020: non-base 2D array levels are aligned to four slices, and
+// volume mips use their own (halved) depth.
+TEST_CASE("array and volume mip layout", "[texture_util]") {
+  constexpr auto k8888 = xenos::TextureFormat::k_8_8_8_8;
+  // 64x64x3 array: level 1 is 32x32 = 4 KB per slice, 4 slices before level 2.
+  texture_util::TextureGuestLayout array = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k2DOrStacked, 2, 64, 64, 3, true, k8888, false, true, 2);
+  CHECK(array.mips[1].array_slice_stride_bytes == 4096);
+  CHECK(array.mip_offsets_bytes[2] == 4096 * 4);
+  // A single-slice 2D texture is not padded.
+  texture_util::TextureGuestLayout single = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k2DOrStacked, 2, 64, 64, 1, true, k8888, false, true, 2);
+  CHECK(single.mip_offsets_bytes[2] == 4096);
+  // 64x64x16 volume: level 1 is 32x32x8.
+  texture_util::TextureGuestLayout volume = texture_util::GetGuestTextureLayout(
+      xenos::DataDimension::k3D, 2, 64, 64, 16, true, k8888, false, true, 2);
+  CHECK(volume.mips[1].array_slice_stride_bytes == 4096 * 8);
+  CHECK(volume.mip_offsets_bytes[2] == 4096 * 8);
+  // Packed 1x1 volume mips: Z placement counts from the mip, not the tail.
+  uint32_t x, y, z;
+  REQUIRE(texture_util::GetPackedMipOffset(128, 128, 256, k8888, 8, x, y, z));
+  CHECK(z == 4);
+}
