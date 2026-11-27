@@ -89,7 +89,6 @@ namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
 
 REX_EXPORT_STUB_RETURN(__imp__VdBlockUntilGUIIdle, 0);
-REX_EXPORT_STUB_RETURN(__imp__VdDisplayFatalError, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdEnableClosedCaption, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdEnableDisablePowerSavingMode, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdGenerateGPUCSCCoefficients, 0);
@@ -596,3 +595,11 @@ void VdQueryRealVideoMode_entry(ppc_ptr_t<X_VIDEO_MODE> video_mode) { VdQueryVid
 REX_EXPORT(__imp__VdGet3dVideoFormat, rex::kernel::xboxkrnl::VdGet3dVideoFormat_entry)
 REX_EXPORT(__imp__VdGetOption, rex::kernel::xboxkrnl::VdGetOption_entry)
 REX_EXPORT(__imp__VdQueryRealVideoMode, rex::kernel::xboxkrnl::VdQueryRealVideoMode_entry)
+
+// Console fatal-error screen (E-code): log it and end the title cleanly, like HalReturnToFirmware.
+extern "C" REX_FUNC(__imp__VdDisplayFatalError) {
+  (void)base;
+  REXKRNL_ERROR("VdDisplayFatalError({:#x}): fatal video error, terminating title", ctx.r3.u32);
+  REX_KERNEL_STATE()->TerminateTitle();
+}
+static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_k2_vdfe("__imp__VdDisplayFatalError", &__imp__VdDisplayFatalError);
