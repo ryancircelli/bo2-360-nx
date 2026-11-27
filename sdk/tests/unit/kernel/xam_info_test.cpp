@@ -39,6 +39,6 @@ TEST_CASE("Original Xbox title classification handles version bits and boundary"
 TEST_CASE("lstrlenW reads big endian UTF-16 and stops at the first terminator", "[xam]") {
   CHECK(lstrlenW_entry(nullptr) == 0);
   rex::be_u16 text[] = {0x0041, 0x4E2D, 0xD83D, 0xDE00, 0, 0x0042, 0};
-  CHECK(lstrlenW_entry(rex::mapped_u16(text, 0x1000)) == 4);
-  CHECK(lstrlenW_entry(rex::mapped_u16(text + 4, 0x1008)) == 0);
+  CHECK(lstrlenW_entry(mapped_u16(text, 0x1000)) == 4);
+  CHECK(lstrlenW_entry(mapped_u16(text + 4, 0x1008)) == 0);
 }
