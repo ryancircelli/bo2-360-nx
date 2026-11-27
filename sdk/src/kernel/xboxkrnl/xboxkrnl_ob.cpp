@@ -21,9 +21,12 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>
 #include <rex/system/xevent.h>
+#include <rex/system/xiocompletion.h>
+#include <rex/system/xmutant.h>
 #include <rex/system/xobject.h>
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xthread.h>
+#include <rex/system/xtimer.h>
 #include <rex/system/xtypes.h>
 
 namespace rex::kernel::xboxkrnl {
@@ -253,8 +256,77 @@ u32 NtQueryEvent_entry(u32 handle, mapped_u32 out_struc) {
   return result;
 }
 
+// Xbox 360 query shapes take no information class (stub-noref research spec rows 127-130).
+struct X_MUTANT_BASIC_INFORMATION {
+  rex::be<int32_t> current_count;  // 1 when free, 1 - recursion depth when owned (NT signal state)
+  uint8_t owned_by_caller;
+  uint8_t abandoned;
+};
+struct X_SEMAPHORE_BASIC_INFORMATION {
+  rex::be<int32_t> current_count;
+  rex::be<int32_t> maximum_count;
+};
+struct X_TIMER_BASIC_INFORMATION {
+  rex::be<int64_t> remaining_time;  // 100ns
+  uint8_t timer_state;         // 1 = signaled
+};
+
+u32 NtQueryMutant_entry(u32 handle, ppc_ptr_t<X_MUTANT_BASIC_INFORMATION> info) {
+  auto mutant = REX_KERNEL_OBJECTS()->LookupObject<XMutant>(handle);
+  if (!mutant) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  info->current_count = 1 - int32_t(mutant->wait_value());
+  info->owned_by_caller = mutant->owning_thread() == XThread::GetCurrentThread();
+  info->abandoned = 0;  // abandoning is not modelled (XMutant::ReleaseMutant asserts on it)
+  return X_STATUS_SUCCESS;
+}
+
+u32 NtQuerySemaphore_entry(u32 handle, ppc_ptr_t<X_SEMAPHORE_BASIC_INFORMATION> info) {
+  auto sem = REX_KERNEL_OBJECTS()->LookupObject<XSemaphore>(handle);
+  if (!sem) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  info->current_count = int32_t(sem->wait_value());
+  info->maximum_count = sem->maximum_count();
+  return X_STATUS_SUCCESS;
+}
+
+u32 NtQueryTimer_entry(u32 handle, ppc_ptr_t<X_TIMER_BASIC_INFORMATION> info) {
+  auto timer = REX_KERNEL_OBJECTS()->LookupObject<XTimer>(handle);
+  if (!timer) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  info->remaining_time = timer->remaining_time();
+  info->timer_state = timer->wait_value() != 0;
+  return X_STATUS_SUCCESS;
+}
+
+u32 NtQueryIoCompletion_entry(u32 handle, mapped_u32 depth) {
+  auto port = REX_KERNEL_OBJECTS()->LookupObject<XIOCompletion>(handle);
+  if (!port) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  *depth = uint32_t(port->queue_depth());
+  return X_STATUS_SUCCESS;
+}
+
+// No object-manager directories are modelled, so every enumeration is already at its end.
+u32 NtQueryDirectoryObject_entry(u32 handle, mapped_void buffer, u32 length, u32 return_single,
+                                 u32 restart_scan, mapped_u32 context, mapped_u32 return_length) {
+  if (return_length) {
+    *return_length = 0;
+  }
+  return X_STATUS_NO_MORE_ENTRIES;
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
+REX_EXPORT(__imp__NtQueryDirectoryObject, rex::kernel::xboxkrnl::NtQueryDirectoryObject_entry)
+REX_EXPORT(__imp__NtQueryMutant, rex::kernel::xboxkrnl::NtQueryMutant_entry)
+REX_EXPORT(__imp__NtQuerySemaphore, rex::kernel::xboxkrnl::NtQuerySemaphore_entry)
+REX_EXPORT(__imp__NtQueryTimer, rex::kernel::xboxkrnl::NtQueryTimer_entry)
+REX_EXPORT(__imp__NtQueryIoCompletion, rex::kernel::xboxkrnl::NtQueryIoCompletion_entry)
 REX_EXPORT(__imp__ObOpenObjectByName, rex::kernel::xboxkrnl::ObOpenObjectByName_entry)
 REX_EXPORT(__imp__ObOpenObjectByPointer, rex::kernel::xboxkrnl::ObOpenObjectByPointer_entry)
 REX_EXPORT(__imp__ObLookupThreadByThreadId, rex::kernel::xboxkrnl::ObLookupThreadByThreadId_entry)
@@ -278,11 +350,5 @@ REX_EXPORT(__imp__ObLookupAnyThreadByThreadId, rex::kernel::xboxkrnl::ObLookupTh
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__ObMakeTemporaryObject);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__ObTranslateSymbolicLink, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtCreateDirectoryObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtCreateSymbolicLinkObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtMakeTemporaryObject, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtOpenDirectoryObject, 0xC0000034);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtQueryDirectoryObject, 0x8000001A);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtQueryIoCompletion, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtQueryMutant, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtQuerySemaphore, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtQueryTimer, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

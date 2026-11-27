@@ -10,6 +10,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
+
 #include <rex/system/xobject.h>
 #include <rex/system/xtypes.h>
 #include <rex/thread.h>
@@ -38,9 +40,14 @@ class XTimer : public XObject {
 
   void Initialize(uint32_t timer_type);
 
+  // dpc: guest KDPC queued to the kernel dispatch thread on each expiry (KeSetTimerEx).
   X_STATUS SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine, uint32_t routine_arg,
-                    bool resume);
+                    bool resume, uint32_t dpc = 0);
   X_STATUS Cancel();
+  // True while set and not yet expired (periodic timers stay set until cancelled).
+  // 100ns until the next expiry in guest time; 0 when not set or already due.
+  int64_t remaining_time() const;
+  bool inserted() const { return inserted_; }
 
  protected:
   rex::thread::WaitHandle* GetWaitHandle() override { return timer_.get(); }
@@ -51,6 +58,10 @@ class XTimer : public XObject {
   XThread* callback_thread_ = nullptr;
   uint32_t callback_routine_ = 0;
   uint32_t callback_routine_arg_ = 0;
+  uint32_t callback_dpc_ = 0;
+  std::atomic<bool> inserted_{false};
+  std::atomic<uint64_t> due_file_time_{0};  // guest file time of the next expiry
+  uint64_t period_100ns_ = 0;
 };
 
 }  // namespace rex::system

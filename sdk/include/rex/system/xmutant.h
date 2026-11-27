@@ -39,6 +39,7 @@ class XMutant : public XObject {
   void InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header);
 
   X_STATUS ReleaseMutant(uint32_t priority_increment, bool abandon, bool wait);
+  XThread* owning_thread() const { return owning_thread_; }
 
   bool Save(stream::ByteStream* stream) override;
   static object_ref<XMutant> Restore(KernelState* kernel_state, stream::ByteStream* stream);

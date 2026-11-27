@@ -28,6 +28,9 @@ void XMutant::Initialize(bool initial_owner) {
 
   mutant_ = rex::thread::Mutant::Create(initial_owner);
   assert_not_null(mutant_);
+  if (initial_owner) {
+    owning_thread_ = XThread::GetCurrentThread();
+  }
 }
 
 void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
@@ -44,7 +47,7 @@ void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
 
 X_STATUS XMutant::ReleaseMutant(uint32_t priority_increment, bool abandon, bool wait) {
   // Call should succeed if we own the mutant, so go ahead and do this.
-  if (owning_thread_ == XThread::GetCurrentThread()) {
+  if (owning_thread_ == XThread::GetCurrentThread() && wait_value() <= 1) {
     owning_thread_ = nullptr;
   }
 

@@ -30,6 +30,7 @@
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xsymboliclink.h>
 #include <rex/system/xthread.h>
+#include <rex/system/xtimer.h>
 
 namespace rex::system {
 
@@ -529,12 +530,17 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
         assert_true(success);
         object = sem;
       } break;
+      case 8:  // TimerNotificationObject
+      case 9:  // TimerSynchronizationObject
+      {
+        auto timer = new XTimer(kernel_state);
+        timer->Initialize(as_type - 8);
+        object = timer;
+      } break;
       case 3:   // ProcessObject
       case 4:   // QueueObject
       case 6:   // ThreadObject
       case 7:   // GateObject
-      case 8:   // TimerNotificationObject
-      case 9:   // TimerSynchronizationObject
       case 18:  // ApcObject
       case 19:  // DpcObject
       case 20:  // DeviceQueueObject

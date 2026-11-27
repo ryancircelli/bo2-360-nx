@@ -695,49 +695,7 @@ void KernelState::SetExecutableModule(object_ref<UserModule> module) {
   }
 
   // Spin up deferred dispatch worker.
-  // TODO(benvanik): move someplace more appropriate (out of ctor, but around
-  // here).
-  if (!dispatch_thread_running_) {
-    dispatch_thread_running_ = true;
-    dispatch_thread_ = object_ref<XHostThread>(new XHostThread(this, 128 * 1024, 0, [this]() {
-      auto global_lock = global_critical_region_.AcquireDeferred();
-      while (dispatch_thread_running_) {
-        global_lock.lock();
-        // Condition variables wake spuriously; popping an empty queue is a double free.
-        while (dispatch_thread_running_ && dispatch_queue_.empty()) {
-          dispatch_cond_.wait(global_lock);
-        }
-        if (!dispatch_thread_running_) {
-          global_lock.unlock();
-          break;
-        }
-        auto fn = std::move(dispatch_queue_.front());
-        dispatch_queue_.pop_front();
-        REXSYS_NOISY_DEBUG("Dispatch thread processing queued item ({} remaining)",
-                           dispatch_queue_.size());
-        global_lock.unlock();
-
-        // Throws out of fn leave the originating overlapped uncompleted and
-        // the waiting guest thread stuck; fail visibly rather than swallow.
-        try {
-          fn();
-        } catch (const std::exception& e) {
-          REX_FATAL("Dispatch thread: deferred completion threw '{}'", e.what());
-        } catch (...) {
-          REX_FATAL("Dispatch thread: deferred completion threw non-std exception");
-        }
-        REXSYS_NOISY_DEBUG("Dispatch thread completed item");
-      }
-      return 0;
-    }));
-    dispatch_thread_->set_name("Kernel Dispatch");
-    X_STATUS create_status = dispatch_thread_->Create();
-    if (XFAILED(create_status)) {
-      dispatch_thread_running_ = false;
-      dispatch_thread_.reset();
-      REX_FATAL("Failed to create kernel dispatch thread (status {:#x})", create_status);
-    }
-  }
+  StartDispatchThread();
 
   LoadAchievementsData();
 }
@@ -1360,6 +1318,68 @@ void KernelState::CompleteOverlappedDeferredEx(
           post_callback();
         }
       });
+  dispatch_cond_.notify_all();
+}
+
+void KernelState::StartDispatchThread() {
+  bool expected = false;
+  if (dispatch_thread_running_.compare_exchange_strong(expected, true)) {
+    dispatch_thread_ = object_ref<XHostThread>(new XHostThread(this, 128 * 1024, 0, [this]() {
+      auto global_lock = global_critical_region_.AcquireDeferred();
+      while (dispatch_thread_running_) {
+        global_lock.lock();
+        // Condition variables wake spuriously; popping an empty queue is a double free.
+        while (dispatch_thread_running_ && dispatch_queue_.empty()) {
+          dispatch_cond_.wait(global_lock);
+        }
+        if (!dispatch_thread_running_) {
+          global_lock.unlock();
+          break;
+        }
+        auto fn = std::move(dispatch_queue_.front());
+        dispatch_queue_.pop_front();
+        REXSYS_NOISY_DEBUG("Dispatch thread processing queued item ({} remaining)",
+                           dispatch_queue_.size());
+        global_lock.unlock();
+
+        // Throws out of fn leave the originating overlapped uncompleted and
+        // the waiting guest thread stuck; fail visibly rather than swallow.
+        try {
+          fn();
+        } catch (const std::exception& e) {
+          REX_FATAL("Dispatch thread: deferred completion threw '{}'", e.what());
+        } catch (...) {
+          REX_FATAL("Dispatch thread: deferred completion threw non-std exception");
+        }
+        REXSYS_NOISY_DEBUG("Dispatch thread completed item");
+      }
+      return 0;
+    }));
+    dispatch_thread_->set_name("Kernel Dispatch");
+    X_STATUS create_status = dispatch_thread_->Create();
+    if (XFAILED(create_status)) {
+      dispatch_thread_running_ = false;
+      dispatch_thread_.reset();
+      REX_FATAL("Failed to create kernel dispatch thread (status {:#x})", create_status);
+    }
+  }
+}
+
+void KernelState::QueueGuestDpc(uint32_t dpc_ptr, uint32_t arg1, uint32_t arg2) {
+  // Lazily started: DPCs can be queued before (or without) an executable module.
+  StartDispatchThread();
+  auto global_lock = global_critical_region_.Acquire();
+  dispatch_queue_.push_back([this, dpc_ptr, arg1, arg2]() {
+    auto* dpc = memory_->TranslateVirtual<XDPC*>(dpc_ptr);
+    uint32_t routine = dpc->routine;
+    uint64_t args[] = {dpc_ptr, dpc->context, arg1, arg2};
+    if (!routine) {
+      return;
+    }
+    auto scope = BeginDPCImpersonation();
+    emulator_->function_dispatcher()->Execute(dispatch_thread_->thread_state(), routine, args, 4);
+    EndDPCImpersonation(scope);
+  });
   dispatch_cond_.notify_all();
 }
 

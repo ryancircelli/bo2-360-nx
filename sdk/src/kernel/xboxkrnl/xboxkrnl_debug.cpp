@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <iterator>
 #include <string>
@@ -162,6 +163,18 @@ void RtlRaiseException_entry(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
   rex::debug::Break();
 }
 
+// Raises a non-continuable exception carrying `status` (stub-noref research spec row RtlRaiseStatus).
+void RtlRaiseStatus_entry(u32 status) {
+  auto* memory = REX_KERNEL_MEMORY();
+  uint32_t address = memory->SystemHeapAlloc(sizeof(X_EXCEPTION_RECORD));
+  auto* record = memory->TranslateVirtual<X_EXCEPTION_RECORD*>(address);
+  std::memset(record, 0, sizeof(*record));
+  record->code = status;
+  record->exception_flags = 1;  // EXCEPTION_NONCONTINUABLE
+  RtlRaiseException_entry(ppc_ptr_t<X_EXCEPTION_RECORD>(record, address));
+  memory->SystemHeapFree(address);
+}
+
 // Logs the failed assertion and continues (a retail kernel would break into the debugger).
 void RtlAssert_entry(u32 expr, u32 file, u32 line, u32 msg) {
   auto str = [](uint32_t a) {
@@ -186,6 +199,7 @@ void KeBugCheck_entry(u32 code) {
 
 REX_EXPORT(__imp__DbgBreakPoint, rex::kernel::xboxkrnl::DbgBreakPoint_entry)
 REX_EXPORT(__imp__RtlRaiseException, rex::kernel::xboxkrnl::RtlRaiseException_entry)
+REX_EXPORT(__imp__RtlRaiseStatus, rex::kernel::xboxkrnl::RtlRaiseStatus_entry)
 REX_EXPORT(__imp__KeBugCheckEx, rex::kernel::xboxkrnl::KeBugCheckEx_entry)
 REX_EXPORT(__imp__KeBugCheck, rex::kernel::xboxkrnl::KeBugCheck_entry)
 
@@ -202,5 +216,4 @@ REX_EXPORT_QUIET_RETURN(__imp__DumpUpdateDumpSettings, 0);  // round-2 spec: del
 REX_EXPORT_QUIET_RETURN(__imp__DumpWriteDump, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__DumpXitThread, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__RtlAssert, rex::kernel::xboxkrnl::RtlAssert_entry)
-REX_EXPORT_QUIET_PASSTHROUGH(__imp__RtlRaiseStatus);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__RtlRip);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
