@@ -510,6 +510,8 @@ class MetalTextureCache::UploadBufferPool
       pending.push_back({shared_from_this(), buffer});
     }
     if (add_handler) {
+      // The encode thread may still be encoding into this command buffer.
+      pass_trace::EncodeBarrier(cmd, "h_upload_pool");
       cmd->addCompletedHandler(^(MTL::CommandBuffer* completed_cmd) {
         UploadBufferPool::HandleCommandBufferCompleted(completed_cmd);
       });
@@ -842,6 +844,8 @@ bool MetalTextureCache::FlushDeferredUploadEncoderBatch() {
       blit->endEncoding();
       auto entries = std::make_shared<std::vector<DirectLoadVerify>>(
           std::move(direct_load_verify_));
+      // The encode thread may still be encoding into this command buffer.
+      pass_trace::EncodeBarrier(cmd, "h_tex_dl_verify");
       cmd->addCompletedHandler([entries](MTL::CommandBuffer*) {
         static std::atomic<uint64_t> checked{0}, bad{0}, superseded{0};
         static std::atomic<uint64_t> rtt_checked{0}, rtt_bad{0};
@@ -1439,6 +1443,8 @@ void MetalTextureCache::EncodePrecommitVerifyReferences(
   if (samples->empty()) {
     return;
   }
+  // The encode thread may still be encoding into this command buffer.
+  pass_trace::EncodeBarrier(cmd, "h_tex_verify");
   cmd->addCompletedHandler([samples](MTL::CommandBuffer*) {
     static std::atomic<uint64_t> ok{0}, mismatch{0}, bytes{0}, scaled{0};
     for (auto& [sample, reference] : *samples) {
@@ -2304,6 +2310,8 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
       buffer_pool->ReleaseAfter(cmd, buffer);
       return;
     }
+    // The encode thread may still be encoding into this command buffer.
+    pass_trace::EncodeBarrier(cmd, "h_tex_buf_release");
     cmd->addCompletedHandler(^(MTL::CommandBuffer*) {
       buffer->release();
     });

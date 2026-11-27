@@ -713,6 +713,8 @@ void MetalTextureCache::TexRenameSettleEncode(
       blit = nullptr;
     }
     if (!pairs->empty()) {
+      // The encode thread may still be encoding into this command buffer.
+      pass_trace::EncodeBarrier(cmd, "h_tex_rename");
       cmd->addCompletedHandler([pairs](MTL::CommandBuffer*) {
         VerifyStats& st = Stats();
         for (Pair& p : *pairs) {

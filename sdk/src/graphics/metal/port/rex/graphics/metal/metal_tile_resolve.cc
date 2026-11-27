@@ -991,6 +991,8 @@ void TileResolveVerifyFinish(MTL::Device* device, MTL::CommandBuffer* cmd,
   EncodeSnapshot(cmd, g_verify, a, "tres_verify_a");
   const size_t total = g_verify.total;
   std::string tag = what ? what : "";
+  // The encode thread may still be encoding into this command buffer.
+  pass_trace::EncodeBarrier(cmd, "h_tres_verify");
   cmd->addCompletedHandler([a, b, total, tag](MTL::CommandBuffer*) {
     const uint8_t* pa = static_cast<const uint8_t*>(a->contents());
     const uint8_t* pb = static_cast<const uint8_t*>(b->contents());

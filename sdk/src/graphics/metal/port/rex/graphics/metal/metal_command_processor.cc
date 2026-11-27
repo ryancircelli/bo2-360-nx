@@ -5795,7 +5795,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       prepared_draw.texture_materialization_plan;
   bool textures_requested_for_draw = false;
   auto request_textures_for_draw = [&](uint64_t& telemetry_counter) -> bool {
-    if (!EnsureCommandBuffer("draw_tex")) {
+    if (!EnsureCommandBuffer()) {
       return false;
     }
     if (texture_materialization_plan.NeedsTextureUpload()) {
@@ -6223,7 +6223,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       REXLOG_ERROR("IssueDraw: no render pass descriptor for draw constants");
       return false;
     }
-    if (!EnsureCommandBuffer("draw_consts")) {
+    if (!EnsureCommandBuffer()) {
       return false;
     }
     miplod_ps_mod_ = pixel_shader ? pixel_shader_modification.value : 0;
@@ -9254,7 +9254,7 @@ bool MetalCommandProcessor::FlushPreparedDrawQueue(
       ++UploadTrace().tex_brk;
       EndRenderEncoder(RenderEncoderEndReason::kTextureUploadBeforeDrawPass);
     }
-    if (!EnsureCommandBuffer("flush_tex")) {
+    if (!EnsureCommandBuffer()) {
       EndTexturePrecommit();
       flushing_prepared_draw_queue_ = previous_flushing;
       return false;
@@ -9566,7 +9566,7 @@ bool MetalCommandProcessor::SubmitPreparedDraw(
       ++UploadTrace().tex_brk;
       EndRenderEncoder(RenderEncoderEndReason::kTextureUploadBeforeDrawPass);
     }
-    if (!EnsureCommandBuffer("submit_tex")) {
+    if (!EnsureCommandBuffer()) {
       EndTexturePrecommit();
       return false;
     }
@@ -10538,7 +10538,7 @@ bool MetalCommandProcessor::IssueCopy() {
     if (!keep_open) {
       EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
     }
-    copy_command_buffer = EnsureCommandBuffer("issue_copy");
+    copy_command_buffer = EnsureCommandBuffer();
     if (!copy_command_buffer) {
       render_target_cache_->TileResolveEnd("resolve:tile-nocb");
       REXLOG_ERROR("MetalCommandProcessor::IssueCopy: failed to get command buffer");
@@ -10634,7 +10634,7 @@ bool MetalCommandProcessor::WaitForMorphReadbackSubmission(
     uint32_t written_address, uint32_t written_length) {
   // Retain the submission so a timeout/error cannot lead to reading data
   // that the GPU is still writing.
-  auto* completion = EnsureCommandBuffer("morph_wait");
+  auto* completion = EnsureCommandBuffer();
   if (!completion) return false;
   completion->retain();
   EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
@@ -10784,7 +10784,7 @@ bool MetalCommandProcessor::MorphReadbackScaled(uint32_t written_address,
   }
 
   EndRenderEncoder(RenderEncoderEndReason::kResolveNeedsBoundary);
-  MTL::CommandBuffer* cmd = EnsureCommandBuffer("morph_scaled");
+  MTL::CommandBuffer* cmd = EnsureCommandBuffer();
   if (!cmd) return false;
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kTransferRequest);
@@ -11304,9 +11304,13 @@ void MetalCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
 
 static DeferredRenderEncoder* g_xpass_recorder = nullptr;
 
-MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer(const char* site) {
+MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   ProcessCompletedSubmissions();
-  render_encoder_recorder_.Barrier(site);
+  // [encode-drain-removal] No encode-thread drain here: this runs per draw and
+  // at every pass begin, where nothing touches the buffer directly. Each real
+  // touch drains on its own: encoders (pass_trace::Blit/Compute/EncodeBarrier),
+  // completion handlers (EncodeBarrier), encodeWait/Signal and commit
+  // (precommit_wait, cb_end, flush_wait), and GetCurrentCommandBuffer.
   if (current_command_buffer_) {
     return current_command_buffer_;
   }
@@ -12338,7 +12342,7 @@ MTL::CommandBuffer* MetalCommandProcessor::RequestTransferCommandBuffer(
       !texture_cache_->FlushPendingUploadEncodersForCommandEncoderBoundary()) {
     return nullptr;
   }
-  return EnsureCommandBuffer("transfer_cb");
+  return EnsureCommandBuffer();
 }
 
 void MetalCommandProcessor::RecordSharedMemoryUploadRoute(
@@ -12823,7 +12827,7 @@ MTL::CommandBuffer* MetalCommandProcessor::TexRenameBeginSettle(
   }
   EndSharedMemoryUploadBlitEncoder(
       SharedMemoryUploadEncoderEndReason::kTextureBlit);
-  if (!EnsureCommandBuffer("rename_settle")) return nullptr;
+  if (!EnsureCommandBuffer()) return nullptr;
   return current_command_buffer_;
 }
 
@@ -13563,7 +13567,7 @@ MTL::RenderPassDescriptor* MetalCommandProcessor::GetDrawRenderPassDescriptor(
 bool MetalCommandProcessor::BeginRenderEncoderForDraw(
     bool fallback_depth_attachment_required) {
   ++backend_telemetry_.begin_encoder_calls;
-  if (!EnsureCommandBuffer("render_begin")) {
+  if (!EnsureCommandBuffer()) {
     return false;
   }
   EndSharedMemoryUploadBlitEncoder(

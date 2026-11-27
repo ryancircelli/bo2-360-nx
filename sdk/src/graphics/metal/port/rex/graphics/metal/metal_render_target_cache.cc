@@ -6164,6 +6164,8 @@ void MetalRenderTargetCache::MainDepthDumpEdram(const char* tag) {
   blit->endEncoding();
   const std::string path = fmt::format("{}/f{}-{}.bin", dir,
                                        frame_log::CurrentFrame(), tag);
+  // The encode thread may still be encoding into this command buffer.
+  pass_trace::EncodeBarrier(cmd, "h_rt_readback");
   cmd->addCompletedHandler([readback, path, length](MTL::CommandBuffer*) {
     if (FILE* f = std::fopen(path.c_str(), "wb")) {
       std::fwrite(readback->contents(), 1, size_t(length), f);

@@ -26,6 +26,7 @@
 #include "rex/memory/utils.h"
 #include "rex/graphics/metal/metal_command_processor.h"
 #include "rex/graphics/metal/metal_frame_log.h"
+#include "rex/graphics/metal/metal_pass_trace.h"
 #include "rex/graphics/metal/metal_readback_merge.h"
 #include "rex/hash.h"
 
@@ -593,6 +594,8 @@ void MetalSharedMemory::TrackStandaloneGpuAccess(
     }
   }
   MetalSharedMemory* shared_memory = this;
+  // The encode thread may still be encoding into this command buffer.
+  pass_trace::EncodeBarrier(command_buffer, "h_shmem_standalone");
   command_buffer->addCompletedHandler(^(MTL::CommandBuffer*) {
     std::lock_guard<std::mutex> lock(
         shared_memory->standalone_gpu_access_mutex_);
