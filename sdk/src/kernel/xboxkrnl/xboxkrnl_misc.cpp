@@ -64,7 +64,6 @@ REX_EXPORT_STUB_RETURN(__imp__KeExecuteOnProtectedStack, 0);
 REX_EXPORT_STUB_RETURN(__imp__EmaExecute, 0xC000009D);
 REX_EXPORT_STUB_RETURN(__imp__ExRegisterThreadNotification, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExTerminateTitleProcess, 0);
-REX_EXPORT_STUB_RETURN(__imp__ExFreeDebugPool, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExReadModifyWriteXConfigSettingUlong, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExRegisterXConfigNotification, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExCancelAlarm, 0);
@@ -74,7 +73,6 @@ REX_EXPORT_STUB_RETURN(__imp__KeBlowFuses, 0xC0000022);
 REX_EXPORT_STUB_RETURN(__imp__KeGetPMWRegister, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeGetPRVRegister, 0x00710800);
 REX_EXPORT_STUB_RETURN(__imp__KeGetSocRegister, 0);
-REX_EXPORT_STUB_RETURN(__imp__KeGetSpecialPurposeRegister, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetPMWRegister, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetPowerMode, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetPRVRegister, 0);
@@ -178,3 +176,14 @@ REX_EXPORT_STUB_RETURN(__imp__XVoicedHeadsetPresent, 0);
 REX_EXPORT_STUB_RETURN(__imp__XVoicedIsActiveProcess, 0);
 REX_EXPORT_STUB_RETURN(__imp__XVoicedSendVPort, 0);
 REX_EXPORT_STUB_RETURN(__imp__XVoicedSubmitPacket, 0);
+
+// stub-backfill-krnl2
+namespace rex::kernel::xboxkrnl {
+// PVR (SPR 287) is the Xenon processor version; every other SPR reads 0.
+u64 KeGetSpecialPurposeRegister_entry(u32 spr) { return spr == 287 ? 0x00710800 : 0; }
+void ExFreeDebugPool_entry(u32 addr) {
+  if (addr) REX_KERNEL_MEMORY()->SystemHeapFree(addr);
+}
+}  // namespace rex::kernel::xboxkrnl
+REX_EXPORT(__imp__KeGetSpecialPurposeRegister, rex::kernel::xboxkrnl::KeGetSpecialPurposeRegister_entry)
+REX_EXPORT(__imp__ExFreeDebugPool, rex::kernel::xboxkrnl::ExFreeDebugPool_entry)

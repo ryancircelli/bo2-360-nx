@@ -12,6 +12,7 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include <cstring>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
@@ -46,7 +47,6 @@ REX_EXPORT_STUB_RETURN(__imp__HalOpenCloseODDTray, 0);
 REX_EXPORT_STUB_RETURN(__imp__HalReadWritePCISpace, 0xC0000001);
 REX_EXPORT_STUB_RETURN(__imp__HalRegisterPowerDownNotification, 0);
 REX_EXPORT_STUB_RETURN(__imp__HalRegisterSMCNotification, 0);
-REX_EXPORT_STUB_RETURN(__imp__HalSendSMCMessage, 0);
 REX_EXPORT_STUB_RETURN(__imp__HalSetAudioEnable, 0);
 REX_EXPORT_STUB_RETURN(__imp__HalIsExecutingPowerDownDpc, 0);
 REX_EXPORT_STUB_RETURN(__imp__HalGetPowerUpCause, 0);
@@ -66,3 +66,15 @@ REX_EXPORT_STUB_RETURN(__imp__HalGetNotedArgonErrors, 0);
 REX_EXPORT_STUB_RETURN(__imp__HalReadArgonEeprom, 0xC0000001);
 REX_EXPORT_STUB_RETURN(__imp__HalWriteArgonEeprom, 0xC0000001);
 REX_EXPORT_STUB_RETURN(__imp__HalConfigureVeDevice, 0);
+
+// stub-backfill-krnl2: SMC mailbox. No per-command reply layouts known (only in canary's SMC model):
+// zero the 16-byte reply and echo the command id.
+namespace rex::kernel::xboxkrnl {
+void HalSendSMCMessage_entry(mapped_void msg, mapped_void resp) {
+  if (!msg || !resp) return;
+  auto* r = resp.as<uint8_t*>();
+  std::memset(r, 0, 16);
+  r[0] = msg.as<uint8_t*>()[0];
+}
+}  // namespace rex::kernel::xboxkrnl
+REX_EXPORT(__imp__HalSendSMCMessage, rex::kernel::xboxkrnl::HalSendSMCMessage_entry)

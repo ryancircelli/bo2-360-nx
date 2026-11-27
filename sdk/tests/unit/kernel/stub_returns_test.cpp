@@ -4,11 +4,11 @@
 #include <rex/ppc/context.h>
 
 namespace {
-uint64_t Call(const char* name) {
+uint64_t Call(const char* name, uint64_t arg = 0xDEADBEEF) {
   auto* f = rex::ppc::FindPPCFuncByName(name);
   REQUIRE(f != nullptr);
   PPCContext ctx{};
-  ctx.r3.u64 = 0xDEADBEEF;
+  ctx.r3.u64 = arg;
   static uint8_t mem[16];
   f(ctx, mem);
   return ctx.r3.u64;
@@ -26,4 +26,6 @@ TEST_CASE("stub families return their deliberate value") {
   CHECK(Call("__imp__VdSetHDCPOption") == 0);            // video: accept and ignore
   CHECK(Call("__imp__XInputdReadState") == 0xC000009D);  // pad driver: absent
   CHECK(Call("__imp__KeGetPRVRegister") == 0x00710800);
+  CHECK(Call("__imp__KeGetSpecialPurposeRegister", 287) == 0x00710800);  // PVR
+  CHECK(Call("__imp__KeGetSpecialPurposeRegister", 1) == 0);
 }

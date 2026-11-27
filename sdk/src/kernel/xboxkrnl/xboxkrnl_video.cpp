@@ -122,13 +122,10 @@ REX_EXPORT_STUB_RETURN(__imp__VdGetDisplayDiscoveryData, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdStartDisplayDiscovery, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdSetHDCPRevocationList, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdEnableWMAProOverHDMI, 0);
-REX_EXPORT_STUB_RETURN(__imp__VdQueryRealVideoMode, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdSetCGMSState, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdSetSCMSState, 0);
-REX_EXPORT_STUB_RETURN(__imp__VdGetOption, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdSetOption, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdQueryVideoCapabilities, 0);
-REX_EXPORT_STUB_RETURN(__imp__VdGet3dVideoFormat, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdGetWSS2Data, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdSet3dVideoFormat, 0);
 REX_EXPORT_STUB_RETURN(__imp__VdSetWSS2Data, 0);
@@ -582,3 +579,20 @@ REX_EXPORT(__imp__VdPersistDisplay, rex::kernel::xboxkrnl::VdPersistDisplay_entr
 REX_EXPORT(__imp__VdRetrainEDRAMWorker, rex::kernel::xboxkrnl::VdRetrainEDRAMWorker_entry)
 REX_EXPORT(__imp__VdRetrainEDRAM, rex::kernel::xboxkrnl::VdRetrainEDRAM_entry)
 REX_EXPORT(__imp__VdSwap, rex::kernel::xboxkrnl::VdSwap_entry)
+
+// stub-backfill-krnl2: real get/query behaviour (clean-room from round-2 specs)
+namespace rex::kernel::xboxkrnl {
+u32 VdGet3dVideoFormat_entry(mapped_void fmt) {
+  if (fmt) *reinterpret_cast<be_u32*>(fmt.as<uint8_t*>()) = 0;  // 2D
+  return 0;
+}
+u32 VdGetOption_entry(u32 id, mapped_void value) {
+  if (value) *reinterpret_cast<be_u32*>(value.as<uint8_t*>()) = 0;  // no options set
+  return 0;
+}
+// Real vs title-scaled mode: we expose one mode, so same output as VdQueryVideoMode.
+void VdQueryRealVideoMode_entry(ppc_ptr_t<X_VIDEO_MODE> video_mode) { VdQueryVideoMode(video_mode); }
+}  // namespace rex::kernel::xboxkrnl
+REX_EXPORT(__imp__VdGet3dVideoFormat, rex::kernel::xboxkrnl::VdGet3dVideoFormat_entry)
+REX_EXPORT(__imp__VdGetOption, rex::kernel::xboxkrnl::VdGetOption_entry)
+REX_EXPORT(__imp__VdQueryRealVideoMode, rex::kernel::xboxkrnl::VdQueryRealVideoMode_entry)
