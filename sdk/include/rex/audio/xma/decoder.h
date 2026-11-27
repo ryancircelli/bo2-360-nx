@@ -101,6 +101,7 @@ class XmaDecoder {
   runtime::FunctionDispatcher* function_dispatcher_ = nullptr;
 
   std::atomic<bool> worker_running_ = {false};
+  std::atomic<bool> worker_loop_running_ = {false};   // WorkerThreadMain is inside its loop: only then can it park for Pause()
   system::object_ref<system::XHostThread> worker_thread_;
   std::unique_ptr<rex::thread::Event> work_event_ = nullptr;
 
