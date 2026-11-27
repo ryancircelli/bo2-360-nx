@@ -327,6 +327,30 @@ u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
   return X_STATUS_SUCCESS;
 }
 
+// Dash context is a plain value; xenia also broadcasts a dash-context-changed notification, which we skip (nothing listens).
+static uint32_t g_dash_context = 0;
+u32 XamSetDashContext_entry(u32 value) {
+  g_dash_context = value;
+  return 0;
+}
+u32 XamGetDashContext_entry() { return g_dash_context; }
+
+// 0xFFFE07D1 is the dashboard title id; titles here never run as the dash.
+u32 XamIsCurrentTitleDash_entry() { return REX_KERNEL_STATE()->title_id() == 0xFFFE07D1u; }
+
+// Local profiles are never child accounts.
+u32 XamIsChildAccountSignedIn_entry() { return 0; }
+
+// IPTV retail flag is never set: xenia returns X_E_FAIL in that case.
+u32 XamIsIptvEnabled_entry() { return X_E_FAIL; }
+
+// Relative 100ns timeout (negative) for -1 = infinite -> returns 0 (null pointer); else writes it and returns its guest address.
+u32 XapiFormatTimeOut_entry(mapped_u64 result, u32 milliseconds) {
+  if (milliseconds == 0xFFFFFFFFu || !result) return 0;
+  *result = static_cast<uint64_t>(-10000ll * static_cast<int64_t>(milliseconds));
+  return result.guest_address();
+}
+
 u32 XamSwapDisc_entry(u32 disc_number) {
   // Stub for multi-disc games. Single-disc games (like Blue Dragon's reblue test)
   // don't need this, but the game may look it up dynamically via XexGetProcedureAddress.
@@ -380,4 +404,10 @@ REX_EXPORT(__imp__XamAlloc, rex::kernel::xam::XamAlloc_entry)
 REX_EXPORT(__imp__XamFree, rex::kernel::xam::XamFree_entry)
 REX_EXPORT(__imp__XamQueryLiveHiveW, rex::kernel::xam::XamQueryLiveHiveW_entry)
 REX_EXPORT(__imp__XamLoaderGetDvdTrayState, rex::kernel::xam::XamLoaderGetDvdTrayState_entry)
+REX_EXPORT(__imp__XamSetDashContext, rex::kernel::xam::XamSetDashContext_entry)
+REX_EXPORT(__imp__XamGetDashContext, rex::kernel::xam::XamGetDashContext_entry)
+REX_EXPORT(__imp__XamIsCurrentTitleDash, rex::kernel::xam::XamIsCurrentTitleDash_entry)
+REX_EXPORT(__imp__XamIsChildAccountSignedIn, rex::kernel::xam::XamIsChildAccountSignedIn_entry)
+REX_EXPORT(__imp__XamIsIptvEnabled, rex::kernel::xam::XamIsIptvEnabled_entry)
+REX_EXPORT(__imp__XapiFormatTimeOut, rex::kernel::xam::XapiFormatTimeOut_entry)
 REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)

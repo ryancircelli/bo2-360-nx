@@ -16,6 +16,7 @@
 #include <rex/logging.h>
 #include <rex/hook.h>
 #include <rex/types.h>
+#include <rex/system/flags.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xenumerator.h>
 #include <rex/system/xthread.h>
@@ -333,6 +334,34 @@ u32 XamGetOnlineLanguageAndCountryString_entry(u32 language_id, u32 country_id, 
   return X_E_SUCCESS;
 }
 
+// Table and bias from xenia-canary xam_locale.cc (BSD-3): date layout id per locale (3 = default).
+static constexpr uint8_t kLocaleDateFmt[] = {
+    2, 1, 3, 1, 3, 3, 3, 3, 3, 3, 3, 2, 3, 2, 1, 4, 2, 3, 1, 2, 2, 3,
+    3, 3, 3, 3, 2, 1, 3, 2, 2, 3, 0, 3, 0, 3, 3, 5, 3, 1, 3, 2, 3, 3,
+    3, 2, 3, 3, 5, 3, 3, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    2, 3, 3, 0, 2, 1, 3, 3, 3, 3, 3, 5, 3, 2, 3, 3, 3, 2, 3, 5, 0, 3,
+    1, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 5, 1, 1, 1, 1};
+
+u32 XamGetLocaleDateFormat_entry(u32 locale) {
+  uint32_t biased = locale - 5;
+  return biased < sizeof(kLocaleDateFmt) ? kLocaleDateFmt[biased] : 3;
+}
+
+// Extended language ids go up to 12; anything above falls back to English (xenia xeGetLanguage).
+u32 XamGetLanguage_entry() {
+  uint32_t lang = REXCVAR_GET(user_language);
+  return lang < 12 ? lang : 1;
+}
+
+u32 XamGetCountry_entry() { return REXCVAR_GET(user_country); }
+
+void XamGetOnlineLanguageAndCountry_entry(u64 xuid, mapped_u8 language_ptr, mapped_u8 country_ptr) {
+  if (country_ptr) *country_ptr = static_cast<uint8_t>(REXCVAR_GET(user_country));
+  if (language_ptr) *language_ptr = static_cast<uint8_t>(REXCVAR_GET(user_language));
+}
+
+u32 XamGetLanguageTypefacePatch_entry(u32 language) { return 0; }
+
 u32 XamGetLocaleString_entry(u32 id, u32 buffer_length, mapped_wstring buffer) {
   if (buffer_length >= 0x80000000u) {
     return X_E_INVALIDARG;
@@ -416,16 +445,16 @@ REX_EXPORT(__imp__XamGetLocaleEx, rex::kernel::xam::XamGetLocaleEx_entry)
 REX_EXPORT_STUB(__imp__XamFormatCurrency);
 REX_EXPORT_STUB(__imp__XamFormatMessage);
 REX_EXPORT_STUB(__imp__XamFormatSystemDateString);
-REX_EXPORT_STUB(__imp__XamGetCountry);
+REX_EXPORT(__imp__XamGetCountry, rex::kernel::xam::XamGetCountry_entry)
 REX_EXPORT_STUB(__imp__XamGetCurrencyFormat);
-REX_EXPORT_STUB(__imp__XamGetLanguage);
+REX_EXPORT(__imp__XamGetLanguage, rex::kernel::xam::XamGetLanguage_entry)
 REX_EXPORT_STUB(__imp__XamGetLanguageLocaleFallbackString);
 REX_EXPORT_STUB(__imp__XamGetLanguageTypeface);
-REX_EXPORT_STUB(__imp__XamGetLanguageTypefacePatch);
-REX_EXPORT_STUB(__imp__XamGetLocaleDateFormat);
+REX_EXPORT(__imp__XamGetLanguageTypefacePatch, rex::kernel::xam::XamGetLanguageTypefacePatch_entry)
+REX_EXPORT(__imp__XamGetLocaleDateFormat, rex::kernel::xam::XamGetLocaleDateFormat_entry)
 REX_EXPORT_STUB(__imp__XamGetLocaleTimeFormat);
 REX_EXPORT_STUB(__imp__XamGetOnlineCountryFeatures);
-REX_EXPORT_STUB(__imp__XamGetOnlineLanguageAndCountry);
+REX_EXPORT(__imp__XamGetOnlineLanguageAndCountry, rex::kernel::xam::XamGetOnlineLanguageAndCountry_entry)
 REX_EXPORT_STUB(__imp__XamGetStoreFront);
 REX_EXPORT_STUB(__imp__XamUniSortCmpString);
 REX_EXPORT_STUB(__imp__XamValidateCountry);
