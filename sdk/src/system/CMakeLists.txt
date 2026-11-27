@@ -61,13 +61,7 @@ else()
     list(APPEND REXSYSTEM_SOURCES savepoint_stub.cpp)
 endif()
 
-if(REXGLUE_PLATFORM_SWITCH)
-    # A NRO is a single static executable: no shared libraries, no dlopen.
-    # rexglue_switch_configure_target links it whole into the title.
-    add_library(rexruntime STATIC ${REXSYSTEM_SOURCES})
-else()
-    add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
-endif()
+add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
 add_library(rex::runtime ALIAS rexruntime)
 add_library(rex::system ALIAS rexruntime)
 add_library(rex::kernel ALIAS rexruntime)
@@ -107,9 +101,7 @@ target_link_libraries(rexruntime
         mspack
         xxHash::xxhash
 )
-if(NOT REXGLUE_PLATFORM_SWITCH)
-    target_link_libraries(rexruntime PUBLIC SDL3::SDL3)
-endif()
+target_link_libraries(rexruntime PUBLIC SDL3::SDL3)
 
 if(REXGLUE_ENABLE_TRACY)
     # TARGET_NAME is what tells install(EXPORT) this text is a target to

@@ -1,8 +1,7 @@
 # bo2cp - ReXGlue Recompiled Project
 #
-# Campaign bring-up: the TU18 default.xex recompiled on its own, drawn by the emulated GPU (xenos), for Windows and
-# the Switch. SDK boilerplate lives in generated/rexglue.cmake; build_windows.sh and build_switch.sh configure and
-# build it.
+# Campaign bring-up: the TU18 default.xex recompiled on its own, drawn by the emulated GPU (xenos), for Windows.
+# SDK boilerplate lives in generated/rexglue.cmake; build_windows.sh configures and builds it.
 
 cmake_minimum_required(VERSION 3.25)
 project(bo2cp LANGUAGES CXX)
@@ -113,17 +112,9 @@ endif()
 
 rexglue_setup_target(bo2cp GPU_PLUGINS xenos)
 
-# Switch, as for bo2zm (games/bo2/CMakeLists.txt): contended host mutexes and the C heap's lock spin briefly before sleeping
-# (games/bo2/src/bo2zm_switch_mutex.cpp), and the default display's id for VSYNC's refresh signal (bo2zm_switch.cpp).
-if(REXGLUE_PLATFORM_SWITCH AND BO2CP_NATIVE)
-    target_sources(bo2cp PRIVATE ${BO2ZM_SRC}/bo2zm_switch_mutex.cpp)
-    target_link_options(bo2cp PRIVATE "-Wl,--wrap=pthread_mutex_lock" "-Wl,--wrap=__malloc_lock,--wrap=__malloc_unlock"
-                        "-Wl,--wrap=viOpenDisplay")
-endif()
-
 # How the generated code reaches guest memory: the Zombies program's header (core/bo2zm_guest_memory.h), appended to
 # its precompiled header, defines REX_GUEST_BARRIER() for the lines tools/guest_barriers.py places; with
-# BO2CP_GUEST_MEMORY_PLAIN (build_switch.sh turns it on, as for bo2zm) the guest loads and stores are plain accesses.
+# BO2CP_GUEST_MEMORY_PLAIN the guest loads and stores are plain accesses.
 option(BO2CP_GUEST_MEMORY_PLAIN "Generated code: plain guest loads and stores, with compiler barriers on guest memory"
        OFF)
 if(TARGET bo2cp_recomp)
@@ -133,31 +124,12 @@ if(TARGET bo2cp_recomp)
     endif()
 endif()
 
-# Switch test build: the C heap's live bytes by caller in the log every minute (core/bo2zm_heap_track.cpp, as in the
-# Zombies program). On with BO2_HEAP_TRACK=1 bash campaign/build_switch.sh; never in a player build.
-option(BO2CP_HEAP_TRACK "Switch test build: log the C heap's live bytes by caller every minute" OFF)
-if(REXGLUE_PLATFORM_SWITCH AND BO2CP_HEAP_TRACK)
-    set_source_files_properties(../core/bo2zm_heap_track.cpp PROPERTIES COMPILE_DEFINITIONS BO2ZM_HEAP_TRACK=1
-                                COMPILE_OPTIONS -fno-omit-frame-pointer)
-    target_link_options(bo2cp PRIVATE "-Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc,--wrap=memalign"
-                        "-Wl,--wrap=aligned_alloc,--wrap=posix_memalign")
-endif()
-
 # rex_app.cpp (compiled into this target) includes imgui.h, but rexruntime links
 # imgui privately, so the include path does not reach us when the SDK is a
 # subdirectory (games/bo2/CMakeLists.txt does the same).
-if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
+if(TARGET imgui)
     target_include_directories(bo2cp PRIVATE
         $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
-endif()
-
-# Nintendo Switch: bo2cp.nro next to the ELF. On the SD card it sits next to bo2zm.nro in sdmc:/switch/bo2zm/, whose
-# Campaign choice starts it and whose game files it reads (src/bo2cp_app.h, src/bo2cp_relaunch.cpp).
-if(REXGLUE_PLATFORM_SWITCH)
-    rexglue_switch_add_nro(bo2cp
-        NAME "Black Ops II 360 NX Campaign"
-        AUTHOR "AlvaroEPena"
-        VERSION "1.1.0")
 endif()
 
 if(BO2CP_NATIVE)
@@ -166,10 +138,7 @@ if(BO2CP_NATIVE)
                                "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
     find_path(BO2CP_XXHASH_INCLUDE xxhash.h HINTS "${REXSDK_DIR}/thirdparty/xxHash" NO_CMAKE_FIND_ROOT_PATH REQUIRED)
     target_include_directories(bo2cp PRIVATE "${BO2CP_XXHASH_INCLUDE}")
-    if(REXGLUE_PLATFORM_SWITCH)
-        target_include_directories(bo2cp PRIVATE "${REXSDK_DIR}/src")
-    endif()
-    if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
+    if(TARGET renderdoc)
         target_include_directories(bo2cp PRIVATE $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
     if(TARGET Vulkan::Headers)

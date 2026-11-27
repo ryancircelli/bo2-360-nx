@@ -32,9 +32,7 @@ target_include_directories(rexinput PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-if(REXGLUE_PLATFORM_SWITCH)
-    target_sources(rexinput PRIVATE switch/switch_input_driver.cpp)
-elseif(WIN32)
+if(WIN32)
     target_sources(rexinput PRIVATE
         sdl/sdl_input_driver.cpp
         sdl/pad_ownership.cpp
@@ -44,21 +42,17 @@ else()
     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp sdl/pad_ownership.cpp)
 endif()
 # Scripted virtual pads and Steam Input detection (mac-input): desktop only.
-if(NOT REXGLUE_PLATFORM_SWITCH)
-    target_sources(rexinput PRIVATE script/script_events.cpp script/script_input_driver.cpp script/kbm_script.cpp
-        steam_detect.cpp)
-endif()
+target_sources(rexinput PRIVATE script/script_events.cpp script/script_input_driver.cpp script/kbm_script.cpp
+    steam_detect.cpp)
 # USB port lookup for pads without a serial, used by the SDL driver.
 if(APPLE)
     target_sources(rexinput PRIVATE sdl/pad_location_mac.mm)
     set_source_files_properties(sdl/pad_location_mac.mm PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(rexinput PUBLIC "-framework GameController" "-framework IOKit")
-elseif(NOT REXGLUE_PLATFORM_SWITCH)
+else()
     target_sources(rexinput PRIVATE sdl/pad_location_stub.cpp)
 endif()
 
 target_link_libraries(rexinput PUBLIC rexcore rexui)
-if(NOT REXGLUE_PLATFORM_SWITCH)
-    target_link_libraries(rexinput PUBLIC SDL3::SDL3)
-endif()
+target_link_libraries(rexinput PUBLIC SDL3::SDL3)

@@ -56,33 +56,6 @@ if(WIN32)
         threading_win.cpp
     )
     target_compile_definitions(rexcore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-elseif(REXGLUE_PLATFORM_SWITCH)
-    # Nintendo Switch (Horizon, libnx, devkitA64). CMAKE_SYSTEM_NAME is Generic,
-    # so neither WIN32 nor UNIX is defined and a branch of its own is needed.
-    # Most of the POSIX layer compiles as is on newlib; what Horizon lacks goes
-    # into the *_switch.cpp files. The reasons for each are in
-    # docs/platform-notes.md.
-    target_sources(rexcore PRIVATE
-        atomic_posix.cpp
-        clock_posix.cpp
-        dbg_posix.cpp
-        filesystem_posix.cpp          # patched: 64-bit off_t without *64 variants
-        math_gcc.cpp
-        platform/console_posix.cpp
-        platform/env_posix.cpp
-        socket_posix.cpp
-        system_posix.cpp
-        threading_posix.cpp           # patched: suspension through svcSetThreadActivity
-        threading_switch.cpp          # shims: affinity, priority, cpu_set_t, gettid
-        dynlib_switch.cpp             # an NRO has no dlopen
-        exception_handler_switch.cpp  # a single __libnx_exception_handler
-        fiber_switch.cpp              # context switch in assembly, without ucontext
-        guest_memory_switch.cpp       # core: window, mirrors and protection by unmapping
-        mapped_memory_switch.cpp      # no file mmap: read into RAM with a cap
-        memory_switch.cpp             # rex::memory API on top of the core
-        seh_switch.cpp                # SEH interface; faults inside SEH scopes are fatal
-        switch_libc_supplement.c      # pread, pwrite and friends: newlib declares them, libnx does not
-    )
 elseif(UNIX)
     # Linux and macOS/Darwin share the POSIX sources; Darwin-specific behavior
     # is selected inside them with #if defined(__APPLE__).

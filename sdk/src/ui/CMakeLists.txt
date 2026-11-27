@@ -19,16 +19,6 @@ set(REXUI_CORE_SOURCES
     windowed_app_context.cpp
     windowed_app_context_sdl.cpp
 )
-if(REXGLUE_PLATFORM_SWITCH)
-    # libnx window and UI loop instead of SDL3.
-    list(REMOVE_ITEM REXUI_CORE_SOURCES
-        sdl_virtual_key.cpp
-        window_sdl.cpp
-        windowed_app_context_sdl.cpp)
-    list(APPEND REXUI_CORE_SOURCES
-        window_switch.cpp
-        windowed_app_context_switch.cpp)
-endif()
 
 # Optional overlay dialogs
 set(REXUI_OVERLAY_SOURCES
@@ -76,10 +66,7 @@ if(REXGLUE_USE_D3D12)
 endif()
 
 # Platform-specific sources (windowing itself is SDL3, platform-independent)
-if(REXGLUE_PLATFORM_SWITCH)
-    # ViNWindowSurface is header-only.
-    set(REXUI_PLATFORM_SOURCES)
-elseif(WIN32)
+if(WIN32)
     set(REXUI_PLATFORM_SOURCES
         surface_win.cpp
     )
@@ -128,9 +115,7 @@ target_link_libraries(rexui PUBLIC
     renderdoc
     imgui::imgui
 )
-if(NOT REXGLUE_PLATFORM_SWITCH)
-    target_link_libraries(rexui PUBLIC SDL3::SDL3)
-endif()
+target_link_libraries(rexui PUBLIC SDL3::SDL3)
 target_link_libraries(rexui PRIVATE utf8cpp)
 
 if(REXGLUE_FIDELITYFX_SOURCE_DIR AND EXISTS "${REXGLUE_FIDELITYFX_SOURCE_DIR}/sdk/include")

@@ -78,11 +78,6 @@ endfunction()
 function(rexglue_configure_target target_name)
     cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
 
-    if(REXGLUE_PLATFORM_SWITCH)
-        # Single static NRO: see cmake/rexglue_switch.cmake.
-        rexglue_switch_configure_target(${target_name} ${ARGN})
-        return()
-    endif()
 
     target_sources(${target_name} PRIVATE
         ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
@@ -389,10 +384,10 @@ REX_DEFINE_APP(@name@, CreateApp)
 ]=] @ONLY)
         target_sources(${name} PRIVATE "${_main}")
     endif()
-    if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET imgui)
+    if(TARGET imgui)
         target_include_directories(${name} PRIVATE $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
-    if(NOT REXGLUE_PLATFORM_SWITCH AND TARGET renderdoc)
+    if(TARGET renderdoc)
         target_include_directories(${name} PRIVATE $<TARGET_PROPERTY:renderdoc,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
     if(TARGET Vulkan::Headers)

@@ -27,7 +27,6 @@ option(REXGLUE_ENABLE_SANITIZERS "Enable UndefinedBehaviorSanitizer" OFF)
 option(REXGLUE_ENABLE_FIDELITYFX "Enable optional AMD FidelityFX integration (experimental)" OFF)
 option(REXGLUE_ENABLE_TRACY                "Enable Tracy profiler integration" ON)
 option(REXGLUE_ENABLE_PERF_COUNTERS        "Enable lightweight perf counter registry and overlay" ON)
-option(REXGLUE_PLATFORM_SWITCH             "Build for Nintendo Switch (devkitA64 + libnx; set by the toolchain file)" OFF)
 # Propagate profiling defines globally (compiled out in Release)
 if(REXGLUE_ENABLE_TRACY)
     add_compile_definitions($<$<NOT:$<CONFIG:Release>>:REXGLUE_ENABLE_PROFILING>)
@@ -73,9 +72,6 @@ set(REXGLUE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rexglue_helpers.cmake)
-if(REXGLUE_PLATFORM_SWITCH)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rexglue_switch.cmake)
-endif()
 
 if(UNIX AND NOT APPLE)
     # Keep installed binaries self-contained by resolving shared libs relative
@@ -96,14 +92,8 @@ elseif(APPLE)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 endif()
 
-# Enforce a Clang toolchain (LLVM Clang or Apple's Clang). Nintendo Switch is
-# the exception: devkitA64 only ships GCC, which builds the whole runtime and,
-# with the DEFINE_REX_FUNC fix in pch_h.inja, the generated code.
-if(REXGLUE_PLATFORM_SWITCH)
-    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        message(FATAL_ERROR "The Nintendo Switch build uses devkitA64's GCC (switch-devkitA64.cmake toolchain)")
-    endif()
-elseif(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(Apple)?Clang$")
+# Enforce a Clang toolchain (LLVM Clang or Apple's Clang).
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "^(Apple)?Clang$")
     message(FATAL_ERROR "ReXGlue requires the Clang compiler (LLVM Clang or AppleClang). Please set CMAKE_CXX_COMPILER to clang++")
 endif()
 
@@ -174,13 +164,7 @@ if(APPLE AND CMAKE_OSX_ARCHITECTURES)
     list(GET CMAKE_OSX_ARCHITECTURES 0 REX_TARGET_PROCESSOR)
 endif()
 
-if(REXGLUE_PLATFORM_SWITCH)
-    # Horizon on aarch64. Code detects it through __SWITCH__ (rex/platform.h);
-    # CMAKE_SYSTEM_NAME is Generic, so neither WIN32 nor UNIX is set.
-    set(REX_PLATFORM "switch-arm64")
-    # Headers Horizon lacks (netinet/ip.h, endian.h), ahead of everything.
-    include_directories(BEFORE SYSTEM ${CMAKE_CURRENT_SOURCE_DIR}/switch_compat)
-elseif(WIN32)
+if(WIN32)
     if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
         set(REX_PLATFORM "win-amd64")
     elseif(REX_TARGET_PROCESSOR MATCHES "aarch64|ARM64|arm64")
@@ -296,15 +280,13 @@ add_subdirectory(src/audio)
 add_subdirectory(src/graphics)
 add_subdirectory(src/system)
 add_subdirectory(src/kernel)
-if(NOT REXGLUE_PLATFORM_SWITCH AND REXGLUE_BUILD_HOST_TOOLS)
-    # Host tools. Code generation runs on the PC; a Switch build compiles its
-    # output.
+if(REXGLUE_BUILD_HOST_TOOLS)
     add_subdirectory(src/codegen)
     add_subdirectory(src/rexglue)
 endif()
 
-# rex-padtest is a desktop tool (SDL controllers); the Switch build leaves it out.
-if(REXGLUE_BUILD_PADTEST AND NOT REXGLUE_PLATFORM_SWITCH)
+# rex-padtest is a desktop tool (SDL controllers).
+if(REXGLUE_BUILD_PADTEST)
     add_subdirectory(tools/padtest)
 endif()
 

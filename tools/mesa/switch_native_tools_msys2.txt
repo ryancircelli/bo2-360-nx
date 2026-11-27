@@ -1,7 +1,0 @@
-# Copy of mesa-switch switch_native_tools_msys2.txt with cbindgen from clang64
-# (the original points at clangarm64, an ARM64 Windows MSYS2). Used by tools/build_mesa.sh.
-[binaries]
-mesa_clc = ['C:/msys64/usr/bin/bash.exe', '@GLOBAL_SOURCE_ROOT@/host-tool-msys2-wrapper.sh', 'builddir-native-x64-host/src/compiler/clc/mesa_clc.exe']
-vtn_bindgen2 = ['C:/msys64/usr/bin/bash.exe', '@GLOBAL_SOURCE_ROOT@/host-tool-msys2-wrapper.sh', 'builddir-native-x64-host/src/compiler/spirv/vtn_bindgen2.exe']
-cbindgen = 'C:/msys64/clang64/bin/cbindgen.exe'
-rust = ['C:/msys64/usr/bin/bash.exe', '@GLOBAL_SOURCE_ROOT@/rustc-native-msys2-wrapper.sh']
