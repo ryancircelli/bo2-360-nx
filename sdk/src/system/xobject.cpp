@@ -9,13 +9,16 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <pthread.h>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
 
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/stream.h>
 #include <rex/thread_spin.h>
 #include <rex/system/kernel_state.h>
@@ -260,6 +263,31 @@ uint32_t XObject::TimeoutTicksToMs(int64_t timeout_ticks) {
   }
 }
 
+REXCVAR_DEFINE_INT32(subms_wait_mode, 0, "Kernel",
+                     "Bench knob: a Wait with a guest timeout under 1 ms (truncated to 0 ms, so a bare poll). 0 = old "
+                     "behaviour, 1 = count it as a guest poll (yield + spin backoff, like the other waits do), 2 = wait "
+                     "1 ms instead");
+
+// Wait-loop study item 3: a nonzero guest timeout under 1 ms is truncated to 0 ms, so the wait turns into a poll.
+// Counts those per thread and logs them every 10 s ("[subms]"). Also called from XThread::Delay.
+void NoteSubMsTimeout(const char* where) {
+  struct Count {
+    uint64_t n = 0;
+    std::chrono::steady_clock::time_point window{};
+  };
+  static thread_local Count c;
+  const auto now = std::chrono::steady_clock::now();
+  if (c.window == std::chrono::steady_clock::time_point{}) c.window = now;
+  ++c.n;
+  if (now - c.window >= std::chrono::seconds(10)) {
+    char name[64] = {};
+    pthread_getname_np(pthread_self(), name, sizeof(name));
+    REXSYS_INFO("[subms] {}, last 10 s: {} {} calls with a guest timeout under 1 ms truncated to 0", name, c.n, where);
+    c.n = 0;
+    c.window = now;
+  }
+}
+
 X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t alertable,
                        uint64_t* opt_timeout) {
   auto wait_handle = GetWaitHandle();
@@ -271,6 +299,11 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
   auto timeout_ms = opt_timeout ? std::chrono::milliseconds(chrono::Clock::ScaleGuestDurationMillis(
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
+  const bool subms = opt_timeout && *opt_timeout != 0 && timeout_ms.count() == 0;
+  if (subms) {
+    NoteSubMsTimeout("Wait");
+    if (REXCVAR_GET(subms_wait_mode) == 2) timeout_ms = std::chrono::milliseconds(1);
+  }
 
   XThread::CheckTitleTermination();
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
@@ -285,7 +318,7 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
     case rex::thread::WaitResult::kTimeout:
       // Only after a zero-timeout poll. After a real timed wait the thread has already given up
       // the core for the whole timeout.
-      if (!opt_timeout || *opt_timeout == 0) {
+      if (!opt_timeout || *opt_timeout == 0 || (subms && REXCVAR_GET(subms_wait_mode) == 1)) {
         rex::thread::GuestPoll();
       }
       return X_STATUS_TIMEOUT;

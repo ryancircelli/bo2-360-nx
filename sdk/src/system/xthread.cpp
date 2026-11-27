@@ -1276,8 +1276,11 @@ void RecordDelay(const std::string& name, uint32_t requested_ms, std::chrono::st
 }
 }  // namespace
 
+void NoteSubMsTimeout(const char* where);  // xobject.cpp
+
 X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t interval) {
   uint32_t timeout_ms = TimeoutTicksToMs(int64_t(interval));
+  if (interval != 0 && timeout_ms == 0) NoteSubMsTimeout("Delay");
   timeout_ms = chrono::Clock::ScaleGuestDurationMillis(timeout_ms);
   CheckTitleTermination();
   if (alertable) {

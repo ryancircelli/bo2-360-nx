@@ -18,6 +18,7 @@
 #include <string>
 
 #include <rex/chrono/chrono_steady_cast.h>
+#include <rex/cvar.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/kernel/xboxkrnl/rtl.h>
 #include <rex/kernel/xboxkrnl/threading.h>
@@ -340,6 +341,10 @@ struct X_RTL_CRITICAL_SECTION {
 #pragma pack(pop)
 static_assert_size(X_RTL_CRITICAL_SECTION, 28);
 
+REXCVAR_DEFINE_BOOL(cs_spin_test_first, false, "Kernel",
+                    "Bench knob (off = old behaviour): the critical-section spin loop reads the lock word and tries the "
+                    "compare-exchange only when it looks free, so waiting threads do not bounce the cache line");
+
 namespace {
 // lock_count lives in guest memory as a big endian word, so the atomics work on the swapped value
 // (rexglue-sdk a04d6fc). -1 and 0 are byte-order symmetric, 1 and up are not.
@@ -421,7 +426,10 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
   }
   if (spin_count) {
     rex::thread::SpinScope spin;
+    const bool test_first = REXCVAR_GET(cs_spin_test_first);
+    const uint32_t free_word = rex::byte_swap(uint32_t(-1));
     while (--spin_count) {
+      if (test_first && LockCountRaw(cs).load(std::memory_order_relaxed) != free_word) continue;
       if (TryAcquireLockCount(cs)) {
         // Acquired.
         cs->owning_thread = cur_thread;
