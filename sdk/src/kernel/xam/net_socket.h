@@ -24,6 +24,13 @@ struct XWSAOVERLAPPED {
 
 u32 NetDll_XNetRandom_entry(u32, mapped_void, u32);
 u32 NetDll_XNetCreateKey_entry(u32, mapped_void, mapped_void);
+u32 NetDll_XNetRegisterKey_entry(u32, mapped_void, mapped_void);
+u32 NetDll_XNetUnregisterKey_entry(u32, mapped_void);
+u32 NetDll_XNetReplaceKey_entry(u32, mapped_void, mapped_void);
+u32 NetDll_XNetServerToInAddr_entry(u32, u32, u32, mapped_u32);
+u32 NetDll_XNetInAddrToServer_entry(u32, u32, mapped_void);
+u32 NetDll_XNetSetSystemLinkPort_entry(u32, u32);
+u32 NetDll_XNetGetSystemLinkPort_entry(u32, mapped_u16);
 u32 NetDll_WSARecvFrom_entry(u32, u32, ppc_ptr_t<XWSABUF>, u32, mapped_u32, mapped_u32,
                             ppc_ptr_t<system::XSOCKADDR_IN>, mapped_u32,
                             ppc_ptr_t<XWSAOVERLAPPED>, mapped_void);

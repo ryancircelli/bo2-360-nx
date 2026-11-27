@@ -115,3 +115,8 @@ add_executable(xhttp_url_tests kernel/xhttp_url_test.cpp)
 target_include_directories(xhttp_url_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(xhttp_url_tests PRIVATE Catch2::Catch2WithMain)
 add_test(NAME xhttp_url_tests COMMAND xhttp_url_tests)
+
+add_executable(stub_families_tests kernel/stub_families_test.cpp)
+target_include_directories(stub_families_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(stub_families_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME stub_families_tests COMMAND stub_families_tests)
