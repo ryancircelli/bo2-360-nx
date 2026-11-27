@@ -40,6 +40,14 @@ target_include_directories(metal_constant_overrides_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
 add_test(NAME metal_constant_overrides_tests COMMAND metal_constant_overrides_tests)
 
+# rexgpu-xenos is a shared plugin with hidden symbols, so compile the sources under test.
+add_executable(texture_util_tests graphics/texture_util_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/util.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/info.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/info_formats.cpp)
+target_link_libraries(texture_util_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME texture_util_tests COMMAND texture_util_tests)
+
 add_executable(patch_loader_tests patch/patch_loader_test.cpp)
 target_include_directories(patch_loader_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(patch_loader_tests PRIVATE rexruntime)
