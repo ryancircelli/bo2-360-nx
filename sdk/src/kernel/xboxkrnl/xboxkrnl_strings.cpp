@@ -355,6 +355,33 @@ REX_HOOK_RAW(__imp___vscwprintf) {
 // Export stubs
 //=============================================================================
 
-REX_EXPORT_STUB(__imp___scprintf);
-REX_EXPORT_STUB(__imp___scwprintf);
-REX_EXPORT_STUB(__imp___vscprintf);
+// Length-only variants: format and return the count, no buffer.
+REX_HOOK_RAW(__imp___scprintf) {
+  if (ctx.r3.u32 == 0) {
+    ctx.r3.u64 = static_cast<uint64_t>(-1);
+    return;
+  }
+  StackArgList args(ctx, base, 1);
+  StringFormatData data(GuestPtr<const u8*>(base, ctx.r3.u32));
+  ctx.r3.u64 = static_cast<uint64_t>(static_cast<int64_t>(format_core(base, data, args, false)));
+}
+
+REX_HOOK_RAW(__imp___scwprintf) {
+  if (ctx.r3.u32 == 0) {
+    ctx.r3.u64 = static_cast<uint64_t>(-1);
+    return;
+  }
+  StackArgList args(ctx, base, 1);
+  WideStringFormatData data(GuestPtr<const u16*>(base, ctx.r3.u32));
+  ctx.r3.u64 = static_cast<uint64_t>(static_cast<int64_t>(format_core(base, data, args, true)));
+}
+
+REX_HOOK_RAW(__imp___vscprintf) {
+  if (ctx.r3.u32 == 0) {
+    ctx.r3.u64 = static_cast<uint64_t>(-1);
+    return;
+  }
+  ArrayArgList args(base, ctx.r4.u32);
+  StringFormatData data(GuestPtr<const u8*>(base, ctx.r3.u32));
+  ctx.r3.u64 = static_cast<uint64_t>(static_cast<int64_t>(format_core(base, data, args, false)));
+}

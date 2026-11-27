@@ -270,7 +270,8 @@ REX_EXPORT(__imp__NtQueryEvent, rex::kernel::xboxkrnl::NtQueryEvent_entry)
 REX_EXPORT_STUB_RETURN(__imp__ObCreateObject, 0xC0000001);
 REX_EXPORT_STUB(__imp__ObGetWaitableObject);
 REX_EXPORT_STUB(__imp__ObInsertObject);
-REX_EXPORT_STUB_RETURN(__imp__ObIsTitleObject, 0);
+// Every object in this process is title-made; BO2 picks the title pool when this is 1.
+REX_EXPORT_STUB_RETURN(__imp__ObIsTitleObject, 1);
 REX_EXPORT_STUB(__imp__ObLookupAnyThreadByThreadId);
 REX_EXPORT_STUB(__imp__ObMakeTemporaryObject);
 REX_EXPORT_STUB(__imp__ObTranslateSymbolicLink);

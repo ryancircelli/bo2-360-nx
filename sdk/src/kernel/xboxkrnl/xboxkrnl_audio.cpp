@@ -24,6 +24,7 @@
 #include <rex/system/xtypes.h>
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -177,8 +178,10 @@ void DumpFrame(uint32_t client, const uint8_t* frame_data) {
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
 
+static std::atomic<uint32_t> speaker_config{0x00010001};
+
 u32 XAudioGetSpeakerConfig_entry(mapped_u32 config_ptr) {
-  *config_ptr = 0x00010001;
+  *config_ptr = speaker_config.load();
   return X_ERROR_SUCCESS;
 }
 
@@ -200,9 +203,18 @@ u32 XAudioGetVoiceCategoryVolume_entry(u32 unk, mapped_f32 out_ptr) {
   return X_ERROR_SUCCESS;
 }
 
-u32 XAudioEnableDucker_entry(u32 unk) {
+// Ducker settings are only stored and read back; the mixer has no ducking stage.
+static std::atomic<uint32_t> ducker_enabled{0};
+static std::atomic<float> ducker_level{1.0f}, ducker_threshold{0}, ducker_attack{0},
+    ducker_release{0}, ducker_hold{0};
+
+u32 XAudioEnableDucker_entry(u32 enable) {
+  ducker_enabled = enable ? 1 : 0;
   return X_ERROR_SUCCESS;
 }
+u32 XAudioIsDuckerEnabled_entry() { return ducker_enabled; }
+u32 XAudioSetSpeakerConfig_entry(u32 v) { speaker_config = v; return X_ERROR_SUCCESS; }
+u32 XAudioOverrideSpeakerConfig_entry(u32 v) { speaker_config = v; return X_ERROR_SUCCESS; }
 
 u32 XAudioRegisterRenderDriverClient_entry(mapped_u32 callback_ptr, mapped_u32 driver_ptr) {
   REXKRNL_DEBUG("XAudioRegisterRenderDriverClient called! callback_ptr={:08X} driver_ptr={:08X}",
@@ -285,23 +297,69 @@ REX_EXPORT_STUB(__imp__XAudioEndDigitalBypassMode);
 REX_EXPORT_STUB(__imp__XAudioSubmitDigitalPacket);
 REX_EXPORT_STUB_RETURN(__imp__XAudioQueryDriverPerformance, 0);
 REX_EXPORT_STUB(__imp__XAudioGetRenderDriverThread);
-REX_EXPORT_STUB(__imp__XAudioSetSpeakerConfig);
-REX_EXPORT_STUB(__imp__XAudioOverrideSpeakerConfig);
+REX_EXPORT(__imp__XAudioSetSpeakerConfig, rex::kernel::xboxkrnl::XAudioSetSpeakerConfig_entry)
+REX_EXPORT(__imp__XAudioOverrideSpeakerConfig, rex::kernel::xboxkrnl::XAudioOverrideSpeakerConfig_entry)
 REX_EXPORT_STUB(__imp__XAudioSuspendRenderDriverClients);
 REX_EXPORT_STUB_RETURN(__imp__XAudioRegisterRenderDriverMECClient, 0);
 REX_EXPORT_STUB_RETURN(__imp__XAudioUnregisterRenderDriverMECClient, 0);
 REX_EXPORT_STUB_RETURN(__imp__XAudioCaptureRenderDriverFrame, 0);
-REX_EXPORT_STUB_RETURN(__imp__XAudioGetRenderDriverTic, 0);
-REX_EXPORT_STUB(__imp__XAudioSetDuckerLevel);
-REX_EXPORT_STUB(__imp__XAudioIsDuckerEnabled);
-REX_EXPORT_STUB_RETURN(__imp__XAudioGetDuckerLevel, 0);
-REX_EXPORT_STUB_RETURN(__imp__XAudioGetDuckerThreshold, 0);
-REX_EXPORT_STUB(__imp__XAudioSetDuckerThreshold);
-REX_EXPORT_STUB_RETURN(__imp__XAudioGetDuckerAttackTime, 0);
-REX_EXPORT_STUB(__imp__XAudioSetDuckerAttackTime);
-REX_EXPORT_STUB_RETURN(__imp__XAudioGetDuckerReleaseTime, 0);
-REX_EXPORT_STUB(__imp__XAudioSetDuckerReleaseTime);
-REX_EXPORT_STUB_RETURN(__imp__XAudioGetDuckerHoldTime, 0);
-REX_EXPORT_STUB(__imp__XAudioSetDuckerHoldTime);
+REX_EXPORT(__imp__XAudioIsDuckerEnabled, rex::kernel::xboxkrnl::XAudioIsDuckerEnabled_entry)
 REX_EXPORT_STUB(__imp__XAudioGetUnderrunCount);
 REX_EXPORT_STUB(__imp__XAudioSetProcessFrameCallback);
+
+// Float in f1 (BO2 compares f1 right after the call); r3 stays 0.
+REX_HOOK_RAW(__imp__XAudioGetDuckerLevel) {
+  ctx.f1.f64 = rex::kernel::xboxkrnl::ducker_level.load();
+  ctx.r3.u64 = 0;
+}
+REX_HOOK_RAW(__imp__XAudioSetDuckerLevel) {
+  rex::kernel::xboxkrnl::ducker_level = static_cast<float>(ctx.f1.f64);
+  ctx.r3.u64 = 0;
+}
+
+// Float in f1 (BO2 compares f1 right after the call); r3 stays 0.
+REX_HOOK_RAW(__imp__XAudioGetDuckerThreshold) {
+  ctx.f1.f64 = rex::kernel::xboxkrnl::ducker_threshold.load();
+  ctx.r3.u64 = 0;
+}
+REX_HOOK_RAW(__imp__XAudioSetDuckerThreshold) {
+  rex::kernel::xboxkrnl::ducker_threshold = static_cast<float>(ctx.f1.f64);
+  ctx.r3.u64 = 0;
+}
+
+// Float in f1 (BO2 compares f1 right after the call); r3 stays 0.
+REX_HOOK_RAW(__imp__XAudioGetDuckerAttackTime) {
+  ctx.f1.f64 = rex::kernel::xboxkrnl::ducker_attack.load();
+  ctx.r3.u64 = 0;
+}
+REX_HOOK_RAW(__imp__XAudioSetDuckerAttackTime) {
+  rex::kernel::xboxkrnl::ducker_attack = static_cast<float>(ctx.f1.f64);
+  ctx.r3.u64 = 0;
+}
+
+// Float in f1 (BO2 compares f1 right after the call); r3 stays 0.
+REX_HOOK_RAW(__imp__XAudioGetDuckerReleaseTime) {
+  ctx.f1.f64 = rex::kernel::xboxkrnl::ducker_release.load();
+  ctx.r3.u64 = 0;
+}
+REX_HOOK_RAW(__imp__XAudioSetDuckerReleaseTime) {
+  rex::kernel::xboxkrnl::ducker_release = static_cast<float>(ctx.f1.f64);
+  ctx.r3.u64 = 0;
+}
+
+// Float in f1 (BO2 compares f1 right after the call); r3 stays 0.
+REX_HOOK_RAW(__imp__XAudioGetDuckerHoldTime) {
+  ctx.f1.f64 = rex::kernel::xboxkrnl::ducker_hold.load();
+  ctx.r3.u64 = 0;
+}
+REX_HOOK_RAW(__imp__XAudioSetDuckerHoldTime) {
+  rex::kernel::xboxkrnl::ducker_hold = static_cast<float>(ctx.f1.f64);
+  ctx.r3.u64 = 0;
+}
+
+// Frame counter: one tick per 256-sample frame at 48 kHz (fh1 checks that it advances).
+REX_HOOK_RAW(__imp__XAudioGetRenderDriverTic) {
+  using namespace std::chrono;
+  auto ms = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+  ctx.r3.u64 = static_cast<uint32_t>(ms * 48000 / 256 / 1000);
+}

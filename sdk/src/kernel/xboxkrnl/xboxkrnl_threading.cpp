@@ -18,6 +18,7 @@
 #include <cstring>
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,7 @@
 #include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/function_dispatcher.h>
@@ -1431,16 +1433,15 @@ u32 InterlockedFlushSList_entry(ppc_ptr_t<X_SLIST_HEADER> plist_ptr) {
   return first;
 }
 
-REX_EXPORT_STUB(__imp__KeInsertByKeyDeviceQueue);
-REX_EXPORT_STUB(__imp__KeInsertDeviceQueue);
-REX_EXPORT_STUB(__imp__KeInsertHeadQueue);
-REX_EXPORT_STUB(__imp__KeInsertQueue);
-REX_EXPORT_STUB(__imp__KeRemoveByKeyDeviceQueue);
-REX_EXPORT_STUB(__imp__KeRemoveDeviceQueue);
-REX_EXPORT_STUB(__imp__KeRemoveEntryDeviceQueue);
-REX_EXPORT_STUB(__imp__KeRemoveQueue);
-REX_EXPORT_STUB(__imp__KeSetEventBoostPriority);
-REX_EXPORT_STUB(__imp__KiApcNormalRoutineNop_);
+REX_EXPORT_QUIET_RETURN(__imp__KeInsertByKeyDeviceQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeInsertDeviceQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeInsertHeadQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeInsertQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeRemoveByKeyDeviceQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeRemoveDeviceQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeRemoveEntryDeviceQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeRemoveQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KiApcNormalRoutineNop_);  // APC routine that does nothing
 
 u32 KeSuspendThread_entry(mapped_void kthread_ptr) {
   auto thread = XObject::GetNativeObject<XThread>(REX_KERNEL_STATE(), kthread_ptr);
@@ -1465,6 +1466,29 @@ void KeSaveFloatingPointState_entry() {
 
 void KeRestoreFloatingPointState_entry() {
   std::memcpy(&current_ppc_context()->f0, t_fpu_save.data(), sizeof(t_fpu_save));
+}
+
+
+u32 KeSetEventBoostPriority_entry(ppc_ptr_t<X_KEVENT> event_ptr, mapped_u32 boosted_thread_ptr) {
+  // No priority boost on the host; wake the waiter like KeSetEvent (increment 1, no wait).
+  if (boosted_thread_ptr) {
+    *boosted_thread_ptr = 0;
+  }
+  return xeKeSetEvent(event_ptr, 1, 0);
+}
+
+u32 KeAlertResumeThread_entry(mapped_void thread_ptr) {
+  return KeResumeThread_entry(thread_ptr);  // alerts are not modelled; resume only
+}
+
+void KeStallExecutionProcessor_entry(u32 microseconds) {
+  if (microseconds < 50) {
+    auto end = std::chrono::steady_clock::now() + std::chrono::microseconds(microseconds);
+    while (std::chrono::steady_clock::now() < end) {
+    }
+  } else {
+    std::this_thread::sleep_for(std::chrono::microseconds(microseconds));
+  }
 }
 
 }  // namespace rex::kernel::xboxkrnl
@@ -1555,39 +1579,40 @@ REX_EXPORT(__imp__InterlockedPushEntrySList, rex::kernel::xboxkrnl::InterlockedP
 REX_EXPORT(__imp__InterlockedPopEntrySList, rex::kernel::xboxkrnl::InterlockedPopEntrySList_entry)
 REX_EXPORT(__imp__InterlockedFlushSList, rex::kernel::xboxkrnl::InterlockedFlushSList_entry)
 
-REX_EXPORT_STUB(__imp__KeAlertResumeThread);
-REX_EXPORT_STUB(__imp__KeAlertThread);
-REX_EXPORT_STUB(__imp__KeBoostPriorityThread);
+REX_EXPORT_QUIET_RETURN(__imp__KeAlertThread, 0);  // no APCs/background procs modelled
+REX_EXPORT(__imp__KeSetEventBoostPriority, rex::kernel::xboxkrnl::KeSetEventBoostPriority_entry)
+REX_EXPORT(__imp__KeAlertResumeThread, rex::kernel::xboxkrnl::KeAlertResumeThread_entry)
+REX_EXPORT(__imp__KeStallExecutionProcessor, rex::kernel::xboxkrnl::KeStallExecutionProcessor_entry)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeBoostPriorityThread);  // no-op: single coherent host cache/TB
 REX_EXPORT_STUB_RETURN(__imp__KeCancelTimer, 0);
-REX_EXPORT_STUB(__imp__KeConnectInterrupt);
-REX_EXPORT_STUB(__imp__KeContextFromKframes);
-REX_EXPORT_STUB(__imp__KeContextToKframes);
-REX_EXPORT_STUB(__imp__KeDisconnectInterrupt);
-REX_EXPORT_STUB(__imp__KeFlushCacheRange);
-REX_EXPORT_STUB(__imp__KeFlushCurrentEntireTb);
-REX_EXPORT_STUB(__imp__KeFlushEntireTb);
-REX_EXPORT_STUB(__imp__KeFlushMultipleTb);
-REX_EXPORT_STUB(__imp__KeFlushUserModeCurrentTb);
-REX_EXPORT_STUB(__imp__KeFlushUserModeTb);
-REX_EXPORT_STUB(__imp__KeInitializeDeviceQueue);
-REX_EXPORT_STUB(__imp__KeInitializeInterrupt);
-REX_EXPORT_STUB(__imp__KeInitializeQueue);
+REX_EXPORT_QUIET_RETURN(__imp__KeConnectInterrupt, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeContextFromKframes, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeContextToKframes, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeDisconnectInterrupt, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeFlushCacheRange);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeFlushCurrentEntireTb);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeFlushEntireTb);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeFlushMultipleTb);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeFlushUserModeCurrentTb);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeFlushUserModeTb);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_RETURN(__imp__KeInitializeDeviceQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeInitializeInterrupt, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeInitializeQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
 // REX_EXPORT_STUB(__imp__KeInitializeTimerEx); -- implemented below
-REX_EXPORT_STUB(__imp__KeIpiGenericCall);
-REX_EXPORT_STUB(__imp__KeQueryBackgroundProcessors);
-REX_EXPORT_STUB(__imp__KeQueryInterruptTime);
-REX_EXPORT_STUB(__imp__KeRegisterDriverNotification);
-REX_EXPORT_STUB(__imp__KeRestoreVectorUnitState);
-REX_EXPORT_STUB(__imp__KeRetireDpcList);
-REX_EXPORT_STUB(__imp__KeRundownQueue);
-REX_EXPORT_STUB(__imp__KeSaveVectorUnitState);
-REX_EXPORT_STUB(__imp__KeSetBackgroundProcessors);
-REX_EXPORT_STUB(__imp__KeSetPriorityClassThread);
-REX_EXPORT_STUB(__imp__KeSetPriorityThread);
+REX_EXPORT_QUIET_RETURN(__imp__KeIpiGenericCall, 0);  // unknown: no guest-callback helper; 0 = routine not run
+REX_EXPORT_QUIET_RETURN(__imp__KeQueryBackgroundProcessors, 0);  // no APCs/background procs modelled
+REX_EXPORT_QUIET_RETURN(__imp__KeQueryInterruptTime, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeRegisterDriverNotification, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeRestoreVectorUnitState, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeRetireDpcList, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_RETURN(__imp__KeRundownQueue, 0);  // unknown: kernel queue objects not modelled; 0 = nothing queued/removed
+REX_EXPORT_QUIET_RETURN(__imp__KeSaveVectorUnitState, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSetBackgroundProcessors);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_RETURN(__imp__KeSetPriorityClassThread, 0);  // no APCs/background procs modelled
+REX_EXPORT_QUIET_RETURN(__imp__KeSetPriorityThread, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_STUB_RETURN(__imp__KeSetTimer, 0);
-REX_EXPORT_STUB(__imp__KeSetTimerEx);
-REX_EXPORT_STUB(__imp__KeStallExecutionProcessor);
-REX_EXPORT_STUB(__imp__KeSweepDcacheRange);
-REX_EXPORT_STUB(__imp__KeSweepIcacheRange);
-REX_EXPORT_STUB(__imp__KeTestAlertThread);
+REX_EXPORT_QUIET_RETURN(__imp__KeSetTimerEx, 0);  // unknown: timer+DPC not modelled; 0 = was not set
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSweepDcacheRange);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSweepIcacheRange);  // no-op: single coherent host cache/TB
+REX_EXPORT_QUIET_RETURN(__imp__KeTestAlertThread, 0);  // no APCs/background procs modelled
 REX_EXPORT(__imp__KfRaiseIrql, rex::kernel::xboxkrnl::KfRaiseIrql_entry)

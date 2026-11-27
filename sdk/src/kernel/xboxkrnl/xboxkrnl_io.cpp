@@ -819,6 +819,74 @@ u32 NtReadFileScatter_entry(u32 file_handle, u32 event_handle, mapped_void apc_r
   return result;
 }
 
+// All file I/O completes synchronously, so there is never a pending request to cancel.
+u32 NtCancelIoFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block) {
+  if (!REX_KERNEL_OBJECTS()->LookupObject<XFile>(file_handle)) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  if (io_status_block) {
+    io_status_block->status = X_STATUS_SUCCESS;
+    io_status_block->information = 0;
+  }
+  return X_STATUS_SUCCESS;
+}
+
+// Xbox FILE_SEGMENT_ELEMENT entries are 32-bit guest pointers (Xenia ReadScatter),
+// unlike the desktop Win32 union. Stage pages into one guest buffer so XFile::Write
+// performs one locked request and emits exactly one completion notification.
+u32 NtWriteFileGather_entry(u32 file_handle, u32 event_handle, u32 apc_routine,
+                            mapped_void apc_context, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block,
+                            mapped_u32 segment_array, u32 length, mapped_u64 byte_offset_ptr) {
+  auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(event_handle);
+  auto file = REX_KERNEL_OBJECTS()->LookupObject<XFile>(file_handle);
+  X_STATUS result = X_STATUS_SUCCESS;
+  if ((event_handle && !ev) || !file) {
+    result = X_STATUS_INVALID_HANDLE;
+  } else if (length && !segment_array) {
+    result = X_STATUS_INVALID_PARAMETER;
+  }
+
+  uint32_t written = 0;
+  if (XSUCCEEDED(result)) {
+    auto* memory = REX_KERNEL_MEMORY();
+    const uint32_t staging_address = length ? memory->SystemHeapAlloc(length) : 0;
+    if (length && !staging_address) {
+      result = X_STATUS_NO_MEMORY;
+    } else {
+      auto release = [memory, staging_address](uint8_t*) {
+        if (staging_address) memory->SystemHeapFree(staging_address);
+      };
+      std::unique_ptr<uint8_t, decltype(release)> staging(
+          length ? memory->TranslateVirtual(staging_address) : nullptr, release);
+      for (uint32_t offset = 0; offset < length;) {
+        const uint32_t bytes = std::min(4096u, length - offset);
+        std::memcpy(staging.get() + offset,
+                    memory->TranslateVirtual(segment_array[offset / 4096]), bytes);
+        offset += bytes;
+      }
+      result = file->Write(staging_address, length,
+                           byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : uint64_t(-1),
+                           &written, apc_context.guest_address());
+      if (io_status_block) {
+        io_status_block->status = result;
+        io_status_block->information = written;
+      }
+      if ((apc_routine & ~1u) && apc_context) {
+        XThread::GetCurrentThread()->EnqueueApc(apc_routine & ~1u, apc_context.guest_address(),
+                                               io_status_block.guest_address(), 0);
+      }
+      if (ev) ev->Set(0, false);
+      // Match NtWriteFile's synchronous implementation of asynchronous handles.
+      return file->is_synchronous() ? result : X_STATUS_PENDING;
+    }
+  }
+  if (io_status_block) {
+    io_status_block->status = result;
+    io_status_block->information = 0;
+  }
+  return result;
+}
+
 u32 NtWriteFile_entry(u32 file_handle, u32 event_handle, u32 apc_routine, mapped_void apc_context,
                       ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block, mapped_void buffer,
                       u32 buffer_length, mapped_u64 byte_offset_ptr) {
@@ -1274,10 +1342,10 @@ REX_EXPORT_STUB(__imp__IoStartPacket);
 REX_EXPORT_STUB(__imp__IoSynchronousFsdRequest);
 REX_EXPORT_STUB(__imp__NtDeleteFile);
 REX_EXPORT_STUB(__imp__NtSetSystemTime);
-REX_EXPORT_STUB_RETURN(__imp__NtWriteFileGather, 0xC0000002);
+REX_EXPORT(__imp__NtWriteFileGather, rex::kernel::xboxkrnl::NtWriteFileGather_entry)
 REX_EXPORT_STUB(__imp__IoAcquireCancelSpinLock);
 REX_EXPORT_STUB(__imp__IoReleaseCancelSpinLock);
-REX_EXPORT_STUB_RETURN(__imp__NtCancelIoFile, 0);
+REX_EXPORT(__imp__NtCancelIoFile, rex::kernel::xboxkrnl::NtCancelIoFile_entry)
 REX_EXPORT_STUB(__imp__NtCancelIoFileEx);
 REX_EXPORT_STUB(__imp__SvodCreateDevice);
 

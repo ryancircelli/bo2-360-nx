@@ -199,3 +199,11 @@ add_test(NAME xam_nui_tests COMMAND xam_nui_tests)
 add_executable(xam_device_output_tests kernel/xam_device_output_test.cpp)
 target_link_libraries(xam_device_output_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME xam_device_output_tests COMMAND xam_device_output_tests)
+add_executable(kernel_backfill_tests
+    kernel/stub_backfill_test.cpp
+    kernel/gather_write_test.cpp
+    kernel/rtl_conversion_test.cpp)
+target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(kernel_backfill_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
