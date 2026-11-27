@@ -223,3 +223,10 @@ target_link_libraries(xam_content_entry_tests PRIVATE rexruntime Catch2::Catch2W
 set_target_properties(xam_content_entry_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME xam_content_entry_tests COMMAND xam_content_entry_tests)
+
+add_executable(xam_notify_entry_tests system/xam_notify_entry_test.cpp)
+target_include_directories(xam_notify_entry_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xam_notify_entry_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xam_notify_entry_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME xam_notify_entry_tests COMMAND xam_notify_entry_tests)
