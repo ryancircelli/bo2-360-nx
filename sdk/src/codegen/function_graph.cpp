@@ -655,7 +655,9 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
   if (lastId != -1 && lastId != PPC_INST_B && lastId != PPC_INST_BLR && lastId != PPC_INST_BCTR &&
       lastWord != 0x7FE00008u /* trap */) {
     const FunctionNode* next = ctx.graph.getFunction(lastEnd);
-    if (next && next != this && next->authority() != FunctionAuthority::IMPORT) {
+    // A function that ends in a call ends there unless the scanner recorded the fall-through (7cde78cd).
+    const bool endsInCall = lastId == PPC_INST_BL && !fallThroughs().contains(lastEnd);
+    if (next && next != this && next->authority() != FunctionAuthority::IMPORT && !endsInCall) {
       const std::string nextName =
           next->name().empty() ? fmt::format("sub_{:08X}", lastEnd) : next->name();
       if (ctx.referenceBlocked)
