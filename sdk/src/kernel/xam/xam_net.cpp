@@ -12,6 +12,10 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include "net_socket.h"
+
+#include <algorithm>
+#include <climits>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
@@ -117,24 +121,6 @@ struct X_WSADATA {
   rex::be<uint16_t> max_sockets;
   rex::be<uint16_t> max_udpdg;
   rex::be<uint32_t> vendor_info_ptr;
-};
-
-struct XWSABUF {
-  rex::be<uint32_t> len;
-  rex::be<uint32_t> buf_ptr;
-};
-
-struct XWSAOVERLAPPED {
-  rex::be<uint32_t> internal;
-  rex::be<uint32_t> internal_high;
-  union {
-    struct {
-      rex::be<uint32_t> low;
-      rex::be<uint32_t> high;
-    } offset;  // must be named to avoid GCC error
-    rex::be<uint32_t> pointer;
-  };
-  rex::be<uint32_t> event_handle;
 };
 
 void LoadSockaddr(const uint8_t* ptr, sockaddr* out_addr) {
@@ -259,9 +245,9 @@ u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer_ptr, u32 length) {
 // receiving: recv/recvfrom. On the Switch an errno this table does not know
 // is reported as "no data yet" for those (offline nothing ever arrives, and
 // BO2 drops out on any other error); the raw value is logged once.
-static void SetLastSocketError(const char* call, bool receiving = false) {
+static uint32_t LastSocketErrorCode(const char* call, bool receiving = false) {
 #if REX_PLATFORM_WIN32
-  XThread::SetLastError(WSAGetLastError());
+  return WSAGetLastError();
 #else
   uint32_t wsa = 10022;  // WSAEINVAL
   switch (errno) {
@@ -330,8 +316,12 @@ static void SetLastSocketError(const char* call, bool receiving = false) {
       REXKRNL_WARN("{} failed: errno {} ({}) -> WSA {} (#{})", call, e, std::strerror(e), wsa, n + 1);
     }
   }
-  XThread::SetLastError(wsa);
+  return wsa;
 #endif
+}
+
+static void SetLastSocketError(const char* call, bool receiving = false) {
+  XThread::SetLastError(LastSocketErrorCode(call, receiving));
 }
 
 u32 NetDll_WSAStartup_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_ptr) {
@@ -396,88 +386,188 @@ u32 NetDll_WSAGetLastError_entry() {
   return XThread::GetLastError();
 }
 
-#ifdef MSG_DONTWAIT
-constexpr int kPeekNoWait = MSG_DONTWAIT;
-#else
-constexpr int kPeekNoWait = 0;  // shortcut: Windows has no per-call non-blocking flag; relies on the socket's FIONBIO
-#endif
-
-u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers_ptr,
-                             u32 buffer_count, mapped_u32 num_bytes_recv, mapped_u32 flags_ptr,
-                             ppc_ptr_t<XSOCKADDR_IN> from_addr,
-                             ppc_ptr_t<XWSAOVERLAPPED> overlapped_ptr,
-                             mapped_void completion_routine_ptr) {
-  auto socket_obj = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
-  if (!socket_obj) {
-    XThread::SetLastError(0x2736);  // WSAENOTSOCK
-    return -1;
-  }
-  // shortcut: never pends. A datagram already queued is taken into the first buffer and completes
-  // at once (overlapped event set); otherwise it fails with WSAEWOULDBLOCK. Upgrade if a title
-  // needs a receive that completes later.
-  if (buffer_count && buffers_ptr) {
-    N_XSOCKADDR_IN native_from;
-    uint32_t native_fromlen = sizeof(N_XSOCKADDR_IN);
-    uint8_t* dst = REX_KERNEL_MEMORY()->TranslateVirtual(buffers_ptr[0].buf_ptr);
-    int ret = socket_obj->RecvFrom(dst, buffers_ptr[0].len, kPeekNoWait, &native_from, &native_fromlen);
-    if (ret >= 0) {
-      if (from_addr) {
-        from_addr->sin_family = native_from.sin_family;
-        from_addr->sin_port = native_from.sin_port;
-        from_addr->sin_addr = native_from.sin_addr;
-        std::memset(from_addr->x_sin_zero, 0, sizeof(from_addr->x_sin_zero));
-      }
-      if (num_bytes_recv) *num_bytes_recv = uint32_t(ret);
-      if (flags_ptr) *flags_ptr = 0;
-      if (overlapped_ptr) {
-        overlapped_ptr->internal = 0;
-        overlapped_ptr->internal_high = uint32_t(ret);
-        if (auto ev = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped_ptr->event_handle)) ev->Set(0, false);
-      }
-      return 0;
-    }
-  }
-  XThread::SetLastError(0x2733);  // WSAEWOULDBLOCK
-  return -1;
+namespace {
+uint32_t SocketFailure(uint32_t error) {
+  XThread::SetLastError(error);
+  return ~0u;
 }
 
-// If the socket is a VDP socket, buffer 0 is the game data length, and buffer 1
-// is the unencrypted game data.
-u32 NetDll_WSASendTo_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
-                           u32 num_buffers, mapped_u32 num_bytes_sent, u32 flags,
-                           ppc_ptr_t<XSOCKADDR_IN> to_ptr, u32 to_len,
-                           ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void completion_routine) {
-  assert(!overlapped);
-  assert(!completion_routine);
+// Cap lengths to the signed count accepted by the native socket APIs.
+bool BufferSize(ppc_ptr_t<XWSABUF> buffers, uint32_t count, uint32_t* size) {
+  if (!buffers || !count || count > 1024) return false;
+  uint64_t total = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (buffers[i].len && !buffers[i].buf_ptr) return false;
+    total += buffers[i].len;
+    if (total > INT_MAX) return false;
+  }
+  *size = uint32_t(total);
+  return true;
+}
 
+void CompleteSocket(ppc_ptr_t<XWSAOVERLAPPED> overlapped,
+                    const object_ref<XEvent>& event, uint32_t error, uint32_t bytes) {
+  if (!overlapped) return;
+  overlapped->internal_high = bytes;
+  std::atomic_ref(overlapped->internal).store(rex::be<uint32_t>(error), std::memory_order_release);
+  if (event) event->Set(0, false);
+}
+
+struct SocketBuffer {
+  uint8_t* data;
+  uint32_t size;
+};
+
+u32 ReceiveBuffers(u32 socket_handle, ppc_ptr_t<XWSABUF> buffers, u32 count,
+                   mapped_u32 bytes, mapped_u32 flags,
+                   ppc_ptr_t<XSOCKADDR_IN> from, mapped_u32 fromlen,
+                   ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback,
+                   bool datagram) {
   auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
-  if (!socket) {
-    // WSAENOTSOCK
-    XThread::SetLastError(0x2736);
-    return -1;
+  if (!socket) return SocketFailure(10038);
+  uint32_t size;
+  if (!BufferSize(buffers, count, &size) || !flags || (!bytes && !overlapped) ||
+      (from && (!fromlen || *fromlen < sizeof(XSOCKADDR_IN)))) return SocketFailure(10014);
+  // Alertable completion needs four guest arguments; the existing APC adapter has three.
+  if (callback) return SocketFailure(10045);  // WSAEOPNOTSUPP
+  if (overlapped && socket->ReceivePending()) return SocketFailure(10035);
+  datagram = datagram || socket->is_datagram();
+  const uint32_t input_flags = *flags;
+  if (input_flags & ~3u) return SocketFailure(10045);  // OOB / PEEK only
+  int native_flags = (input_flags & 1 ? MSG_OOB : 0) | (input_flags & 2 ? MSG_PEEK : 0);
+#if defined(MSG_DONTWAIT)
+  if (overlapped) native_flags |= MSG_DONTWAIT;
+#else
+  // A cancellable, per-call nonblocking receive is not available on this backend yet.
+  if (overlapped) return SocketFailure(10045);
+#endif
+  // Copy descriptors now: the caller may reuse its WSABUF array after posting.
+  std::vector<SocketBuffer> destinations;
+  auto memory = REX_KERNEL_MEMORY();
+  for (uint32_t i = 0; i < count; ++i)
+    destinations.push_back({memory->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len});
+  auto event = overlapped ? REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped->event_handle)
+                          : object_ref<XEvent>{};
+  // One host receive preserves datagram boundaries across all guest buffers.
+  auto transfer = [socket_ptr = socket.get(), destinations = std::move(destinations), size,
+                   native_flags, from, fromlen, overlapped, event, datagram]
+                  (bool cancelled, uint32_t* transferred, uint32_t* error) {
+    *transferred = 0;
+    if (cancelled) {
+      *error = 995;  // WSA_OPERATION_ABORTED
+      CompleteSocket(overlapped, event, *error, 0);
+      return true;
+    }
+    std::vector<uint8_t> storage(datagram ? std::max(size, 65536u) : size);
+    N_XSOCKADDR_IN address{};
+    uint32_t length = sizeof(address);
+    const int result = datagram
+        ? socket_ptr->RecvFrom(storage.data(), uint32_t(storage.size()), native_flags, &address, &length)
+        : socket_ptr->Recv(storage.data(), size, native_flags);
+    if (result < 0) {
+      *error = LastSocketErrorCode("WSARecv");
+      return false;
+    }
+    *error = 0;
+    *transferred = uint32_t(result);
+    uint32_t offset = 0;
+    for (const auto& buffer : destinations) {
+      const uint32_t n = std::min(buffer.size, std::min(size, uint32_t(result)) - offset);
+      if (n) std::memcpy(buffer.data, storage.data() + offset, n);
+      offset += n;
+    }
+    if (from) {
+      from->sin_family = address.sin_family;
+      from->sin_port = address.sin_port;
+      from->sin_addr = address.sin_addr;
+      std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
+      *fromlen = sizeof(XSOCKADDR_IN);
+    }
+    if (uint32_t(result) > size) {
+      *error = 10040;  // WSAEMSGSIZE: consume one datagram, retain only the prefix
+      return false;
+    }
+    CompleteSocket(overlapped, event, 0, uint32_t(result));
+    return true;
+  };
+  uint32_t transferred, error;
+  if (transfer(false, &transferred, &error)) {
+    if (bytes) *bytes = transferred;
+    *flags = 0;
+    return 0;
   }
+  if (!overlapped || error != 10035) return SocketFailure(error);
+  overlapped->internal_high = 0;
+  std::atomic_ref(overlapped->internal).store(rex::be<uint32_t>(996), std::memory_order_release);  // WSA_IO_INCOMPLETE, queried by WSAGetOverlappedResult
+  if (event) event->Reset();
+  if (!socket->StartReceive([transfer = std::move(transfer), overlapped, event](bool cancel) {
+        uint32_t n, error;
+        if (transfer(cancel, &n, &error)) return true;
+        if (error == 10035) return false;
+        CompleteSocket(overlapped, event, error, 0);
+        return true;
+      })) return SocketFailure(10035);
+  return SocketFailure(997);  // WSA_IO_PENDING
+}
+}  // namespace
 
-  // Our sockets implementation doesn't support multiple buffers, so we need
-  // to combine the buffers the game has given us!
-  std::vector<uint8_t> combined_buffer_mem;
-  uint32_t combined_buffer_size = 0;
-  uint32_t combined_buffer_offset = 0;
-  for (uint32_t i = 0; i < num_buffers; i++) {
-    combined_buffer_size += buffers[i].len;
-    combined_buffer_mem.resize(combined_buffer_size);
-    uint8_t* combined_buffer = combined_buffer_mem.data();
+u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                             u32 count, mapped_u32 bytes, mapped_u32 flags,
+                             ppc_ptr_t<XSOCKADDR_IN> from, mapped_u32 fromlen,
+                             ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  return ReceiveBuffers(socket_handle, buffers, count, bytes, flags, from, fromlen,
+                        overlapped, callback, true);
+}
 
-    std::memcpy(combined_buffer + combined_buffer_offset,
-                REX_KERNEL_MEMORY()->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len);
-    combined_buffer_offset += buffers[i].len;
+u32 NetDll_WSARecv_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                         u32 count, mapped_u32 bytes, mapped_u32 flags,
+                         ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  return ReceiveBuffers(socket_handle, buffers, count, bytes, flags, nullptr, nullptr,
+                        overlapped, callback, false);
+}
+
+u32 NetDll_WSASendTo_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                           u32 count, mapped_u32 bytes, u32 flags,
+                           ppc_ptr_t<XSOCKADDR_IN> to, u32 tolen,
+                           ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) return SocketFailure(10038);
+  uint32_t size;
+  if (!BufferSize(buffers, count, &size) || (!bytes && !overlapped) ||
+      (to && tolen < sizeof(XSOCKADDR_IN))) return SocketFailure(10014);
+  if (callback || (flags & ~5u)) return SocketFailure(10045);
+  const int native_flags = (flags & 1 ? MSG_OOB : 0) | (flags & 4 ? MSG_DONTROUTE : 0);
+  std::vector<uint8_t> storage(size);
+  uint32_t offset = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (buffers[i].len)
+      std::memcpy(storage.data() + offset,
+                  REX_KERNEL_MEMORY()->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len);
+    offset += buffers[i].len;
   }
-
-  N_XSOCKADDR_IN native_to(to_ptr);
-  socket->SendTo(combined_buffer_mem.data(), combined_buffer_size, flags, &native_to, to_len);
-
-  // TODO: Instantly complete overlapped
-
+  int result;
+  if (to) {
+    N_XSOCKADDR_IN address(to);
+    result = socket->SendTo(storage.data(), size, native_flags, &address, sizeof(address));
+  } else {
+    result = socket->Send(storage.data(), size, native_flags);
+  }
+  if (result < 0) {
+    SetLastSocketError("WSASendTo");
+    return ~0u;
+  }
+  if (bytes) *bytes = uint32_t(result);
+  auto event = overlapped ? REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped->event_handle)
+                          : object_ref<XEvent>{};
+  CompleteSocket(overlapped, event, 0, uint32_t(result));
   return 0;
+}
+
+u32 NetDll_WSASend_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                         u32 count, mapped_u32 bytes, u32 flags,
+                         ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  return NetDll_WSASendTo_entry(caller, socket_handle, buffers, count, bytes, flags,
+                               nullptr, 0, overlapped, callback);
 }
 
 u32 NetDll_WSAWaitForMultipleEvents_entry(u32 num_events, mapped_u32 events, u32 wait_all,
@@ -892,13 +982,26 @@ u32 NetDll_getsockname_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR_
   return 0;
 }
 
+u32 NetDll_getpeername_entry(u32 caller, u32 socket_handle,
+                            ppc_ptr_t<XSOCKADDR_IN> name, mapped_u32 length) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) return SocketFailure(10038);
+  if (!name || !length || *length < sizeof(XSOCKADDR_IN)) return SocketFailure(10014);
+  if (XFAILED(socket->GetPeerName(name))) {
+    SetLastSocketError("getpeername");
+    return ~0u;
+  }
+  *length = sizeof(XSOCKADDR_IN);
+  return 0;
+}
+
 u32 NetDll_WSACancelOverlappedIO_entry(u32 caller, u32 socket_handle) {
-  // Our overlapped receives never stay pending (NetDll_WSARecvFrom fails at once), so there is
-  // nothing to cancel on a real socket.
-  if (!REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle)) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
     XThread::SetLastError(0x2736);  // WSAENOTSOCK
     return -1;
   }
+  socket->CancelReceive();
   return 0;
 }
 
@@ -910,9 +1013,20 @@ u32 NetDll_WSAGetOverlappedResult_entry(u32 caller, u32 socket_handle,
     XThread::SetLastError(0x2726);  // WSAEINVAL
     return 0;
   }
-  // shortcut: never waits on the event; nothing here completes an overlapped asynchronously.
-  const uint32_t status = overlapped->internal;
-  if (status == 0x3E4) {  // WSA_IO_INCOMPLETE
+  if (!REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle)) {
+    XThread::SetLastError(10038);
+    return 0;
+  }
+  if (wait && std::atomic_ref(overlapped->internal).load(std::memory_order_acquire).get() == 996) {
+    auto event = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped->event_handle);
+    if (!event) {
+      XThread::SetLastError(10022);  // waiting without an event is not supported yet
+      return 0;
+    }
+    event->Wait(0, 0, 0, nullptr);
+  }
+  const uint32_t status = std::atomic_ref(overlapped->internal).load(std::memory_order_acquire);
+  if (status == 996) {
     XThread::SetLastError(status);
     return 0;
   }
@@ -1311,8 +1425,8 @@ REX_EXPORT_STUB(__imp__NetDll_UpnpSearchCreate);
 REX_EXPORT_STUB(__imp__NetDll_UpnpSearchGetDevices);
 REX_EXPORT_STUB(__imp__NetDll_UpnpStartup);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_WSAEventSelect, 0xFFFFFFFF);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_WSARecv, 0xFFFFFFFF);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_WSASend, 0xFFFFFFFF);
+REX_EXPORT(__imp__NetDll_WSARecv, rex::kernel::xam::NetDll_WSARecv_entry)
+REX_EXPORT(__imp__NetDll_WSASend, rex::kernel::xam::NetDll_WSASend_entry)
 REX_EXPORT(__imp__NetDll_WSAStartupEx, rex::kernel::xam::NetDll_WSAStartupEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCloseHandle, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpConnect, 0);
@@ -1406,4 +1520,4 @@ REX_EXPORT_STUB(__imp__NetDll_XnpToolIpProxyInject);
 REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpUnregisterKeyForCallerType, 0);
 REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_getpeername, 0xFFFFFFFF);
+REX_EXPORT(__imp__NetDll_getpeername, rex::kernel::xam::NetDll_getpeername_entry)

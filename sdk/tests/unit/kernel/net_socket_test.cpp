@@ -1,0 +1,163 @@
+#include <atomic>
+#include <cstring>
+#include <filesystem>
+#include <catch2/catch_test_macros.hpp>
+#include <rex/runtime.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xthread.h>
+#include <rex/system/xevent.h>
+#include "kernel/xam/net_socket.h"
+
+namespace {
+using namespace rex;
+using namespace rex::system;
+using namespace rex::kernel::xam;
+
+template<class T> auto Map(T* value) { return ppc_ptr_t<T>::from_host(value); }
+
+// Run kernel calls on an actual host-backed guest thread with bound kernel TLS.
+template<class F> void WithKernel(F function) {
+  Runtime runtime(std::filesystem::current_path());
+  RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  std::atomic<bool> passed{false};
+  auto thread = object_ref<XHostThread>(new XHostThread(runtime.kernel_state(), 128 * 1024,
+      X_CREATE_SUSPENDED, [&] { passed = function(runtime); return 0; }));
+  REQUIRE(thread->Create() == X_STATUS_SUCCESS);
+  REQUIRE(thread->Resume() == X_STATUS_SUCCESS);
+  REQUIRE(thread->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+  REQUIRE(passed.load());
+}
+
+bool DatagramRegression(Runtime& runtime) {
+  auto receiver = object_ref<XSocket>(new XSocket(runtime.kernel_state()));
+  auto sender = object_ref<XSocket>(new XSocket(runtime.kernel_state()));
+  if (receiver->Initialize(XSocket::AddressFamily::X_AF_INET, XSocket::Type::X_SOCK_DGRAM,
+                           XSocket::Protocol::X_IPPROTO_UDP) != X_STATUS_SUCCESS ||
+      sender->Initialize(XSocket::AddressFamily::X_AF_INET, XSocket::Type::X_SOCK_DGRAM,
+                         XSocket::Protocol::X_IPPROTO_UDP) != X_STATUS_SUCCESS) return false;
+  N_XSOCKADDR_IN bind{};
+  bind.sin_family = 2;
+  bind.sin_addr = 0x7F000001;
+  if (receiver->Bind(&bind, sizeof(bind)) != X_STATUS_SUCCESS) return false;
+  XSOCKADDR_IN destination{};
+  if (receiver->GetName(&destination) != X_STATUS_SUCCESS) return false;
+  const auto allocation = runtime.memory()->SystemHeapAlloc(64);
+  auto data = runtime.memory()->TranslateVirtual(allocation);
+  std::memcpy(data, "abcDEF", 6);
+  XWSABUF sends[2]{{3, allocation}, {3, allocation + 3}};
+  XWSABUF receives[2]{{2, allocation + 16}, {8, allocation + 18}};
+  auto send_event = object_ref<XEvent>(new XEvent(runtime.kernel_state()));
+  auto recv_event = object_ref<XEvent>(new XEvent(runtime.kernel_state()));
+  send_event->Initialize(true, false);
+  recv_event->Initialize(true, true);
+  XWSAOVERLAPPED send_over{}, recv_over{};
+  send_over.event_handle = send_event->handle();
+  recv_over.event_handle = recv_event->handle();
+  be_u32 sent{0}, received{0xDEADBEEF}, flags{0}, length{sizeof(XSOCKADDR_IN)};
+  XSOCKADDR_IN source{};
+  bool ok = true;
+#if !REX_PLATFORM_WIN32
+  // Post before there is data. The ninth and tenth arguments must really be the
+  // overlapped pointer and callback, following the from-length eighth argument.
+  ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 2, Map(&received),
+      Map(&flags), Map(&source), Map(&length), Map(&recv_over), nullptr) == ~0u;
+  ok &= XThread::GetLastError() == 997 && received == 0xDEADBEEF;
+  int64_t zero = 0;
+  ok &= recv_event->Wait(0, 0, 0, &zero) == X_STATUS_TIMEOUT;
+#endif
+  ok &= NetDll_WSASendTo_entry(1, sender->handle(), Map(sends), 2, Map(&sent), 0,
+      Map(&destination), sizeof(destination), Map(&send_over), nullptr) == 0;
+  ok &= sent == 6 && send_over.internal == 0 && send_over.internal_high == 6;
+  int64_t timeout = -20000000; // two seconds, bounded failure
+  ok &= send_event->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS;
+#if !REX_PLATFORM_WIN32
+  ok &= recv_event->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS;
+  ok &= NetDll_WSAGetOverlappedResult_entry(1, receiver->handle(), Map(&recv_over),
+      Map(&received), 0, Map(&flags)) == 1;
+#else
+  ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 2, Map(&received),
+      Map(&flags), Map(&source), Map(&length), nullptr, nullptr) == 0;
+#endif
+  ok &= received == 6 && std::memcmp(data + 16, "abcDEF", 6) == 0;
+  ok &= length == sizeof(XSOCKADDR_IN) && source.sin_addr == 0x7F000001;
+#if !REX_PLATFORM_WIN32
+  // Cancellation must publish failure and wake an event even with no traffic.
+  ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 2, Map(&received),
+      Map(&flags), nullptr, nullptr, Map(&recv_over), nullptr) == ~0u;
+  ok &= XThread::GetLastError() == 997;
+  ok &= NetDll_WSACancelOverlappedIO_entry(1, receiver->handle()) == 0;
+  ok &= recv_event->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS;
+  ok &= NetDll_WSAGetOverlappedResult_entry(1, receiver->handle(), Map(&recv_over),
+      Map(&received), 0, Map(&flags)) == 0 && XThread::GetLastError() == 995;
+#endif
+  // Connected sends use the same gather path; immediate receives must scatter
+  // without splitting a single datagram into separate recv calls.
+  N_XSOCKADDR_IN connected(&destination);
+  ok &= sender->Connect(reinterpret_cast<N_XSOCKADDR*>(&connected), sizeof(connected))
+        == X_STATUS_SUCCESS;
+  ok &= NetDll_WSASend_entry(1, sender->handle(), Map(sends), 2, Map(&sent), 0,
+                             nullptr, nullptr) == 0 && sent == 6;
+  ok &= NetDll_WSARecv_entry(1, receiver->handle(), Map(receives), 2, Map(&received),
+                             Map(&flags), nullptr, nullptr) == 0 && received == 6;
+  ok &= std::memcmp(data + 16, "abcDEF", 6) == 0;
+  // Reject an undersized source address before consuming the queued packet.
+  ok &= NetDll_WSASend_entry(1, sender->handle(), Map(sends), 2, Map(&sent), 0,
+                             nullptr, nullptr) == 0;
+  length = 1;
+  ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 2, Map(&received),
+      Map(&flags), Map(&source), Map(&length), nullptr, nullptr) == ~0u;
+  ok &= XThread::GetLastError() == 10014;
+  receives[0].len = 1;
+  ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 1, Map(&received),
+      Map(&flags), nullptr, nullptr, nullptr, nullptr) == ~0u;
+  ok &= XThread::GetLastError() == 10040 && data[16] == 'a';
+#if !REX_PLATFORM_WIN32
+  ok &= NetDll_WSARecvFrom_entry(1, receiver->handle(), Map(receives), 1, Map(&received),
+      Map(&flags), nullptr, nullptr, Map(&recv_over), nullptr) == ~0u;
+  ok &= XThread::GetLastError() == 997;
+  // Native descriptor cannot be closed/reused while its receive worker is alive.
+  receiver->Close();
+  ok &= recv_event->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS;
+  ok &= recv_over.internal == 995;
+#else
+  receiver->Close();
+#endif
+  sender->Close();
+  runtime.memory()->SystemHeapFree(allocation);
+  return ok;
+}
+}
+
+TEST_CASE("WSA datagrams scatter, complete events, and cancel pending receive", "[kernel][net]") {
+  WithKernel(DatagramRegression);
+}
+
+TEST_CASE("getpeername validates length and distinguishes unconnected sockets", "[kernel][net]") {
+  WithKernel([](rex::Runtime& runtime) {
+    using namespace rex;
+    using namespace rex::system;
+    using namespace rex::kernel::xam;
+    auto socket = object_ref<XSocket>(new XSocket(runtime.kernel_state()));
+    if (socket->Initialize(XSocket::AddressFamily::X_AF_INET, XSocket::Type::X_SOCK_DGRAM,
+                           XSocket::Protocol::X_IPPROTO_UDP) != X_STATUS_SUCCESS) return false;
+    XSOCKADDR_IN peer{};
+    be_u32 length{1};
+    bool ok = NetDll_getpeername_entry(1, socket->handle(), Map(&peer), Map(&length)) == ~0u
+              && XThread::GetLastError() == 10014;
+    length = sizeof(peer);
+    ok &= NetDll_getpeername_entry(1, socket->handle(), Map(&peer), Map(&length)) == ~0u
+          && XThread::GetLastError() == 10057;
+    N_XSOCKADDR_IN destination{};
+    destination.sin_family = 2;
+    destination.sin_addr = 0x7F000001;
+    destination.sin_port = 54321;
+    ok &= socket->Connect(reinterpret_cast<N_XSOCKADDR*>(&destination), sizeof(destination))
+          == X_STATUS_SUCCESS;
+    ok &= NetDll_getpeername_entry(1, socket->handle(), Map(&peer), Map(&length)) == 0;
+    ok &= peer.sin_addr == 0x7F000001 && peer.sin_port == 54321;
+    socket->Close();
+    return ok;
+  });
+}

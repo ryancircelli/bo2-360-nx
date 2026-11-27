@@ -1046,6 +1046,7 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
 }
 
 X_STATUS XSocket::Close() {
+  CancelReceive();
   if (broadcast_helper_) {
     rex::net::socket_close(broadcast_helper_);
     broadcast_helper_ = 0;
@@ -1075,9 +1076,56 @@ X_STATUS XSocket::GetName(XSOCKADDR_IN* out_name) {
   }
   std::memset(out_name, 0, sizeof(*out_name));
   out_name->sin_family = 2;  // AF_INET
-  out_name->sin_port = bound_ ? bound_port_ : uint16_t(ntohs(host.sin_port));
+  out_name->sin_port = bound_ && bound_port_ ? bound_port_ : uint16_t(ntohs(host.sin_port));
   out_name->sin_addr = ntohl(host.sin_addr.s_addr);
   return X_STATUS_SUCCESS;
+}
+
+X_STATUS XSocket::GetPeerName(XSOCKADDR_IN* out_name) {
+  sockaddr_in host{};
+  socklen_t length = sizeof(host);
+  if (getpeername(native_handle_, reinterpret_cast<sockaddr*>(&host), &length) < 0)
+    return X_STATUS_UNSUCCESSFUL;
+  std::memset(out_name, 0, sizeof(*out_name));
+  out_name->sin_family = 2;
+  out_name->sin_port = ntohs(host.sin_port);
+  out_name->sin_addr = ntohl(host.sin_addr.s_addr);
+  return X_STATUS_SUCCESS;
+}
+
+bool XSocket::StartReceive(std::function<bool(bool)> receive) {
+  std::lock_guard lock(receive_mutex_);
+  if (!receive_done_.load(std::memory_order_acquire)) return false;
+#if !REX_PLATFORM_WIN32
+  if (native_handle_ >= FD_SETSIZE) return false;
+#endif
+  if (receive_thread_.joinable()) receive_thread_.join();
+  receive_done_.store(false, std::memory_order_release);
+  receive_thread_ = std::jthread([this, receive = std::move(receive)](std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      if (receive(false)) {
+        receive_done_.store(true, std::memory_order_release);
+        return;
+      }
+      // Bounded readiness wait also makes cancellation/close independent of traffic.
+      fd_set read;
+      FD_ZERO(&read);
+      FD_SET(native_handle_, &read);
+      timeval timeout{0, 20000};
+      select(int(native_handle_) + 1, &read, nullptr, nullptr, &timeout);
+    }
+    receive(true);
+    receive_done_.store(true, std::memory_order_release);
+  });
+  return true;
+}
+
+void XSocket::CancelReceive() {
+  std::lock_guard lock(receive_mutex_);
+  if (receive_thread_.joinable()) {
+    receive_thread_.request_stop();
+    receive_thread_.join();
+  }
 }
 
 static void MapSocketOption(uint32_t level, uint32_t optname, int* native_level, int* native_optname) {
