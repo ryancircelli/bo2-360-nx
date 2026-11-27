@@ -78,7 +78,6 @@ DEFINE_bool(submit_on_primary_buffer_end, true,
             "possible to submit immediately to try to reduce frame latency.",
             "GPU");
 
-DEFINE_bool(ac6_ground_fix, false, "XeniOS AC6-specific texture workaround (leave disabled for Fable II)", "HACKS");
 DEFINE_bool(half_pixel_offset, true, "Adjust pixel centers between guest and host graphics APIs", "GPU");
 DEFINE_int32(anisotropic_override, -1, "Anisotropic filtering override (-1 follows the game)", "GPU");
 DEFINE_bool(gpu_3d_to_2d_texture, true, "Handle 3D textures sampled as 2D using the first guest slice", "GPU");

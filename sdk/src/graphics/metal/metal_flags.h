@@ -47,8 +47,6 @@ DECLARE_bool(occlusion_query_log);
 DECLARE_bool(snorm16_render_target_full_range);
 DECLARE_bool(submit_on_primary_buffer_end);
 
-DECLARE_bool(ac6_ground_fix);
-
 // Settings formerly read from FABLE2_* environment variables (README.md,
 // "Settings"). User-facing ones are the cvars below (env REX_METAL_<NAME>, or
 // the legacy FABLE2_<NAME> through ApplyLegacyMetalEnv).
