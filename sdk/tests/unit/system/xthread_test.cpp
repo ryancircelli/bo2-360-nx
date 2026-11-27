@@ -383,3 +383,25 @@ TEST_CASE("Waiting twice on a finished thread does not join a newer thread", "[t
   REQUIRE(rex::thread::Wait(second.get(), false, 2000ms) == rex::thread::WaitResult::kSuccess);
 }
 #endif
+
+TEST_CASE("A zero-timeout wait on several objects sees a signaled one while another is busy",
+          "[thread][wait]") {
+  auto busy = rex::thread::Event::CreateManualResetEvent(false);
+  auto set = rex::thread::Event::CreateManualResetEvent(true);
+  std::atomic<bool> stop{false};
+  // Keeps the first object's mutex busy; the object itself stays unsignaled between passes.
+  std::thread hammer([&] {
+    while (!stop.load(std::memory_order_relaxed)) {
+      busy->Reset();
+    }
+  });
+  rex::thread::WaitHandle* handles[] = {busy.get(), set.get()};
+  int timeouts = 0;
+  for (int i = 0; i < 200000; ++i) {
+    auto result = rex::thread::WaitAny(handles, 2, false, std::chrono::milliseconds(0));
+    if (result.first != rex::thread::WaitResult::kSuccess) ++timeouts;
+  }
+  stop = true;
+  hammer.join();
+  CHECK(timeouts == 0);
+}
