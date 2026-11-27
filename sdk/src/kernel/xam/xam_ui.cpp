@@ -701,12 +701,12 @@ REX_EXPORT(__imp__XamShowPartyUI, rex::kernel::xam::XamShowPartyUI_entry)
 REX_EXPORT(__imp__XamShowCommunitySessionsUI, rex::kernel::xam::XamShowCommunitySessionsUI_entry)
 REX_EXPORT(__imp__XamShowMessageBoxUIEx, rex::kernel::xam::XamShowMessageBoxUIEx_entry)
 
-REX_EXPORT_STUB(__imp__XamIsGuideDisabled);
-REX_EXPORT_STUB(__imp__XamIsMessageBoxActive);
-REX_EXPORT_STUB(__imp__XamIsNuiUIActive);
-REX_EXPORT_STUB(__imp__XamIsSysUiInvokedByTitle);
-REX_EXPORT_STUB(__imp__XamIsSysUiInvokedByXenonButton);
-REX_EXPORT_STUB(__imp__XamIsUIThread);
+REX_EXPORT_STUB_RETURN(__imp__XamIsGuideDisabled, 0);  // FALSE: no guide/UI state emulated
+REX_EXPORT_STUB_RETURN(__imp__XamIsMessageBoxActive, 0);  // FALSE: no guide/UI state emulated
+REX_EXPORT_STUB_RETURN(__imp__XamIsNuiUIActive, 0);  // FALSE: no guide/UI state emulated
+REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByTitle, 0);  // FALSE: no guide/UI state emulated
+REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByXenonButton, 0);  // FALSE: no guide/UI state emulated
+REX_EXPORT_STUB_RETURN(__imp__XamIsUIThread, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB(__imp__XamNavigate);
 REX_EXPORT_STUB(__imp__XamNavigateBack);
 REX_EXPORT_STUB(__imp__XamOverrideHudOpenType);
@@ -721,7 +721,7 @@ REX_EXPORT_STUB(__imp__XamShowBadDiscErrorUI);
 REX_EXPORT_STUB(__imp__XamShowBeaconsUI);
 REX_EXPORT_STUB(__imp__XamShowBrandedKeyboardUI);
 REX_EXPORT_STUB(__imp__XamShowChangeGamerTileUI);
-REX_EXPORT_STUB(__imp__XamShowComplaintUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowComplaintUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowCreateProfileUI);
 REX_EXPORT_STUB(__imp__XamShowCreateProfileUIEx);
 REX_EXPORT_STUB(__imp__XamShowCsvTransitionUI);
@@ -744,30 +744,30 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowGameVoiceChannelUI, 0x32);
 REX_EXPORT_STUB(__imp__XamShowGamerCardUI);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGamerCardUIForXUID, 0x32);
 REX_EXPORT_STUB(__imp__XamShowGamerCardUIForXUIDp);
-REX_EXPORT_STUB(__imp__XamShowGamesUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGamesUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowGenericOnlineAppUI);
-REX_EXPORT_STUB(__imp__XamShowGoldUpgradeUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGoldUpgradeUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowGraduateUserUI);
-REX_EXPORT_STUB(__imp__XamShowGuideUI);
-REX_EXPORT_STUB(__imp__XamShowJoinPartyUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowGuideUI, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowJoinPartyUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowJoinSessionByIdInProgressUI);
 REX_EXPORT_STUB(__imp__XamShowJoinSessionInProgressUI);
 REX_EXPORT_STUB(__imp__XamShowKeyboardUIMessenger);
-REX_EXPORT_STUB(__imp__XamShowLiveSignupUI);
-REX_EXPORT_STUB(__imp__XamShowLiveUpsellUI);
-REX_EXPORT_STUB(__imp__XamShowLiveUpsellUIEx);
+REX_EXPORT_STUB_RETURN(__imp__XamShowLiveSignupUI, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowLiveUpsellUI, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowLiveUpsellUIEx, 0x32);  // offline: not supported
 REX_EXPORT(__imp__XamShowMarketplaceDownloadItemsUI,
            rex::kernel::xam::XamShowMarketplaceDownloadItemsUI_entry)
 REX_EXPORT_STUB(__imp__XamShowMarketplaceGetOrderReceipts);
 REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUI);
 REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUIEx);
 REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowMarketplaceUIEx);
+REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowMessageBox);
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessageComposeUI, 0x32);
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowMessagesUIEx);
-REX_EXPORT_STUB(__imp__XamShowMessengerUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUIEx, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowMessengerUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowMultiplayerUpgradeUI);
 REX_EXPORT_STUB(__imp__XamShowNetworkStorageSyncUI);
 REX_EXPORT_STUB(__imp__XamShowNuiAchievementsUI);
@@ -792,34 +792,34 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowNuiSigninUI, 0x32);
 REX_EXPORT_STUB(__imp__XamShowNuiVideoRichPresenceUI);
 REX_EXPORT_STUB(__imp__XamShowOptionalMediaUpdateRequiredUI);
 REX_EXPORT_STUB(__imp__XamShowOptionalMediaUpdateRequiredUIEx);
-REX_EXPORT_STUB(__imp__XamShowOptionsUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowOptionsUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowPamUI);
-REX_EXPORT_STUB(__imp__XamShowPartyInviteUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPartyInviteUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowPartyJoinInProgressUI);
 REX_EXPORT_STUB(__imp__XamShowPasscodeVerifyUI);
 REX_EXPORT_STUB(__imp__XamShowPasscodeVerifyUIEx);
-REX_EXPORT_STUB(__imp__XamShowPaymentOptionsUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPaymentOptionsUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowPersonalizationUI);
 REX_EXPORT_STUB_RETURN(__imp__XamShowPlayerReviewUI, 0x32);
 REX_EXPORT_STUB_RETURN(__imp__XamShowPlayersUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowPrivateChatInviteUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowPrivateChatInviteUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowQuickChatUI, 0x32);
 REX_EXPORT_STUB(__imp__XamShowQuickChatUIp);
-REX_EXPORT_STUB(__imp__XamShowQuickLaunchUI);
-REX_EXPORT_STUB(__imp__XamShowRecentMessageUI);
-REX_EXPORT_STUB(__imp__XamShowRecentMessageUIEx);
-REX_EXPORT_STUB(__imp__XamShowReputationUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowQuickLaunchUI, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUI, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUIEx, 0x32);  // offline: not supported
+REX_EXPORT_STUB_RETURN(__imp__XamShowReputationUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowSigninUIEx);
 REX_EXPORT_STUB(__imp__XamShowSignupCreditCardUI);
-REX_EXPORT_STUB(__imp__XamShowSocialPostUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowSocialPostUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowStorePickerUI);
 REX_EXPORT_STUB(__imp__XamShowTFAUI);
 REX_EXPORT_STUB(__imp__XamShowTermsOfUseUI);
 REX_EXPORT_STUB(__imp__XamShowUpdaterUI);
-REX_EXPORT_STUB(__imp__XamShowVideoChatInviteUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowVideoChatInviteUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowVideoRichPresenceUI);
 REX_EXPORT_STUB_RETURN(__imp__XamShowVoiceMailUI, 0x32);
 REX_EXPORT_STUB(__imp__XamShowVoiceSettingsUI);
-REX_EXPORT_STUB(__imp__XamShowWhatsOnUI);
+REX_EXPORT_STUB_RETURN(__imp__XamShowWhatsOnUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowWordRegisterUI);
 REX_EXPORT_STUB(__imp__XamSysUiDisableAutoClose);
