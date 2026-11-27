@@ -18,6 +18,7 @@
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
 #include <rex/math.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
@@ -751,23 +752,23 @@ REX_EXPORT(__imp__MmCreateKernelStack, rex::kernel::xboxkrnl::MmCreateKernelStac
 REX_EXPORT(__imp__MmDeleteKernelStack, rex::kernel::xboxkrnl::MmDeleteKernelStack_entry)
 
 REX_EXPORT(__imp__ExAllocatePoolWithTag, rex::kernel::xboxkrnl::ExAllocatePoolWithTag_entry)
-REX_EXPORT_STUB(__imp__ExQueryPoolBlockSize);
-REX_EXPORT_STUB(__imp__MmDoubleMapMemory);
-REX_EXPORT_STUB(__imp__MmUnmapMemory);
+REX_EXPORT_QUIET_RETURN(__imp__ExQueryPoolBlockSize, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmDoubleMapMemory, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmUnmapMemory, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__MmIsAddressValid, rex::kernel::xboxkrnl::MmIsAddressValid_entry)
-REX_EXPORT_STUB(__imp__MmLockAndMapSegmentArray);
-REX_EXPORT_STUB(__imp__MmLockUnlockBufferPages);
-REX_EXPORT_STUB(__imp__MmPersistPhysicalMemoryAllocation);
-REX_EXPORT_STUB(__imp__MmSplitPhysicalMemoryAllocation);
-REX_EXPORT_STUB(__imp__MmUnlockAndUnmapSegmentArray);
-REX_EXPORT_STUB(__imp__MmUnmapIoSpace);
+REX_EXPORT_QUIET_RETURN(__imp__MmLockAndMapSegmentArray, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__MmLockUnlockBufferPages);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmPersistPhysicalMemoryAllocation, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__MmSplitPhysicalMemoryAllocation);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmUnlockAndUnmapSegmentArray, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__MmUnmapIoSpace);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__NtAllocateEncryptedMemory, rex::kernel::xboxkrnl::NtAllocateEncryptedMemory_entry)
 REX_EXPORT(__imp__NtFreeEncryptedMemory, rex::kernel::xboxkrnl::NtFreeEncryptedMemory_entry)
-REX_EXPORT_STUB(__imp__ExDebugMonitorService);
-REX_EXPORT_STUB(__imp__MmDbgReadCheck);
-REX_EXPORT_STUB(__imp__MmDbgReleaseAddress);
-REX_EXPORT_STUB(__imp__MmDbgWriteCheck);
-REX_EXPORT_STUB(__imp__MmGetPoolPagesType);
-REX_EXPORT_STUB(__imp__ExExpansionInstall);
-REX_EXPORT_STUB(__imp__ExExpansionCall);
-REX_EXPORT_STUB(__imp__MmResetLowestAvailablePages);
+REX_EXPORT_QUIET_RETURN(__imp__ExDebugMonitorService, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmDbgReadCheck, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__MmDbgReleaseAddress);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmDbgWriteCheck, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__MmGetPoolPagesType, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__ExExpansionInstall, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__ExExpansionCall, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__MmResetLowestAvailablePages);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

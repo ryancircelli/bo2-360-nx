@@ -20,6 +20,7 @@
 #include <rex/dbg.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
@@ -161,6 +162,14 @@ void RtlRaiseException_entry(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
   rex::debug::Break();
 }
 
+// Logs the failed assertion and continues (a retail kernel would break into the debugger).
+void RtlAssert_entry(u32 expr, u32 file, u32 line, u32 msg) {
+  auto str = [](uint32_t a) {
+    return a ? std::string(REX_KERNEL_MEMORY()->TranslateVirtual<const char*>(a)) : std::string();
+  };
+  REXKRNL_WARN("ASSERT: {} ({}:{}) {}", str(expr), str(file), line, str(msg));
+}
+
 void KeBugCheckEx_entry(u32 code, u32 param1, u32 param2, u32 param3, u32 param4) {
   REXKRNL_DEBUG("*** STOP: 0x{:08X} (0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X})", code, param1, param2,
                 param3, param4);
@@ -180,18 +189,18 @@ REX_EXPORT(__imp__RtlRaiseException, rex::kernel::xboxkrnl::RtlRaiseException_en
 REX_EXPORT(__imp__KeBugCheckEx, rex::kernel::xboxkrnl::KeBugCheckEx_entry)
 REX_EXPORT(__imp__KeBugCheck, rex::kernel::xboxkrnl::KeBugCheck_entry)
 
-REX_EXPORT_STUB(__imp__DbgBreakPointWithStatus);
-REX_EXPORT_STUB(__imp__DbgPrompt);
-REX_EXPORT_STUB(__imp__DbgLoadImageSymbols);
-REX_EXPORT_STUB(__imp__DbgUnLoadImageSymbols);
-REX_EXPORT_STUB(__imp__DmPrintData);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__DbgBreakPointWithStatus);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__DbgPrompt, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__DbgLoadImageSymbols);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__DbgUnLoadImageSymbols);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__DmPrintData);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 
-REX_EXPORT_STUB(__imp__DumpGetRawDumpInfo);
-REX_EXPORT_STUB(__imp__DumpRegisterDedicatedDataBlock);
-REX_EXPORT_STUB(__imp__DumpSetCollectionFacility);
-REX_EXPORT_STUB(__imp__DumpUpdateDumpSettings);
-REX_EXPORT_STUB(__imp__DumpWriteDump);
-REX_EXPORT_STUB(__imp__DumpXitThread);
-REX_EXPORT_STUB(__imp__RtlAssert);
-REX_EXPORT_STUB(__imp__RtlRaiseStatus);
-REX_EXPORT_STUB(__imp__RtlRip);
+REX_EXPORT_QUIET_RETURN(__imp__DumpGetRawDumpInfo, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__DumpRegisterDedicatedDataBlock, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__DumpSetCollectionFacility, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__DumpUpdateDumpSettings, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__DumpWriteDump, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__DumpXitThread, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT(__imp__RtlAssert, rex::kernel::xboxkrnl::RtlAssert_entry)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__RtlRaiseStatus);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__RtlRip);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

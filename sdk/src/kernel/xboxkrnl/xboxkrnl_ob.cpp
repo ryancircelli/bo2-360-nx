@@ -15,6 +15,7 @@
 #include <rex/assert.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
@@ -268,19 +269,19 @@ REX_EXPORT(__imp__NtClose, rex::kernel::xboxkrnl::NtClose_entry)
 REX_EXPORT(__imp__NtQueryEvent, rex::kernel::xboxkrnl::NtQueryEvent_entry)
 
 REX_EXPORT_STUB_RETURN(__imp__ObCreateObject, 0xC0000001);
-REX_EXPORT_STUB(__imp__ObGetWaitableObject);
-REX_EXPORT_STUB(__imp__ObInsertObject);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__ObGetWaitableObject);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__ObInsertObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 // Every object in this process is title-made; BO2 picks the title pool when this is 1.
 REX_EXPORT_STUB_RETURN(__imp__ObIsTitleObject, 1);
-REX_EXPORT_STUB(__imp__ObLookupAnyThreadByThreadId);
-REX_EXPORT_STUB(__imp__ObMakeTemporaryObject);
-REX_EXPORT_STUB(__imp__ObTranslateSymbolicLink);
-REX_EXPORT_STUB(__imp__NtCreateDirectoryObject);
-REX_EXPORT_STUB(__imp__NtCreateSymbolicLinkObject);
-REX_EXPORT_STUB(__imp__NtMakeTemporaryObject);
-REX_EXPORT_STUB(__imp__NtOpenDirectoryObject);
-REX_EXPORT_STUB(__imp__NtQueryDirectoryObject);
-REX_EXPORT_STUB(__imp__NtQueryIoCompletion);
-REX_EXPORT_STUB(__imp__NtQueryMutant);
-REX_EXPORT_STUB(__imp__NtQuerySemaphore);
-REX_EXPORT_STUB(__imp__NtQueryTimer);
+REX_EXPORT_QUIET_RETURN(__imp__ObLookupAnyThreadByThreadId, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__ObMakeTemporaryObject);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__ObTranslateSymbolicLink, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtCreateDirectoryObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtCreateSymbolicLinkObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtMakeTemporaryObject, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtOpenDirectoryObject, 0xC0000034);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtQueryDirectoryObject, 0x8000001A);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtQueryIoCompletion, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtQueryMutant, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtQuerySemaphore, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__NtQueryTimer, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

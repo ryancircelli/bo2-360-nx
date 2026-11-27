@@ -502,7 +502,7 @@ X_RESULT ContentManager::OpenContent(const std::string_view root_name, uint64_t 
   auto package = ResolvePackage(root_name, xuid, data);
   assert_not_null(package);
   package->LoadPackageLicenseMask(ResolvePackageHeaderPath(
-      data.file_name(), xuid, kernel_state_->title_id(), data.content_type));
+      data.file_name(), xuid, data.title_id, data.content_type));
   content_license = package->GetPackageLicense();
 
   {

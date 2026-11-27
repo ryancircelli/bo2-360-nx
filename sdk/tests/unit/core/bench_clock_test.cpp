@@ -35,7 +35,7 @@ TEST_CASE("frame-locked guest clock advances one step per frame", "[bench]") {
     REQUIRE(now >= prev);  // never goes back
     prev = now;
   }
-  REQUIRE(prev - t0 >= 5 * step);
+  REQUIRE(prev - t0 + step / 10 >= 5 * step);  // t0 is read a few ticks after its frame began, so allow that lead
   REQUIRE(prev - t0 <= 6 * step + step / 10);  // the last frame's step, plus the time since it began
   REQUIRE(Clock::frame_lock_stalls() == 0);
   // A stall (no frame for longer than clock_frame_lock_stall_ms) lets guest time run with wall time again.
@@ -51,7 +51,11 @@ TEST_CASE("spin scopes count only the outermost scope, and only when enabled", "
     rex::thread::SpinScope off;  // before EnableSpinCount: free, nothing recorded
   }
   rex::thread::EnableSpinCount();
+#if defined(__APPLE__)  // the instruction counter is Apple-only; elsewhere counting stays off
   REQUIRE(rex::thread::SpinCountEnabled());
+#else
+  REQUIRE(!rex::thread::SpinCountEnabled());
+#endif
   {
     rex::thread::SpinScope outer;
     for (int i = 0; i < 100; ++i) rex::thread::MaybeYield();  // nested scopes inside MaybeYield

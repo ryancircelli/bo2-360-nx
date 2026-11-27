@@ -22,6 +22,7 @@
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
 #include <rex/memory.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/info/file.h>
@@ -577,6 +578,16 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
     REXKRNL_IMPORT_RESULT("NtCreateFile", "{:#x} handle={:#x}", result, handle);
   }
   return result;
+}
+
+// Deletes the file named by the attributes through the VFS (documented NT behaviour).
+u32 NtDeleteFile_entry(ppc_ptr_t<X_OBJECT_ATTRIBUTES> object_attrs) {
+  if (!object_attrs) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
+  auto object_name = REX_KERNEL_MEMORY()->TranslateVirtual<X_ANSI_STRING*>(object_attrs->name_ptr);
+  auto path = util::TranslateAnsiPath(REX_KERNEL_MEMORY(), object_name);
+  return REX_KERNEL_FS()->DeletePath(path) ? X_STATUS_SUCCESS : X_STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
 u32 NtOpenFile_entry(mapped_u32 handle_out, u32 desired_access,
@@ -1317,36 +1328,37 @@ REX_EXPORT(__imp__IoSynchronousDeviceIoControlRequest,
 REX_EXPORT(__imp__StfsCreateDevice, rex::kernel::xboxkrnl::StfsCreateDevice_entry)
 REX_EXPORT(__imp__StfsControlDevice, rex::kernel::xboxkrnl::StfsControlDevice_entry)
 
-REX_EXPORT_STUB(__imp__IoAcquireDeviceObjectLock);
-REX_EXPORT_STUB(__imp__IoAllocateIrp);
-REX_EXPORT_STUB(__imp__IoBuildAsynchronousFsdRequest);
-REX_EXPORT_STUB(__imp__IoBuildDeviceIoControlRequest);
-REX_EXPORT_STUB(__imp__IoBuildSynchronousFsdRequest);
-REX_EXPORT_STUB(__imp__IoCallDriver);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoAcquireDeviceObjectLock);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoAllocateIrp, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoBuildAsynchronousFsdRequest, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoBuildDeviceIoControlRequest, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoBuildSynchronousFsdRequest, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoCallDriver, 0xC0000010);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_STUB_RETURN(__imp__IoCheckShareAccess, 0);
-REX_EXPORT_STUB(__imp__IoCompleteRequest);
-REX_EXPORT_STUB(__imp__IoCreateFile);
-REX_EXPORT_STUB(__imp__IoDeleteDevice);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoCompleteRequest);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+// IoCreateFile = NtCreateFile plus a trailing driver-flags arg, which we ignore.
+REX_EXPORT(__imp__IoCreateFile, rex::kernel::xboxkrnl::NtCreateFile_entry)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoDeleteDevice);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_STUB_RETURN(__imp__IoDismountVolume, 0);
-REX_EXPORT_STUB(__imp__IoFreeIrp);
-REX_EXPORT_STUB(__imp__IoInitializeIrp);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoFreeIrp);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoInitializeIrp);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_STUB_RETURN(__imp__IoInvalidDeviceRequest, 0xC0000010);
-REX_EXPORT_STUB(__imp__IoQueueThreadIrp);
-REX_EXPORT_STUB(__imp__IoReleaseDeviceObjectLock);
-REX_EXPORT_STUB(__imp__IoRemoveShareAccess);
-REX_EXPORT_STUB(__imp__IoSetIoCompletion);
-REX_EXPORT_STUB(__imp__IoSetShareAccess);
-REX_EXPORT_STUB(__imp__IoStartNextPacket);
-REX_EXPORT_STUB(__imp__IoStartNextPacketByKey);
-REX_EXPORT_STUB(__imp__IoStartPacket);
-REX_EXPORT_STUB(__imp__IoSynchronousFsdRequest);
-REX_EXPORT_STUB(__imp__NtDeleteFile);
-REX_EXPORT_STUB(__imp__NtSetSystemTime);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoQueueThreadIrp);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoReleaseDeviceObjectLock);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoRemoveShareAccess);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoSetIoCompletion, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoSetShareAccess);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoStartNextPacket);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoStartNextPacketByKey);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoStartPacket);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__IoSynchronousFsdRequest, 0xC0000010);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT(__imp__NtDeleteFile, rex::kernel::xboxkrnl::NtDeleteFile_entry)
+REX_EXPORT_QUIET_RETURN(__imp__NtSetSystemTime, 0xC0000061);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__NtWriteFileGather, rex::kernel::xboxkrnl::NtWriteFileGather_entry)
-REX_EXPORT_STUB(__imp__IoAcquireCancelSpinLock);
-REX_EXPORT_STUB(__imp__IoReleaseCancelSpinLock);
+REX_EXPORT_QUIET_RETURN(__imp__IoAcquireCancelSpinLock, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoReleaseCancelSpinLock);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__NtCancelIoFile, rex::kernel::xboxkrnl::NtCancelIoFile_entry)
-REX_EXPORT_STUB(__imp__NtCancelIoFileEx);
-REX_EXPORT_STUB(__imp__SvodCreateDevice);
+REX_EXPORT_QUIET_RETURN(__imp__NtCancelIoFileEx, 0xC0000225);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__SvodCreateDevice, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 
-REX_EXPORT_STUB(__imp__SataCdRomRecordReset);
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__SataCdRomRecordReset);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

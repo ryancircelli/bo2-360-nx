@@ -152,6 +152,14 @@ add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
 
+add_executable(kernel_backfill_tests
+    kernel/stub_backfill_test.cpp
+    kernel/gather_write_test.cpp
+    kernel/rtl_conversion_test.cpp)
+target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(kernel_backfill_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
 add_executable(xmemory_heap_tests system/xmemory_heap_test.cpp)
 target_link_libraries(xmemory_heap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(xmemory_heap_tests PROPERTIES
@@ -208,14 +216,6 @@ add_test(NAME xam_nui_tests COMMAND xam_nui_tests)
 add_executable(xam_device_output_tests kernel/xam_device_output_test.cpp)
 target_link_libraries(xam_device_output_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME xam_device_output_tests COMMAND xam_device_output_tests)
-add_executable(kernel_backfill_tests
-    kernel/stub_backfill_test.cpp
-    kernel/gather_write_test.cpp
-    kernel/rtl_conversion_test.cpp)
-target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2WithMain)
-set_target_properties(kernel_backfill_tests PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
-add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
 
 add_executable(kernel_stub_returns_tests kernel/stub_returns_test.cpp)
 target_include_directories(kernel_stub_returns_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
@@ -236,3 +236,31 @@ add_executable(stub_families_tests kernel/stub_families_test.cpp)
 target_include_directories(stub_families_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(stub_families_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME stub_families_tests COMMAND stub_families_tests)
+add_executable(xevent_tests system/xevent_test.cpp)
+target_include_directories(xevent_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xevent_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xevent_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME xevent_tests COMMAND xevent_tests)
+
+add_executable(runtime_objects_tests system/runtime_objects_test.cpp)
+target_include_directories(runtime_objects_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(runtime_objects_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(runtime_objects_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME runtime_objects_tests COMMAND runtime_objects_tests)
+set_tests_properties(runtime_objects_tests PROPERTIES TIMEOUT 30)
+
+add_executable(vfs_devices_tests filesystem/devices_test.cpp)
+target_include_directories(vfs_devices_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(vfs_devices_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(vfs_devices_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME vfs_devices_tests COMMAND vfs_devices_tests)
+
+add_executable(content_manager_tests system/content_manager_test.cpp)
+target_include_directories(content_manager_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(content_manager_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME content_manager_tests COMMAND content_manager_tests)

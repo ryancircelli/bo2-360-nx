@@ -15,6 +15,7 @@
 #include <rex/cvar.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/flags.h>
@@ -128,4 +129,4 @@ u32 ExGetXConfigSetting_entry(u16 category, u16 setting, mapped_void buffer_ptr,
 }  // namespace rex::kernel::xboxkrnl
 
 REX_EXPORT(__imp__ExGetXConfigSetting, rex::kernel::xboxkrnl::ExGetXConfigSetting_entry)
-REX_EXPORT_STUB(__imp__ExSetXConfigSetting);
+REX_EXPORT_QUIET_RETURN(__imp__ExSetXConfigSetting, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)

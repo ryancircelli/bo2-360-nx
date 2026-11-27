@@ -17,6 +17,7 @@
 #include <rex/filesystem.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/runtime.h>
@@ -289,23 +290,30 @@ REX_EXPORT(__imp__XAudioUnregisterRenderDriverClient,
 REX_EXPORT(__imp__XAudioSubmitRenderDriverFrame,
            rex::kernel::xboxkrnl::XAudioSubmitRenderDriverFrame_entry)
 
-REX_EXPORT_STUB(__imp__XAudioRenderDriverInitialize);
-REX_EXPORT_STUB(__imp__XAudioRenderDriverLock);
-REX_EXPORT_STUB(__imp__XAudioSetVoiceCategoryVolume);
-REX_EXPORT_STUB(__imp__XAudioBeginDigitalBypassMode);
-REX_EXPORT_STUB(__imp__XAudioEndDigitalBypassMode);
-REX_EXPORT_STUB(__imp__XAudioSubmitDigitalPacket);
+REX_EXPORT_QUIET_RETURN(__imp__XAudioRenderDriverInitialize, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_PASSTHROUGH(__imp__XAudioRenderDriverLock);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XAudioSetVoiceCategoryVolume, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XAudioBeginDigitalBypassMode, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XAudioEndDigitalBypassMode, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XAudioSubmitDigitalPacket, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_STUB_RETURN(__imp__XAudioQueryDriverPerformance, 0);
-REX_EXPORT_STUB(__imp__XAudioGetRenderDriverThread);
+REX_EXPORT_QUIET_RETURN(__imp__XAudioGetRenderDriverThread, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__XAudioSetSpeakerConfig, rex::kernel::xboxkrnl::XAudioSetSpeakerConfig_entry)
 REX_EXPORT(__imp__XAudioOverrideSpeakerConfig, rex::kernel::xboxkrnl::XAudioOverrideSpeakerConfig_entry)
-REX_EXPORT_STUB(__imp__XAudioSuspendRenderDriverClients);
-REX_EXPORT_STUB_RETURN(__imp__XAudioRegisterRenderDriverMECClient, 0);
-REX_EXPORT_STUB_RETURN(__imp__XAudioUnregisterRenderDriverMECClient, 0);
-REX_EXPORT_STUB_RETURN(__imp__XAudioCaptureRenderDriverFrame, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XAudioSuspendRenderDriverClients, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+// MEC (mic echo cancel) client: write handle 1, success; no audio is captured.
+extern "C" REX_FUNC(__imp__XAudioRegisterRenderDriverMECClient) {
+  (void)base;
+  if (ctx.r4.u32) {
+    *reinterpret_cast<rex::be<uint32_t>*>(REX_KERNEL_MEMORY()->TranslateVirtual(ctx.r4.u32)) = 1;
+  }
+  ctx.r3.u64 = 0;
+}
+REX_EXPORT_QUIET_RETURN(__imp__XAudioUnregisterRenderDriverMECClient, 0);
+REX_EXPORT_QUIET_RETURN(__imp__XAudioCaptureRenderDriverFrame, 0);
 REX_EXPORT(__imp__XAudioIsDuckerEnabled, rex::kernel::xboxkrnl::XAudioIsDuckerEnabled_entry)
-REX_EXPORT_STUB(__imp__XAudioGetUnderrunCount);
-REX_EXPORT_STUB(__imp__XAudioSetProcessFrameCallback);
+REX_EXPORT_QUIET_RETURN(__imp__XAudioGetUnderrunCount, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XAudioSetProcessFrameCallback, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 
 // Float in f1 (BO2 compares f1 right after the call); r3 stays 0.
 REX_HOOK_RAW(__imp__XAudioGetDuckerLevel) {

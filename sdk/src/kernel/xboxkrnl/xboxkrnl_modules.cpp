@@ -11,6 +11,7 @@
 
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
+#include "../quiet_return.h"
 #include <rex/hook.h>
 #include <rex/thread/mutex.h>
 #include <rex/types.h>
@@ -235,37 +236,37 @@ REX_EXPORT(__imp__ExRegisterTitleTerminateNotification,
            rex::kernel::xboxkrnl::ExRegisterTitleTerminateNotification_entry)
 REX_EXPORT(__imp__XexLoadImageHeaders, rex::kernel::xboxkrnl::XexLoadImageHeaders_entry)
 
-REX_EXPORT_STUB(__imp__XexLoadExecutable);
-REX_EXPORT_STUB(__imp__XexLoadImageFromMemory);
-REX_EXPORT_STUB(__imp__XexPcToFileHeader);
-REX_EXPORT_STUB(__imp__XexRegisterPatchDescriptor);
-REX_EXPORT_STUB(__imp__XexSendDeferredNotifications);
-REX_EXPORT_STUB(__imp__XexStartExecutable);
-REX_EXPORT_STUB(__imp__XexUnloadTitleModules);
-REX_EXPORT_STUB(__imp__XexVerifyImageHeaders);
-REX_EXPORT_STUB(__imp__XexGetModuleImportVersions);
-REX_EXPORT_STUB(__imp__XexActivationGetNonce);
-REX_EXPORT_STUB(__imp__XexActivationSetLicense);
-REX_EXPORT_STUB(__imp__XexActivationVerifyOwnership);
-REX_EXPORT_STUB(__imp__XexDisableVerboseDbgPrint);
-REX_EXPORT_STUB(__imp__XexImportTraceEnable);
-REX_EXPORT_STUB(__imp__XexSetExecutablePrivilege);
-REX_EXPORT_STUB(__imp__XexSetLastKdcTime);
-REX_EXPORT_STUB(__imp__XexTransformImageKey);
-REX_EXPORT_STUB(__imp__XexShimDisable);
-REX_EXPORT_STUB(__imp__XexShimEnable);
-REX_EXPORT_STUB(__imp__XexShimEntryDisable);
-REX_EXPORT_STUB(__imp__XexShimEntryEnable);
-REX_EXPORT_STUB(__imp__XexShimEntryRegister);
-REX_EXPORT_STUB(__imp__XexShimLock);
-REX_EXPORT_STUB(__imp__XexTitleHash);
-REX_EXPORT_STUB(__imp__XexTitleHashClose);
-REX_EXPORT_STUB(__imp__XexTitleHashContinue);
-REX_EXPORT_STUB(__imp__XexTitleHashOpen);
-REX_EXPORT_STUB(__imp__XexReserveCodeBuffer);
-REX_EXPORT_STUB(__imp__XexCommitCodeBuffer);
-REX_EXPORT_STUB(__imp__XexRegisterUsermodeModule);
-REX_EXPORT_STUB(__imp__LDICreateDecompression);
-REX_EXPORT_STUB(__imp__LDIDecompress);
-REX_EXPORT_STUB(__imp__LDIDestroyDecompression);
-REX_EXPORT_STUB(__imp__LDIResetDecompression);
+REX_EXPORT_QUIET_RETURN(__imp__XexLoadExecutable, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexLoadImageFromMemory, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexPcToFileHeader, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexRegisterPatchDescriptor, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexSendDeferredNotifications, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexStartExecutable, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexUnloadTitleModules, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexVerifyImageHeaders, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexGetModuleImportVersions, 0xC0000225);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexActivationGetNonce, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexActivationSetLicense, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexActivationVerifyOwnership, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexDisableVerboseDbgPrint, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexImportTraceEnable, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexSetExecutablePrivilege, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexSetLastKdcTime, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexTransformImageKey, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexShimDisable, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexShimEnable, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexShimEntryDisable, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexShimEntryEnable, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexShimEntryRegister, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexShimLock, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexTitleHash, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexTitleHashClose, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexTitleHashContinue, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexTitleHashOpen, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexReserveCodeBuffer, 0xC00000BB);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexCommitCodeBuffer, 0xC00000BB);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__XexRegisterUsermodeModule, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__LDICreateDecompression, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__LDIDecompress, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__LDIDestroyDecompression, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT_QUIET_RETURN(__imp__LDIResetDecompression, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
