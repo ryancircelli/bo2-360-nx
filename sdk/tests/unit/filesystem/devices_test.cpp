@@ -242,8 +242,16 @@ TEST_CASE("Range cache keys on the absolute path so game: and update: with one r
     out.write(content.data(), content.size());
   }
   VirtualFileSystem vfs;
-  REQUIRE(vfs.RegisterDevice(std::make_unique<HostPathDevice>("\\Device\\Game", temp.path / "game", true)));
-  REQUIRE(vfs.RegisterDevice(std::make_unique<HostPathDevice>("\\Device\\Update", temp.path / "update", true)));
+  {
+    auto dev = std::make_unique<HostPathDevice>("\\Device\\Game", temp.path / "game", true);
+    REQUIRE(dev->Initialize());
+    REQUIRE(vfs.RegisterDevice(std::move(dev)));
+  }
+  {
+    auto dev = std::make_unique<HostPathDevice>("\\Device\\Update", temp.path / "update", true);
+    REQUIRE(dev->Initialize());
+    REQUIRE(vfs.RegisterDevice(std::move(dev)));
+  }
   REQUIRE(vfs.RegisterSymbolicLink("game:", "\\Device\\Game"));
   REQUIRE(vfs.RegisterSymbolicLink("update:", "\\Device\\Update"));
   for (int pass = 0; pass < 2; ++pass) {  // second pass would hit the cache
