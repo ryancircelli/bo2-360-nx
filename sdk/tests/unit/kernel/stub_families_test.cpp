@@ -36,11 +36,11 @@ TEST_CASE("XNet offline lookups fail with zeroed outputs") {
   be_u32 out{0x1234};
   CHECK(NetDll_XNetServerToInAddr_entry(1, 5, 6, Map(&out)) == 10050);
   CHECK(out == 0);
-  uint8_t xnaddr[36];
-  std::memset(xnaddr, 0xAA, sizeof(xnaddr));
-  CHECK(NetDll_XNetInAddrToServer_entry(1, 5, MapV(xnaddr)) == 10050);
-  CHECK(xnaddr[0] == 0);
-  CHECK(xnaddr[35] == 0);
+  // The out is one IN_ADDR: the bytes after it (the caller's next stack slot) must survive.
+  be_u32 ina[2] = {0x1234, 0x5678};
+  CHECK(NetDll_XNetInAddrToServer_entry(1, 5, Map(&ina[0])) == 10050);
+  CHECK(ina[0] == 0);
+  CHECK(ina[1] == 0x5678);
 }
 
 TEST_CASE("System link port defaults to 3074 and keeps a set value") {

@@ -859,8 +859,9 @@ u32 NetDll_XNetTsAddrToInAddr_entry(u32 caller, u32 ts, u32 service, mapped_void
   if (out) *out = 0;
   return 10050;
 }
-u32 NetDll_XNetInAddrToServer_entry(u32 caller, u32 ina, mapped_void xnaddr_out) {
-  if (xnaddr_out) std::memset(xnaddr_out.host_address(), 0, 36);  // sizeof(XNADDR)
+// XNetInAddrToServer(ina, IN_ADDR* pina): the out is one 4-byte IN_ADDR, not an XNADDR.
+u32 NetDll_XNetInAddrToServer_entry(u32 caller, u32 ina, mapped_u32 out) {
+  if (out) *out = 0;
   return 10050;
 }
 u32 NetDll_XNetQosGetListenStats_entry(u32 caller, mapped_void xnkid, mapped_void stats) {
