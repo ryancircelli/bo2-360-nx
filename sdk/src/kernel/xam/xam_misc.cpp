@@ -541,8 +541,6 @@ REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetClearCache, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetCurrentTitleD3DVersion, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetGameInfo, 0x80004005);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetLogonTitle, 0x80004005);
-REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetMediaInfo, 0);
-REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetMediaInfoEx, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetPriorTitleId, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderGetState, 0);
 REX_EXPORT_QUIET_RETURN(__imp__XamLoaderIsKinectUIPreferredForLogonTitle, 0);
