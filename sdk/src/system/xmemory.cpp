@@ -141,7 +141,8 @@ Memory::~Memory() {
   physical_membase_ = nullptr;
 }
 
-bool Memory::Initialize() {
+bool Memory::Initialize(bool no_phys_alias) {
+  no_phys_alias_ = no_phys_alias;
   file_name_ = fmt::format("xenia_memory_{}", chrono::Clock::QueryHostTickCount());
 
   // Create main page file-backed mapping. This is all reserved but
@@ -218,9 +219,21 @@ bool Memory::Initialize() {
   heaps_.vA0000000.Initialize(this, virtual_membase_, memory::HeapType::kGuestPhysical, 0xA0000000,
                               0x20000000, 64 * 1024, &heaps_.physical);
   heaps_.vC0000000.Initialize(this, virtual_membase_, memory::HeapType::kGuestPhysical, 0xC0000000,
-                              0x20000000, 16 * 1024 * 1024, &heaps_.physical);
+                              0x20000000, no_phys_alias_ ? 4096 : 16 * 1024 * 1024,
+                              &heaps_.physical);
   heaps_.vE0000000.Initialize(this, virtual_membase_, memory::HeapType::kGuestPhysical, 0xE0000000,
                               0x1FD00000, 4096, &heaps_.physical);
+
+  if (no_phys_alias_) {
+    // Nothing is allocated at 0xE0000000 in this layout: a stray use (an address the game made
+    // itself, or code built without no_phys_alias) faults here instead of reading 4K off.
+    if (!rex::memory::Protect(virtual_membase_ + 0xE0000000ull, heaps_.vE0000000.heap_size(),
+                              rex::memory::PageAccess::kNoAccess, nullptr)) {
+      REXSYS_ERROR("no_phys_alias: could not make the 0xE0000000 view no-access");
+      return false;
+    }
+    REXSYS_INFO("no_phys_alias: 4K physical pages at 0xC0000000, 0xE0000000 view no-access");
+  }
 
   // Protect the first and last 64kb of memory.
   heaps_.v00000000.AllocFixed(0x00000000, 0x10000, 0x10000,
@@ -453,7 +466,7 @@ const BaseHeap* Memory::LookupHeap(uint32_t address) const {
 BaseHeap* Memory::LookupHeapByType(bool physical, uint32_t page_size) {
   if (physical) {
     if (page_size <= 4096) {
-      return &heaps_.vE0000000;
+      return no_phys_alias_ ? &heaps_.vC0000000 : &heaps_.vE0000000;
     } else if (page_size <= 64 * 1024) {
       return &heaps_.vA0000000;
     } else {

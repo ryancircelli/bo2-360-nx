@@ -386,7 +386,11 @@ class Memory {
   // Initializes the memory system.
   // This may fail if the host address space could not be reserved or the
   // mapping to the file system fails.
-  bool Initialize();
+  // no_phys_alias (PPCCodegenFlags): 4K-page physical memory comes from the 0xC0000000 heap
+  // (made 4K-granular) and the 0xE0000000 view is no-access, so no guest address ever needs
+  // the 0xE0000000 page-offset fix-up.
+  bool Initialize(bool no_phys_alias = false);
+  bool no_phys_alias() const { return no_phys_alias_; }
 
   // Resets all memory to zero and resets all allocations.
   void Reset();
@@ -595,6 +599,7 @@ class Memory {
   std::filesystem::path file_name_;
   uint32_t system_page_size_ = 0;
   uint32_t system_allocation_granularity_ = 0;
+  bool no_phys_alias_ = false;
   uint8_t* virtual_membase_ = nullptr;
   uint8_t* physical_membase_ = nullptr;
 

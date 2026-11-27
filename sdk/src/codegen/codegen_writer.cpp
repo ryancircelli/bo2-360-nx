@@ -94,6 +94,7 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
       {"non_volatile_as_local", cfg.nonVolatileRegistersAsLocalVariables},
       {"vector_scratch_as_local", cfg.vectorScratchRegistersAsLocalVariables},
       {"abi_poison_checks", cfg.abiPoisonChecks},
+      {"no_phys_alias", cfg.noPhysAlias},
       {"reference_functions", !cfg.referenceFunctions.empty() || cfg.referenceSampleEvery != 0},
   };
 

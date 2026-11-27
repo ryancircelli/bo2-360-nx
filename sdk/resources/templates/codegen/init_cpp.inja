@@ -12,6 +12,10 @@ DEFINE_REX_FUNC({{ imp.name }}) {
     REX_CALL_INDIRECT_FUNC({{ imp.address }});
 }
 {% endfor %}
+// One source of truth: the flag Memory reads comes from the PCH macro the recompiled code was built with.
+#if {% if config_flags.no_phys_alias %}!{% endif %}defined(REX_CONFIG_NO_PHYS_ALIAS)
+#error "no_phys_alias: the PCH was generated with a different setting than this file; regenerate"
+#endif
 const rex::PPCImageInfo PPCImageConfig = {
     .code_base = REX_CODE_BASE,
     .code_size = REX_CODE_SIZE,
@@ -31,6 +35,9 @@ const rex::PPCImageInfo PPCImageConfig = {
         .cr_as_local = {{ config_flags.cr_as_local }},
         .non_argument_as_local = {{ config_flags.non_argument_as_local }},
         .non_volatile_as_local = {{ config_flags.non_volatile_as_local }},
+#if defined(REX_CONFIG_NO_PHYS_ALIAS)
+        .no_phys_alias = true,
+#endif
     },
 };
 

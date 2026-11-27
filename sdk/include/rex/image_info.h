@@ -35,6 +35,7 @@ struct PPCCodegenFlags {
   bool cr_as_local = false;
   bool non_argument_as_local = false;
   bool non_volatile_as_local = false;
+  bool no_phys_alias = false;  ///< 4K physical pages at 0xC0000000; the 0xE0000000 view is no-access
 };
 
 /// PPC image layout passed from the generated config header into ReXApp.

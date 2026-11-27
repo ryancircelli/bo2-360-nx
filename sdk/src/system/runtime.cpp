@@ -147,7 +147,7 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
 
   // Create memory system first
   memory_ = std::make_unique<memory::Memory>();
-  if (!memory_->Initialize()) {
+  if (!memory_->Initialize(config.no_phys_alias)) {
     return fail(X_STATUS_UNSUCCESSFUL, "memory init failed");
   }
 
@@ -229,6 +229,7 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
 }
 
 X_STATUS Runtime::Setup(const rex::PPCImageInfo& image_info, RuntimeConfig config) {
+  config.no_phys_alias = image_info.codegen_flags.no_phys_alias;
   X_STATUS status = Setup(std::move(config));
   if (status != X_STATUS_SUCCESS) {
     return status;
@@ -280,9 +281,16 @@ X_STATUS Runtime::Setup(const rex::PPCImageInfo& image_info, RuntimeConfig confi
   const auto& flags = image_info.codegen_flags;
   REXSYS_DEBUG(
       "Codegen config: skip_lr={} skip_msr={} ctr={} xer={} cr={} reserved={} "
-      "non_argument={} non_volatile={}",
+      "non_argument={} non_volatile={} no_phys_alias={}",
       flags.skip_lr, flags.skip_msr, flags.ctr_as_local, flags.xer_as_local, flags.cr_as_local,
-      flags.reserved_as_local, flags.non_argument_as_local, flags.non_volatile_as_local);
+      flags.reserved_as_local, flags.non_argument_as_local, flags.non_volatile_as_local,
+      flags.no_phys_alias);
+  if (flags.no_phys_alias != memory_->no_phys_alias()) {
+    REXSYS_ERROR("no_phys_alias: generated code says {}, memory layout says {}; refusing to start",
+                 flags.no_phys_alias, memory_->no_phys_alias());
+    Shutdown();
+    return X_STATUS_UNSUCCESSFUL;
+  }
 
   return X_STATUS_SUCCESS;
 }

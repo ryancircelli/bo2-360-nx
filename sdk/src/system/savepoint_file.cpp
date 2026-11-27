@@ -998,6 +998,27 @@ bool LoadSavepointFile(const std::string& path) {
     uint32_t n = in.U32();
     auto* pages = in.Take(size_t(n) * 8);
     auto* heap = HeapFor(mem, base, physical != 0);
+    if (pages && !physical && mem->no_phys_alias() && base == 0xE0000000u) {
+      for (uint32_t p = 0; p < n; ++p) {
+        memory::PageEntry e;
+        std::memcpy(&e.qword, pages + size_t(p) * 8, 8);
+        if (e.state) {
+          SPLOAD_ERR(
+              "[savepoint] load: {} holds 0xE0000000 allocations but this build has no_phys_alias "
+              "(4K physical pages at 0xC0000000); remake the save point with this build",
+              path);
+          return false;
+        }
+      }
+    }
+    if (pages && heap && !physical && base == 0xC0000000u &&
+        heap->CaptureRewindState().pages.size() != n) {
+      SPLOAD_ERR(
+          "[savepoint] load: {} was made with the other physical memory layout (no_phys_alias {} "
+          "here); remake the save point with this build",
+          path, mem->no_phys_alias() ? "on" : "off");
+      return false;
+    }
     if (!pages || !heap || heap->heap_base() != base ||
         heap->CaptureRewindState().pages.size() != n) {
       SPLOAD_ERR("[savepoint] load: heap {:08X} layout differs from this process", base);
