@@ -86,15 +86,9 @@ endforeach()
 # ---------------------------------------------------------------------------
 # 2. Private, patched copy of the SDK graphics sources
 # ---------------------------------------------------------------------------
-set(_metal_patches
-    sdk-metal.patch
-    sdk-metal-native-scale.patch
-    sdk-metal-rt-shrink.patch
-    sdk-metal-hle-census.patch
-    sdk-metal-gpucmd.patch
-    sdk-metal-ssmask.patch
-    sdk-metal-loadwindow.patch
-)
+# Patch list shared with the Linux check of the patched core (tools/gputest/patchedcore).
+include(${_metal_dir}/patches.cmake)
+set(_metal_patches ${REXGPU_METAL_PATCHES})
 set(_sdk_private ${_metal_work}/sdk-private)
 
 # The copy is refreshed at build time whenever an SDK graphics source or a patch
