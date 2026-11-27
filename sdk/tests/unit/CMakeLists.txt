@@ -109,3 +109,8 @@ add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
 add_executable(md5_selfcheck crypto/md5_selfcheck.cpp)
 target_include_directories(md5_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME md5_selfcheck COMMAND md5_selfcheck)
+
+add_executable(kernel_crypt_tests kernel/crypt_test.cpp)
+target_include_directories(kernel_crypt_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(kernel_crypt_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME kernel_crypt_tests COMMAND kernel_crypt_tests)

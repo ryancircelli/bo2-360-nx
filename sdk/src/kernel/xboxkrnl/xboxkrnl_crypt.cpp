@@ -13,6 +13,8 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <array>
+#include <vector>
 
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
@@ -178,6 +180,14 @@ void XeCryptSha256Init_entry(ppc_ptr_t<XECRYPT_SHA256_STATE> sha_state) {
   sha_state->state[5] = 0x9b05688c;
   sha_state->state[6] = 0x1f83d9ab;
   sha_state->state[7] = 0x5be0cd19;
+}
+
+// FIPS 180-4 section 5.3.2; continue with Sha256Update and a 28-byte Sha256Final.
+void XeCryptSha224Init_entry(ppc_ptr_t<XECRYPT_SHA256_STATE> sha_state) {
+  sha_state.Zero();
+  constexpr uint32_t iv[] = {0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939,
+                              0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4};
+  std::copy(std::begin(iv), std::end(iv), sha_state->state);
 }
 
 void XeCryptSha256Update_entry(ppc_ptr_t<XECRYPT_SHA256_STATE> sha_state, mapped_void input,
@@ -371,9 +381,43 @@ u32 XeCryptBnQwNeRsaPubCrypt_entry(ppc_ptr_t<uint64_t> qw_a, ppc_ptr_t<uint64_t>
 
 #endif
 
+// Behaviour specified in the stream research ledger from RFC 8017 and the credited
+// upstream ABI. The block is stored as a little-endian integer, including the hash.
+void XeCryptBnDwLePkcs1Format_entry(mapped_void hash, u32 format, mapped_void sig, u32 size) {
+  if (size < 39 || size > 512) return;
+  // Invalid selectors have no documented encoding. Preserve the caller's buffer.
+  if (format > 2) return;
+  constexpr uint8_t standard[] = {0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
+                                 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14};
+  constexpr uint8_t short_form[] = {0x30, 0x1f, 0x30, 0x07, 0x06, 0x05, 0x2b,
+                                   0x0e, 0x03, 0x02, 0x1a, 0x04, 0x14};
+  // Save the hash first so the input may alias the output.
+  std::array<uint8_t, 20> digest;
+  std::copy_n(hash.as<const uint8_t*>(), digest.size(), digest.begin());
+  auto* dst = sig.as<uint8_t*>();
+  std::fill_n(dst, size, 0xff);
+  std::reverse_copy(digest.begin(), digest.end(), dst);
+  size_t separator = digest.size();
+  if (format == 0) {
+    std::reverse_copy(std::begin(standard), std::end(standard), dst + separator);
+    separator += sizeof(standard);
+  } else if (format == 1) {
+    std::reverse_copy(std::begin(short_form), std::end(short_form), dst + separator);
+    separator += sizeof(short_form);
+  }
+  dst[separator] = 0;
+  dst[size - 2] = 1;
+  dst[size - 1] = 0;
+}
+
 u32 XeCryptBnDwLePkcs1Verify_entry(mapped_void hash, mapped_void sig, u32 size) {
-  // BOOL return value
-  return 1;
+  if (size < 39 || size > 512) return 0;
+  std::array<uint8_t, 512> expected;
+  for (u32 format = 0; format < 3; ++format) {
+    XeCryptBnDwLePkcs1Format_entry(hash, format, mapped_void::from_host(expected.data()), size);
+    if (std::memcmp(expected.data(), sig.as<const uint8_t*>(), size) == 0) return 1;
+  }
+  return 0;
 }
 
 void XeCryptRandom_entry(mapped_void buf, u32 buf_size) {
@@ -743,6 +787,81 @@ i32 XeCryptBnQwNeCompare_entry(mapped_u64 a, mapped_u64 b, u32 qwords) {
   return 0;
 }
 
+// Ported from Xenia Canary (BSD-3-Clause), retaining its Montgomery conventions.
+u64 XeCryptBnQwNeModInv_entry(u64 input) {
+  uint64_t intermediate = input;
+  // Compute the 2-adic of qw such that: result = -1 + input^2
+  uint64_t result = (intermediate * 3) ^ 2;
+  intermediate = 1 - (result * intermediate);
+
+  // Raise it to another 32 such that: result = -1 + input^64
+  for (uint32_t i = 5; i < 32; i <<= 1) {
+    result = result * (intermediate + 1);
+    intermediate = intermediate * intermediate;
+  }
+
+  // Done
+  result = result * (intermediate + 1);
+  return result;
+}
+
+void XeCryptBnQwNeModMul_entry(mapped_u64 qw_a, mapped_u64 qw_b, mapped_u64 qw_out,
+                               u64 inverse, mapped_u64 modulus,
+                               u32 size) {
+  using u128 = unsigned __int128;
+  const auto u128_mul64 = [](uint64_t a, uint64_t b) { return u128{a} * b; };
+  const auto u128_add = [](u128 a, uint64_t b) { return a + b; };
+  const auto u128_from = [](uint64_t a) { return u128{a}; };
+
+  const uint32_t n = size;
+  if (!n) {
+    return;
+  }
+
+  std::vector<uint64_t> ab(n), mn(n);
+  for (uint32_t i = 0; i < n; i++) {
+    uint64_t b = qw_b[i];
+    // Makes the low qwords of both sums equal, so they drop out of the shift
+    uint64_t m = (ab[0] - mn[0] + b * uint64_t(qw_a[0])) * uint64_t(inverse);
+
+    uint64_t ab_carry = 0;
+    uint64_t mn_carry = 0;
+    for (uint32_t j = 0; j < n; j++) {
+      u128 t = u128_add(u128_add(u128_mul64(b, qw_a[j]), ab[j]), ab_carry);
+      u128 u = u128_add(u128_add(u128_mul64(m, modulus[j]), mn[j]), mn_carry);
+      if (j) {
+        ab[j - 1] = static_cast<uint64_t>(t);
+        mn[j - 1] = static_cast<uint64_t>(u);
+      }
+      ab_carry = static_cast<uint64_t>(t >> 64);
+      mn_carry = static_cast<uint64_t>(u >> 64);
+    }
+    ab[n - 1] = ab_carry;
+    mn[n - 1] = mn_carry;
+  }
+
+  bool greater = false;
+  for (uint32_t i = n; i-- > 0;) {
+    if (ab[i] != mn[i]) {
+      greater = ab[i] > mn[i];
+      break;
+    }
+  }
+
+  // Inputs are only read above, so the output can overlap them
+  uint64_t carry = 0;
+  uint64_t borrow = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    u128 sum = u128_add(
+        u128_add(u128_from(ab[i]), greater ? 0 : uint64_t(modulus[i])), carry);
+    carry = static_cast<uint64_t>(sum >> 64);
+    uint64_t diff = static_cast<uint64_t>(sum) - mn[i];
+    uint64_t next_borrow = static_cast<uint64_t>(sum) < mn[i] || diff < borrow;
+    qw_out[i] = diff - borrow;
+    borrow = next_borrow;
+  }
+}
+
 // ---- MD5 / HMAC-MD5: opaque host-order state blocks (see md5.h). ----
 static_assert(sizeof(Md5) <= 0x60);  // guest XECRYPT_MD5_STATE blocks are at least this big
 static_assert(sizeof(HmacMd5) <= 0xC0);
@@ -902,14 +1021,14 @@ REX_EXPORT_STUB(__imp__XeCryptBnDwLeDhModExp);
 REX_EXPORT(__imp__XeCryptBnDw_Copy, rex::kernel::xboxkrnl::XeCryptBnDw_Copy_entry)
 REX_EXPORT(__imp__XeCryptBnDw_SwapLeBe, rex::kernel::xboxkrnl::XeCryptBnDw_SwapLeBe_entry)
 REX_EXPORT(__imp__XeCryptBnDw_Zero, rex::kernel::xboxkrnl::XeCryptBnDw_Zero_entry)
-REX_EXPORT_STUB(__imp__XeCryptBnDwLePkcs1Format);
+REX_EXPORT(__imp__XeCryptBnDwLePkcs1Format, rex::kernel::xboxkrnl::XeCryptBnDwLePkcs1Format_entry)
 REX_EXPORT_STUB(__imp__XeCryptBnQwBeSigCreate);
 REX_EXPORT_STUB(__imp__XeCryptBnQwBeSigFormat);
 REX_EXPORT_STUB(__imp__XeCryptBnQwBeSigVerify);
 REX_EXPORT_STUB(__imp__XeCryptBnQwNeModExp);
 REX_EXPORT_STUB(__imp__XeCryptBnQwNeModExpRoot);
-REX_EXPORT_STUB(__imp__XeCryptBnQwNeModInv);
-REX_EXPORT_STUB(__imp__XeCryptBnQwNeModMul);
+REX_EXPORT(__imp__XeCryptBnQwNeModInv, rex::kernel::xboxkrnl::XeCryptBnQwNeModInv_entry)
+REX_EXPORT(__imp__XeCryptBnQwNeModMul, rex::kernel::xboxkrnl::XeCryptBnQwNeModMul_entry)
 REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwNeRsaKeyGen, 0);
 REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwNeRsaPrvCrypt, 0);
 REX_EXPORT(__imp__XeCryptBnQw_Copy, rex::kernel::xboxkrnl::XeCryptBnQw_Copy_entry)
@@ -1002,7 +1121,7 @@ REX_EXPORT_STUB(__imp__XeCryptAesCtr);
 REX_EXPORT_STUB(__imp__XeCryptAesCbcMac);
 REX_EXPORT_STUB(__imp__XeCryptAesDmMac);
 REX_EXPORT_STUB(__imp__XeKeysGetTruncatedSecondaryConsoleId);
-REX_EXPORT_STUB(__imp__XeCryptSha224Init);
+REX_EXPORT(__imp__XeCryptSha224Init, rex::kernel::xboxkrnl::XeCryptSha224Init_entry)
 REX_EXPORT_STUB(__imp__XeCryptAesCreateKeySchedule);
 REX_EXPORT_STUB(__imp__XeCryptAesEncryptOne);
 REX_EXPORT_STUB(__imp__XeCryptAesDecryptOne);
