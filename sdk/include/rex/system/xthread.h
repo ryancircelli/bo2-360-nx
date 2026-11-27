@@ -424,6 +424,13 @@ class XThread : public XObject {
   // Atomic: written by the thread itself in Exit/Terminate, read cross-thread by
   // KernelState::TerminateTitle's cooperative drain.
   std::atomic<bool> running_{false};
+  // Pointer ref owned by the running host thread, so a guest handle or
+  // ObDereferenceObject release cannot free the object under it (Halo 3
+  // startup: use-after-free in Exit). Dropped once, by DropHostRef().
+  std::atomic<bool> host_ref_{false};
+  void TakeHostRef() { Retain(); host_ref_ = true; }
+  // May delete this: nothing may touch the object afterwards.
+  void DropHostRef() { if (host_ref_.exchange(false)) Release(); }
 
   std::string thread_name_;
   std::unique_ptr<runtime::ThreadState> thread_state_;

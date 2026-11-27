@@ -5050,14 +5050,21 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           mode == xenos::TessellationMode::kAdaptive &&
           ReadAdaptiveTessFactors(primitive_processing_result, factor_min,
                                   factor_max, tess_cp_scratch_);
-      // Continuous quads (continuous_quad_1cp_hs): every factor is the
-      // maximum; one patch per control point.
-      if (mode == xenos::TessellationMode::kContinuous &&
+      // Factors per patch: 4 for quads, 3 for triangles (Halo 3 water,
+      // adaptive_triangle_hs), one per control point.
+      const bool tess_tri =
           primitive_processing_result.host_vertex_shader_type ==
-              Shader::HostVertexShaderType::kQuadDomainPatchIndexed &&
+          Shader::HostVertexShaderType::kTriangleDomainPatchIndexed;
+      const uint32_t tess_cps = tess_tri ? 3u : 4u;
+      // Continuous quads / triangles (continuous_*_1cp_hs): every factor is
+      // the maximum; one patch per control point.
+      if (mode == xenos::TessellationMode::kContinuous &&
+          IsNativeDomainType(
+              primitive_processing_result.host_vertex_shader_type) &&
           NativeTessMode()) {
         tess_cp_scratch_.assign(
-            size_t(primitive_processing_result.host_draw_vertex_count) * 4,
+            size_t(primitive_processing_result.host_draw_vertex_count) *
+                tess_cps,
             factor_max);
         have_factors = !tess_cp_scratch_.empty();
       }
@@ -5081,7 +5088,7 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
             have_factors && mode == xenos::TessellationMode::kAdaptive;
         const uint32_t patches =
             adaptive_factors
-                ? uint32_t(tess_cp_scratch_.size() / 4)
+                ? uint32_t(tess_cp_scratch_.size() / tess_cps)
                 : primitive_processing_result.host_draw_vertex_count;
         emu_stats::Stats::Get().NoteTessellation(
             frame_current_, kind, vs_hash, patches,
@@ -5136,10 +5143,12 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           (tess_mode == 1 || (tess_mode == 3 && tess_blended))) {
         const float* cp = tess_cp_scratch_.data();
         bool uniform = true;
-        for (size_t i = 0; i + 3 < tess_cp_scratch_.size() && uniform;
-             i += 4) {
-          uniform = cp[i] == cp[i + 1] && cp[i] == cp[i + 2] &&
-                    cp[i] == cp[i + 3] && float(__fp16(cp[i])) == cp[i];
+        for (size_t i = 0; i + tess_cps <= tess_cp_scratch_.size() && uniform;
+             i += tess_cps) {
+          uniform = float(__fp16(cp[i])) == cp[i];
+          for (uint32_t j = 1; j < tess_cps && uniform; ++j) {
+            uniform = cp[i + j] == cp[i];
+          }
         }
         if (tess_blended) {
           // Only the tessellator order was accepted for blended draws.
@@ -5171,6 +5180,11 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
       if (terrain_shared_path && (tess_mode == 1 || tess_mode == 3)) {
         tess_exact = true;
         tess_cpu = true;
+      }
+      // The reference patterns are quad-domain only: triangles always take
+      // Metal's tessellator (no emulation to fall back to in this build).
+      if (tess_tri) {
+        tess_cpu = false;
       }
       // The reference pattern path (exact): runs of consecutive patches
       // sharing a pattern are drawn instanced.
@@ -5268,9 +5282,10 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
                 vertex_translation, pixel_translation,
                 primitive_processing_result, attachment_formats,
                 rendering_key);
-        const uint32_t patches = uint32_t(tess_cp_scratch_.size() / 4);
-        // MTLQuadTessellationFactorsHalf: 4 edge + 2 inside halves.
-        constexpr size_t kPatchBytes = 12;
+        const uint32_t patches = uint32_t(tess_cp_scratch_.size() / tess_cps);
+        // MTLQuadTessellationFactorsHalf: 4 edge + 2 inside halves;
+        // MTLTriangleTessellationFactorsHalf: 3 edge + 1 inside.
+        const size_t kPatchBytes = tess_tri ? 8 : 12;
         MTL::Buffer* buffer = nullptr;
         size_t offset = 0;
         uint64_t gpu_address = 0;
@@ -5297,7 +5312,17 @@ bool MetalCommandProcessor::IssueDrawImpl(xenos::PrimitiveType primitive_type,
           }();
           auto* out = reinterpret_cast<__fp16*>(data);
           const float* cp = tess_cp_scratch_.data();
-          for (uint32_t p = 0; p < patches; ++p, cp += 4, out += 6) {
+          // adaptive_triangle_hs: edge i = control point (i + 1) % 3,
+          // inside = min of the three.
+          for (uint32_t p = 0; tess_tri && p < patches;
+               ++p, cp += 3, out += 4) {
+            for (uint32_t i = 0; i < 3; ++i) {
+              out[i] = __fp16(cp[(i + 1) % 3]);
+            }
+            out[3] = __fp16(std::fmin(std::fmin(cp[0], cp[1]), cp[2]));
+          }
+          for (uint32_t p = 0; !tess_tri && p < patches;
+               ++p, cp += 4, out += 6) {
             for (uint32_t i = 0; i < 4; ++i) {
               out[i] = __fp16(cp[edge_map[i]]);
             }
@@ -9827,13 +9852,16 @@ bool MetalCommandProcessor::ReadAdaptiveTessFactors(
   const uint32_t count = primitive_processing_result.host_draw_vertex_count;
   if (primitive_processing_result.tessellation_mode !=
           xenos::TessellationMode::kAdaptive ||
-      primitive_processing_result.host_vertex_shader_type !=
-          Shader::HostVertexShaderType::kQuadDomainPatchIndexed ||
+      !IsNativeDomainType(primitive_processing_result.host_vertex_shader_type) ||
       primitive_processing_result.index_buffer_type !=
           PrimitiveProcessor::ProcessedIndexBufferType::kGuestDMA ||
       primitive_processing_result.host_index_format !=
           xenos::IndexFormat::kInt32 ||
-      !count || (count & 3)) {
+      !count ||
+      count % (primitive_processing_result.host_vertex_shader_type ==
+                       Shader::HostVertexShaderType::kTriangleDomainPatchIndexed
+                   ? 3u
+                   : 4u)) {
     return false;
   }
   const auto* words = reinterpret_cast<const uint32_t*>(
@@ -10155,8 +10183,12 @@ bool MetalCommandProcessor::DispatchDraw(
     UseRenderEncoderResource(native->tess_factor_buffer, MTL::ResourceUsageRead);
     current_render_encoder_->setTessellationFactorBuffer(
         native->tess_factor_buffer, native->tess_factor_offset, 0);
-    current_render_encoder_->drawPatches(4, 0, native->tess_patch_count,
-                                         nullptr, 0, 1, 0);
+    current_render_encoder_->drawPatches(
+        primitive_processing_result.host_vertex_shader_type ==
+                Shader::HostVertexShaderType::kTriangleDomainPatchIndexed
+            ? 3
+            : 4,
+        0, native->tess_patch_count, nullptr, 0, 1, 0);
   } else if (use_tessellation_emulation) {
     IRRuntimePrimitiveType tess_primitive = IRRuntimePrimitiveTypeTriangle;
     switch (primitive_processing_result.host_primitive_type) {

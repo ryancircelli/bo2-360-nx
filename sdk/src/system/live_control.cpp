@@ -129,6 +129,19 @@ std::string Record(const std::string& args) {
          std::to_string(samples.empty() ? 0 : samples.front().ms);
 }
 
+// record PATH: every pad input since start (routes and live presses alike) in the hid_replay_input format.
+std::string Record(const std::string& args) {
+  const std::string path = Trim(args);
+  if (path.empty()) return "error usage: record PATH";
+  const auto samples = input::GlobalInputRing().Window(input::ProcessMs(), input::ProcessMs());
+  std::ofstream out(path, std::ios::trunc);
+  out << input::SamplesToText(samples);
+  if (!out) return "error cannot write " + path;
+  // The file's times start at its first sample: first_ms is when that was (hid_replay_delay for the replay).
+  return "ok recorded " + std::to_string(samples.size()) + " samples to " + path + " first_ms " +
+         std::to_string(samples.empty() ? 0 : samples.front().ms);
+}
+
 }  // namespace
 
 std::string LiveControlCommand(const std::string& command, const std::string& args) {

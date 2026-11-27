@@ -968,6 +968,31 @@ int Replayer::Run(const std::vector<uint8_t>& trace) {
   hooks_.chain = cp_.trace_hooks();
   cp_.set_trace_hooks(&hooks_);
   bool ok = ExecuteCommands(trace);
+  // Diagnostic final guest-memory dump, after every recorded resolve has run.
+  // Unlike a render-target readback this includes the game's resolve format.
+  const char* dump_address = std::getenv("REX_REPLAY_DUMP_GUEST_ADDRESS");
+  const char* dump_size = std::getenv("REX_REPLAY_DUMP_GUEST_SIZE");
+  const char* dump_file = std::getenv("REX_REPLAY_DUMP_GUEST_FILE");
+  if (ok && (dump_address || dump_size || dump_file)) {
+    char* address_end = nullptr;
+    char* size_end = nullptr;
+    uint64_t address = dump_address ? std::strtoull(dump_address, &address_end, 0) : 0;
+    uint64_t size = dump_size ? std::strtoull(dump_size, &size_end, 0) : 0;
+    if (!dump_address || !dump_size || !dump_file || !*dump_file ||
+        address_end == dump_address || *address_end || size_end == dump_size ||
+        *size_end || !size || address >= 0x20000000ull ||
+        size > 0x20000000ull - address) {
+      REXGPU_ERROR("replay: invalid final guest dump address, size or file");
+      ok = false;
+    } else {
+      cp_.TraceReadbackGuestMemory(uint32_t(address), uint32_t(size));
+      std::ofstream dump(dump_file, std::ios::binary);
+      dump.write(reinterpret_cast<const char*>(memory_->TranslatePhysical(uint32_t(address))),
+                 std::streamsize(size));
+      ok = bool(dump);
+      if (!ok) REXGPU_ERROR("replay: failed writing final guest dump");
+    }
+  }
   TextureLoadProbeSlot() = nullptr;
   cp_.set_trace_hooks(hooks_.chain);
   std::fclose(draws_json_);
