@@ -307,9 +307,11 @@ void RecordWait(const char* event, uint64_t start_us) {
 uint64_t Now() { return Enabled() ? frame_log::NowUs() : 0; }
 // Per-frame CPU of named threads, sampled on the GPU Commands thread at each guest swap.
 struct ThreadCpu {
-  static constexpr int kCount = 4;
-  const char* prefixes[kCount] = {"GPU Commands", "GameThread", "3D Engine", "Audio Worker"};
-  const char* events[kCount] = {"tcpu_gpucmd_us", "tcpu_game_us", "tcpu_3d_us", "tcpu_audio_us"};
+  static constexpr int kCount = 5;
+  const char* prefixes[kCount] = {"GPU Commands", "GameThread", "3D Engine", "Audio Worker",
+                                  "GPU Encode"};
+  const char* events[kCount] = {"tcpu_gpucmd_us", "tcpu_game_us", "tcpu_3d_us", "tcpu_audio_us",
+                                "tcpu_encode_us"};
   mach_port_t ports[kCount] = {};
   uint64_t last[kCount] = {};
   uint64_t last_lookup_us = 0;
