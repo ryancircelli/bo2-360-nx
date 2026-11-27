@@ -572,9 +572,10 @@ void XamShowDirtyDiscErrorUI_entry(u32 user_index) {
   std::_Exit(1);
 }
 
-u32 XamShowPartyUI_entry(u32 r3, u32 r4) {
-  return X_ERROR_FUNCTION_FAILED;
-}
+u32 AnswerWithoutUI(u32 user_index, u32 overlapped, u32 result = X_ERROR_SUCCESS);
+
+// No party backend: the panel opens and closes with nothing chosen.
+u32 XamShowPartyUI_entry(u32 user_index, u32) { return AnswerWithoutUI(user_index, 0); }
 
 // Offline: no marketplace. Validate like xenia-canary, then complete as if the dialog closed.
 u32 XamShowMarketplaceDownloadItemsUI_entry(u32 user_index, u32 ui_type, mapped_u64 offers,
@@ -591,18 +592,43 @@ u32 XamShowMarketplaceDownloadItemsUI_entry(u32 user_index, u32 ui_type, mapped_
   return X_ERROR_SUCCESS;
 }
 
-u32 XamShowCommunitySessionsUI_entry(u32 r3, u32 r4) {
-  return X_ERROR_FUNCTION_FAILED;
-}
+u32 XamShowCommunitySessionsUI_entry(u32 user_index, u32) { return AnswerWithoutUI(user_index, 0); }
 
-// Offline guide panel (stub-noref-research specs/stub-specs.md #1/#2; checks after xenia-canary):
-// no profile -> NO_SUCH_USER, UI already up -> ACCESS_DENIED, else "opened and dismissed" = 0.
-u32 XamShowOfflinePanelUI_entry(u32 user_index) {
+// The one no-UI answer for guide panels (stub-noref-research specs/stub-specs.md #1/#2; checks
+// after xenia-canary): no profile -> NO_SUCH_USER, UI already up -> ACCESS_DENIED, else the panel
+// "opened and was dismissed": XN_SYS_UI true then false, `result` returned or put in the overlapped.
+u32 AnswerWithoutUI(u32 user_index, u32 overlapped, u32 result) {
   if (user_index >= 4 || !REX_KERNEL_STATE()->user_profile(user_index)) return X_ERROR_NO_SUCH_USER;
   if (xeXamIsUIActive()) return X_ERROR_ACCESS_DENIED;
+  if (overlapped) return xeXamDispatchHeadless([result] { return X_RESULT(result); }, overlapped);
   REX_KERNEL_STATE()->BroadcastNotification(0x9, true);
   REX_KERNEL_STATE()->BroadcastNotification(0x9, false);
-  return X_ERROR_SUCCESS;
+  return result;
+}
+u32 XamShowOfflinePanelUI_entry(u32 user_index) { return AnswerWithoutUI(user_index, 0); }
+
+// Halo 3 and NFS Hot Pursuit pass 15 arguments; the 15th is the overlapped (caller sub_8239DA70).
+u32 XamShowCustomMessageComposeUI_entry(u32 user_index, u32, u32, u32, u32, u32, u32, u32, u32,
+                                        u32, u32, u32, u32, u32, u32 overlapped) {
+  return AnswerWithoutUI(user_index, overlapped);
+}
+// XShowCustomPlayerListUI(user, flags, title, desc, image, cb, players, count, x, y, result, ov):
+// cancel so the unknown XPLAYERLIST_RESULT is never written (NFS Hot Pursuit wrapper sub_8951D320).
+u32 XamShowCustomPlayerListUI_entry(u32 user_index, u32, u32, u32, u32, u32, u32, u32, u32, u32,
+                                    u32, u32 overlapped) {
+  return AnswerWithoutUI(user_index, overlapped, X_ERROR_CANCELLED);
+}
+// xenia-canary 2da2519 (BSD-3-Clause): no profile is created headless, the dialog just closes.
+u32 XamShowCreateProfileUI_entry(u32, u32) {
+  return xeXamDispatchHeadless([] { return X_RESULT(X_ERROR_SUCCESS); }, 0);
+}
+u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask);
+// xenia-canary 2da2519: the plain sign-in answer, delivered through the overlapped when given.
+u32 XamShowSigninUIEx_entry(u32 users_needed, u32 flags, u32 overlapped) {
+  u32 result = XamShowSigninUI_entry(users_needed, flags);
+  if (!overlapped) return result;
+  REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped, result);
+  return X_ERROR_IO_PENDING;
 }
 
 u32 XamShowNuiTroubleshooterUI_entry(u32, u32, u32);
@@ -613,6 +639,8 @@ u32 XamShowGoldUpgradeUI_entry(u32, u32, u32) { return X_ERROR_FUNCTION_FAILED; 
 u32 XamShowMultiplayerUpgradeUI_entry(u32 user) {
   return XamShowGoldUpgradeUI_entry(user, 6, 0);
 }
+// Canary NuiHudCheck: with no Kinect HUD every Nui*UI (guide, message box, device selector,
+// sign-in) is refused before any UI; the extra arguments are never read.
 u32 XamShowNuiGuideUI_entry(u32, u32) { return X_ERROR_ACCESS_DENIED; }
 u32 XamShowNuiHardwareRequiredUI_entry(u32 flags) {
   if (flags) return X_ERROR_INVALID_PARAMETER;
@@ -858,26 +886,26 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowBeaconsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowBrandedKeyboardUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowChangeGamerTileUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowComplaintUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB_RETURN(__imp__XamShowCreateProfileUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowCreateProfileUIEx, 0x4C7);
+REX_EXPORT(__imp__XamShowCreateProfileUI, rex::kernel::xam::XamShowCreateProfileUI_entry)
+REX_EXPORT(__imp__XamShowCreateProfileUIEx, rex::kernel::xam::XamShowCreateProfileUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowCsvTransitionUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowCustomMessageComposeUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowCustomPlayerListUI, 0x4C7);
+REX_EXPORT(__imp__XamShowCustomMessageComposeUI, rex::kernel::xam::XamShowCustomMessageComposeUI_entry)
+REX_EXPORT(__imp__XamShowCustomPlayerListUI, rex::kernel::xam::XamShowCustomPlayerListUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowDirectAcquireUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowEditProfileUI, 0x4C7);
+REX_EXPORT(__imp__XamShowEditProfileUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowFirstRunWelcomeUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessBodyProfileUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessClearUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessWarnAboutPrivacyUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowFitnessWarnAboutTimeUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowFofUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowForcedNameChangeUI, 0x4C7);
+REX_EXPORT(__imp__XamShowForcedNameChangeUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowFriendRequestUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowFriendsUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowFriendsUIp, 0x4C7);
 REX_EXPORT(__imp__XamShowGameInviteUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowGameVoiceChannelUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
-REX_EXPORT_STUB_RETURN(__imp__XamShowGamerCardUI, 0x4C7);
+REX_EXPORT(__imp__XamShowGamerCardUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowGamerCardUIForXUID, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowGamerCardUIForXUIDp, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGamesUI, 0x32);  // offline: not supported
@@ -908,7 +936,7 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowNetworkStorageSyncUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiAchievementsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiCommunitySessionsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiControllerRequiredUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowNuiDeviceSelectorUI, 0x32);
+REX_EXPORT(__imp__XamShowNuiDeviceSelectorUI, rex::kernel::xam::XamShowNuiGuideUI_entry)  // no NUI HUD
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiFriendRequestUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiFriendsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiGameInviteUI, 0x4C7);
@@ -919,10 +947,10 @@ REX_EXPORT(__imp__XamShowNuiHardwareRequiredUI, rex::kernel::xam::XamShowNuiHard
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiJoinSessionInProgressUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMarketplaceDownloadItemsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMarketplaceUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMessageBoxUI, 0x32);
+REX_EXPORT(__imp__XamShowNuiMessageBoxUI, rex::kernel::xam::XamShowNuiGuideUI_entry)  // no NUI HUD
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiMessagesUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiPartyUI, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowNuiSigninUI, 0x32);
+REX_EXPORT(__imp__XamShowNuiSigninUI, rex::kernel::xam::XamShowNuiGuideUI_entry)  // no NUI HUD
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiVideoRichPresenceUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowOptionalMediaUpdateRequiredUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowOptionalMediaUpdateRequiredUIEx, 0x4C7);
@@ -943,7 +971,7 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowQuickLaunchUI, 0x32);  // offline: not supp
 REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowReputationUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB_RETURN(__imp__XamShowSigninUIEx, 0x4C7);
+REX_EXPORT(__imp__XamShowSigninUIEx, rex::kernel::xam::XamShowSigninUIEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowSignupCreditCardUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowSocialPostUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowStorePickerUI, 0x4C7);
