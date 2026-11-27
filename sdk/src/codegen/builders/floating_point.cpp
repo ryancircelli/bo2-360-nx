@@ -274,7 +274,7 @@ bool build_fres(BuilderContext& ctx) {
 
 bool build_frsqrte(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
-  ctx.println("\t{}.f64 = double(float(1.0 / sqrt({}.f64)));", ctx.f(ctx.insn.operands[0]),
+  ctx.println("\t{}.f64 = rex::ppc::ReciprocalSqrtEstimate({}.f64);", ctx.f(ctx.insn.operands[0]),
               ctx.f(ctx.insn.operands[1]));
   return true;
 }

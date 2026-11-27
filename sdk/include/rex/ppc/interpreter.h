@@ -16,8 +16,8 @@
 // Anything else stops with Exit::kUnsupported and the instruction word, so a
 // region that needs more fails loudly instead of being compared wrongly.
 // FPSCR status bits, XER[OV], the reservation and FP record forms are not
-// modelled. Reciprocal estimates return the correctly rounded value, as the
-// recompiled code does (the hardware tables are not public).
+// modelled. frsqrte uses the console table; the other reciprocal estimates return
+// the correctly rounded value, as the recompiled code does.
 //
 // Register layout follows PPCContext: a vector register's guest byte i is
 // host byte 15 - i, so guest word i is u32[3 - i].
@@ -1159,7 +1159,7 @@ class Machine {
         case 25: r = fa * fc; break;                         // fmul
         case 18: r = fa / fb; break;                         // fdiv
         case 22: r = std::sqrt(fb); break;                   // fsqrt
-        case 26: r = 1.0 / std::sqrt(fb); break;             // frsqrte (exact)
+        case 26: r = ReciprocalSqrtEstimate(fb); break;      // frsqrte (console table)
         case 23: r = (fa >= 0.0) ? fc : fb; break;           // fsel (NaN picks frB)
         case 29: r = std::fma(fa, fc, fb); break;            // fmadd
         case 28: r = std::fma(fa, fc, -fb); break;           // fmsub

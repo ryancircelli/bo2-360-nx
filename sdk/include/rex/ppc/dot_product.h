@@ -1,6 +1,6 @@
 /**
  * @file        ppc/dot_product.h
- * @brief       Bit-exact vmsum3fp128/vmsum4fp128 dot product of the Xenon VMX128 unit
+ * @brief       Bit-exact vmsum3fp128/vmsum4fp128 dot product and frsqrte estimate of Xenon
  *
  * Ported from rexglue-sdk 6384603 include/rex/ppc/fpu.h (BSD 3-Clause, Copyright (c) 2026
  * Tom Clay), itself from xenia-canary f8d431a7b, which matches 2,621,440 console results.
@@ -16,6 +16,49 @@
 #endif
 
 #include <rex/types.h>
+
+namespace rex::ppc {
+
+// frsqrte: the console estimate table, ported from rexglue-sdk 6384603 include/rex/ppc/fpu.h
+// (BSD-3-Clause, Tom Clay).
+/** Scalar reciprocal square root estimate indexed by parity and the top 3 mantissa bits. */
+inline constexpr u64 kScalarReciprocalSqrtTable[16] = {
+    0x3FEF100000000000, 0x3FED800000000000, 0x3FEC000000000000, 0x3FEA800000000000,
+    0x3FE9800000000000, 0x3FE8800000000000, 0x3FE8000000000000, 0x3FE7000000000000,
+    0x3FE6000000000000, 0x3FE4C00000000000, 0x3FE3C00000000000, 0x3FE3000000000000,
+    0x3FE2000000000000, 0x3FE1800000000000, 0x3FE1000000000000, 0x3FE0800000000000,
+};
+
+inline constexpr u64 kSign64 = 0x8000000000000000ull, kQuiet64 = 0x0008000000000000ull,
+                     kMantissa64 = 0x000FFFFFFFFFFFFFull, kInfinity64 = 0x7FF0000000000000ull,
+                     kQNaN64 = 0x7FF8000000000000ull;
+
+[[nodiscard]] inline f64 ReciprocalSqrtEstimate(f64 x) noexcept {
+  const u64 a = std::bit_cast<u64>(x);
+  const u64 sign = a & kSign64;
+  i64 e = static_cast<i64>((a >> 52) & 0x7FFu);
+  u64 m = a & kMantissa64;
+  if (e == 0x7FF) {
+    return std::bit_cast<f64>(m != 0 ? a | kQuiet64 : (sign != 0 ? kQNaN64 : 0));
+  }
+  if (e == 0) {
+    if (m == 0) {
+      return std::bit_cast<f64>(sign | kInfinity64);
+    }
+    const i32 shift = std::countl_zero(m) - 11;
+    m = (m << shift) & kMantissa64;
+    e = 1 - shift;
+  }
+  if (sign != 0) {
+    return std::bit_cast<f64>(kQNaN64);
+  }
+  const i64 unbiased = e - 1023;
+  const u64 base = kScalarReciprocalSqrtTable[static_cast<u64>(unbiased & 1) << 3 | m >> 49];
+  const i64 exponent = static_cast<i64>(base >> 52) - (unbiased >> 1);
+  return std::bit_cast<f64>(static_cast<u64>(exponent) << 52 | (base & kMantissa64));
+}
+
+}  // namespace rex::ppc
 
 namespace rex::ppc::simd {
 
