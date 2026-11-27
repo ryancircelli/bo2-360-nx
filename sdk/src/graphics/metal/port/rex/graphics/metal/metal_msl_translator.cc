@@ -3257,9 +3257,12 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
     std::string format = NewTemp("integer_format");
     std::string scale = NewTemp("integer_scale");
     Line("uint {} = {} & 63u;", format, FetchWord(tf, 1));
-    // Only the 16-bit unsigned formats are validated (BO2 5.11 luminance).
-    Line("float {} = ({} == 24u || {} == 25u || {} == 26u) ? 65535.0f : 1.0f;", scale, format,
-         format, format);
+    // 16-bit unsigned formats (BO2 5.11 luminance) and 8-bit-component formats
+    // (k_8, k_8_8_8_8, k_8_A, k_8_B, k_8_8, k_8_8_8_8_A: Fallout 3 copies the
+    // resolved depth bytes through an integer 8888 fetch).
+    Line("float {} = ({} == 24u || {} == 25u || {} == 26u) ? 65535.0f : "
+         "(({} == 2u || {} == 6u || {} == 8u || {} == 9u || {} == 10u || {} == 14u) ? 255.0f : 1.0f);",
+         scale, format, format, format, format, format, format, format, format, format);
     for (uint32_t i = 0; i < 4; ++i) {
       if (!(nonzero & (1u << i)))
         continue;

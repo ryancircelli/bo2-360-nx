@@ -1,0 +1,2 @@
+fh1-2278	draw 89 PS 31511D87 thresholded output flips ~10 channel values vs CPU ref after 8-bit integer fetch scale fix (3c5215d0); old Metal also flipped 5 px
+fh1-menu-3	same as fh1-2278
