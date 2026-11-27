@@ -40,7 +40,9 @@ std::vector<uint32_t> tailBranchTargets(const CodegenContext& ctx) {
       continue;
     const uint32_t w = load_and_swap<uint32_t>(before);
     const bool ends = w == 0 || w == 0x4E800020 || w == 0x4E800420 || ((w >> 26) == 18 && !(w & 1));
-    if (ends && !ctx.Config().functions.contains(e.address))
+    // A function whose first instruction is a plain branch is a thunk: its target is a function.
+    const bool thunk = ctx.graph.getFunction(e.secondaryAddress) != nullptr;
+    if ((ends || thunk) && !ctx.Config().functions.contains(e.address))
       out.push_back(e.address);
   }
   std::sort(out.begin(), out.end());
