@@ -91,9 +91,15 @@ class Stfs:
 
     def entries(self):
         out, block = [], self.ft_block
+        seen = set()
         for _ in range(self.ft_count):
+            if block in seen or block >= self.total_blocks:
+                raise ValueError("invalid STFS file-table chain")
+            seen.add(block)
             self.f.seek(self.block_offset(block))
             data = self.f.read(BLOCK)
+            if len(data) != BLOCK:
+                raise ValueError("truncated STFS file table")
             for i in range(BLOCK // 0x40):
                 e = data[i * 0x40:(i + 1) * 0x40]
                 if e[0] == 0:
@@ -112,7 +118,11 @@ class Stfs:
                 break
         for e in out:
             parts, p = [e["name"]], e["parent"]
+            parents = set()
             while p != 0xFFFF:
+                if p in parents or p >= len(out) or not out[p]["dir"]:
+                    raise ValueError("invalid STFS parent directory")
+                parents.add(p)
                 parts.insert(0, out[p]["name"])
                 p = out[p]["parent"]
             e["path"] = "/".join(parts)
