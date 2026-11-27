@@ -26,6 +26,8 @@
   runq wait ID [ID...]      block until the jobs are done (no polling needed on the caller's side); exit = worst exit
   runq status               the queue in run order with estimated start times, running jobs, build throttle
   runq cancel ID            dequeue, or stop a running job (its own process group only)
+  runq quiet on|off         on: slots/game_cap/idle_cap 0, running jobs cancelled, builds frozen, no build starts;
+                            off: caps restored, builds resumed (state in quiet.json)
   runq priority ID CLASS    move a queued job to another class (name or number)
   runq bump ID              run a queued job next within its class (ahead of the owner turns)
   runq solo ID on|off       make a queued job solo or not
@@ -49,6 +51,7 @@ and holds back build tokens while a game runs. Any runq/buildq command starts it
 result.json records the slot count, solo, and the games running during the job (conditions.games_start / games_mean /
 games_max, full_speed = no other game at any sample), so a 3-game run is never read as a full-speed one.
 """
+import traceback
 import errno, fcntl, json, os, re, select, shlex, shutil, signal, subprocess, sys, tempfile, time
 
 SPOOL = os.path.expanduser(os.environ.get('RUNQ_SPOOL', '~/Games/Xbox360/bo2-build/runq'))
@@ -58,6 +61,8 @@ POOL_LOCK = os.path.join(SPOOL, 'pool.lock')
 BUILD_EXEC_LOCK = os.path.join(SPOOL, 'build-exec.lock')
 DAEMON_LOCK = os.path.join(SPOOL, 'daemon.lock')
 STATE = os.path.join(SPOOL, 'state.json')
+CONFIG = os.path.join(SPOOL, 'config.json')
+QUIET = os.path.join(SPOOL, 'quiet.json')   # runq quiet on: saved caps, frozen build pids
 DLOG = os.path.join(SPOOL, 'daemon.log')
 HOLD_PERF_FILE = os.path.join(SPOOL, 'hold-perf')
 LAPTOP_HB = os.path.join(SPOOL, 'laptop.json')   # the laptop worker's last poll: {t, busy, load, worker}
@@ -82,7 +87,9 @@ def set_power_mode(mode):
     except (OSError, subprocess.SubprocessError):
         return False
 HERE = os.path.dirname(os.path.realpath(__file__))
-DEFAULTS = {'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'run_cap': 12, 'port_base': 60000, 'kill_grace_s': 15}
+IDLE_STOP_GRACE_S = 10   # a live session gets this long to stop itself after the idle stop file
+FROZEN_KILL_GRACE_S = 5   # TERM-to-KILL deadline for a job that was frozen when it was stopped
+DEFAULTS = {'live_idle_stop_s': 600, 'slots': 3, 'idle_cap': 16, 'game_cap': 4, 'run_cap': 12, 'port_base': 60000, 'kill_grace_s': 15}
 COMPILERS = re.compile(r'^(clang|clang\+\+|clang-\d+|cc1|cc1plus|ld|ld64|ld-prime|swift|swiftc|swift-frontend|'
                        r'metal|metallib|dxc|rustc|cc|c\+\+|ninja(?:-build)?|sccache|ccache)$')
 BUILD_TOOL = re.compile(r'^(dotnet|msbuild|xcodebuild|cmake|make|gmake|cargo|bazel|buck|scons|meson|gradle|ant)$', re.I)
@@ -93,7 +100,6 @@ QUIET_WAIT_CAP_S = 300
 QUIET_MIN_ADAPTER_W = 90
 BUILD_INTERLEAVE_WINDOW_S = 12 * 60
 BUILD_WAIT_BEFORE_WINDOW_S = 5 * 60
-PERF_BATCH_AGE_S = 30 * 60
 COMPILE_CPU_DELTA_THRESHOLD_S = 0.05
 COMPILER_INVALID_CPU_S = 2.0
 COMPILER_INVALID_WALL_S = 5.0
@@ -101,6 +107,723 @@ COMPILER_IDLE_CPU_S = 0.1   # a driver (ninja, cmake) asleep on its children use
 _COMPILER_CPU_LAST = {}
 _PERF_ACTIVITY_CPU_LAST = {}
 PROCESS_SNAPSHOT = []
+
+# ---------------------------------------------------------------- outside-load meter (runq-quiet-measure, 11-23)
+# A speed number is trustworthy only when nothing else used the machine. Instant measure, not the 1-minute load
+# average: host CPU ticks (all cores, kernel included, short-lived processes included) minus the game's own process
+# tree = what everything else used. Thresholds live in config.json (quiet_*), defaults here.
+QUIET_OUTSIDE_MAX_CORES = 6.0     # gate: outside CPU (cores) must stay under this ...
+QUIET_CALM_S = 20                 # ... for this many consecutive seconds before a speed run starts
+QUIET_GATE_CAP_S = 600            # bounded wait; at the cap the run starts and is judged by what it measured
+OUTSIDE_WINDOW_S = 10.0           # run is cut into windows this long; a window is "hot" above the threshold
+P_SHARE_MIN = 0.62                # game CPU time on performance cores below this = displaced by outside load
+OUTSIDE_HOT_INVALID_S = 20.0      # a run with this many seconds of hot windows is invalid
+FREEZE_HEAVY = re.compile(r'^(codesign|ditto|zip|unzip|rg|ripgrep|rsync|xz|gzip|bzip2|shasum|md5|sha256sum|'
+                          r'productbuild|pkgbuild|hdiutil|actool|ibtool|iconutil|lipo|install_name_tool|strip)$')
+FREEZE_MIN_CPU_S = 0.3             # a heavy-named process is frozen mid-run only if it used this much CPU in one sample
+FREEZE_HEAVY_COMMAND = re.compile(r'(pack_app|package\.sh|make_game_app|build_app|build_shaders|shader_seed)')
+
+# ---------------------------------------------------------------- agent freeze (runq-solo-freeze, 11-23)
+# With ~17 agents working, their tool shells, scripts and builds put 5-9 cores of outside load on a solo speed run.
+# During a measured run (and its quiet gate) we SIGSTOP: every agent tool shell and everything below it, processes
+# started from /tmp/bo2 or bo2-360-nx*, buildq trees, and Spotlight workers. Never: the agent CLIs themselves, Paseo,
+# runq daemons / job wrappers, the game under test, the daemon's own ancestors. Hard limit SOLO_FREEZE_MAX_S, then
+# everything is resumed and not frozen again; a watchdog (`runq _freeze-watchdog`) resumes it if the daemon dies.
+SOLO_FREEZE_MAX_S = 420
+SOLO_FREEZE_RESCAN_S = 2.0
+SOLO_WATCHDOG_GRACE_S = 300   # the watchdog's own backstop for ALL frozen pids = limit + this
+AGENT_SHELL_ROOT = re.compile(r'shell-snapshots/snapshot-')
+AGENT_CLIS = {'claude', 'codex', 'kimi', 'opencode', 'gemini'}
+AGENT_SHELLS = {'zsh', 'bash', 'sh'}
+AGENT_PATHS = re.compile(r'(/tmp/bo2/|/private/tmp/bo2/|bo2-360-nx)')
+AGENT_NEVER = re.compile(r'(\.local/bin/claude|/\.codex/|opencode|Paseo|/\.paseo/|--output-format stream-json|'
+                         r'runq _daemon|runq-job|_freeze-watchdog|_quiet-wait|_perf-wait)')
+# the manager and its tooling are never frozen: anything with one of these in its own or an ancestor's command line
+AGENT_KEEP = re.compile(r'(/Users/ryanc/bin/|com\.ryanc\.|bo2-tick|stream-check|manager-pause|bo2_watchdog)')
+FREEZE_LOG = os.path.join(SPOOL, 'freeze.log')
+
+
+def manager_token():
+    try:
+        return open(os.path.expanduser('~/dev/bo2-mac-port/manager-agent-id')).read().strip()[:8]
+    except OSError:
+        return ''
+
+
+def stream_agent(owner):
+    """Agent id of the newest streams.tsv row whose owner column matches (prefers a row that is not closed)."""
+    try:
+        rows = [l.rstrip('\n').split('\t') for l in open(os.path.expanduser('~/dev/bo2-mac-port/streams.tsv'))][1:]
+    except OSError:
+        return ''
+    rows = [r for r in rows if len(r) >= 5 and owner and (r[2] == owner or r[0] == owner or r[2].startswith(owner + '-'))]
+    rows = [r for r in rows if r[4] != 'closed'] or rows
+    return rows[-1][1] if rows else ''
+
+
+def job_agent(job):
+    """Prefer the submitting agent. A generated live- name is not a stream owner."""
+    if job.get('agent'):
+        return job['agent']
+    if not job.get('owner') and (job.get('name') or '').startswith('live-'):
+        return ''
+    return stream_agent(job_owner(job))
+
+
+def freeze_log(msg):
+    try:
+        with open(FREEZE_LOG, 'a') as f:
+            f.write(f'{time.strftime("%H:%M:%S")} {msg}\n')
+    except OSError:
+        pass
+
+
+# runq-queue-freeze-trim (11-24): idle tool shells use ~0 CPU, so freezing them protected nothing and only stalled
+# agent tool calls (3406 freeze events / 48 h). A candidate is now frozen only if it is a compiler/linker, a build
+# tree, another game, or busy: CPU delta >= FREEZE_BUSY_CPU_S over the last scan (first sight: lifetime average).
+FREEZE_BUSY_CPU_S = 0.3            # CPU-seconds per SOLO_FREEZE_RESCAN_S scan (~15% of one core)
+FREEZE_GAME = re.compile(r'\.app/Contents/MacOS/')
+# replay/ref emulator tools are short CPU bursts (invalidated gate-speed-B1 08:12): freeze on sight, no CPU wait, wherever they live
+FREEZE_REPLAY = re.compile(r'(^|/)(rexgpu-replay|refxenos)( |$)')
+_FREEZE_CPU_PREV = {}
+_FREEZE_T0 = {}                    # pid -> monotonic time we froze it (stall accounting)
+
+
+def freeze_busy(p, by, prev):
+    """True when freezing p protects the measurement: compiler/linker, build tree, another game, or CPU above threshold."""
+    old = prev.get(p['pid'])
+    if old is not None:
+        busy = p['cpu_s'] - old >= FREEZE_BUSY_CPU_S
+    else:
+        busy = p['cpu_s'] >= 1.0 and p['cpu_s'] / max(p.get('elapsed_s') or 1.0, 1.0) >= 0.15
+    if busy or is_compiler_process(p) or FREEZE_GAME.search(p['command']) or FREEZE_REPLAY.search(p['command']):
+        return True
+    q = p['ppid']  # start at the parent: a buildq client itself (waiting for or between tokens) is never frozen,
+    for _ in range(64):  # only the compilers under it, else a stopped client holds granted tokens for hours
+        c = by.get(q)
+        if not c or q <= 1:
+            return False
+        if 'bin/buildq' in c['command']:
+            return True
+        q = c['ppid']
+    return False
+
+
+def freeze_stall_log(jid, pids):
+    """freeze.log: how long the frozen processes were stopped (process-seconds) = the cost to agents of this run."""
+    now, secs = time.monotonic(), []
+    for pid in pids:
+        t0 = _FREEZE_T0.pop(pid, None)
+        if t0 is not None:
+            secs.append(now - t0)
+    if secs:
+        freeze_log(f'{jid} stall frozen={len(secs)} pid_s={sum(secs):.0f} max_s={max(secs):.0f}')
+
+
+def solo_freeze_targets(procs, protected, game, own_out='', prev=None):
+    """pids a measured run may freeze. procs = process snapshot (pid/ppid/exe/command/state/cpu_s/elapsed_s).
+    prev = {pid: cpu_s} from the previous scan (updated here); None = no CPU filter (everything matching)."""
+    by = {p['pid']: p for p in procs}
+    out = []
+    mgr = manager_token()
+    for p in procs:
+        pid = p['pid']
+        if pid in protected or pid in game or process_is_stopped(p) or pid <= 1 or p['state'].startswith('Z'):
+            continue  # zombies cannot be stopped: they were re-logged every scan
+        if AGENT_NEVER.search(p['command']) or p['exe'] in AGENT_CLIS or (own_out and own_out in p['command']):
+            continue
+        chain, q = [], pid
+        while q in by and q > 1 and len(chain) < 64:
+            chain.append(by[q])
+            q = by[q]['ppid']
+        if any(c['pid'] in game or 'runq _daemon' in c['command'] or 'runq-job' in c['command']
+               for c in chain[1:]):
+            continue
+        if (any(AGENT_KEEP.search(c['command']) or (mgr and mgr in c['command']) for c in chain)):
+            continue
+        shell_root = any(AGENT_SHELL_ROOT.search(c['command']) or
+                         (c['exe'] in AGENT_SHELLS and by.get(c['ppid'], {}).get('exe') in AGENT_CLIS)
+                         for c in chain)
+        # any compiler/linker, even an orphaned build.sh/ninja tree outside buildq, whose argv has no agent path
+        if (shell_root or AGENT_PATHS.search(p['command']) or FREEZE_REPLAY.search(p['command'])
+                or is_compiler_process(p) or any('bin/buildq' in c['command'] for c in chain)):
+            if prev is None or freeze_busy(p, by, prev):
+                out.append(pid)
+    if prev is not None:
+        prev.clear()
+        prev.update({p['pid']: p['cpu_s'] for p in procs})
+    return out
+
+
+def by_pid_cmd(pid):
+    for p in PROCESS_SNAPSHOT:
+        if p['pid'] == pid:
+            return p['command'][:90]
+    return '?'
+
+
+def agent_freeze_file(job_id):
+    return os.path.join(D['running'], job_id + '.agentfreeze')
+
+
+# Outside CPU hogs we cannot stop but can push onto efficiency cores for a measured run (taskpolicy -b, undone with -B):
+# Paseo's helpers (polling UI/agents), macOS analysis daemons, and Claude Code's embedded find/grep (argv0 bfs / ugrep).
+DEMOTE_EXE = re.compile(r'^(Paseo Helper.*|mediaanalysisd|photoanalysisd|contactsd|contactsdonationagent|mds_stores|mdworker.*|'
+                        r'bfs|ugrep|rg|fd|find|grep|suggestd|knowledgeconstructiond|corespotlightd)$')
+
+
+def set_background(pids, on):
+    for pid in pids:
+        subprocess.run(['taskpolicy', '-b' if on else '-B', '-p', str(pid)], capture_output=True)
+
+
+def write_agent_freeze(job_id, pids, job_pid, deadline, bg=()):
+    wjson(agent_freeze_file(job_id), {'pids': sorted(set(pids)), 'job_pid': job_pid, 'deadline': deadline,
+                                      'bg': sorted(set(bg))})
+
+
+def cont_pids(pids):
+    if pids:
+        freeze_log('resume ' + ' '.join(str(x) for x in pids))
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGCONT)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def freeze_watchdog(path, daemon_pid):
+    """Resume every pid in the state file when the deadline passes, the job ends, the file disappears, or the daemon
+    is gone (state.json stale 20 s: a `runq restart` hands over within that). Always resumes before it exits."""
+    while True:
+        st = rjson(path)
+        if not st:
+            return
+        try:
+            stale = time.time() - os.stat(os.path.join(SPOOL, 'state.json')).st_mtime > 20
+        except OSError:
+            stale = True
+        if (time.time() > st.get('deadline', 0) or (st.get('job_pid') and not alive(st['job_pid'])) or
+                (not alive(daemon_pid) and stale)):
+            cont_pids(st.get('pids', []))
+            set_background(st.get('bg', []), False)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return
+        time.sleep(2)
+
+
+def host_cpu_ticks():
+    """Cumulative (user, system, idle, nice) CPU ticks of the whole machine, 100 per second per core; None if unreadable."""
+    try:
+        import ctypes, ctypes.util
+
+        class _Info(ctypes.Structure):
+            _fields_ = [('t', ctypes.c_uint32 * 4)]
+        libc = ctypes.CDLL(ctypes.util.find_library('c'))
+        libc.mach_host_self.restype = ctypes.c_uint32
+        n, info = ctypes.c_uint32(4), _Info()
+        if libc.host_statistics(libc.mach_host_self(), 3, ctypes.byref(info), ctypes.byref(n)) != 0:
+            return None
+        return list(info.t)
+    except Exception:
+        return None
+
+
+def busy_cores(prev, cur, dt):
+    """Average busy cores (user+system+nice) between two host_cpu_ticks() readings dt seconds apart."""
+    if not prev or not cur or dt <= 0:
+        return None
+    d = [b - a for a, b in zip(prev, cur)]
+    return max(0.0, (d[0] + d[1] + d[3]) / 100.0 / dt)
+
+
+def process_descendants(processes, root):
+    """root plus every descendant in a process snapshot (list of dicts with pid/ppid)."""
+    kids = {}
+    for p in processes:
+        kids.setdefault(p['ppid'], []).append(p['pid'])
+    seen, todo = {root}, [root]
+    while todo:
+        for c in kids.get(todo.pop(), []):
+            if c not in seen:
+                seen.add(c)
+                todo.append(c)
+    return seen
+
+
+def exe_cpu_deltas(prev, processes, exclude=()):
+    """{exe: CPU-seconds used since the previous snapshot} for processes outside `exclude` (pid set); `prev` ({pid: cpu_s})
+    is updated in place. Processes that started and ended between snapshots are not seen (the host tick total is)."""
+    out, live = {}, set()
+    for p in processes:
+        pid = p['pid']
+        live.add(pid)
+        old = prev.get(pid)
+        prev[pid] = p['cpu_s']
+        if old is not None and pid not in exclude and p['cpu_s'] > old:
+            out[p['exe']] = out.get(p['exe'], 0.0) + (p['cpu_s'] - old)
+    for pid in set(prev) - live:
+        prev.pop(pid, None)
+    return out
+
+
+def quiet_gate(max_cores, calm_s, cap_s, sleep=time.sleep, ticks=host_cpu_ticks, mono=time.monotonic,
+               procs=None):
+    """Block until outside CPU (all cores busy, nothing of ours running yet) stayed <= max_cores for calm_s seconds in
+    a row, or cap_s passed. Instant host CPU ticks, 1 s resolution, not the lagging 1-minute load average.
+    Returns {waited_s, outside_cores (last), calm_s, capped, top}."""
+    start = last = mono()
+    prev_t = ticks()
+    calm = 0.0
+    cores, capped, prev_p, top = None, False, {}, {}
+    procs = procs or (lambda: (compiler_processes(), PROCESS_SNAPSHOT)[1])
+    exe_cpu_deltas(prev_p, procs() or [], exclude={os.getpid()})
+    n = 0
+    while True:
+        sleep(1.0)
+        now = mono()
+        cur = ticks()
+        cores = busy_cores(prev_t, cur, now - last) if prev_t else None
+        if cores is None:
+            cores = loadavg()[0]            # no host statistics: the old load-average rule, same unit
+        prev_t, last = cur, now
+        n += 1
+        if n % 3 == 0:
+            top = exe_cpu_deltas(prev_p, procs() or [], exclude={os.getpid()})
+        calm = calm + 1.0 if cores <= max_cores else 0.0
+        if calm >= calm_s:
+            break
+        if now - start >= cap_s:
+            capped = True
+            break
+    return {'waited_s': round(mono() - start, 1), 'outside_cores': round(cores, 2), 'calm_s': round(calm, 1),
+            'capped': capped, 'top': sorted(top.items(), key=lambda kv: -kv[1])[:3]}
+
+
+# ---------------------------------------------------------------- work per frame (runq-quiet-measure, owner idea 11-23)
+# A starved run draws fewer frames but each frame costs the same instructions and GPU time; judging speed by work per
+# presented frame lets speed checks run several at once. External: counters come from the OS for the game's pid.
+MACH_NUM, MACH_DEN = 125, 3          # mach ticks -> ns on Apple silicon (checked with mach_timebase_info at start)
+WORK_SKIP_S = 60.0                   # same warm-up skip as abverdict
+
+
+def _rusage_struct():
+    import ctypes
+    names = ['ri_user_time', 'ri_system_time', 'ri_pkg_idle_wkups', 'ri_interrupt_wkups', 'ri_pageins', 'ri_wired_size',
+             'ri_resident_size', 'ri_phys_footprint', 'ri_proc_start_abstime', 'ri_proc_exit_abstime',
+             'ri_child_user_time', 'ri_child_system_time', 'ri_child_pkg_idle_wkups', 'ri_child_interrupt_wkups',
+             'ri_child_pageins', 'ri_child_elapsed_abstime', 'ri_diskio_bytesread', 'ri_diskio_byteswritten',
+             'q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'ri_billed_system_time', 'ri_serviced_system_time',
+             'ri_logical_writes', 'ri_lifetime_max_phys_footprint', 'ri_instructions', 'ri_cycles', 'ri_billed_energy',
+             'ri_serviced_energy', 'ri_interval_max_phys_footprint', 'ri_runnable_time', 'ri_flags', 'ri_user_ptime',
+             'ri_system_ptime', 'ri_pinstructions', 'ri_pcycles', 'ri_energy_nj', 'ri_penergy_nj',
+             'ri_secure_time_in_system', 'ri_secure_ptime_in_system', 'ri_neural_footprint',
+             'ri_lifetime_max_neural_footprint', 'ri_interval_max_neural_footprint'] + ['r%d' % i for i in range(9)]
+
+    class R(ctypes.Structure):
+        _fields_ = [('uuid', ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in names]
+    return R
+
+
+_LIBC = None
+
+
+def _libc():
+    global _LIBC
+    if _LIBC is None:
+        import ctypes, ctypes.util
+        _LIBC = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+        _LIBC.mach_absolute_time.restype = ctypes.c_uint64
+    return _LIBC
+
+
+def mach_now_s():
+    return _libc().mach_absolute_time() * MACH_NUM / MACH_DEN / 1e9
+
+
+def proc_work_counters(pid):
+    """Whole-process CPU counters (RUSAGE_INFO_V6): times in mach ticks, instructions/cycles, P-core shares. None if
+    the process is gone or unreadable. `age_s` = seconds since the process started (game clock origin)."""
+    try:
+        import ctypes
+        R = _rusage_struct()
+        r = R()
+        if _libc().proc_pid_rusage(int(pid), 6, ctypes.byref(r)) != 0:
+            return None
+        ns = MACH_NUM / MACH_DEN
+        return {'age_s': mach_now_s() - r.ri_proc_start_abstime * ns / 1e9,
+                'user_ms': r.ri_user_time * ns / 1e6, 'sys_ms': r.ri_system_time * ns / 1e6,
+                'puser_ms': r.ri_user_ptime * ns / 1e6, 'psys_ms': r.ri_system_ptime * ns / 1e6,
+                'instr': r.ri_instructions, 'cycles': r.ri_cycles,
+                'pinstr': r.ri_pinstructions, 'pcycles': r.ri_pcycles, 'runnable_ms': r.ri_runnable_time * ns / 1e6}
+    except Exception:
+        return None
+
+
+def thread_work_counters(pid):
+    """{tid: {'name', 'v': (instr_P, cycles_P, cpu_ms_P, instr_E, cycles_E, cpu_ms_E)}} for every live thread
+    (PROC_PIDTHREADCOUNTS: one block per core type, level 0 = performance cores)."""
+    out = {}
+    try:
+        import ctypes
+        libc = _libc()
+        ids = (ctypes.c_uint64 * 512)()
+        n = libc.proc_pidinfo(int(pid), 28, 0, ids, ctypes.sizeof(ids))     # PROC_PIDLISTTHREADIDS
+        ns = MACH_NUM / MACH_DEN
+
+        class TI(ctypes.Structure):
+            _fields_ = [('user', ctypes.c_uint64), ('sys', ctypes.c_uint64), ('cpu', ctypes.c_int32),
+                        ('policy', ctypes.c_int32), ('run', ctypes.c_int32), ('flags', ctypes.c_int32),
+                        ('sleep', ctypes.c_int32), ('curpri', ctypes.c_int32), ('pri', ctypes.c_int32),
+                        ('maxpri', ctypes.c_int32), ('name', ctypes.c_char * 64)]
+        for i in range(max(0, n) // 8):
+            tid = ids[i]
+            buf = (ctypes.c_uint64 * 32)()
+            if libc.proc_pidinfo(int(pid), 34, tid, buf, ctypes.sizeof(buf)) < 56:       # PROC_PIDTHREADCOUNTS
+                continue
+            levels = buf[0] & 0xffff
+            v = []
+            for lv in range(min(levels, 2)):
+                b = 1 + lv * 5
+                v += [buf[b], buf[b + 1], (buf[b + 2] + buf[b + 3]) * ns / 1e6]
+            v += [0] * (6 - len(v))
+            ti = TI()
+            name = ''
+            if libc.proc_pidinfo(int(pid), 15, tid, ctypes.byref(ti), ctypes.sizeof(ti)) > 0:   # PROC_PIDTHREADID64INFO
+                name = ti.name.decode(errors='replace')
+            out[tid] = {'name': name, 'v': tuple(v)}
+    except Exception:
+        return out
+    return out
+
+
+def read_bench(run_dir):
+    """The deterministic bench's result (SDK bench_frames): every '[bench] json' line of the game log (one per round,
+    bench_rounds), per frame, averaged over the rounds. work = instructions minus spin (yields, sleeps, waits, the
+    game's wait loops), the figure that compares builds; work_per_kdraw = work per 1000 draws (cancels scene content)."""
+    try:
+        R = []
+        with open(os.path.join(run_dir, 'game.log'), errors='replace') as f:
+            for l in f:
+                if '[bench] json ' in l:
+                    R.append(json.loads(l.split('[bench] json ', 1)[1]))
+        if not R:
+            return None
+        mean = lambda xs: sum(xs) / len(xs)
+        work = lambda j: j['work'] if 'work' in j else j['instr'] - j.get('spin_instr', 0)
+        j = R[-1]
+        n = j['frames']
+        th = sorted(j.get('threads', []), key=lambda t: -(t['instr'] - t.get('spin_instr', 0)))
+        out = {'frames': sum(r['frames'] for r in R), 'rounds': len(R), 'fps': round(mean([r['fps'] for r in R]), 2),
+               'stall_frames': sum(r.get('stall_frames') or 0 for r in R), 'frame_lock_hz': j.get('frame_lock_hz'),
+               'instr_m_per_frame': round(mean([r['instr'] / r['frames'] for r in R]) / 1e6, 3),
+               'spin_m_per_frame': round(mean([(r['instr'] - work(r)) / r['frames'] for r in R]) / 1e6, 3),
+               'work_m_per_frame': round(mean([work(r) / r['frames'] for r in R]) / 1e6, 3),
+               'round_work_m': [round(work(r) / r['frames'] / 1e6, 2) for r in R],
+               'cpu_ms_per_frame': round(mean([r['cpu_ms'] / r['frames'] for r in R]), 3),
+               'gpu_ms_per_frame': round(mean([r['gpu_ms'] / r['frames'] for r in R]), 4),
+               'threads': [{'name': t['name'], 'work_m': round((t['instr'] - t.get('spin_instr', 0)) / n / 1e6, 3),
+                            'spin_m': round(t.get('spin_instr', 0) / n / 1e6, 3)} for t in th[:16]]}
+        if all(r.get('draws') for r in R):
+            out['draws_per_frame'] = round(mean([r['draws'] / r['frames'] for r in R]), 1)
+            out['work_per_kdraw'] = round(mean([work(r) / r['draws'] for r in R]) / 1e3, 4)
+        return out
+    except (OSError, ValueError, KeyError, ZeroDivisionError):
+        return None
+
+
+def read_perf_frames(run_dir):
+    """perf.tsv -> list of dicts {t, frame_ms, cpu_ms, gpu_ms, wait_ms, enc_ms, draws} for presented frames."""
+    rows = []
+    try:
+        with open(os.path.join(run_dir, 'perf.tsv')) as f:
+            for line in f:
+                if line[:1] in ('#', 'f'):
+                    continue
+                a = line.rstrip('\n').split('\t')
+                try:
+                    if int(a[7]) <= 0:
+                        continue
+                    num = lambda x: None if x == '-' else float(x)
+                    rows.append({'t': float(a[1]) / 1e3, 'frame_ms': num(a[2]), 'cpu_ms': num(a[3]), 'gpu_ms': num(a[4]),
+                                 'wait_ms': num(a[5]), 'enc_ms': num(a[8]) if len(a) > 8 else None, 'draws': int(a[7])})
+                except (IndexError, ValueError):
+                    pass
+    except OSError:
+        return []
+    return rows
+
+
+def _pct(vals, q):
+    vals = sorted(v for v in vals if v is not None)
+    return vals[min(len(vals) - 1, int(q * len(vals)))] if vals else None
+
+
+def work_per_frame(samples, frames, skip_s=WORK_SKIP_S, bin_s=60.0):
+    """samples = [{'age_s', 'proc': proc_work_counters, 'threads': thread_work_counters}] (1 s apart, game clock);
+    frames = read_perf_frames(). Per presented frame between the first sample after warm-up and the last sample:
+    CPU time, instructions, cycles, P-core share, per key thread, GPU time, plus 60 s-bin spread. None if too little."""
+    if len(samples) < 5 or len(frames) < 200:
+        return None
+    t0 = frames[0]['t'] + skip_s
+    win = [s for s in samples if s['age_s'] >= t0]
+    if len(win) < 2:
+        return None
+    a, b = win[0], win[-1]
+    fr = [f for f in frames if a['age_s'] <= f['t'] <= b['age_s']]
+    n = len(fr)
+    if n < 100:
+        return None
+
+    def delta(x, y):
+        return {k: y['proc'][k] - x['proc'][k] for k in ('user_ms', 'sys_ms', 'puser_ms', 'psys_ms', 'instr', 'cycles',
+                                                          'pinstr', 'pcycles', 'runnable_ms')}
+    d = delta(a, b)
+    cpu = d['user_ms'] + d['sys_ms']
+    res = {'frames': n, 'window_s': round(b['age_s'] - a['age_s'], 1), 'fps': round(n / (b['age_s'] - a['age_s']), 2),
+           'cpu_ms_per_frame': round(cpu / n, 3), 'instr_m_per_frame': round(d['instr'] / n / 1e6, 3),
+           'cycles_m_per_frame': round(d['cycles'] / n / 1e6, 3),
+           'p_time_share': round((d['puser_ms'] + d['psys_ms']) / cpu, 3) if cpu else None,
+           'p_instr_share': round(d['pinstr'] / d['instr'], 3) if d['instr'] else None,
+           'p_cycles_share': round(d['pcycles'] / d['cycles'], 3) if d['cycles'] else None,
+           'ipc': round(d['instr'] / d['cycles'], 2) if d['cycles'] else None,
+           'runnable_ms_per_frame': round(d['runnable_ms'] / n, 3)}
+    g = [f['gpu_ms'] for f in fr if f['gpu_ms'] is not None]
+    if g:
+        res.update(gpu_ms_per_frame=round(sum(g) / len(g), 3), gpu_ms_median=round(_pct(g, 0.5), 3),
+                   gpu_ms_p99=round(_pct(g, 0.99), 3))
+    for key, name in (('cpu_ms', 'render_cpu_ms'), ('wait_ms', 'present_wait_ms'), ('enc_ms', 'enc_wait_ms'),
+                      ('frame_ms', 'frame_ms_mean')):
+        v = [f[key] for f in fr if f[key] is not None]
+        if v:
+            res[name] = round(sum(v) / len(v), 3)
+    # per thread (name, else tid): the same window, summed over core types
+    ta, tb = a['threads'], b['threads']
+    last = {}
+    for s in win:
+        last.update(s['threads'])
+    th = []
+    for tid, last_v in last.items():
+        v1 = (tb.get(tid) or last_v)['v']
+        v0 = (ta.get(tid) or {'v': (0,) * 6})['v']
+        instr = (v1[0] + v1[3]) - (v0[0] + v0[3])
+        ms = (v1[2] + v1[5]) - (v0[2] + v0[5])
+        pms = v1[2] - v0[2]
+        if ms > 0:
+            th.append({'thread': last_v['name'] or str(tid), 'tid': tid, 'cpu_ms_per_frame': round(ms / n, 3),
+                       'instr_m_per_frame': round(instr / n / 1e6, 3), 'p_share': round(pms / ms, 2)})
+    th.sort(key=lambda x: -x['cpu_ms_per_frame'])
+    res['threads'] = th[:8]
+    # 60 s bins inside the window: instructions/frame spread within one run
+    bins, k = [], 0
+    while a['age_s'] + (k + 1) * bin_s <= b['age_s']:
+        lo, hi = a['age_s'] + k * bin_s, a['age_s'] + (k + 1) * bin_s
+        sa = min(win, key=lambda s: abs(s['age_s'] - lo))
+        sb = min(win, key=lambda s: abs(s['age_s'] - hi))
+        nf = sum(1 for f in fr if sa['age_s'] <= f['t'] <= sb['age_s'])
+        if nf > 50:
+            bins.append((sb['proc']['instr'] - sa['proc']['instr']) / nf / 1e6)
+        k += 1
+    if len(bins) >= 2:
+        mean = sum(bins) / len(bins)
+        res['instr_bin_cv'] = round((sum((x - mean) ** 2 for x in bins) / (len(bins) - 1)) ** 0.5 / mean, 4)
+    return res
+
+
+def is_freezable_heavy(proc):
+    """Heavy non-interactive outside work we may SIGSTOP during a speed run (never apps, WindowServer, agents, runq)."""
+    return bool(FREEZE_HEAVY.match(proc.get('exe', '')) or
+                (re.match(r'^(python|Python|python3|bash|sh|zsh)', proc.get('exe', '')) and
+                 FREEZE_HEAVY_COMMAND.search(proc.get('command', ''))))
+
+
+
+_DARWIN_CACHE = None
+def darwin_user_cache_dir():
+    """os.confstr has no CS_DARWIN_USER_CACHE_DIR in this Python build; getconf has it."""
+    global _DARWIN_CACHE
+    if _DARWIN_CACHE is None:
+        _DARWIN_CACHE = subprocess.run(['getconf', 'DARWIN_USER_CACHE_DIR'], capture_output=True,
+                                       text=True).stdout.strip() or os.path.expanduser('~/Library/Caches')
+    return _DARWIN_CACHE
+
+class ContentionMeter:
+    """Integrates the outside CPU of one speed run: cores per OUTSIDE_WINDOW_S window, who used it, CPU-seconds."""
+
+    def __init__(self, max_cores=QUIET_OUTSIDE_MAX_CORES, window_s=OUTSIDE_WINDOW_S):
+        self.max_cores, self.window_s = max_cores, window_s
+        self.t = self.cpu_s = self.game_cpu_s = 0.0
+        self.names = {}
+        self.windows = []                 # (t_start, mean_cores, top_names)
+        self._wt = self._wcpu = 0.0
+        self._wnames = {}
+
+    def add(self, dt, outside_cores, game_cores, names):
+        """One sample: dt seconds, outside/game cores over that span, names = {exe: cpu_s used in the span}."""
+        if dt <= 0 or outside_cores is None:
+            return
+        cpu = outside_cores * dt
+        self.t += dt
+        self.cpu_s += cpu
+        self.game_cpu_s += (game_cores or 0.0) * dt
+        for k, v in names.items():
+            self.names[k] = self.names.get(k, 0.0) + v
+            self._wnames[k] = self._wnames.get(k, 0.0) + v
+        self._wt += dt
+        self._wcpu += cpu
+        if self._wt >= self.window_s:
+            top = sorted(self._wnames.items(), key=lambda kv: -kv[1])[:3]
+            self.windows.append((round(self.t - self._wt, 1), self._wcpu / self._wt, top))
+            self._wt = self._wcpu = 0.0
+            self._wnames = {}
+
+    def summary(self):
+        wins = self.windows
+        hot = [w for w in wins if w[1] > self.max_cores]
+        hot_names = {}
+        for w in hot:
+            for k, v in w[2]:
+                hot_names[k] = hot_names.get(k, 0.0) + v
+        return {'seconds': round(self.t, 1), 'outside_cpu_s': round(self.cpu_s, 1), 'game_cpu_s': round(self.game_cpu_s, 1),
+                'mean_cores': round(self.cpu_s / self.t, 2) if self.t else None,
+                'window_s': self.window_s, 'windows': len(wins),
+                'max_window_cores': round(max((w[1] for w in wins), default=0.0), 2),
+                'threshold_cores': self.max_cores, 'hot_windows': len(hot), 'hot_s': len(hot) * self.window_s,
+                'hot_offenders': [{'name': k, 'cpu_s': round(v, 1)} for k, v in
+                                  sorted(hot_names.items(), key=lambda kv: -kv[1])[:5]],
+                'top_processes': [{'name': k, 'cpu_s': round(v, 1)} for k, v in
+                                  sorted(self.names.items(), key=lambda kv: -kv[1])[:8]]}
+
+
+def contention_invalid_reason(outside, hot_invalid_s=OUTSIDE_HOT_INVALID_S):
+    """Why a run is not trustworthy because of what else used the machine, or None."""
+    if not outside or not outside.get('seconds'):
+        return None
+    if outside.get('hot_s', 0) >= hot_invalid_s:
+        who = ', '.join(f"{p['name']} {p['cpu_s']} CPU-s" for p in outside.get('hot_offenders', [])[:3]) or 'unattributed'
+        return (f"outside CPU over {outside['threshold_cores']} cores for {int(outside['hot_s'])} s of the run "
+                f"(peak 10 s window {outside['max_window_cores']} cores, run mean {outside['mean_cores']}): {who}")
+    return None
+
+
+def parse_therm(text, ncpu=None):
+    """pmset -g therm -> {'limited': bool, 'detail': str}. Limited = a CPU speed/scheduler limit below 100 or fewer
+    CPUs available than the machine has; the 'No ... recorded' notes mean nothing was throttled."""
+    detail = []
+    for key in ('CPU_Speed_Limit', 'CPU_Scheduler_Limit'):
+        m = re.search(key + r'\s*=\s*(\d+)', text)
+        if m and int(m.group(1)) < 100:
+            detail.append(f'{key}={m.group(1)}')
+    m = re.search(r'CPU_Available_CPUs\s*=\s*(\d+)', text)
+    if m and ncpu and int(m.group(1)) < ncpu:
+        detail.append(f'CPU_Available_CPUs={m.group(1)}/{ncpu}')
+    for m in re.finditer(r'(Thermal|Performance) warning level\s*=\s*(\d+)', text):
+        if int(m.group(2)) > 0:
+            detail.append(f'{m.group(1).lower()}_warning={m.group(2)}')
+    return {'limited': bool(detail), 'detail': ', '.join(detail)}
+
+
+def read_gauges():
+    """One snapshot of slow-moving machine state: thermal, memory pressure, swap, paging, GPU utilisation."""
+    def sh(cmd, timeout=5):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ''
+    g = {}
+    try:
+        ncpu = int(sh(['/usr/sbin/sysctl', '-n', 'hw.ncpu']).strip() or 0)
+    except ValueError:
+        ncpu = 0
+    g.update({'thermal_' + k: v for k, v in parse_therm(sh(['/usr/bin/pmset', '-g', 'therm']), ncpu).items()})
+    try:
+        g['pressure'] = int(sh(['/usr/sbin/sysctl', '-n', 'kern.memorystatus_vm_pressure_level']).strip())
+    except ValueError:
+        g['pressure'] = None
+    m = re.search(r'used = ([\d.]+)M', sh(['/usr/sbin/sysctl', 'vm.swapusage']))
+    g['swap_used_mb'] = float(m.group(1)) if m else None
+    vm = sh(['/usr/bin/vm_stat'])
+    for key, name in (('Swapins', 'swapins'), ('Swapouts', 'swapouts'), ('Pageouts', 'pageouts'),
+                      ('Pageins', 'pageins')):
+        m = re.search(key + r':\s+(\d+)', vm)
+        g[name] = int(m.group(1)) if m else None
+    m = re.search(r'"Device Utilization %"=(\d+)', sh(['/usr/sbin/ioreg', '-r', '-d', '1', '-w0', '-c', 'AGXAccelerator']))
+    g['gpu'] = int(m.group(1)) if m else None
+    return g
+
+
+def summarize_gauges(series):
+    """series = [(t, gauges)] over one run -> worst thermal, max pressure, swap and paging deltas, GPU mean/max."""
+    if not series:
+        return None
+    gs = [g for _, g in series]
+
+    def vals(k):
+        return [g[k] for g in gs if g.get(k) is not None]
+    out = {'samples': len(gs), 'thermal_limited': any(g.get('thermal_limited') for g in gs),
+           'thermal_detail': next((g['thermal_detail'] for g in gs if g.get('thermal_limited')), ''),
+           'pressure_max': max(vals('pressure'), default=None),
+           'swap_used_mb_start': (vals('swap_used_mb') or [None])[0], 'swap_used_mb_end': (vals('swap_used_mb') or [None])[-1]}
+    for k in ('swapins', 'swapouts', 'pageouts', 'pageins'):
+        v = vals(k)
+        out[k + '_delta'] = (v[-1] - v[0]) if len(v) > 1 else None
+    gpu = vals('gpu')
+    if gpu:
+        out['gpu_util_mean'], out['gpu_util_max'] = round(sum(gpu) / len(gpu), 1), max(gpu)
+    return out
+
+
+def machine_state_invalid_reason(gauges):
+    """Thermal throttling or memory pressure above normal during the run, or None."""
+    if not gauges:
+        return None
+    if gauges.get('thermal_limited'):
+        return 'thermal throttling during the run: ' + (gauges.get('thermal_detail') or 'limited')
+    if (gauges.get('pressure_max') or 1) >= 2:
+        return f"memory pressure level {gauges['pressure_max']} during the run (swap {gauges.get('swap_used_mb_end')} MB)"
+    return None
+
+
+def frames_stopped_reason(run_dir, wall_s, gate_waited_s=0.0, slack_s=30.0):
+    """perf.tsv frame clock (ms since the game started) ends long before the run did: the game hung or died while
+    runq still waited for the route (ct2-A5: 114 s of frames in a 392 s run). Returns a reason or None."""
+    last = None
+    try:
+        with open(os.path.join(run_dir, 'perf.tsv')) as f:
+            for line in f:
+                if line[:1] in ('#', 'f'):
+                    continue
+                a = line.split('\t')
+                try:
+                    if int(a[7]) > 0:
+                        last = float(a[1])
+                except (IndexError, ValueError):
+                    pass
+    except OSError:
+        return None
+    if last is None:
+        return None
+    gap = (wall_s - gate_waited_s) - last / 1000.0
+    if gap > slack_s:
+        return (f'game stopped drawing: frames end {last / 1000.0:.0f} s after launch but the run lasted '
+                f'{wall_s - gate_waited_s:.0f} s ({gap:.0f} s without frames)')
+    return None
+
+
+def game_fault_count(run_dir):
+    n = 0
+    try:
+        logs = os.path.join(run_dir, 'logs')
+        for name in os.listdir(logs):
+            if name.endswith('.log'):
+                with open(os.path.join(logs, name), errors='replace') as f:
+                    n += sum(1 for line in f if 'Unhandled guest access violation' in line)
+    except OSError:
+        pass
+    return n
 
 
 def power_source():
@@ -137,7 +860,7 @@ def power_source():
 
 def adapter_hold_reason(job, power):
     """Return why a quiet/perf job must wait for power, or None when its gate is met."""
-    if not (job.get('quiet_machine') or job_class(job) == 4):
+    if not is_quiet(job):
         return None
     minimum = int((job.get('env') or {}).get('RUNQ_MIN_ADAPTER_W', QUIET_MIN_ADAPTER_W))
     if not power or power.get('error'):
@@ -153,8 +876,9 @@ def adapter_hold_reason(job, power):
 def cfg():
     c = dict(DEFAULTS)
     try:
-        with open(os.path.join(SPOOL, 'config.json')) as f:
+        with open(CONFIG) as f:
             c.update(json.load(f))
+            c['_mtime'] = os.fstat(f.fileno()).st_mtime
     except (OSError, ValueError):
         pass
     return c
@@ -441,6 +1165,14 @@ def parse_quiet_machine_log(text):
                 gate.update(waited_s=float(fields['waited_s']), load1=float(fields['load1']),
                             load_limit=int(fields['limit']), wait_cap_s=int(fields['cap_s']),
                             cap_reached=fields['capped'] == 'true')
+                for key in ('outside_cores', 'max_cores', 'calm_s'):
+                    if key in fields:
+                        try:
+                            gate[key] = float(fields[key])
+                        except ValueError:
+                            pass
+                if fields.get('top_cpu_s') not in (None, '-'):
+                    gate['top_cpu_s'] = fields['top_cpu_s']
         elif line.startswith('power-machine gate: '):
             fields = dict(re.findall(r'(\w+)=([^\s]+)', line))
             for key in ('connected', 'ac', 'charging'):
@@ -587,8 +1319,60 @@ def job_uses_boot_test(job):
     return any(os.path.basename(str(arg).strip()) == 'boot_test.sh' for arg in args)
 
 
+def missing_summary_reason(run, res):
+    """Why a boot_test run has no summary.json: boot_test.sh writes the cause (crash status, no perf log) into summary.txt."""
+    try:
+        txt = open(os.path.join(run, 'summary.txt'), errors='replace').read()
+    except OSError:
+        txt = ''
+    for pat in ('no perf log', 'ended by itself with status', 'ended early or crashed'):
+        for line in txt.splitlines():
+            if pat in line:
+                return line.strip()[:160]
+    return f'boot_test left no summary.json under {run} (wall {res.get("wall_s")} s; the game exited early, or the build has no bo2zm_perf_log)'
+
+
 def quiet_missing_summary_invalid(job, status):
     return status == 'done' and quiet_fps_required(job)
+
+
+VSYNC_CAP_FPS = 59.5      # a run at the vsync cap carries no speed signal
+COLLAPSE_RATIO = 0.6      # a 60 s bin below 60% of the run median = machine hiccup, rerun (4 of 100 long runs 11-12..11-15)
+
+
+def perf_tsv_health(run_dir, skip_s=60.0, bin_s=60.0):
+    """Return (min_bin_fps, median_bin_fps) over the measured window of run/perf.tsv, or None."""
+    p = os.path.join(run_dir, 'perf.tsv')
+    try:
+        t = []
+        with open(p) as f:
+            for line in f:
+                if line[:1] in ('#', 'f'):
+                    continue
+                a = line.split('\t')
+                try:
+                    if int(a[7]) > 0:
+                        t.append(float(a[1]))
+                except (IndexError, ValueError):
+                    pass
+    except OSError:
+        return None
+    if len(t) < 200:
+        return None
+    t0 = t[0] + skip_s * 1e3
+    t = [x for x in t if x >= t0]
+    bins, i, j = [], 0, 0
+    while t and t[0] + (i + 1) * bin_s * 1e3 <= t[-1]:
+        lo, hi = t[0] + i * bin_s * 1e3, t[0] + (i + 1) * bin_s * 1e3
+        n = 0
+        while j < len(t) and t[j] < hi:
+            n += t[j] >= lo
+            j += 1
+        bins.append(n / bin_s)
+        i += 1
+    if len(bins) < 2:
+        return None
+    return min(bins), sorted(bins)[len(bins) // 2]
 
 
 def perf_guard_required(job):
@@ -692,6 +1476,8 @@ def can_finish_daemon_shutdown(running_jobs, active_buildq, compiler_count):
 
 
 def runq_solo_active():
+    if os.path.exists(QUIET):
+        return True   # runq quiet on: no build may start, priority lane included
     st = rjson(STATE) or {}
     return bool(st.get('quiet_starting') or any(j.get('solo') or j.get('quiet_machine')
                                                  for j in (st.get('running') or {}).values()))
@@ -710,17 +1496,40 @@ def defer_solo_for_build_window(job, window_active):
                               job_class(job) == CLASSES['perf'])
 
 
-def paused(c):
-    """config.json "paused_until": "HH:MM" (today) holds the queue, e.g. for a quiet window already promised."""
-    pu = c.get('paused_until')
+def pause_end(c):
+    """config.json "paused_until" -> epoch or None. "YYYY-MM-DD HH:MM" is absolute; a bare "HH:MM" means the first such
+    time after config.json was written, so "07:00" set at 23:00 holds the queue overnight (the daemon pins it)."""
+    pu = str(c.get('paused_until') or '').strip()
     if not pu:
-        return False
+        return None
     try:
+        if len(pu) > 5:
+            return time.mktime(time.strptime(pu.replace('T', ' ')[:16], '%Y-%m-%d %H:%M'))
         h, m = map(int, pu.split(':'))
     except ValueError:
-        return False
-    t = time.localtime()
-    return (t.tm_hour, t.tm_min) < (h, m)
+        return None
+    a = c.get('_mtime') or time.time()
+    t = time.localtime(a)
+    end = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, h, m, 0, 0, 0, -1))
+    return end if end > a else time.mktime((t.tm_year, t.tm_mon, t.tm_mday + 1, h, m, 0, 0, 0, -1))
+
+
+def paused(c, now=None):
+    """config.json "paused_until" holds the queue, e.g. for a quiet window already promised (see pause_end)."""
+    end = pause_end(c)
+    if end is None:
+        return bool(str(c.get('paused_until') or '').strip())   # unreadable ("24:00", "8am"): hold, never run over the owner
+    return (now or time.time()) < end
+
+
+def pin_pause(c):
+    """Rewrite a bare "HH:MM" paused_until as an absolute time, so a later config edit cannot move it a day on."""
+    pu, end = str(c.get('paused_until') or '').strip(), pause_end(c)
+    raw = rjson(CONFIG)
+    if pu and len(pu) <= 5 and end and isinstance(raw, dict) and raw.get('paused_until') == c.get('paused_until'):
+        raw['paused_until'] = time.strftime('%Y-%m-%d %H:%M', time.localtime(end))
+        wjson(CONFIG, raw)
+        return raw['paused_until']
 
 
 def active_build_count(build_pids, stopped_pids=None):
@@ -836,6 +1645,7 @@ class Adopted:
 
 
 EXIT_FILE = '.runq_exit'
+VISIBLE_WINDOW = 'visible window'
 UNKNOWN_EXIT = 125   # an adopted job that left no exit file (started before the job wrapper existed, or killed)
 # every job runs under this wrapper so a restarted daemon can still learn the exit code
 WRAP = ['/bin/sh', '-c', '"$@"; c=$?; echo $c > "$RUNQ_OUT/' + EXIT_FILE + '"; exit $c', 'runq-job']
@@ -844,6 +1654,8 @@ WRAP = ['/bin/sh', '-c', '"$@"; c=$?; echo $c > "$RUNQ_OUT/' + EXIT_FILE + '"; e
 class Daemon:
     def __init__(self):
         self.c = cfg()
+        OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
+        set_aging(self.c)
         self.held = 0           # build tokens the daemon holds back while games run
         self.power_checked_at = 0.0
         self.power_status = None
@@ -855,8 +1667,11 @@ class Daemon:
         self.quiet_starting = False
         self.last_repair = 0.0
         self.outside = []
+        self.outside_builds = []   # CPU-active build processes no buildq build owns: [{pid, exe, cwd}] (runq status)
+        self.outside_builds_t = 0.0
         st = rjson(STATE) or {}
         self.last_start = st.get('last_start_by_owner') or {}
+        self.phase = st.get('phase') or new_phase('ord', time.time())
         self.last_external_build_activity = restorable_external_activity(
             st.get('last_external_build_activity'), st.get('last_external_build_activity_source'))
         self.last_external_build_activity_source = ('outside' if self.last_external_build_activity is not None else None)
@@ -865,6 +1680,8 @@ class Daemon:
             self.build_interleave_until = time.time() + BUILD_INTERLEAVE_WINDOW_S
         self.perf_batch = set(st.get('perf_batch') or [])
         self.stop_requested = False
+        self.handoff = False
+        self.freeze_outside = False
 
     def log(self, msg):
         print(f'[{now_s()}] {msg}', flush=True)
@@ -911,6 +1728,10 @@ class Daemon:
     def cap_now(self):
         """(cap, why): game_cap while a measured job runs, run_cap while only unmeasured games run (games started
         outside runq count as unmeasured), idle_cap with no game."""
+        # Queue held by config paused_until (owner playing): no solo can start, so do not hold builds at 0 for one
+        # (11-23 19:13-19:30: cap 0 'preparing' with 10 builds waiting while the queue was paused).
+        if paused(self.c) and not self.jobs and not self.quiet_starting:
+            return self.c['idle_cap'], 'queue paused (paused_until): idle build cap'
         build_window = self.build_interleave_active()
         quiet = [j['job'].get('name', j['job']['id']) for j in self.jobs.values()
                  if j['job'].get('quiet_machine') or is_solo(j['job']) or
@@ -924,7 +1745,11 @@ class Daemon:
                 return min(self.c.get('run_cap', 12), self.c['idle_cap']), \
                     f'build window with {len(self.jobs) + len(self.outside)} unmeasured game(s)'
             return self.c['idle_cap'], 'build window: no solo jobs; idle build cap'
-        if quiet or self.quiet_starting or self.perf_batch:
+        # Builds stay up while ordinary games still drain ahead of a speed batch (a 29 min Forza drive froze every build
+        # for the whole drain, 11-23); the cap drops to 0 only when no such game remains or a quiet job is starting.
+        draining = [j for j in self.jobs.values() if not (is_solo(j['job']) or j['job'].get('quiet_machine') or
+                                                           job_class(j['job']) == CLASSES['perf'])]
+        if quiet or self.quiet_starting or (self.perf_batch and not draining):
             return 0, 'quiet machine: ' + (', '.join(quiet) if quiet else 'preparing')
         measured = [j['job'].get('name', j['job']['id']) for j in self.jobs.values() if is_measured(j['job'])]
         if measured:
@@ -965,7 +1790,9 @@ class Daemon:
             o = job_owner(j['job'])
             rbo[o] = rbo.get(o, 0) + 1
         jobs = [(f, rjson(os.path.join(D['queue'], f)) or {}) for f in q]
-        jobs.sort(key=lambda fj: sched_key(fj[1], rbo, self.last_start))
+        jobs = owner_capped(jobs, rbo, int(self.c.get('slots', 3)))
+        key = fair_key if jobs and all(is_solo(j) for _, j in jobs) else sched_key
+        jobs.sort(key=lambda fj: key(fj[1], rbo, self.last_start))
         return jobs[0][0]
 
     def launch(self, qfile):
@@ -976,7 +1803,7 @@ class Daemon:
                 os.unlink(src)
             return   # (or the laptop worker claimed it between pick and launch)
         used = {j['slot'] for j in self.jobs.values()}
-        slot = min(set(range(self.c['slots'])) - used)
+        slot = min(set(range(len(used) + 1)) - used)   # stopped lane jobs keep theirs, so the next free may be >= slots
         out = job['out']
         os.makedirs(out, exist_ok=True)
         app = job.get('app') or ''
@@ -991,6 +1818,28 @@ class Daemon:
                 os.unlink(src)
                 return
             app = dst
+            if not job.get('allow_window') and (job.get('env') or {}).get('REX_HEADLESS', 'true') != 'false':
+                # headless: the clone is a UI element, or macOS shows a Dock tile for ~0.5 s before the engine's
+                # Prohibited policy lands (the bundle is not re-signed; direct launches don't check the plist seal)
+                subprocess.run(['plutil', '-replace', 'LSUIElement', '-bool', 'YES',
+                                os.path.join(app, 'Contents', 'Info.plist')], capture_output=True)
+            if not job.get('shared_metal_cache'):
+                # sweep per-job caches of jobs that ended abnormally (lost/crashed daemon skips the end-of-job removal)
+                live = {re.sub(r'[^A-Za-z0-9]', '', k) for k in self.jobs}
+                cd = darwin_user_cache_dir()
+                for n in os.listdir(cd):
+                    m = re.search(r'\.rq(\d+)$', n)
+                    if m and m.group(1) not in live:
+                        shutil.rmtree(os.path.join(cd, n), ignore_errors=True)
+                # own throwaway Metal cache: macOS keys ~/C/<bundle id>/com.apple.metal(+gpuarchiver) by bundle id, so a
+                # unique id per job keeps ~3 GB/launch out of the installed game's cache; removed when the job ends
+                plist = os.path.join(app, 'Contents', 'Info.plist')
+                r = subprocess.run(['plutil', '-extract', 'CFBundleIdentifier', 'raw', plist], capture_output=True, text=True)
+                if r.returncode == 0 and r.stdout.strip():
+                    nid = '%s.rq%s' % (r.stdout.strip(), re.sub(r'[^A-Za-z0-9]', '', job['id']))
+                    if subprocess.run(['plutil', '-replace', 'CFBundleIdentifier', '-string', nid, plist],
+                                      capture_output=True).returncode == 0:
+                        job['metal_cache_id'] = nid
         port = str(self.c['port_base'] + 2000 * slot)
         subst = {'{APP}': app, '{OUT}': out, '{PORT}': port, '{SLOT}': str(slot), '{IN}': os.path.join(out, 'in')}
         if job.get('inputs'):   # same layout the laptop worker builds: {IN}/<basename> (symlinks here, nothing to copy)
@@ -1003,15 +1852,20 @@ class Daemon:
                for a in job['cmd']]
         cmd = [re.sub(r'\{(APP|OUT|PORT|SLOT|IN)\}', lambda m: subst['{' + m.group(1) + '}'], a) for a in cmd]
         quiet_pids = []
-        exec_lock_fd = None
+        agent_pids, agent_deadline = [], 0.0
         if job.get('quiet_machine') or is_solo(job) or job_class(job) == CLASSES['perf']:
             # Class-perf always means a measured quiet-machine run, even if an older
             # queued manifest omitted --quiet-machine.
-            if job.get('quiet_machine') or job_class(job) == CLASSES['perf']:
+            if is_quiet(job):
                 job['quiet_machine'] = True
+            fd = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+            try:   # never block the daemon loop: a stopped buildq holding it shared would hang reaping and cancels
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                return   # still queued; the next tick retries
+            self.launch_lock = fd
             self.quiet_starting = True
-            exec_lock_fd = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
-            fcntl.flock(exec_lock_fd, fcntl.LOCK_EX)
             self.throttle()
             def stop_build_pid(pid):
                 if pid in quiet_pids or pid in self.protected_pids or not alive(pid):
@@ -1025,24 +1879,78 @@ class Daemon:
                 except (ProcessLookupError, PermissionError):
                     pass
 
+            if getattr(self, 'freeze_outside', False) and is_quiet(job):
+                compiler_processes()   # refreshes PROCESS_SNAPSHOT
+                held = [p['pid'] for p in PROCESS_SNAPSHOT if is_build_activity_process(p)
+                        and p['pid'] not in self.protected_pids]
+                for pid in held:
+                    stop_build_pid(pid)
+                self.log(f'froze {len(held)} outside build process(es) for {job["id"]}')
+            if is_quiet(job):
+                compiler_processes()
+                heavy = [p['pid'] for p in PROCESS_SNAPSHOT if is_freezable_heavy(p) and not process_is_stopped(p)
+                         and p['pid'] not in self.protected_pids and p['pid'] != os.getpid()]
+                for pid in heavy:
+                    stop_build_pid(pid)
+                if heavy:
+                    self.log(f'froze {len(heavy)} heavy outside process(es) for {job["id"]}')
             builds = registered_buildq_builds()
-            roots = {int(pid) for build in builds for pid in (build.get('pid'), build.get('child_pid')) if pid}
+            # a client with no child yet holds tokens but runs nothing: stopping it only strands the grant (buildq pids stuck in T 3-6 h)
+            roots = {int(pid) for build in builds if build.get('child_pid')
+                     for pid in (build.get('pid'), build.get('child_pid')) if pid}
             # Stop every token owner before inspecting children so none can spawn another compiler.
             for pid in roots:
                 stop_build_pid(pid)
             if compiler_processes() is not None:
+                kids = {p['ppid'] for p in PROCESS_SNAPSHOT}
+                by_p = {p['pid']: p for p in PROCESS_SNAPSHOT}
                 for pid in buildq_owned_processes(PROCESS_SNAPSHOT):
+                    if 'bin/buildq' in by_p.get(pid, {}).get('command', '') and pid not in kids:
+                        continue  # idle client: stopping it only strands its token grant
                     stop_build_pid(pid)
             else:
                 for pid in roots:
                     for child in process_tree(pid):
                         stop_build_pid(child)
+            if job.get('quiet_machine'):
+                if self.c.get('agent_freeze', True):
+                    compiler_processes()
+                    for pid in solo_freeze_targets(PROCESS_SNAPSHOT, self.protected_pids | {os.getpid()}, set(),
+                                                   job.get('out', ''), _FREEZE_CPU_PREV):
+                        if pid not in quiet_pids:
+                            quiet_pids.append(pid)
+                            agent_pids.append(pid)
+                            freeze_log(f'{job["id"]} freeze {pid} {by_pid_cmd(pid)}')
+                            _FREEZE_T0[pid] = time.monotonic()
+                            try:
+                                os.kill(pid, signal.SIGSTOP)
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                    self.log(f'froze {len(agent_pids)} agent/tool process(es) for {job["id"]} '
+                             f'(max {SOLO_FREEZE_MAX_S} s)')
+                agent_deadline = time.time() + SOLO_FREEZE_MAX_S
+                # the watchdog covers every pid this run froze (builds too) and outlives the daemon
+                write_agent_freeze(job['id'], quiet_pids, 0, agent_deadline + SOLO_WATCHDOG_GRACE_S)
+                subprocess.Popen([sys.executable, '-I', os.path.join(HERE, 'runq'), '_freeze-watchdog',
+                                  agent_freeze_file(job['id']), str(os.getpid())], start_new_session=True,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             job['quiet_build_pids'] = quiet_pids
             wjson(src, job)  # recover the suspension even if the daemon exits before Popen/run.json
             if job.get('quiet_machine'):
                 cmd = [sys.executable, '-I', os.path.join(HERE, 'runq'), '_quiet-wait', '--'] + cmd
         env = dict(os.environ)
         env['REX_AUDIO_MUTE'] = 'true'  # owner rule: test games never make sound
+        # owner 11-22: test games grabbed his real keyboards/receivers; tests never open real USB input devices
+        # v0.11 builds read only the canonical names (REX_UI_SDL_START_MINIMIZED...), the old aliases were ignored: two full-screen runs 11-25/26
+        env.update(REX_UI_SDL_START_MINIMIZED='true', REX_UI_FULLSCREEN='false', REX_APU_MUTE='true')
+        # headless-test-mode 11-26: off-screen engine mode (no window/Dock/audio device); jobs that test a real window
+        # opt out with `submit --window` (job allow_window). Apps without the feature ignore it and start minimized.
+        env['REX_HEADLESS'] = 'false' if job.get('allow_window') else 'true'
+        env['SDL_HIDAPI_LIBUSB'] = '0'
+        env['SDL_JOYSTICK_HIDAPI'] = '0'
+        env.update(RUNQ_QUIET_CORES=str(self.c.get('quiet_outside_max_cores', QUIET_OUTSIDE_MAX_CORES)),
+                   RUNQ_QUIET_CALM_S=str(self.c.get('quiet_calm_s', QUIET_CALM_S)),
+                   RUNQ_QUIET_WAIT_CAP_S=str(self.c.get('quiet_wait_cap_s', QUIET_GATE_CAP_S)))
         env.update(job.get('env') or {})
         env.update(RUNQ_HOST='mac', RUNQ_JOB=job['id'], RUNQ_SLOT=str(slot), RUNQ_OUT=out, BO2_NET_PORT_OFFSET=port)
         if job_class(job) == CLASSES['perf']:
@@ -1052,7 +1960,7 @@ class Daemon:
         start = time.time()
         la = loadavg()
         rec = {'id': job['id'], 'pid': None, 'slot': slot, 'started': now_s(), 'load_start': la,
-               'cmd': cmd, 'games_start': len(self.jobs) + 1 + len(self.outside)}
+               'cmd': cmd, 'games_start': len(self.fg_jobs()) + 1 + len(self.outside)}
         qlog = os.path.join(out, 'runq.log')
         log = open(qlog, 'ab')
         job['runq_log_offset'] = os.fstat(log.fileno()).st_size
@@ -1072,9 +1980,7 @@ class Daemon:
             finally:
                 self.resume_builds(quiet_pids)
                 self.quiet_starting = False
-                if exec_lock_fd is not None:
-                    fcntl.flock(exec_lock_fd, fcntl.LOCK_UN)
-                    os.close(exec_lock_fd)
+                self.release_launch_lock()
             if isinstance(e, OSError):
                 return
             raise
@@ -1091,12 +1997,16 @@ class Daemon:
             compiler_baseline = compiler_processes() or []
             self.jobs[job['id']] = {'proc': proc, 'job': job, 'slot': slot, 'start': start, 'samples': [],
                                     'next_sample': 0.0, 'load_start': la, 'killing': 0.0,
-                                    'games_start': len(self.jobs) + 1 + len(self.outside), 'quiet_pids': quiet_pids,
+                                    'games_start': len(self.fg_jobs()) + 1 + len(self.outside), 'quiet_pids': quiet_pids,
+                                    'lane': bool(not is_solo(job) and (is_live_session_job(job) or (lane_safe(job) and is_lane_est(estimate_s(job, getattr(self, 'hist', ({}, {}))), self.c)))),
+                                    'agent_frozen': agent_pids, 'agent_deadline': agent_deadline,
                                     'compiler_cpu_prev': {p['pid']: p['cpu_s'] for p in compiler_baseline},
                                     'compiler_activity': {},
                                     'process_cpu_prev': {p['pid']: p['cpu_s'] for p in PROCESS_SNAPSHOT},
                                     'process_cpu_totals': {}}
             registered = True
+            if agent_deadline:
+                write_agent_freeze(job['id'], quiet_pids, proc.pid, agent_deadline + SOLO_WATCHDOG_GRACE_S)
             self.quiet_starting = False
             self.log(f'start {job["id"]} slot {slot} pid {proc.pid} load {la[0]}: {shlex.join(cmd)[:300]}')
             self.write_state()
@@ -1108,9 +2018,34 @@ class Daemon:
                     pass
                 self.resume_builds(quiet_pids)
                 self.quiet_starting = False
-            if exec_lock_fd is not None:
-                fcntl.flock(exec_lock_fd, fcntl.LOCK_UN)
-                os.close(exec_lock_fd)
+            self.release_launch_lock()
+
+    def release_launch_lock(self):
+        fd, self.launch_lock = getattr(self, 'launch_lock', None), None
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def launch_failed(self, qfile, e):
+        """launch() raised: the job fails, whatever it froze resumes, and the daemon keeps going (an exception here
+        used to end the daemon; the same queued job then crashed every restart)."""
+        self.log(f'launch {qfile} failed: {traceback.format_exc()}')
+        self.release_launch_lock()
+        self.quiet_starting = False
+        src = os.path.join(D['queue'], qfile)
+        job = rjson(src)
+        if job:
+            self.resume_builds(job.get('quiet_build_pids', []))
+            try:
+                os.unlink(src)
+            except OSError:
+                pass
+            job.setdefault('id', qfile[:-5])
+            job.setdefault('out', os.path.join(D['jobs'], job['id']))
+            try:
+                self.finish_record(job, -1, 2, 'error', time.time(), [], f'cannot start: {e!r}')
+            except Exception:
+                self.log(f'finish_record for {qfile} failed: {traceback.format_exc()}')
 
     def sample(self, j, t):
         la = loadavg()
@@ -1131,22 +2066,229 @@ class Daemon:
         cp = -1 if compilers is None else len(hot)
         totals = j.setdefault('process_cpu_totals', {})
         previous = j.setdefault('process_cpu_prev', {})
+        tree = process_descendants(PROCESS_SNAPSHOT, j['proc'].pid)
+        tree_cpu = 0.0
         for proc in PROCESS_SNAPSHOT:
             pid = proc['pid']
             old = previous.get(pid, proc['cpu_s'])
             delta = max(0.0, proc['cpu_s'] - old)
             previous[pid] = proc['cpu_s']
+            if pid in tree:
+                tree_cpu += delta
             if delta > 0:
                 item = totals.setdefault(pid, {'pid': pid, 'ppid': proc['ppid'], 'exe': proc['exe'],
                                                'command': proc['command'], 'cpu_s': 0.0})
                 item.update(ppid=proc['ppid'], exe=proc['exe'], command=proc['command'])
                 item['cpu_s'] += delta
+        dt = t - j.get('cpu_sample_t', t)
+        j['cpu_percent'] = round(100 * tree_cpu / dt, 1) if dt > 0 else None
+        j['cpu_sample_t'] = t
+        if compilers is not None and (perf_guard_required(j['job']) or j['job'].get('quiet_machine')):
+            n_frozen = len(j.get('quiet_pids', []))
+            try:
+                self.meter_tick(j)
+                self.agent_freeze_tick(j)
+            except Exception as e:     # measuring must never take the daemon down
+                self.log(f'meter tick failed: {e!r}')
+            finally:   # a SIGSTOP followed by an exception must still reach the spool
+                if len(j.get('quiet_pids', [])) != n_frozen:
+                    self.persist_quiet_pids(j)
+        if job_uses_boot_test(j['job']) and not j.get('adopted'):
+            try:
+                self.work_tick(j)
+            except Exception as e:
+                self.log(f'work tick failed: {e!r}')
         cap = self.cap_now()[0]
-        games = len(self.jobs) + len(self.outside)
+        games = len(self.fg_jobs()) + bool(j.get('lane')) + len(self.outside)   # a stopped lane job runs no game
         j['samples'].append((la[0], ab, cp, games, cap, hot))
+        # A job may rename or delete its own output folder; that must not take the daemon down.
+        os.makedirs(j['job']['out'], exist_ok=True)
         with open(os.path.join(j['job']['out'], 'conditions.tsv'), 'a') as f:
             details = json.dumps(hot, separators=(',', ':')).replace('\t', ' ').replace('\n', ' ')
             f.write(f'{t - j["start"]:.0f}\t{la[0]}\t{la[1]}\t{ab}\t{cp}\t{cap}\t{games}\t{details}\n')
+
+    def work_tick(self, j):
+        """Per-second OS counters of the game process (CPU time, instructions, cycles, P/E split, per thread) for
+        work-per-frame results. Works for every route job, solo or not."""
+        w = j.setdefault('work', {'pid': None, 'samples': []})
+        game = process_descendants(PROCESS_SNAPSHOT, j['proc'].pid)
+        cands = [p for p in PROCESS_SNAPSHOT if p['pid'] in game and p['pid'] != j['proc'].pid and
+                 not p['exe'].startswith(('MTLCompiler', 'sh', 'bash', 'zsh', 'python', 'Python', 'caffeinate', 'sleep'))]
+        if not cands:
+            return
+        pid = max(cands, key=lambda p: p['cpu_s'])['pid']     # the game: the heaviest process of the job's tree
+        if pid != w['pid']:
+            w['pid'] = pid
+            w['samples'] = []                                  # a different process: its counters are not comparable
+        proc = proc_work_counters(pid)
+        if proc is None:
+            return
+        w['samples'].append({'age_s': proc['age_s'], 'proc': proc, 'threads': thread_work_counters(pid)})
+
+    def persist_quiet_pids(self, j):
+        """Write the frozen-pid list to the job's spool files so a restarted daemon (or crash recovery) resumes them."""
+        jid = j['job']['id']
+        for suf, key in (('.json', 'quiet_build_pids'), ('.run.json', 'quiet_pids')):
+            path = os.path.join(D['running'], jid + suf)
+            d = rjson(path)
+            if d is not None:
+                d[key] = list(j.get('quiet_pids', []))
+                wjson(path, d)
+
+    def meter_tick(self, j):
+        """One ~1 s sample of what everything outside the game used (host CPU ticks minus the game's process tree),
+        plus slow gauges every 10 s; freezes heavy non-interactive outside work that starts during the run."""
+        now = time.monotonic()
+        m = j.get('meter')
+        if m is None:
+            m = j['meter'] = {'obj': ContentionMeter(float(self.c.get('quiet_outside_max_cores', QUIET_OUTSIDE_MAX_CORES))),
+                              'ticks': host_cpu_ticks(), 't': now, 'prev': {}, 'gauges': [], 'gauge_t': 0.0,
+                              'frozen': [], 'adopted': bool(j.get('adopted'))}
+            exe_cpu_deltas(m['prev'], PROCESS_SNAPSHOT)
+        cur = host_cpu_ticks()
+        dt = now - m['t']
+        busy = busy_cores(m['ticks'], cur, dt)
+        m['ticks'], m['t'] = cur, now
+        if now - m['gauge_t'] >= 10:
+            m['gauge_t'] = now
+            m['gauges'].append((now, read_gauges()))
+        if busy is None or dt <= 0.2:
+            return
+        game = process_descendants(PROCESS_SNAPSHOT, j['proc'].pid)
+        game_cpu = own = demoted = 0.0
+        bgset = set(j.get('bg_pids') or [])
+        names, deltas, live = {}, {}, set()
+        for p in PROCESS_SNAPSHOT:
+            pid = p['pid']
+            live.add(pid)
+            old = m['prev'].get(pid)
+            m['prev'][pid] = p['cpu_s']
+            if old is None or p['cpu_s'] <= old:
+                continue
+            d = p['cpu_s'] - old
+            deltas[pid] = d
+            if pid in game or p['exe'].startswith('MTLCompilerServ'):   # the game's own shader compiles
+                game_cpu += d
+            elif pid == os.getpid():
+                own += d
+            elif pid in bgset:   # background-QoS clamped: runs on efficiency cores; P-core share is judged by P_SHARE_MIN
+                demoted += d
+            else:
+                names[p['exe']] = names.get(p['exe'], 0.0) + d
+        for pid in set(m['prev']) - live:
+            m['prev'].pop(pid, None)
+        m['obj'].add(dt, max(0.0, busy - (game_cpu + own + demoted) / dt), game_cpu / dt, names)
+        # heavy non-interactive outside work started during the run (codesign, pack, zip, rg ...): freeze until the end
+        qp = j.setdefault('quiet_pids', [])
+        for p in PROCESS_SNAPSHOT:
+            pid = p['pid']
+            if (pid in game or pid in qp or pid in self.protected_pids or pid == os.getpid() or process_is_stopped(p)
+                    or deltas.get(pid, 0.0) < FREEZE_MIN_CPU_S or not is_freezable_heavy(p)):
+                continue
+            qp.append(pid)
+            m['frozen'].append({'pid': pid, 'exe': p['exe'], 'command': p['command'][:120]})
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                self.log(f'froze {p["exe"]}[{pid}] during {j["job"]["id"]}: {p["command"][:100]}')
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    def agent_freeze_tick(self, j):
+        """Keep the agent freeze current for a measured run: freeze new tool shells / scripts / builds every
+        SOLO_FREEZE_RESCAN_S, and resume everything at the deadline (not refrozen)."""
+        dl = j.get('agent_deadline')
+        if not dl:
+            return
+        jid = j['job']['id']
+        if time.time() > dl:
+            if j.get('agent_frozen'):
+                freeze_stall_log(jid, j['agent_frozen'])
+                cont_pids(j['agent_frozen'])
+                self.log(f'agent freeze for {jid} ended at its {SOLO_FREEZE_MAX_S} s limit: resumed {len(j["agent_frozen"])}')
+                j['agent_frozen'] = []
+                j['comp_only'] = True  # compilers stay frozen to the end of the run: they ruined a 12 min measured run
+            if not j.get('comp_only'):
+                return
+        if time.monotonic() - j.get('agent_scan', 0.0) < SOLO_FREEZE_RESCAN_S:
+            return
+        j['agent_scan'] = time.monotonic()
+        qp = j.setdefault('quiet_pids', [])
+        game = process_descendants(PROCESS_SNAPSHOT, j['proc'].pid)
+        new = [pid for pid in solo_freeze_targets(PROCESS_SNAPSHOT, self.protected_pids | {os.getpid()}, game,
+                                                  j['job'].get('out', ''), _FREEZE_CPU_PREV)]
+        if j.get('comp_only'):
+            bp = {p['pid']: p for p in PROCESS_SNAPSHOT}
+            new = [x for x in new if is_compiler_process(bp[x])]
+        bg = j.setdefault('bg_pids', [])
+        nbg = [p['pid'] for p in PROCESS_SNAPSHOT if DEMOTE_EXE.match(p['exe']) and p['pid'] not in bg
+               and p['pid'] not in game and p['pid'] not in self.protected_pids]
+        if nbg:
+            set_background(nbg, True)
+            bg.extend(nbg)
+            self.log(f'background QoS for {len(nbg)} outside process(es) during {jid}')
+        for pid in new:
+            freeze_log(f'{jid} freeze {pid} {by_pid_cmd(pid)}')
+            _FREEZE_T0[pid] = time.monotonic()
+            qp.append(pid)
+            j['agent_frozen'].append(pid)
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if new or nbg or len(qp) != j.get('agent_file_n') or j.get('comp_only'):
+            # comp_only: rolling deadline so the watchdog outlives dl+grace while compilers stay frozen
+            wd = time.time() + SOLO_WATCHDOG_GRACE_S if j.get('comp_only') else dl + SOLO_WATCHDOG_GRACE_S
+            write_agent_freeze(jid, qp, j['proc'].pid, wd, bg)
+            j['agent_file_n'] = len(qp)
+            j['agent_new_total'] = j.get('agent_new_total', 0) + len(new)
+
+    def live_idle_guard(self, j, t):
+        info = live_idle_info(j['job'], t, self.c)
+        j.update(info)
+        if not info or info['live_idle_s'] < info['live_idle_stop_s'] or j.get('idle_stopped'):
+            return
+        j['idle_stopped'] = t
+        msg = (f"{j['job']['id']} ({j['job'].get('name')}) stopped: no live control command for "
+               f"{info['live_idle_s']:.0f} s (limit {info['live_idle_stop_s']:.0f} s)")
+        out = j['job']['out']
+        wjson(os.path.join(out, 'IDLE-STOP.json'), dict(info, message=msg, t=t))
+        open(os.path.join(out, 'stop'), 'a').close()
+        self.log('live idle guard: ' + msg)
+        owner = job_agent(j['job'])
+        if owner:
+            subprocess.Popen(['paseo', 'send', owner, 'runq live idle guard: ' + msg], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    def screen_guard(self, j, t):
+        """runq-screen-guard: a job's process tree must never have a normal on-screen window (owner's display).
+        Checked every second for the first 30 s of the job, then every 5 s; offender -> kill, failed, note, owner told."""
+        if j['job'].get('allow_window') or t < j.get('guard_next', 0):
+            return
+        j['guard_next'] = t + (1 if t - j['start'] < 30 else 5)
+        try:
+            r = subprocess.run([os.path.join(HERE, 'winguard'), ','.join(map(str, process_tree(j['proc'].pid)))],
+                               capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return   # fail open: a missing helper must not kill measured runs
+        if r.returncode != 1:
+            j.pop('vis_since', None)
+            return
+        # a window that minimizes at start is on screen for a moment: kill only when it stays 3 s (always-on guard kills full-screen at once)
+        if t - j.setdefault('vis_since', t) < 3:
+            return
+        jid = j['job']['id']
+        msg = f'{jid} ({j["job"].get("name")}) had a visible window after {t - j["start"]:.1f} s: {r.stdout.strip()}'
+        self.kill_job(j, VISIBLE_WINDOW)
+        try:
+            open(os.path.join(j['job']['out'], 'VISIBLE-WINDOW.txt'), 'w').write(msg + '\n')
+            open(os.path.join(SPOOL, 'visible-window.log'), 'a').write(f'{now_s()} {msg}\n')
+        except OSError:
+            pass
+        self.log('screen guard: ' + msg)
+        owner = job_agent(j['job'])   # unknown owner: log only, message nobody
+        if owner:
+            subprocess.Popen(['paseo', 'send', owner, f'runq screen guard killed {msg}'], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
     def kill_job(self, j, why):
         pid = j['proc'].pid
@@ -1154,19 +2296,25 @@ class Daemon:
             j['killing'] = time.time()
             j['why'] = why
             self.log(f'stop {j["job"]["id"]} pgid {pid}: {why}')
+            j['grace_s'] = self.c['kill_grace_s']
+            if j.get('lane_pids'):   # frozen for a solo window: a stopped group never acts on TERM, so thaw it first
+                j['grace_s'] = min(j['grace_s'], FROZEN_KILL_GRACE_S)
+                self.lane_resume(j['job']['id'], j)
             try:
+                os.killpg(pid, signal.SIGCONT)   # also thaws a group stopped by anything else (agent/build freezes)
                 os.killpg(pid, signal.SIGTERM)   # the job's own process group (start_new_session), nothing else
             except ProcessLookupError:
                 pass
-        elif time.time() - j['killing'] > self.c['kill_grace_s']:
+        elif time.time() - j['killing'] > j.get('grace_s', self.c['kill_grace_s']):
             try:
-                os.killpg(pid, signal.SIGKILL)
+                os.killpg(pid, signal.SIGKILL)   # works on stopped processes too
             except ProcessLookupError:
                 pass
 
     def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None, games_start=None,
-                      process_cpu_totals=None, compiler_activity=None):
+                      process_cpu_totals=None, compiler_activity=None, meter=None, work=None):
         out = job['out']
+        os.makedirs(out, exist_ok=True)   # a job (or its agent) may delete its own out dir
         res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code, 'measured': is_measured(job),
                'submitted': job.get('submitted'), 'started': time.strftime('%Y-%m-%d %H:%M:%S',
                                                                            time.localtime(start)),
@@ -1195,7 +2343,7 @@ class Daemon:
         if job.get('quiet_machine'):
             res['quiet_machine'] = {'stopped_build_pids': job.get('quiet_build_pids', []),
                                     'load_limit': QUIET_LOAD_LIMIT, 'wait_cap_s': QUIET_WAIT_CAP_S,
-                                    'fps_valid_threshold': 30,
+                                    'fps_valid_threshold': None,   # 11-23: average FPS below 30 is a note, not a validity rule
                                     'fps_required': quiet_fps_required(job),
                                     'minimum_adapter_watts': int((job.get('env') or {}).get(
                                         'RUNQ_MIN_ADAPTER_W', QUIET_MIN_ADAPTER_W))}
@@ -1224,17 +2372,31 @@ class Daemon:
             if s.get('ft_worst'):
                 res['fps']['fps_min'] = round(1000.0 / s['ft_worst'], 2)
             if quiet_fps_required(job):
-                res['fps']['valid'] = res['fps'].get('fps_avg') is not None and res['fps']['fps_avg'] >= 30
-                if not res['fps']['valid'] and status == 'done':
-                    status, code, note = 'invalid', 2, 'quiet-machine average FPS below 30'
-                    res.update(status=status, exit=code, note=note)
+                res['fps']['valid'] = res['fps'].get('fps_avg') is not None
+                if res['fps']['valid'] and res['fps']['fps_avg'] < 30:
+                    res['fps']['below_30'] = True    # note only: a slow build is a result, not an invalid run
+                    note = (note + '; ' if note else '') + 'average fps below 30 (note only, not a validity rule)'
+                    res.update(note=note)
+                if res['fps']['valid'] and status == 'done':
+                    h = perf_tsv_health(run)
+                    if h:
+                        res['fps']['bin_min'], res['fps']['bin_median'] = round(h[0], 2), round(h[1], 2)
+                    if h and h[0] < COLLAPSE_RATIO * h[1]:
+                        res['fps']['valid'] = False
+                        status, code, note = 'invalid', 2, \
+                            f'collapsed run: a 60 s bin fell to {h[0]:.1f} fps vs median {h[1]:.1f}; rerun'
+                        res.update(status=status, exit=code, note=note)
+                    elif (res['fps'].get('fps_avg') or 0) >= VSYNC_CAP_FPS:
+                        res['fps']['capped'] = True    # flag, not invalid: some jobs want to show 60 is held
+                        note = (note + '; ' if note else '') + 'fps at vsync cap: no speed signal'
+                        res.update(note=note)
         elif job.get('quiet_machine'):
             res['fps'] = {'fps_avg': None, 'fps_min': None,
                           'valid': False if quiet_fps_required(job) else None}
             if not quiet_fps_required(job):
                 res['fps']['required'] = False
         if not sj and quiet_missing_summary_invalid(job, status):
-            status, code, note = 'invalid', 2, 'quiet-machine FPS summary missing'
+            status, code, note = 'invalid', 2, 'quiet-machine FPS summary missing: ' + missing_summary_reason(run, res)
             res.update(status=status, exit=code, note=note)
         if status == 'done' and perf_guard_required(job):
             meaningful = res['conditions'].get('meaningful_compiler_processes', [])
@@ -1244,6 +2406,63 @@ class Daemon:
                 status, code, note = 'invalid', 2, f'perf run overlapped {len(meaningful)} meaningful compiler process(es)' + \
                     (f': {names}' if names else '')
                 res.update(status=status, exit=code, note=note)
+        if work and work.get('samples'):
+            try:
+                with open(os.path.join(out, 'work.tsv'), 'w') as wf:     # raw per-second counters, for re-analysis
+                    wf.write('age_s\tuser_ms\tsys_ms\tpuser_ms\tpsys_ms\tinstr\tcycles\tpinstr\tpcycles\n')
+                    for sm in work['samples']:
+                        pr = sm['proc']
+                        wf.write('\t'.join(str(round(x, 3)) for x in (sm['age_s'], pr['user_ms'], pr['sys_ms'], pr['puser_ms'],
+                                 pr['psys_ms'], pr['instr'], pr['cycles'], pr['pinstr'], pr['pcycles'])) + '\n')
+                wpf = work_per_frame(work['samples'], read_perf_frames(run))
+                if wpf:
+                    res['work'] = wpf
+            except Exception as e:
+                res['work_error'] = repr(e) + ' ' + traceback.format_exc().strip().splitlines()[-2].strip()
+        bench = read_bench(run)
+        if bench:
+            res['bench'] = bench
+        gauges = None
+        if meter:
+            res['outside'] = meter['obj'].summary()
+            res['outside']['frozen'] = meter.get('frozen', [])
+            if meter.get('adopted'):
+                res['outside']['partial'] = 'daemon restarted during the run: only the time after the restart is measured'
+            gauges = summarize_gauges(meter['gauges'])
+            res['machine'] = gauges
+            hot_s = float(self.c.get('outside_hot_invalid_s', OUTSIDE_HOT_INVALID_S))
+            if res['outside'].get('seconds') and res['outside']['mean_cores'] is not None:
+                res['outside']['valid_for_speed'] = contention_invalid_reason(res['outside'], hot_s) is None
+        if status == 'done' and perf_guard_required(job) and meter:
+            pshare = (res.get('work') or {}).get('p_time_share')
+            hot = contention_invalid_reason(res.get('outside'), float(self.c.get('outside_hot_invalid_s', OUTSIDE_HOT_INVALID_S)))
+            pmin = float(self.c.get('p_share_min', P_SHARE_MIN))
+            if pshare is not None:
+                # What counts is what happened to the game, not who used the CPU: outside CPU alone (Paseo, node, bun,
+                # mds_stores) is only a note while the game stayed on the performance cores.
+                if pshare >= pmin:
+                    if hot:
+                        res['outside']['note'] = 'outside load high but game P-core share ' + str(pshare) + ' held: ' + hot
+                    hot = None
+                elif hot:
+                    hot = f'game CPU time only {pshare:.2f} on performance cores (min {pmin}) - displaced by outside load: {hot}'
+                else:
+                    # quiet machine + low P share = the build itself runs on efficiency cores (a real regression): valid, loud note
+                    res['outside']['note'] = f'game ran on efficiency cores on a quiet machine (P-core share {pshare:.2f}, min {pmin})'
+                    res['p_share_low_quiet'] = pshare
+            why = [r for r in (hot,
+                               machine_state_invalid_reason(gauges),
+                               frames_stopped_reason(run, res['wall_s'],
+                                                     float(res.get('quiet_machine', {}).get('waited_s') or 0))) if r]
+            faults = game_fault_count(run)
+            if faults:
+                res['game_faults'] = faults
+            if why:
+                status, code = 'invalid', 2
+                note = '; '.join(why) + (f'; {faults} guest access violations in the game log' if faults else '')
+                res.update(status=status, exit=code, note=note)
+                if res.get('fps'):
+                    res['fps']['valid'] = False
         caps = os.path.join(run, 'captures')
         if os.path.isdir(caps):
             res['captures'] = sorted(f for f in os.listdir(caps) if f.endswith('.png'))
@@ -1267,6 +2486,12 @@ class Daemon:
                 + (' solo' if res['solo'] else '')
                 + (f' build cap {res["conditions"]["build_cap"]}' if 'build_cap' in res['conditions'] else '')
                 + (f' fps {res["fps"].get("fps_avg")}/{res["fps"].get("fps_1pct_low")}' if res.get('fps') else '')
+                + (f' outside {res["outside"]["mean_cores"]} cores (peak {res["outside"]["max_window_cores"]}, '
+                   f'hot {int(res["outside"]["hot_s"])} s)' if res.get('outside') and res['outside'].get('mean_cores') is not None else '')
+                + (f' work {res["work"]["instr_m_per_frame"]} Minstr/frame {res["work"]["cpu_ms_per_frame"]} cpu-ms/frame '
+                   f'P {res["work"]["p_time_share"]} gpu {res["work"].get("gpu_ms_per_frame")} ms/frame' if res.get('work') else '')
+                + (f' bench {res["bench"]["work_m_per_frame"]} Mwork/frame (spin {res["bench"]["spin_m_per_frame"]}) '
+                   f'gpu {res["bench"]["gpu_ms_per_frame"]} ms/frame stalls {res["bench"]["stall_frames"]}' if res.get('bench') else '')
                 + (f' scene {extra.get("verdict")}' if extra else '') + (f' ({note})' if note else ''))
         with open(os.path.join(out, 'result.txt'), 'w') as f:
             f.write(line + '\n')
@@ -1285,10 +2510,17 @@ class Daemon:
             if code is None:
                 if os.path.exists(os.path.join(D['running'], jid + '.cancel')):
                     self.kill_job(j, 'cancelled')
-                elif t - j['start'] > to:
+                elif t - j['start'] - j.get('paused_s', 0.0) - (t - j['lane_t'] if j.get('lane_pids') else 0.0) > to:
                     self.kill_job(j, f'timeout {to} s')
+                elif not j['killing']:
+                    self.live_idle_guard(j, t)
+                    self.screen_guard(j, t)
+                    if j.get('idle_stopped') and t - j['idle_stopped'] > IDLE_STOP_GRACE_S:
+                        self.kill_job(j, 'live idle stop')   # the session did not stop itself (frozen or hung)
+                    elif j.get('idle_stopped') and j.get('lane_pids'):
+                        self.lane_resume(jid, j)   # thaw it so it can read its stop file
                 continue
-            status = {'cancelled': 'cancelled'}.get(j.get('why', ''), 'timeout' if j.get('why') else 'done')
+            status = {'cancelled': 'cancelled', VISIBLE_WINDOW: 'failed'}.get(j.get('why', ''), 'timeout' if j.get('why') else 'done')
             if code < 0:
                 code = 128 - code
             if code == UNKNOWN_EXIT and j.get('adopted'):
@@ -1301,12 +2533,23 @@ class Daemon:
             try:
                 self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
                                    j['load_start'], j.get('games_start'), j.get('process_cpu_totals'),
-                                   j.get('compiler_activity'))
+                                   j.get('compiler_activity'), j.get('meter'), j.get('work'))
+            except Exception:   # (a job deleting its own out dir crash-looped the daemon) a bare record still frees `runq wait`
+                self.log(f'finish_record {jid} failed: {traceback.format_exc()}')
+                wjson(os.path.join(D['done'], jid + '.json'), {'id': jid, 'name': j['job'].get('name'), 'status': status,
+                                                               'exit': code, 'why': 'result record failed (daemon.log)'})
             finally:
+                freeze_stall_log(jid, j.get('agent_frozen', []))
                 self.resume_builds(j.get('quiet_pids', []))
+                try:
+                    os.unlink(agent_freeze_file(jid))
+                except OSError:
+                    pass
             if j['job'].get('clone_app', True) and j['job'].get('app'):
                 shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
-            for suf in ('.json', '.run.json', '.cancel'):
+            if j['job'].get('metal_cache_id'):
+                shutil.rmtree(os.path.join(darwin_user_cache_dir(), j['job']['metal_cache_id']), ignore_errors=True)
+            for suf in ('.json', '.run.json', '.cancel', '.lanestop'):
                 try:
                     os.unlink(os.path.join(D['running'], jid + suf))
                 except OSError:
@@ -1316,7 +2559,7 @@ class Daemon:
             if is_solo(j['job']) or j['job'].get('quiet_machine'):
                 builds_waiting = active_builds()
                 wait_s = oldest_build_wait_s()
-                if should_open_build_window(builds_waiting, wait_s):
+                if should_open_build_window(builds_waiting, wait_s) and self.phase['phase'] != 'solo':
                     self.build_interleave_until = max(self.build_interleave_until,
                                                       time.time() + BUILD_INTERLEAVE_WINDOW_S)
                     self.log(f'build window opened after {jid}: {builds_waiting} buildq job(s), '
@@ -1345,6 +2588,8 @@ class Daemon:
                       'build_cap_why': self.cap_now()[1],
                       'tokens_held_back': self.held, 'games_outside_runq': self.outside,
                       'paused_until': self.c.get('paused_until') if paused(self.c) else None,
+                      'paused_until_s': pause_end(self.c) if paused(self.c) else None,
+                      'quiet': os.path.exists(QUIET),
                       'build_interleave_until': self.build_interleave_until,
                       'build_interleave_window_s': BUILD_INTERLEAVE_WINDOW_S,
                       'power_hold': self.power_hold,
@@ -1354,28 +2599,64 @@ class Daemon:
                       'power_status': self.power_status,
                       'running': {k: {'slot': v['slot'], 'pid': v['proc'].pid, 'name': v['job'].get('name'),
                                       'solo': is_solo(v['job']),
+                                      'cpu_percent': v.get('cpu_percent'),
+                                      **live_idle_info(v['job'], time.time(), self.c),
                                       'quiet_machine': bool(v['job'].get('quiet_machine')),
-                                      'since_s': round(time.time() - v['start'])} for k, v in self.jobs.items()},
+                                      'since_s': round(time.time() - v['start']),
+                                      'paused_s': round(v.get('paused_s', 0.0) + (time.time() - v['lane_t'] if v.get('lane_pids') else 0.0))} for k, v in self.jobs.items()},
                       'quiet_starting': self.quiet_starting,
-                      'queued': self.queued(), 'last_start_by_owner': self.last_start})
+                      'queued': self.queued(), 'last_start_by_owner': self.last_start, 'phase': self.phase,
+                      'outside_builds': self.outside_builds})
+
+    def fg_jobs(self):
+        return [v for v in self.jobs.values() if not v.get('lane')]
+
+    def lane_sync(self):
+        """Long-lane jobs run through ordinary windows and are SIGSTOPped for the whole solo window (a stopped job
+        uses no CPU, so the measured run stays clean); the stopped time is not charged to their timeout."""
+        solo = self.phase['phase'] == 'solo'
+        for jid, v in self.jobs.items():
+            if not v.get('lane') or v['killing'] or v.get('idle_stopped'):
+                continue
+            f = os.path.join(D['running'], jid + '.lanestop')
+            cap = cfg().get('lane_pause_max_s', 1800)
+            if v.get('lane_pids') and time.time() - v['lane_t'] + v.get('paused_s', 0.0) > cap:
+                # a paused job cannot finish a wall-timed route anyway: past the cap it runs and blocks windows like any job
+                self.lane_resume(jid, v)
+                v['lane'] = False
+                self.log(f'lane job {jid} paused past {cap}s: now an ordinary job')
+                continue
+            if solo and not v.get('lane_pids') and v.get('paused_s', 0.0) < cap:
+                pids = sorted(process_descendants(PROCESS_SNAPSHOT, v['proc'].pid))   # includes the root
+                v['lane_pids'], v['lane_t'] = pids, time.time()
+                wjson(f, pids)
+                for pid in pids:
+                    try:
+                        os.kill(pid, signal.SIGSTOP)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                self.log(f'lane job {jid} stopped for the solo window ({len(pids)} processes)')
+            elif not solo and v.get('lane_pids'):
+                self.lane_resume(jid, v)
+
+    def lane_resume(self, jid, v):
+        cont_pids(v.pop('lane_pids'))
+        v['paused_s'] = v.get('paused_s', 0.0) + time.time() - v.pop('lane_t', time.time())
+        try:
+            os.unlink(os.path.join(D['running'], jid + '.lanestop'))
+        except OSError:
+            pass
+        self.log(f'lane job {jid} resumed (paused {int(v["paused_s"])}s in total)')
 
     def resume_builds(self, pids):
+        cont_pids(pids)
         for pid in pids:
             try:
                 os.kill(pid, signal.SIGCONT)
             except (ProcessLookupError, PermissionError):
                 pass
 
-    def run(self):
-        mkdirs()
-        lk = os.open(DAEMON_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return  # another daemon has it
-        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'stop_requested', True))
-        if os.getpriority(os.PRIO_PROCESS, 0) > 0:
-            self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
+    def adopt(self):
         # jobs left in running/ by an earlier daemon: adopt the ones still alive (same pid, same process group; the
         # exit code comes from the job wrapper's exit file), record the dead ones as lost
         for f in os.listdir(D['running']):
@@ -1389,12 +2670,17 @@ class Daemon:
                                             'load_start': rec.get('load_start'), 'killing': 0.0,
                                             'games_start': rec.get('games_start'), 'adopted': True,
                                             'quiet_pids': rec.get('quiet_pids', [])}
+                    if not is_solo(job) and (is_live_session_job(job) or is_lane_est(estimate_s(job, history_wall()), self.c)):
+                        self.jobs[job['id']]['lane'] = True   # a restart must not turn a lane job back into a window-blocker
+                    lp = rjson(os.path.join(D['running'], job['id'] + '.lanestop'))
+                    if lp:
+                        self.jobs[job['id']].update(lane=True, lane_pids=lp, lane_t=time.time())
                     self.log(f'adopted {job["id"]} slot {rec["slot"]} pid {rec["pid"]}')
                     continue
                 if job:
-                    self.resume_builds(job.get('quiet_build_pids', []))
+                    self.resume_builds(job.get('quiet_build_pids', []) + (rjson(os.path.join(D['running'], f[:-5] + '.lanestop')) or []))
                     self.finish_record(job, -1, 2, 'lost', time.time(), [], 'the daemon restarted during the job')
-                for suf in ('.json', '.run.json', '.cancel'):
+                for suf in ('.json', '.run.json', '.cancel', '.lanestop'):
                     try:
                         os.unlink(os.path.join(D['running'], f[:-5] + suf))
                     except OSError:
@@ -1404,153 +2690,225 @@ class Daemon:
             if stale:
                 self.resume_builds(stale)
                 wjson(os.path.join(D['queue'], qf), job)
+
+    def tick(self):
+        """One pass of the daemon loop; True = exit."""
+        self.c = cfg()
+        pinned = pin_pause(self.c)
+        if pinned:
+            self.log(f'paused_until pinned to {pinned}')
+            self.c = cfg()
+        if paused(self.c) and pause_end(self.c) is None and getattr(self, 'bad_pause', None) != self.c['paused_until']:
+            self.bad_pause = self.c['paused_until']
+            self.log(f'paused_until {self.bad_pause!r} is not HH:MM or YYYY-MM-DD HH:MM: queue held until it is fixed')
+        OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
+        set_aging(self.c)
+        self.reap()
+        want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
+        if want_mode is not None and want_mode != getattr(self, 'power_mode', None):
+            ok = set_power_mode(want_mode)
+            self.log(f'power mode -> {"low" if want_mode == 1 else "high"}'
+                     f'{"" if ok else " FAILED (sudoers entry missing?)"}')
+            self.power_mode = want_mode
+        # jobs the Mac may not start (where=laptop, or where=any with the laptop idle) must not open a solo window or
+        # keep a perf batch (build cap 0) for work that never starts here (sim: test_laptop_jobs_do_not_hold_mac)
+        hb = laptop_state()
+        qjobs = [(qf, j) for qf in self.queued() for j in [rjson(os.path.join(D['queue'], qf)) or {}] if mac_may_run(j, hb)]
+        q = [qf for qf, _ in qjobs]
+        needs_power = any(is_quiet(j) for _, j in qjobs)
+        if needs_power and time.time() - self.power_checked_at >= 15:
+            try:
+                self.power_status = power_source()
+            except RuntimeError as e:
+                self.power_status = {'error': str(e)}
+            self.power_checked_at = time.time()
+        if needs_power:
+            self.power_hold = next((reason for _, job in qjobs
+                                    if (reason := adapter_hold_reason(job, self.power_status))), None)
+        else:
+            self.power_hold = None
+        activity = external_build_activity()
+        now = time.time()
+        if now - self.outside_builds_t >= 10:   # who is compiling outside buildq (it invalidates speed runs)
+            self.outside_builds_t = now
+            act = (activity or [])[:12]
+            cwds = process_cwds([a['pid'] for a in act]) if act else {}
+            self.outside_builds = [{'pid': a['pid'], 'exe': a['exe'], 'cwd': cwds.get(a['pid'], '?')} for a in act]
+        if activity is None:
+            self.last_external_build_activity = now
+            self.last_external_build_activity_source = 'unknown'
+        elif activity:
+            self.last_external_build_activity = now
+            self.last_external_build_activity_source = 'outside'
+        self.perf_hold = (perf_activity_hold_reason(os.path.exists(HOLD_PERF_FILE),
+                                                   self.last_external_build_activity, now)
+                          if any(is_quiet(j) for _, j in qjobs) else None)
+        # Bounded wait: outside builds (cmake/ninja started without buildq) never go quiet on a busy day, so a
+        # speed job held by one for perf_hold_max_s (default 900) runs anyway; launch() freezes those builds
+        # for the run and resumes them after.
+        self.freeze_outside = False
+        if self.perf_hold == 'held: outside build':
+            oldest = max((now - j.get('submitted_t', now) for _, j in qjobs if is_quiet(j)), default=0)
+            if oldest >= float(self.c.get('perf_hold_max_s', PERF_HOLD_MAX_S)):
+                self.perf_hold, self.freeze_outside = None, True
+                if not getattr(self, 'freeze_logged', False):
+                    self.log(f'speed job waited {int(oldest)}s behind outside builds: it runs now and the '
+                             'outside builds are frozen for the run')
+                self.freeze_logged = True
+            else:
+                self.freeze_logged = False
+        qby = {j.get('id'): j for _, j in qjobs}
+        qids = set(qby)
+        power_eligible = {j.get('id') for _, j in qjobs if not adapter_hold_reason(j, self.power_status)}
+        perf_eligible = {i for i in power_eligible if self.perf_hold is None or not is_quiet(qby[i])}
+        # Held speed work must not keep a batch open and block builds or non-speed jobs.
+        self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
+        self.perf_batch.intersection_update(qids | set(self.jobs))
+        # Alternating windows (runq-fairness): a solo window runs up to solo_batch_n solo jobs back to back,
+        # then an ordinary window runs games (up to slots at once) for ord_window_s or until none wait.
+        # Neither kind waits for the other's whole backlog. Fair order inside each kind is sched_key.
+        solos_w = [j for _, j in qjobs if is_solo(j) and j.get('id') in perf_eligible]
+        ords_w = [j for _, j in qjobs if not is_solo(j) and j.get('id') in power_eligible]
+        new_phase = phase_step(self.phase, time.time(), solos_w, ords_w, not (self.fg_jobs() or self.outside),
+                               any(is_solo(j['job']) for j in self.jobs.values()), self.c)
+        if new_phase is not self.phase:
+            if new_phase['phase'] != self.phase['phase']:
+                self.log(f'window -> {new_phase["phase"]} ({len(solos_w)} solo, {len(ords_w)} ordinary waiting; '
+                         f'previous {self.phase["phase"]} window ran {int(time.time() - self.phase["t0"])}s, '
+                         f'{self.phase.get("solo_started", 0)} solo started)')
+            self.phase = new_phase
+        self.lane_sync()
+        if self.phase['phase'] == 'solo' and not self.stop_requested:
+            self.perf_batch = {j.get('id') for _, j in qjobs
+                               if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible} | \
+                              {k for k, v in self.jobs.items() if job_class(v['job']) == CLASSES['perf']}
+        else:
+            self.perf_batch = set()
+        if self.stop_requested and not self.jobs:
+            # A TERM stops new launches; release the perf hold so token-waiting buildq jobs can finish.
+            self.perf_batch.clear()
+            self.build_interleave_until = 0.0
+        self.outside = (games_outside({j['proc'].pid for j in self.jobs.values()})
+                        if self.c.get('count_outside_games', True) else [])
+        free = self.c['slots'] - len(self.outside)
+        solo_running = any(is_solo(j['job']) for j in self.jobs.values())
+        # Speed-run starvation clock. It restarts while a speed job runs or none is waiting; a hold (outside
+        # build, power) neither restarts it nor counts as starved, so checks keep flowing during a hold.
+        perf_waiting = any(job_class(j) == CLASSES['perf'] and j.get('id') in power_eligible for _, j in qjobs)
+        if not perf_waiting or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
+            self.perf_seen = time.time()
+        starved = perf_starved(getattr(self, 'perf_seen', 0.0), time.time(), bool(self.perf_batch),
+                               self.perf_hold)
+        if starved and not getattr(self, 'starve_logged', False):
+            self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
+        self.starve_logged = starved
+        # a lane job stopped for the solo window holds no slot: with 3 of them (live sessions, long builds) the window
+        # never got a slot and the queue idled until lane_pause_max_s (sim: test_live_session_does_not_idle_queue)
+        holding = lambda: sum(not v.get('lane_pids') for v in self.jobs.values())
+        while q and not self.stop_requested and not paused(self.c) and not solo_running and holding() < free:
+            if self.phase['phase'] == 'solo':
+                self.build_interleave_until = 0.0   # builds wait for the ordinary window; the batch is short
+            interleave_active = self.build_interleave_active()
+            compiler_busy = (not self.freeze_outside and
+                             (outside_compile_procs() if self.perf_batch else compile_procs()) != 0)
+            builds_busy = active_builds() > 0
+            jobs_per_owner = []
+            if time.time() - getattr(self, 'hist_t', 0) > 60:
+                self.hist, self.hist_t = history_wall(), time.time()
+            solo_waiting = any(is_solo(j) and not adapter_hold_reason(j, self.power_status) for _, j in qjobs)
+            machine_empty = not (self.fg_jobs() or self.outside)
+            lane_ok = sum(bool(v.get('lane')) for v in self.jobs.values()) < LANE_MAX
+            for qf in q:
+                job = rjson(os.path.join(D['queue'], qf)) or {}
+                if not phase_admits(self.phase, is_solo(job), time.time(), machine_empty,
+                                    estimate_s(job, self.hist), time.time() - job.get('submitted_t', time.time()),
+                                    solo_waiting, interleave_active, self.c, lane_ok and lane_safe(job)):
+                    continue
+                if adapter_hold_reason(job, self.power_status):
+                    continue
+                if self.perf_hold and is_quiet(job):
+                    continue
+                if not allowed_during_perf_batch(job, self.perf_batch, interleave_active, starved):
+                    continue
+                if not self.perf_batch and job_class(job) == CLASSES['perf']:
+                    continue
+                if defer_perf_for_activity(job, interleave_active, builds_busy, compiler_busy,
+                                           bool(self.perf_batch)):
+                    continue
+                if defer_solo_for_build_window(job, interleave_active):
+                    continue
+                jobs_per_owner.append((qf, job))
+            non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
+            non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
+            candidates = [qf for qf, job in jobs_per_owner if is_solo(job) or non_speed_running < non_speed_cap]
+            if not candidates:
+                break
+            qf = self.pick(candidates)
+            if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
+                solo_running = True   # (a solo job is only admitted on an empty machine)
+                self.phase = dict(self.phase, solo_started=self.phase.get('solo_started', 0) + 1)
+            q.remove(qf)
+            try:
+                self.launch(qf)
+            except Exception as e:
+                self.launch_failed(qf, e)
+        if time.time() - getattr(self, 'remote_checked', 0) >= 5:
+            self.remote_checked = time.time()
+            try:
+                reap_remote()
+            except Exception as e:   # never let laptop bookkeeping stop the Mac queue
+                self.log(f'reap_remote failed: {e!r}')
+        self.throttle()
+        self.write_state()
+        if self.handoff:
+            self.log(f'handoff: daemon exits now; {len(self.jobs)} running job(s) and all builds keep going '
+                     'and are adopted by the next daemon')
+            return True
+        if self.stop_requested and can_finish_daemon_shutdown(
+                len(self.jobs), active_builds(), compile_procs()):
+            self.log('graceful daemon stop: runq jobs and buildq/compiler activity drained')
+            return True
+        return False
+
+    def run(self):
+        mkdirs()
+        lk = os.open(DAEMON_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # another daemon has it
+        # TERM / `runq restart`: hand over now. Running games and builds are not touched (each game has its own session
+        # and exit-code wrapper); the next daemon adopts them. USR1 keeps the old behaviour: stop launching, wait for
+        # every job and build to drain, then exit (needs a quiet machine, which a busy queue never gets).
+        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'handoff', True))
+        signal.signal(signal.SIGUSR1, lambda *_: setattr(self, 'stop_requested', True))
+        if os.getpriority(os.PRIO_PROCESS, 0) > 0:
+            self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
+        self.adopt()
         self.pool_open()
         self.log(f'daemon up pid {os.getpid()}, slots {self.c["slots"]}, build cap {self.c["idle_cap"]} idle / '
                  f'{self.c.get("run_cap", 12)} unmeasured games / {self.c["game_cap"]} measured')
         try:
             while True:
-                self.c = cfg()
-                self.reap()
-                want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
-                if want_mode is not None and want_mode != getattr(self, 'power_mode', None):
-                    ok = set_power_mode(want_mode)
-                    self.log(f'power mode -> {"low" if want_mode == 1 else "high"}'
-                             f'{"" if ok else " FAILED (sudoers entry missing?)"}')
-                    self.power_mode = want_mode
-                q = self.queued()
-                qjobs = [(qf, rjson(os.path.join(D['queue'], qf)) or {}) for qf in q]
-                needs_power = any(j.get('quiet_machine') or job_class(j) == CLASSES['perf'] for _, j in qjobs)
-                if needs_power and time.time() - self.power_checked_at >= 15:
-                    try:
-                        self.power_status = power_source()
-                    except RuntimeError as e:
-                        self.power_status = {'error': str(e)}
-                    self.power_checked_at = time.time()
-                if needs_power:
-                    self.power_hold = next((reason for _, job in qjobs
-                                            if (reason := adapter_hold_reason(job, self.power_status))), None)
-                else:
-                    self.power_hold = None
-                activity = external_build_activity()
-                now = time.time()
-                if activity is None:
-                    self.last_external_build_activity = now
-                    self.last_external_build_activity_source = 'unknown'
-                elif activity:
-                    self.last_external_build_activity = now
-                    self.last_external_build_activity_source = 'outside'
-                self.perf_hold = (perf_activity_hold_reason(os.path.exists(HOLD_PERF_FILE),
-                                                           self.last_external_build_activity, now)
-                                  if any(j.get('quiet_machine') or job_class(j) == CLASSES['perf']
-                                         for _, j in qjobs) else None)
-                qids = {j.get('id') for _, j in qjobs}
-                power_eligible = {j.get('id') for _, j in qjobs
-                                  if not adapter_hold_reason(j, self.power_status)}
-                perf_eligible = {j.get('id') for _, j in qjobs if j.get('id') in power_eligible and
-                                 (not (j.get('quiet_machine') or job_class(j) == CLASSES['perf']) or
-                                  self.perf_hold is None)}
-                # Held speed work must not keep a batch open and block builds or non-speed jobs.
-                self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
-                self.perf_batch.intersection_update(qids | set(self.jobs))
-                self.perf_batch.update(bumped_perf_jobs(qjobs, perf_eligible))
-                if not self.perf_batch:
-                    waiting_perf = [(qf, j) for qf, j in qjobs
-                                    if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible]
-                    batch_n = max(1, int(self.c.get('perf_batch_size', 3)))
-                    batch_age = max(1, int(self.c.get('perf_batch_age_s', PERF_BATCH_AGE_S)))
-                    running_by_owner = {}
-                    for active in self.jobs.values():
-                        owner = job_owner(active['job'])
-                        running_by_owner[owner] = running_by_owner.get(owner, 0) + 1
-                    selected, batch_kind, oldest_age = (choose_perf_batch(
-                        waiting_perf, time.time(), batch_n, batch_age, running_by_owner, self.last_start)
-                        if not self.stop_requested else ([], False, 0))
-                    if selected:
-                        self.perf_batch = set(selected)
-                        if batch_kind == 'urgent':
-                            self.log(f'urgent perf batch opened: {next(iter(self.perf_batch))}')
-                        elif batch_kind == 'bump':
-                            self.log(f'bumped perf job opened next: {next(iter(self.perf_batch))}')
-                        else:
-                            self.log(f'perf batch opened: {len(self.perf_batch)} job(s), oldest waited '
-                                     f'{int(oldest_age)}s; builds and non-speed work held until batch drains')
-                if self.stop_requested and not self.jobs:
-                    # A TERM stops new launches; release the perf hold so token-waiting buildq jobs can finish.
-                    self.perf_batch.clear()
-                    self.build_interleave_until = 0.0
-                self.outside = (games_outside({j['proc'].pid for j in self.jobs.values()})
-                                if self.c.get('count_outside_games', True) else [])
-                free = self.c['slots'] - len(self.outside)
-                solo_running = any(is_solo(j['job']) for j in self.jobs.values())
-                # Speed-run starvation clock. It restarts while a speed job runs or none is waiting; a hold (outside
-                # build, power) neither restarts it nor counts as starved, so checks keep flowing during a hold.
-                perf_waiting = any(job_class(j) == CLASSES['perf'] and j.get('id') in power_eligible for _, j in qjobs)
-                if not perf_waiting or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
-                    self.perf_seen = time.time()
-                starved = perf_starved(getattr(self, 'perf_seen', 0.0), time.time(), bool(self.perf_batch),
-                                       self.perf_hold)
-                if starved and not getattr(self, 'starve_logged', False):
-                    self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
-                self.starve_logged = starved
-                while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
-                    interleave_active = self.build_interleave_active()
-                    compiler_busy = (outside_compile_procs() if self.perf_batch else compile_procs()) != 0
-                    builds_busy = active_builds() > 0
-                    jobs_per_owner = []
-                    for qf in q:
-                        job = rjson(os.path.join(D['queue'], qf)) or {}
-                        if adapter_hold_reason(job, self.power_status):
-                            continue
-                        if not mac_may_run(job):
-                            continue
-                        if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
-                            continue
-                        if not allowed_during_perf_batch(job, self.perf_batch, interleave_active, starved):
-                            continue
-                        if not self.perf_batch and job_class(job) == CLASSES['perf']:
-                            continue
-                        if defer_perf_for_activity(job, interleave_active, builds_busy, compiler_busy,
-                                                   bool(self.perf_batch)):
-                            continue
-                        if defer_solo_for_build_window(job, interleave_active):
-                            continue
-                        jobs_per_owner.append((qf, job))
-                    non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
-                    non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
-                    candidates = [qf for qf, job in jobs_per_owner
-                                  if self.perf_batch or non_speed_running < non_speed_cap]
-                    if not candidates:
+                try:
+                    if self.tick():
                         break
-                    qf = self.pick(candidates)
-                    if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
-                        # a solo job holds the machine alone: start nothing else until the running games end
-                        if self.jobs or self.outside:
-                            break
-                        solo_running = True
-                    q.remove(qf)
-                    self.launch(qf)
-                if time.time() - getattr(self, 'remote_checked', 0) >= 5:
-                    self.remote_checked = time.time()
-                    try:
-                        reap_remote()
-                    except Exception as e:   # never let laptop bookkeeping stop the Mac queue
-                        self.log(f'reap_remote failed: {e!r}')
-                self.throttle()
-                self.write_state()
-                if self.stop_requested and can_finish_daemon_shutdown(
-                        len(self.jobs), active_builds(), compile_procs()):
-                    self.log('graceful daemon stop: runq jobs and buildq/compiler activity drained')
-                    break
+                except Exception:   # nothing restarts a dead daemon until the next runq command: log and keep going
+                    tb = traceback.format_exc()
+                    if tb != getattr(self, 'last_tb', None):
+                        self.log(f'tick failed, daemon keeps running: {tb}')
+                    self.last_tb = tb
                 time.sleep(1)
         finally:
             for j in self.jobs.values():
-                self.resume_builds(j.get('quiet_pids', []))
+                if not self.handoff:   # on a handoff a running solo job still needs its builds frozen
+                    self.resume_builds(j.get('quiet_pids', []))
             if self.held:
                 os.write(self.fifo, b'+' * self.held)
 
 
 # ------------------------------------------------------------------ scheduling
-CLASSES = {'ship': 0, 'harness': 1, 'proof': 2, 'sweep': 3, 'perf': 4}
+CLASSES = {'ship': 0, 'harness': 1, 'proof': 2, 'sweep': 3, 'perf': 4, 'bench': 5}
 CLASS_NAMES = {v: k for k, v in CLASSES.items()}
 
 
@@ -1564,6 +2922,11 @@ def parse_class(v):
         sys.exit(f'runq: unknown class {v} (ship, harness, proof, sweep, perf or a number)')
 
 
+def is_quiet(j):
+    """A measured quiet-machine run: --quiet-machine, or class perf (which always means one)."""
+    return bool(j.get('quiet_machine')) or job_class(j) == CLASSES['perf']
+
+
 def job_class(j):
     if 'class' in j:
         return int(j['class'])
@@ -1574,33 +2937,139 @@ def job_owner(j):
     return j.get('owner') or (j.get('name') or 'anon').split('-')[0]
 
 
-def sched_key(j, running_by_owner, last_start):
+PERF_HOLD_MAX_S = 900   # a speed job held by outside builds this long runs anyway, outside builds frozen
+SOLO_SHORT_S = 300       # while a solo job waits, only jobs expected to finish within this start...
+SOLO_LONG_MAX_AGE_S = 1800   # ...except a long job that has itself waited this long (no starving the soaks)
+SOLO_BATCH_N = 3        # solo jobs run back to back per solo window
+ORD_WINDOW_S = 900      # an ordinary window lasts this long while solo jobs wait
+ORD_GRACE_S = 300       # a game may outlast the window by this much when it starts
+ORD_MIN_S = 600         # a bumped solo job may cut an ordinary window short, but not below this
+SOLO_SHARE_RATIO = 2.0  # ordinary window >= 2x the previous solo window while ordinary jobs wait (solo <= 1/3 of wall)
+SOLO_PHASE_MAX_S = 1800 # a solo window ends after this long if ordinary jobs wait
+
+
+def fair_key(j, running_by_owner, last_start, now=None):
+    """Order inside a solo window: owners take turns across ALL solo classes (a chain of short proof-class solo jobs
+    from one owner kept class-perf solo jobs from other owners waiting 25+ min, 11-23). Class does not rank."""
+    return sched_key(dict(j, **{'class': 0}), running_by_owner, last_start, now)
+
+
+LANE_LONG_S = 480   # an ordinary job estimated longer runs in the lane (config long_job_s; 0 turns the lane off)
+LANE_MAX = 2
+
+
+def lane_safe(job):
+    """Lane jobs get SIGSTOPped through solo windows. A game misses its wall-timed route presses while stopped
+    (metal360-v011-nfsmw-sigbus, vmxdot-fast), so only game-less jobs (builds, captures, harvests) may use the lane."""
+    cmd = job.get('cmd') or []
+    return not (job.get('app') or job.get('scene') or job_uses_boot_test(job)
+                or any(str(a).endswith('.route') for a in ([cmd] if isinstance(cmd, str) else cmd)))
+
+
+def is_live_session_job(job):
+    """A live session is driven by an agent on conditions, not a wall-timed route, so it may be paused through a
+    solo window like a lane job. Without this an actively driven session kept 'machine_empty' false and the whole
+    queue sat in a closing window (11-27 04:20: 25 jobs behind one Halo 3 session)."""
+    cmd = job.get('cmd') or []
+    return any(os.path.basename(str(x)) == 'live_session.py' for x in ([cmd] if isinstance(cmd, str) else cmd))
+
+
+def is_lane_est(est_s, c):
+    ls = float(c.get('long_job_s', LANE_LONG_S))
+    return ls > 0 and est_s >= ls
+
+
+def new_phase(name, now):
+    return {'phase': name, 't0': now, 'solo_started': 0, 'closing': False}
+
+
+def phase_step(ph, now, solos, ords, machine_empty, solo_running, c):
+    """Alternating windows. ph = {'phase': 'solo'|'ord', 't0', 'solo_started', 'closing'}; solos / ords = eligible waiting
+    solo / ordinary jobs. Returns ph itself when nothing changed, else a new dict.
+    solo window: runs solo jobs one at a time (the machine must be empty); ends once solo_batch_n have started and none
+      runs, or when no solo job waits, or after solo_phase_max_s with ordinary jobs waiting.
+    ord window: runs ordinary games; closes (no new admissions) after ord_window_s or when no ordinary job waits, and
+      only if a solo job waits; flips to the solo window once the machine is empty. A bumped/urgent solo closes it now."""
+    n = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
+    if ph['phase'] == 'solo':
+        if solo_running:
+            return ph
+        # an aged ordinary job ends the window once one solo job has run (else two aged jobs of each kind would never alternate)
+        over = ph.get('solo_started', 0) >= n or not solos or (
+            ords and now - ph['t0'] >= float(c.get('solo_phase_max_s', SOLO_PHASE_MAX_S))) or (
+            ph.get('solo_started', 0) >= 1 and any(is_aged(j, now) for j in ords))
+        return dict(new_phase('ord', now), prev_solo_s=now - ph['t0']) if over else ph
+    if not solos:
+        return ph if not ph.get('closing') else dict(ph, closing=False)
+    # queue-audit: a bump/urgent solo closed the window after one batch (275 s, 3 jobs, 22 waiting); it now waits for
+    # ord_min_s, and the solo share is capped: the window lasts at least solo_share_ratio x the last solo window.
+    age = now - ph['t0']
+    floor = max(float(c.get('ord_min_s', ORD_MIN_S)), float(c.get('solo_share_ratio', SOLO_SHARE_RATIO)) * ph.get('prev_solo_s', 0.0))
+    urgent = any(j.get('bump') or j.get('urgent') for j in solos) and age >= floor
+    urgent = urgent or any(is_aged(j, now) for j in solos)   # aged solo/bench job forces its window (no floor)
+    closing = urgent or not ords or age >= max(floor, float(c.get('ord_window_s', ORD_WINDOW_S)))
+    if closing and machine_empty:
+        return new_phase('solo', now)
+    return ph if closing == bool(ph.get('closing')) else dict(ph, closing=closing)
+
+
+def phase_admits(ph, solo, now, machine_empty, est_s, age_s, solo_waiting, interleave_active, c, lane_ok=False):
+    """May this queued job start now under the current window?"""
+    if ph['phase'] == 'solo':
+        n = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
+        if solo:
+            return machine_empty and ph.get('solo_started', 0) < n
+        return False   # no ordinary job of any length starts until the solo batch has run (build windows are off in it)
+    if solo or ph.get('closing'):
+        return False
+    if not solo_waiting:
+        return True
+    if lane_ok and is_lane_est(est_s, c):
+        return True   # long lane: runs across windows, stopped during solo runs, never delays the flip
+    # a solo job waits: a game that would outlast the window by more than the grace would stretch the drain
+    # manager 11-25: the window really lasts max(ord_window_s, ord_min_s, solo_share_ratio x last solo window) (see
+    # phase_step); judging 'left' on ord_window_s alone left the machine idle from 900 s to that floor (22 min seen).
+    win = max(float(c.get('ord_window_s', ORD_WINDOW_S)), float(c.get('ord_min_s', ORD_MIN_S)),
+              float(c.get('solo_share_ratio', SOLO_SHARE_RATIO)) * ph.get('prev_solo_s', 0.0))
+    left = ph['t0'] + win - now
+    # (estimates are medians; tonight a 23 min estimate ran 45 min, so budget 1.5x)
+    return est_s * 1.5 <= max(SOLO_SHORT_S, left + ORD_GRACE_S) or age_s >= SOLO_LONG_MAX_AGE_S
+
+
+OWNER_PRIORITY = []   # config.json owner_priority, copied here by the daemon: first pick, after bumped jobs
+MAX_WAIT_S = 5400     # runq-aging: a job waiting longer outranks everything but a manual bump (config max_wait_s)
+OWNER_SLOT_SHARE = 0.5   # runq-aging: while other owners wait, one owner holds at most this share of the slots
+
+
+def set_aging(c):
+    global MAX_WAIT_S, OWNER_SLOT_SHARE
+    MAX_WAIT_S = float(c.get('max_wait_s', 5400))
+    OWNER_SLOT_SHARE = float(c.get('owner_slot_share', 0.5))
+
+
+def is_aged(j, now=None):
+    """Waited past max_wait_s. Class and owner priority never starve a job past this (11-27: bench jobs waited 6+ h behind
+    a steady stream of class 1-2 gate and live jobs, bumped or not: class ranks inside the bump tier)."""
+    return MAX_WAIT_S > 0 and (now or time.time()) - j.get('submitted_t', time.time()) > MAX_WAIT_S
+
+
+def sched_key(j, running_by_owner, last_start, now=None):
+    """Order: manual bump, then aged (oldest first, whatever class or owner), then owner priority, class, owners taking turns."""
     o = job_owner(j)
-    return (job_class(j), 0 if j.get('bump') else 1, -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
+    if is_aged(j, now):
+        return (0 if j.get('bump') else 1, 0, 0, 0, -j.get('bump_t', 0.0), 0, 0.0, j.get('submitted_t', 0.0))
+    pri = OWNER_PRIORITY.index(o) if o in OWNER_PRIORITY else len(OWNER_PRIORITY)
+    return (0 if j.get('bump') else 1, 1, pri, job_class(j), -j.get('bump_t', 0.0), running_by_owner.get(o, 0),
             last_start.get(o, 0.0), j.get('submitted_t', 0.0))
 
 
-def choose_perf_batch(waiting_perf, now, batch_n, batch_age, running_by_owner, last_start):
-    """Return IDs for an urgent one-job batch or a fair N/age-triggered perf block."""
-    bumped = sorted(((qf, j) for qf, j in waiting_perf if j.get('bump')),
-                    key=lambda fj: sched_key(fj[1], running_by_owner, last_start))
-    oldest_age = max((now - j.get('submitted_t', now) for _, j in waiting_perf), default=0)
-    if bumped:
-        return [bumped[0][1]['id']], 'bump', oldest_age
-    urgent = sorted(((qf, j) for qf, j in waiting_perf if j.get('urgent')),
-                    key=lambda fj: fj[1].get('submitted_t', 0))
-    if urgent:
-        return [urgent[0][1]['id']], 'urgent', oldest_age
-    if len(waiting_perf) < batch_n and oldest_age < batch_age:
-        return [], None, oldest_age
-    ordered = sorted(waiting_perf, key=lambda fj: sched_key(fj[1], running_by_owner, last_start))
-    return [j['id'] for _, j in ordered[:batch_n]], 'batch', oldest_age
-
-
-def bumped_perf_jobs(qjobs, power_eligible):
-    """Include a newly bumped queued speed job in an already-open batch, regardless of owner rotation."""
-    return {j.get('id') for _, j in qjobs
-            if j.get('id') in power_eligible and job_class(j) == CLASSES['perf'] and j.get('bump')}
+def owner_capped(cands, running_by_owner, slots, share=None):
+    """[(qfile, job)] minus those held back by the per-owner share: an owner already holding max(1, slots*share) slots
+    waits while another owner has a candidate. Bumped and aged jobs are never held back; if that would leave nothing,
+    nothing is held back (the machine never idles for fairness)."""
+    cap = max(1, int(slots * (OWNER_SLOT_SHARE if share is None else share)))
+    out = [(f, j) for f, j in cands if j.get('bump') or is_aged(j) or running_by_owner.get(job_owner(j), 0) < cap]
+    return out or cands
 
 
 PERF_STARVE_S = 600   # checks may pass an open speed batch this long after speed work last ran; then they wait
@@ -1621,8 +3090,8 @@ def allowed_during_perf_batch(job, selected, interleave_active, starved=False):
         return False   # also inside a build window: a 400 s check started there outlasts it and blocks the solo run
     if interleave_active:
         return True
-    if klass > CLASSES['perf']:
-        return False
+    if klass > CLASSES['perf'] and not is_solo(job):   # a solo bench job is its own measured run: it takes its turn
+        return False   # (fair_key); blocked it starved 5.7 h behind a perpetual perf batch (detbench-short-solo-s1)
     return klass != CLASSES['perf'] or job.get('id') in selected
 
 
@@ -1655,11 +3124,15 @@ def estimate_s(j, hist):
     return min(j.get('timeout_s', 600), 600)
 
 
-def plan(queued, running, slots, last_start, now=None, hist=None):
+def plan(queued, running, slots, last_start, now=None, hist=None, phase=None, c=None):
     """Simulate the scheduler. queued: [(qfile, job)]; running: [(job, started_t)]; slots: slots free of games
-    outside runq. -> [(qfile, job, est_start_t, est_s)] in run order (the daemon picks the first)."""
+    outside runq; phase / c: the daemon's current window and config. -> [(qfile, job, est_start_t, est_s)] in run
+    order (the daemon picks the first)."""
     now = now or time.time()
     hist = hist or history_wall()
+    c = c or {}
+    ph = dict(phase) if phase else new_phase('ord', now)
+    n_batch = max(1, int(c.get('solo_batch_n', SOLO_BATCH_N)))
     busy = [(max(now + 30, t + estimate_s(j, hist)), job_owner(j)) for j, t in running]
     free_at = [now] * max(0, slots - len(busy)) + [e for e, _ in busy]
     if not free_at:
@@ -1669,13 +3142,29 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
     pending = list(queued)
     out = []
     while pending:
+        solos = [x for x in pending if is_solo(x[1])]
+        plain = [x for x in pending if not is_solo(x[1])]
         t = min(free_at)
         busy = [(e, o) for e, o in busy if e > t]
+        if not solos:
+            ph = new_phase('ord', ph['t0']) if ph['phase'] != 'ord' else ph
+        elif not plain:
+            ph = new_phase('solo', max(free_at)) if ph['phase'] != 'solo' else ph
+        elif ph['phase'] == 'solo' and (ph['solo_started'] >= n_batch or
+                                        max(free_at) - ph['t0'] >= float(c.get('solo_phase_max_s', SOLO_PHASE_MAX_S))):
+            ph = new_phase('ord', max(free_at))
+        elif ph['phase'] == 'ord' and (t - ph['t0'] >= float(c.get('ord_window_s', ORD_WINDOW_S)) or
+                                       any(x[1].get('bump') or x[1].get('urgent') for x in solos)):
+            ph = new_phase('solo', max(free_at))
         rbo = {}
         for _, o in busy:
             rbo[o] = rbo.get(o, 0) + 1
-        pending.sort(key=lambda qj: sched_key(qj[1], rbo, ls))
-        qf, j = pending.pop(0)
+        group = solos if ph['phase'] == 'solo' else plain
+        key = fair_key if ph['phase'] == 'solo' else sched_key
+        group.sort(key=lambda qj: key(qj[1], rbo, ls, t))
+        pick_ = group[0]
+        pending.remove(pick_)
+        qf, j = pick_
         est = estimate_s(j, hist)
         if is_solo(j):   # waits for every slot, then holds them all
             t = max(free_at)
@@ -1683,6 +3172,7 @@ def plan(queued, running, slots, last_start, now=None, hist=None):
             free_at = [t + est] * len(free_at)
             busy = [(t + est, job_owner(j))]
             ls[job_owner(j)] = t
+            ph['solo_started'] += 1
             continue
         out.append((qf, j, t, est))
         free_at.remove(t)
@@ -1702,6 +3192,8 @@ def is_measured(j):
     benchmarks (BENCHMARK true in the route or scene), or --measured. Other games only need builds kept at run_cap."""
     if j.get('measured') is not None:
         return bool(j['measured'])
+    if job_class(j) == CLASSES['bench'] and not j.get('solo'):
+        return False   # deterministic bench (frame-locked clock): its result does not depend on load, builds keep running
     if is_solo(j):
         return True
     try:
@@ -1716,9 +3208,141 @@ def is_measured(j):
     return False
 
 
+def solo_has_speed_signal(j):
+    """Solo exists to keep a speed number clean. A job may hold the machine alone only if it yields one: a route run
+    (boot_test records FPS), a timed benchmark scene, a --quiet-machine bench, or a job submitted with --timing (it
+    measures its own speed/frame timing, or proves a frame-rate-dependent bug). Builds, trace captures, harvests and
+    picture-only checks never need the machine alone."""
+    if j.get('timing') or j.get('quiet_machine'):
+        return True
+    if j.get('scene'):
+        r = (rjson(j['scene']) or {}).get('route', {})
+        return str(r.get('BO2ZM_BENCHMARK', r.get('REX_BO2ZM_BENCHMARK', ''))).lower() in ('true', '1')
+    return job_uses_boot_test(j)
+
+
+NO_SIGNAL_SOLO_MSG = ('solo is only for jobs that produce a speed number, and this one gets no FPS from runq. '
+                      'If it measures its own speed/frame timing or proves a frame-rate-dependent bug, add --timing; '
+                      'otherwise drop --solo (class perf: add --no-solo or pick another class).')
+
+
+def route_vars(job):
+    """KEY=VALUE settings of the job: its route file(s) (--route, or a .route argument) plus --env."""
+    out = {}
+    cmd = job.get('cmd') or []
+    for a in ([cmd] if isinstance(cmd, str) else cmd):
+        if str(a).endswith('.route') and os.path.isfile(str(a)):
+            for line in open(str(a), errors='replace'):
+                m = re.match(r'\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*?)\s*$', line)
+                if m:
+                    out[m.group(1)] = m.group(2)
+    out.update(job.get('env') or {})
+    return out
+
+
+def app_lacks(app, names):
+    """Which of these cvar names appear in no binary of APP/Contents/MacOS (the SDK registers cvars by name)."""
+    d = os.path.join(app or '', 'Contents', 'MacOS')
+    if not names or not os.path.isdir(d):
+        return []
+    left = {n.encode() for n in names}
+    for f in sorted(os.listdir(d)):
+        p = os.path.join(d, f)
+        if left and not os.path.islink(p) and os.path.isfile(p):
+            data = open(p, 'rb').read()
+            left = {n for n in left if n not in data}
+    return sorted(n.decode() for n in left)
+
+
+LAPTOP_SSH_HOSTS = {'drawer-wsl', '100.73.92.76', '10.0.0.47'}
+
+
+def laptop_ssh_command(cmd):
+    """Recognize laptop SSH even through env, timeout, or a shell command string."""
+    for i, token in enumerate(cmd):
+        if os.path.basename(token) in ('sh', 'bash', 'zsh') and i + 2 < len(cmd) and cmd[i + 1] in ('-c', '-lc'):
+            try:
+                if laptop_ssh_command(shlex.split(cmd[i + 2])):
+                    return True
+            except ValueError:
+                pass
+        if os.path.basename(token) != 'ssh':
+            continue
+        args = iter(cmd[i + 1:])
+        for arg in args:
+            if arg in ('-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w'):
+                next(args, None)
+                continue
+            if arg.startswith('-'):
+                continue
+            host = arg.rsplit('@', 1)[-1].lower().rstrip('.')
+            if host.startswith('ssh://'):
+                host = host[6:].split(':', 1)[0]
+            return host in LAPTOP_SSH_HOSTS
+    return False
+
+
+def live_idle_info(job, now, config):
+    """Only ready live jobs expire. Startup probes and status reads are not user activity."""
+    if not any(os.path.basename(str(x)) == 'live_session.py' for x in job.get('cmd', [])):
+        return {}
+    out = job['out']
+    state = rjson(os.path.join(out, 'live.json')) or {}
+    if state.get('state') != 'ready':
+        return {}
+    ready = state.get('ready_at') or os.path.getmtime(os.path.join(out, 'live.json'))
+    try:
+        last = max(ready, os.path.getmtime(os.path.join(out, 'last-control')))
+    except OSError:
+        last = ready
+    cmd = job.get('cmd') or []
+    keep = float(cmd[cmd.index('--keep') + 1]) if '--keep' in cmd else 0
+    limit = min(1800.0, max(1.0, float(config.get('live_idle_stop_s', 600)), keep))
+    return {'live_idle_s': round(max(0, now - last), 1), 'live_idle_stop_s': limit}
+
+
+def submit_refusal(job):
+    """The common invalid submissions of the 11-24 waste audit, refused before they cost a run. -> message or None."""
+    cmd = job.get('cmd') or []
+    if laptop_ssh_command(cmd) and job.get('where', 'mac') != 'laptop':
+        return 'SSH work on the laptop must use --where laptop; submit the command to run there directly (without ssh).'
+    if job_uses_boot_test(job) and '--route' not in cmd:
+        return ('boot_test.sh without --route records no FPS (the result is invalid: "FPS summary missing"). '
+                'Submit with --route ROUTE (runq builds the boot_test command itself).')
+    bench = sorted(k[4:].lower() for k in route_vars(job) if re.match(r'REX_(BENCH_|CLOCK_FRAME_LOCK_HZ$)', k))
+    if job_class(job) == CLASSES['bench'] and not bench:
+        return ('class bench needs a bench route (REX_BENCH_FRAMES etc., e.g. tools/mac/bench/town4_rounds.route); '
+                'without one the job writes no bench result.')
+    lack = app_lacks(job.get('app'), bench)
+    if lack:
+        return (f'{job.get("app")} has no bench code ({", ".join(lack)} not in its binaries), so the run would end '
+                '"no bench result". Build the app from a branch that has it (origin/main, or bench-concurrent for '
+                'bench_rounds) or use a route without those settings.')
+    return None
+
+
 def is_solo(j):
     """Solo jobs run with no other game on the machine; class perf is solo unless submitted with --no-solo."""
     return bool(j.get('solo', job_class(j) == CLASSES['perf']))
+
+
+def cmd_restart(argv):
+    """runq restart: load new runq code without touching running jobs or builds. The old daemon hands over (TERM) and a
+    new one adopts every running job. Takes a few seconds; queued jobs just wait."""
+    mkdirs()
+    st = rjson(STATE) or {}
+    pid = st.get('pid')
+    if pid and alive(pid) and daemon_running():
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(150):   # the daemon checks every second
+            if not daemon_running():
+                break
+            time.sleep(0.2)
+        else:
+            sys.exit(f'runq restart: daemon {pid} did not exit within 30 s (kill -9 it; jobs are adopted either way)')
+    ensure_daemon()
+    st = rjson(STATE) or {}
+    print(f'runq: daemon restarted, pid {st.get("pid")}; adopted jobs are in {DLOG}')
 
 
 def cmd_solo(argv):
@@ -1726,6 +3350,9 @@ def cmd_solo(argv):
         sys.exit('runq: solo ID on|off')
     for f, j in load_queue():
         if f.endswith(argv[0] + '.json'):
+            if argv[1] == 'on' and not solo_has_speed_signal(j):
+                print(f'{argv[0]}: refused: {NO_SIGNAL_SOLO_MSG}')
+                return 1
             j['solo'] = argv[1] == 'on'
             wjson(os.path.join(D['queue'], f), j)
             print(f'{argv[0]}: solo {argv[1]}')
@@ -1778,7 +3405,7 @@ def cmd_submit(argv):
     ap.add_argument('--name')
     ap.add_argument('--out')
     ap.add_argument('--priority', action='store_true', help='= --class ship')
-    ap.add_argument('--class', dest='klass', help='ship, harness, proof, sweep (default), perf, or a number')
+    ap.add_argument('--class', dest='klass', help='ship, harness, proof, sweep (default), perf, bench (deterministic bench, runs beside games and builds), or a number')
     ap.add_argument('--owner', help='fair-share owner (default $RUNQ_OWNER, else the name up to its first -)')
     ap.add_argument('--solo', action='store_true', default=None,
                     help='run with no other game on the machine (default for class perf); for FPS numbers and '
@@ -1792,11 +3419,17 @@ def cmd_submit(argv):
                          f'{QUIET_WAIT_CAP_S} s, record actual load and avg/min FPS')
     ap.add_argument('--no-fps', action='store_true',
                     help='with --quiet-machine, skip FPS summary validity for offline/non-game jobs')
+    ap.add_argument('--timing', action='store_true',
+                    help='the job measures its own speed/frame timing or proves a frame-rate-dependent bug; required '
+                         'for --solo (and class perf) on --scene/-- CMD jobs that get no FPS from runq')
     ap.add_argument('--urgent', action='store_true', help='class-perf only: request an immediate one-job speed batch')
     ap.add_argument('--timeout', type=int)
-    ap.add_argument('--where', choices=('mac', 'any', 'laptop'), default='mac')
+    ap.add_argument('--where', choices=('mac', 'any', 'laptop'), default=None)
     ap.add_argument('--input', action='append', default=[], help='Mac path copied to {IN}/<name> (with --where)')
     ap.add_argument('--env', action='append', default=[])
+    ap.add_argument('--window', action='store_true',
+                    help='the job tests a real window: no off-screen mode (REX_HEADLESS=false), screen guard off')
+    ap.add_argument('--shared-metal-cache', action='store_true', help='keep the app bundle id, so Metal caches are shared with the installed game')
     ap.add_argument('--no-clone', action='store_true', help='run the app in place (one job at a time per app!)')
     ap.add_argument('--golden', help='scene runs: golden dir override')
     ap.add_argument('--no-diff', action='store_true')
@@ -1817,6 +3450,12 @@ def cmd_submit(argv):
     klass = 0 if a.priority else parse_class(a.klass) if a.klass else 3
     if a.no_fps and not a.quiet_machine:
         sys.exit('runq submit: --no-fps requires --quiet-machine')
+    # a plain command that runs a script under the laptop's own home needs no Mac GPU: it goes to the laptop
+    # (any = the Mac takes it only while the laptop is busy). `--where mac` forces the Mac.
+    if a.where is None:
+        a.where = ('any' if cmd and not (a.app or a.scene or a.route or a.quiet_machine or a.solo or a.urgent
+                                         or klass == CLASSES['perf']) and str(cmd[0]).startswith('/home/ryanr/')
+                   else 'mac')
     if a.where != 'mac' and (a.app or a.scene or a.route or a.quiet_machine or a.solo or a.urgent or not cmd
                              or klass == CLASSES['perf']):
         sys.exit('runq submit: --where any|laptop is for plain `-- CMD` jobs only (no --app/--scene/--route/--solo/'
@@ -1827,7 +3466,9 @@ def cmd_submit(argv):
     if a.quiet_machine:
         solo = True
     job = {'id': jid, 'submitted': now_s(), 'submitted_t': time.time(), 'priority': a.priority, 'class': klass,
-           'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'env': env}
+           'solo': solo, 'app': a.app, 'clone_app': not a.no_clone, 'shared_metal_cache': a.shared_metal_cache, 'env': env}
+    if a.window:
+        job['allow_window'] = True
     if a.urgent:
         job['urgent'] = True
     if a.measured is not None:
@@ -1836,6 +3477,8 @@ def cmd_submit(argv):
         job.update(quiet_machine=True, measured=True)
     if a.no_fps:
         job['no_fps'] = True
+    if a.timing:
+        job['timing'] = True
     if a.scene:
         sp = os.path.abspath(os.path.expanduser(a.scene))
         scene = rjson(sp)
@@ -1858,6 +3501,11 @@ def cmd_submit(argv):
         if not a.app:
             sys.exit('runq: --app is required with --route')
         name = a.name or os.path.basename(rp).split('.')[0]
+        if re.match(r'town4', os.path.basename(rp)) and not re.search(r'det|rounds', os.path.basename(rp)):
+            print('runq: hint: for a CPU-side speed A/B of BO2 town4, the deterministic bench is ~10x faster and less noisy than an fps pair: '
+                  'runq submit --app APP --route <branch>/tools/mac/bench/town4_rounds.route --class bench --timeout 1500 '
+                  '--env "END_ON_LOG=[bench] done" (runs beside games and builds), compare with abverdict.py --bench (WORKFLOW.md "Deterministic bench"). '
+                  'GPU-side changes need --solo bench runs or fps runs.', file=sys.stderr)
         out = os.path.abspath(os.path.expanduser(a.out)) if a.out else os.path.join(D['jobs'], f'{jid}-{name}')
         dur = 600
         for line in open(rp):
@@ -1873,6 +3521,12 @@ def cmd_submit(argv):
         job.update(name=name, out=out, cmd=cmd, cwd=os.getcwd(), timeout_s=a.timeout or 1800)
     else:
         sys.exit('runq submit: give --scene, --route or -- CMD')
+    if solo and not solo_has_speed_signal(job):
+        sys.exit(f'runq submit: {NO_SIGNAL_SOLO_MSG}')
+    job['where'] = a.where
+    why = submit_refusal(job)
+    if why:
+        sys.exit(f'runq submit: refused: {why}')
     os.makedirs(job['out'], exist_ok=True)
     if a.where != 'mac':
         job['where'] = a.where
@@ -1881,6 +3535,9 @@ def cmd_submit(argv):
         for i in job['inputs']:
             if not os.path.exists(i):
                 sys.exit(f'runq: no input {i}')
+    agent = os.environ.get('PASEO_AGENT_ID')
+    if agent:
+        job['agent'] = agent
     owner = a.owner or os.environ.get('RUNQ_OWNER')
     if owner:
         job['owner'] = owner
@@ -2032,7 +3689,9 @@ def find_done(jid):
     return os.path.join(D['done'], jid + '.json')
 
 
-def cmd_wait(ids):
+def cmd_wait(ids, timeout=None):
+    """timeout (s): give up and return 124 with jobs still pending."""
+    deadline = time.monotonic() + timeout if timeout else None
     ensure_daemon(fatal=False)
     ids = [i for i in ids if i]
     pending = set(ids)
@@ -2057,7 +3716,10 @@ def cmd_wait(ids):
                 pending.discard(jid)
                 worst = max(worst, 2)
         if pending:
-            kq.control([ev], 1, 60)   # wakes when done/ changes; 60 s as a safety net
+            if deadline and time.monotonic() >= deadline:
+                os.close(dfd)
+                return 124
+            kq.control([ev], 1, min(60, max(0.1, deadline - time.monotonic())) if deadline else 60)   # wakes when done/ changes; 60 s safety net
             ensure_daemon(fatal=False)
     os.close(dfd)
     return worst
@@ -2073,6 +3735,18 @@ def cmd_status(_argv):
     print(f'build throttle: cap now {st.get("build_cap_now")} ({st.get("build_cap_why", "")}; idle {st.get("idle_cap")}, '
           f'unmeasured games {st.get("run_cap")}, measured {st.get("game_cap")}), tokens held back {st.get("tokens_held_back")}, active buildq builds '
           f'{active_builds()}, compiler processes {compile_procs()}')
+    ph = st.get('phase') or {}
+    if ph:
+        print(f'window: {ph.get("phase")} for {int(time.time() - ph.get("t0", time.time()))} s'
+              f'{" (closing, solo jobs next)" if ph.get("closing") else ""}'
+              f'{", " + str(ph.get("solo_started", 0)) + " solo started" if ph.get("phase") == "solo" else ""}')
+    ob = st.get('outside_builds') or []
+    if ob:
+        by = {}
+        for b in ob:
+            by.setdefault(b.get('cwd', '?'), []).append(b.get('exe', '?'))
+        print('OUTSIDE BUILDS (compiling without buildq, they spoil speed runs): ' + '; '.join(
+            f'{cwd} [{", ".join(sorted(set(exes)))} x{len(exes)}]' for cwd, exes in by.items()))
     if st.get('power_hold'):
         print(st['power_hold'])
     if st.get('perf_hold'):
@@ -2082,7 +3756,10 @@ def cmd_status(_argv):
     if st.get('paused_until'):
         print(f'queue paused until {st["paused_until"]} (config.json paused_until)')
     for jid, r in (st.get('running') or {}).items():
-        print(f'running {jid} slot {r["slot"]} pid {r["pid"]} {r["name"]} {r["since_s"]} s')
+        print(f'running {jid} slot {r["slot"]} pid {r["pid"]} {r["name"]} {r["since_s"]} s'
+              + (f' CPU {r["cpu_percent"]:.1f}% (100%=one core)' if r.get('cpu_percent') is not None else ' CPU warming up')
+              + (f' live idle {r["live_idle_s"]:.0f} s/{r["live_idle_stop_s"]:.0f} s' if 'live_idle_s' in r else '')
+              + (f' (paused {r["paused_s"]} s, run {r["since_s"] - r["paused_s"]} s)' if r.get('paused_s') else ''))
     now = time.time()
     running = []
     for jid, r in (st.get('running') or {}).items():
@@ -2090,10 +3767,8 @@ def cmd_status(_argv):
         running.append((jj, now - r.get('since_s', 0)))
     slots = (cfg().get('slots', 2)) - len(st.get('games_outside_runq') or [])
     start = now
-    if st.get('paused_until'):
-        hh, mm = map(int, st['paused_until'].split(':'))
-        lt = time.localtime(now)
-        start = max(now, time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1)))
+    if st.get('paused_until_s'):
+        start = max(now, st['paused_until_s'])
     hb = laptop_state()
     print('laptop: ' + (f'{hb["state"]} (poll {hb["age_s"]} s ago, load {hb.get("load")})' if hb.get('t') else 'never polled'))
     for rf in sorted(os.listdir(D['remote'])):
@@ -2101,7 +3776,8 @@ def cmd_status(_argv):
             rj = rjson(os.path.join(D['remote'], rf)) or {}
             print(f'running {rj.get("id")} ON LAPTOP {rj.get("name")} since {rj.get("claim", {}).get("started")} '
                   f'attempt {rj.get("attempts", 0) + 1}')
-    for qf, j, t, est in plan([(f, j) for f, j in load_queue() if j.get('where') != 'laptop'], running, max(1, slots), st.get('last_start_by_owner') or {}, now=start):
+    for qf, j, t, est in plan([(f, j) for f, j in load_queue() if j.get('where') != 'laptop'], running, max(1, slots), st.get('last_start_by_owner') or {}, now=start,
+                                 phase=st.get('phase'), c=cfg()):
         k = job_class(j)
         print(f'queued  {j.get("id")} {j.get("name")}  class {CLASS_NAMES.get(k, k)}{" bumped" if j.get("bump") else ""}'
               f'{" solo" if is_solo(j) else ""}  owner {job_owner(j)}  est start {time.strftime("%H:%M", time.localtime(t))} (~{int(est // 60)} min)')
@@ -2139,9 +3815,62 @@ def cmd_cancel(ids):
                 print(f'{jid}: not queued or running')
 
 
+QUIET_KEYS = ('slots', 'game_cap', 'idle_cap')
+
+
+def cmd_quiet(argv):
+    """runq quiet on: slots/game_cap/idle_cap -> 0, running games cancelled, every build/compiler SIGSTOPped, no build
+    may start (priority lane too). runq quiet off: caps restored, builds resumed. State in quiet.json."""
+    mode = argv[0] if argv else ''
+    raw = rjson(CONFIG)
+    if mode not in ('on', 'off') or not isinstance(raw, dict):
+        sys.exit('usage: runq quiet on|off' if mode not in ('on', 'off') else f'runq quiet: cannot read {CONFIG}')
+    q = rjson(QUIET)
+    if mode == 'on':
+        if q:
+            print(f'runq quiet: already on since {q.get("since")} (frozen {len(q.get("frozen", []))} build processes)')
+            return 0
+        saved = {k: raw.get(k) for k in QUIET_KEYS}
+        wjson(QUIET, {'since': now_s(), 'saved': saved, 'frozen': [], 'cancelled': []})  # first: blocks new builds
+        raw.update({k: 0 for k in QUIET_KEYS})
+        wjson(CONFIG, raw)
+        cancelled = sorted(f[:-5] for f in os.listdir(D['running']) if f.endswith('.json') and '.run.' not in f)
+        for jid in cancelled:
+            open(os.path.join(D['running'], jid + '.cancel'), 'w').close()
+        comp = compiler_processes() or []
+        me = set(process_ancestors(os.getpid()))
+        pids = sorted(({p['pid'] for p in comp} | buildq_owned_processes(PROCESS_SNAPSHOT or [])) - me)
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if pids:
+            freeze_log('quiet on: stop ' + ' '.join(map(str, pids)))
+        wjson(QUIET, {'since': now_s(), 'saved': saved, 'frozen': pids, 'cancelled': cancelled})
+        print(f'runq quiet on: slots/game_cap/idle_cap 0 (were {saved}); cancelled {len(cancelled)} running job(s) '
+              f'{" ".join(cancelled)}; froze {len(pids)} build process(es). Undo: runq quiet off')
+        return 0
+    if not q:
+        print('runq quiet: already off')
+        return 0
+    for k, v in (q.get('saved') or {}).items():
+        if raw.get(k) == 0:   # an edit made while quiet wins
+            if v is None:
+                raw.pop(k, None)
+            else:
+                raw[k] = v
+    wjson(CONFIG, raw)
+    cont_pids(q.get('frozen') or [])
+    os.unlink(QUIET)
+    print(f'runq quiet off: caps restored {q.get("saved")}; resumed {len(q.get("frozen") or [])} build process(es); '
+          f'resubmit cancelled jobs if still needed: {" ".join(q.get("cancelled") or []) or "none"}')
+    return 0
+
+
 def cmd_install(_argv):
     mkdirs()
-    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py',
+    for f in ('runq', 'boot_test.sh', 'perf_summary.py', 'make_video.sh', 'compare_video.py', 'scenediff.py', 'abverdict.py',
               'scenes_gate.sh', 'runq_live.py', 'live_session.py'):
         s = os.path.join(HERE, f)
         if os.path.exists(s):
@@ -2322,6 +4051,19 @@ def timeline(text, launch=None):
 
 
 # ------------------------------------------------------------------ buildq
+def older_multi_waiter(me, registered, tokens):
+    """True when another live buildq client still waiting for tokens (-t N, N > 1) registered before me, and I am
+    either a smaller request or younger. The oldest multi-token waiter then drains the pool unopposed."""
+    for f in os.listdir(D['builds']):
+        if not f.endswith('.json') or f == f'{me}.json':
+            continue
+        b = rjson(os.path.join(D['builds'], f)) or {}
+        if (b.get('waiting') and b.get('tokens', 1) > 1 and b.get('pid') and alive(b['pid'])
+                and (tokens <= 1 or b.get('registered', 0) < registered)):
+            return True
+    return False
+
+
 def buildq(argv):
     tokens, ship, prio, i = 1, False, False, 0
     while i < len(argv):
@@ -2344,6 +4086,7 @@ def buildq(argv):
         sys.exit('usage: buildq [-t N] [--ship] [-p] [--] CMD ARGS...')
     ensure_daemon()
     base = os.path.basename(cmd[0])
+    cmd = ccache_configure(cmd) if base == 'cmake' else cmd
     jobserver = base == 'ninja' or (base == 'cmake' and '--build' in cmd)
     if jobserver:
         cmd = strip_jobs(cmd)
@@ -2351,14 +4094,14 @@ def buildq(argv):
     c = cfg()
     tokens = max(1, min(tokens, c['game_cap']))
     # Priority lane: one tiny command (a patch dylib, ~1 s) takes no token, so it is not queued behind big builds that
-    # hold every token (one waited 1,511 s). It still waits out solo/quiet runs below and is frozen like any build.
+    # hold every token (one waited 1,511 s). It still waits out solo/quiet-machine runs below and is frozen like any build.
     # Automatic for build_patch_lib.sh; never for a jobserver build (ninja, cmake --build).
     if (prio or base == 'build_patch_lib.sh') and not jobserver:
         tokens = 0
     rec = os.path.join(D['builds'], f'{os.getpid()}.json')
     registered = now_s()
     wjson(rec, {'pid': os.getpid(), 'cmd': cmd, 'cwd': os.getcwd(), 'tokens': tokens, 'jobserver': jobserver,
-                'registered': registered, 'started': registered})
+                'registered': registered, 'started': registered, 'waiting': True})
     fifo = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)
     lk = os.open(POOL_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
     exec_lk = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
@@ -2368,6 +4111,9 @@ def buildq(argv):
     try:
         while True:
             while got < tokens:   # (priority lane: tokens 0, loop skipped)
+                if older_multi_waiter(os.getpid(), registered, tokens):
+                    time.sleep(0.5)   # FIFO: the oldest -t N waiter reserves the pool (1-token builds starved one for 6 h)
+                    continue
                 fcntl.flock(lk, fcntl.LOCK_SH)   # token reads serialize with pool repair
                 try:
                     b = os.read(fifo, tokens - got)
@@ -2427,6 +4173,33 @@ def buildq(argv):
             os.unlink(rec)
         except OSError:
             pass
+
+
+CCACHE_LAUNCHER = os.path.expanduser('~/Games/Xbox360/bo2-build/ccache/launcher')
+
+
+def ccache_configure(cmd):
+    """Fresh `cmake -S/-B` configure: share one compile cache across worktrees (build-cache stream, 2026-11-24).
+    1. /tmp/ paths become /private/tmp/: ninja runs in the physical dir and ccache's base_dir rewrite only gives the same relative
+       paths in every worktree when no /tmp spelling appears anywhere. 2. the ccache launcher goes in as the compiler launcher.
+    Skipped for --build, -E, -P, build dirs that already have a CMakeCache.txt (adding a launcher would rebuild them from scratch),
+    explicit launchers, and BUILDQ_NO_CCACHE=1. Stats: ~/Games/Xbox360/bo2-build/ccache/stats"""
+    if '--build' in cmd or '-E' in cmd or '-P' in cmd or '--install' in cmd or os.environ.get('BUILDQ_NO_CCACHE'):
+        return cmd
+    if not (os.path.exists(CCACHE_LAUNCHER) and any(a in ('-S', '-B') or a.startswith(('-S', '-B')) for a in cmd[1:])):
+        return cmd
+    if any('COMPILER_LAUNCHER' in a for a in cmd):
+        return cmd
+    out = [re.sub(r'(^|=|(?<=^-[SB]))/tmp/', r'\1/private/tmp/', a) for a in cmd]
+    bdir = None
+    for i, a in enumerate(out):
+        if a == '-B' and i + 1 < len(out):
+            bdir = out[i + 1]
+        elif a.startswith('-B') and len(a) > 2:
+            bdir = a[2:]
+    if bdir is None or os.path.exists(os.path.join(os.path.abspath(bdir), 'CMakeCache.txt')):
+        return cmd
+    return out + [f'-DCMAKE_{l}_COMPILER_LAUNCHER={CCACHE_LAUNCHER}' for l in ('C', 'CXX', 'OBJC', 'OBJCXX')]
 
 
 def strip_jobs(cmd):
@@ -2526,6 +4299,68 @@ def test_laptop():
           'Mac fallback after 3 tries, lost for laptop-only, result, cancel')
 
 
+def test_phases(bump_waiting):
+    """Alternating windows: phase_step / phase_admits / plan on synthetic queues."""
+    c = {'solo_batch_n': 3, 'ord_window_s': 1200}   # (tests pin 1200; the default is ORD_WINDOW_S)
+    S = lambda i, o='o1', **k: {'id': f's{i}', 'class': CLASSES['perf'], 'solo': True, 'owner': o, 'submitted_t': 0 + i, **k}
+    O = lambda i, o='o2', **k: {'id': f'g{i}', 'class': CLASSES['proof'], 'owner': o, 'submitted_t': 0 + i, **k}
+    ord0 = new_phase('ord', 0)
+    # ordinary window with solo + ordinary waiting stays open until the window time, then closes and flips on empty
+    assert phase_step(ord0, 100, [S(1)], [O(1)], False, False, c) is ord0
+    closing = phase_step(ord0, 1300, [S(1)], [O(1)], False, False, c)
+    assert closing['phase'] == 'ord' and closing['closing']
+    assert phase_step(closing, 1301, [S(1)], [O(1)], False, False, c) is closing
+    assert phase_step(closing, 1500, [S(1)], [O(1)], True, False, c)['phase'] == 'solo'
+    # nothing ordinary waiting: flip as soon as the machine is empty; no solo waiting: stay ordinary
+    assert phase_step(ord0, 5, [S(1)], [], True, False, c)['phase'] == 'solo'
+    assert phase_step(ord0, 5, [], [O(1)], True, False, c) is ord0
+    assert phase_step(ord0, 5, [S(1, bump=True)], [O(1)], True, False, c)['phase'] == 'ord'    # bump waits for ord_min_s
+    assert phase_step(ord0, 700, [S(1, bump=True)], [O(1)], True, False, c)['phase'] == 'solo'   # then closes it
+    assert phase_step(dict(ord0, prev_solo_s=600), 700, [S(1, bump=True)], [O(1)], True, False, c)['phase'] == 'ord'   # solo share cap
+    # solo window: runs N back to back, then hands over; never flips while a solo runs
+    sol = new_phase('solo', 0)
+    assert phase_step(sol, 10, [S(1)], [O(1)], True, True, c) is sol
+    assert phase_step(sol, 10, [S(1)], [O(1)], True, False, c) is sol
+    done3 = dict(sol, solo_started=3)
+    assert phase_step(done3, 10, [S(1)], [O(1)], True, True, c) is done3
+    assert phase_step(done3, 10, [S(1)], [O(1)], True, False, c)['phase'] == 'ord'
+    assert phase_step(sol, 10, [], [O(1)], True, False, c)['phase'] == 'ord'
+    assert phase_step(sol, 2000, [S(1)], [O(1)], True, False, c)['phase'] == 'ord'      # solo window time bound
+    # admission
+    assert phase_admits(sol, True, 5, True, 360, 5, True, False, c)
+    assert not phase_admits(sol, True, 5, False, 360, 5, True, False, c)               # needs an empty machine
+    assert not phase_admits(dict(sol, solo_started=3), True, 5, True, 360, 5, True, False, c)
+    assert not phase_admits(sol, False, 5, True, 60, 5, True, False, c)                # ordinary waits in solo window...
+    assert not phase_admits(sol, False, 5, True, 60, 5, True, True, c)                 # ...even in a build window
+    assert not phase_admits(ord0, True, 5, True, 360, 5, True, False, c)
+    assert phase_admits(ord0, False, 5, False, 60, 5, True, False, c)
+    assert not phase_admits(closing, False, 1400, False, 60, 5, True, False, c)
+    assert phase_admits(ord0, False, 5, False, 600, 5, True, False, c)                 # a 10 min game fits a fresh window
+    assert not phase_admits(ord0, False, 5, False, 1100, 5, True, False, c)          # a 20 min one (30 min budget) waits for age
+    assert not phase_admits(ord0, False, 1100, False, 600, 5, True, False, c)          # ...and nothing long near the end
+    assert phase_admits(ord0, False, 1100, False, 2400, 1900, True, False, c)          # unless it already waited 30 min
+    assert phase_admits(ord0, False, 1100, False, 2400, 5, False, False, c)            # no solo waiting: anything
+    assert phase_admits(ord0, False, 1100, False, 2400, 5, True, False, c, True)       # long lane: a 40 min job starts anyway
+    assert not phase_admits(ord0, False, 1100, False, 2400, 5, True, False, c, False)  # ...unless the lane is full
+    assert not phase_admits(closing, False, 1400, False, 2400, 5, True, False, c, True) # ...never in a closing window
+    # plan(): 9 solo (3 owners x 3) + 6 ordinary, 3 slots: solo batch of 3 then ordinary window, owners rotate
+    hist = ({}, {})
+    q = [(f'qs{i}', S(i, 'ab' if i < 5 else ('cd' if i < 7 else 'ef'), timeout_s=360)) for i in range(1, 10)]
+    q += [(f'qg{i}', O(i, 'x', timeout_s=300)) for i in range(1, 7)]
+    out = plan(q, [], 3, {}, now=1000, hist=hist, phase=new_phase('ord', 1000), c=c)
+    first = [qf for qf, *_ in out]
+    assert first[:6] == ['qg1', 'qg2', 'qg3', 'qg4', 'qg5', 'qg6'] or first[0].startswith('qg'), first
+    solo_order = [j['owner'] for _, j, *_ in out if is_solo(j)]
+    assert solo_order[:3] != ['ab', 'ab', 'ab'], solo_order       # one owner's halves do not take a whole batch
+    starts = {qf: t for qf, _, t, _ in out}
+    assert max(t for qf, t in starts.items() if qf.startswith('qg')) - 1000 < 2400   # ordinary starts bounded
+    mixed = [(f'm{i}', j) for i, j in enumerate([S(1, 'sp', **{'class': CLASSES['proof']}), S(2, 'sp', **{'class': CLASSES['proof']}),
+                                                  S(3, 'ct'), S(4, 'ge')])]
+    o = plan(mixed, [], 3, {'sp': 500}, now=1000, hist=({}, {}), phase=new_phase('solo', 1000), c=c)
+    assert [j['owner'] for _, j, *_ in o][:3] == ['ct', 'ge', 'sp'], [j['owner'] for _, j, *_ in o]   # proof-class chain does not jump perf solos
+    print('runq window self-test passed')
+
+
 
 def main():
     if os.path.basename(sys.argv[0]) == 'buildq':
@@ -2536,6 +4371,67 @@ def main():
     sub, argv = sys.argv[1], sys.argv[2:]
     if sub == '_daemon':
         Daemon().run()
+    elif sub == '_test-solo-freeze':
+        def P(pid, ppid, cmd, state='S'):
+            return {'pid': pid, 'ppid': ppid, 'exe': os.path.basename(cmd.split()[0]), 'command': cmd, 'state': state}
+        snap = [P(2, 1, '/Users/x/.local/bin/claude --output-format stream-json /tmp/bo2/y'),
+                P(3, 2, '/bin/zsh -c source /Users/x/.claude/shell-snapshots/snapshot-zsh-1.sh && eval ls'),
+                P(4, 3, 'git status'), P(5, 3, 'node /Users/x/script.js'),
+                P(6, 1, 'python3 /tmp/bo2/foo/probe.py'), P(7, 1, '/Applications/Paseo.app/x/Paseo Helper'),
+                P(8, 1, 'python -I /x/runq/bin/runq _daemon'), P(9, 8, '/bin/sh -c runq-job /tmp/bo2/game'),
+                P(10, 9, '/tmp/bo2/app/game'), P(11, 1, 'mdworker_shared -s mdworker'), P(17, 3, '/Users/ryanc/bin/stream-check x'), P(18, 17, 'cut -c1-9'), P(19, 3, 'claude-ish'),P(12, 1, 'WindowServer'),
+                P(13, 1, 'python -I /x/runq/bin/buildq -- ninja'), P(14, 13, 'clang -c a.c'),
+                P(15, 1, 'python3 /tmp/bo2/job/run.py', 'T'), P(16, 3, 'codesign x')]
+        got = sorted(solo_freeze_targets(snap, {1}, {10}))
+        assert got == [3, 4, 5, 6, 13, 14, 16, 19], got
+        # trimmed: only compilers / build trees / games / busy processes (CPU filter on)
+        for p in snap:
+            p.setdefault('cpu_s', 0.0); p.setdefault('elapsed_s', 100.0)
+        prev = {}
+        solo_freeze_targets(snap, {1}, {10}, '', prev)           # first scan: idle everything -> only buildq tree
+        assert sorted(solo_freeze_targets(snap, {1}, {10}, '', prev)) == [14], 'idle shells and the idle buildq client must not freeze'
+        snap[3]['cpu_s'] = 5.0                                    # pid 5 (node) burns 5 CPU-s in a scan
+        snap[4]['cpu_s'] = 0.1                                    # pid 6 python: below threshold
+        assert sorted(solo_freeze_targets(snap, {1}, {10}, '', prev)) == [5, 14], 'busy node + compiler under buildq'
+        snap.append(dict(P(30, 1, '/Users/x/elsewhere/rexgpu-replay --x'), cpu_s=0.0, elapsed_s=1.0))  # idle yet frozen, any path
+        assert 30 in solo_freeze_targets(snap, {1}, {10}, '', prev), 'replay tool frozen on sight'
+        snap.append(dict(P(31, 3, 'refxenos run', 'Z'), cpu_s=0.0, elapsed_s=1.0))
+        assert 31 not in solo_freeze_targets(snap, {1}, {10}, '', prev), 'zombie skipped'
+        print('solo-freeze selection ok', got)
+    elif sub == '_test-guardrails':
+        # pause past midnight: "07:00" written at 23:00 holds until 07:00 next morning
+        t23 = time.mktime((2026, 11, 25, 23, 0, 0, 0, 0, -1))
+        c = {'paused_until': '07:00', '_mtime': t23}
+        assert pause_end(c) == time.mktime((2026, 11, 26, 7, 0, 0, 0, 0, -1)), pause_end(c)
+        assert paused(c, t23 + 3 * 3600) and not paused(c, t23 + 9 * 3600)
+        c = {'paused_until': '23:30', '_mtime': t23}                      # same evening
+        assert paused(c, t23 + 60) and not paused(c, t23 + 3600)
+        c = {'paused_until': '2026-11-26 07:00', '_mtime': 0}
+        assert paused(c, t23) and not paused(c, t23 + 9 * 3600) and not paused({}, t23)
+        assert pause_end({'paused_until': 'junk'}) is None and paused({'paused_until': 'junk'}, t23)
+        # lane only for game-less jobs
+        assert lane_safe({'cmd': ['ninja', '-C', 'x']})
+        assert not lane_safe({'app': '/a.app', 'cmd': ['x']}) and not lane_safe({'cmd': ['drv', 'fh1-drive.route']})
+        # submit refusals
+        tmp = tempfile.mkdtemp(prefix='rq-guard-', dir=os.environ.get('TMPDIR', '/tmp'))
+        app = os.path.join(tmp, 'A.app')
+        os.makedirs(os.path.join(app, 'Contents', 'MacOS'))
+        open(os.path.join(app, 'Contents', 'MacOS', 'librt.dylib'), 'wb').write(b'..bench_frames..bench_warmup_frames..')
+        rt = os.path.join(tmp, 'b.route')
+        open(rt, 'w').write('duration_s = 700\nREX_BENCH_FRAMES = 600\nREX_BENCH_ROUNDS = 4\n')
+        bt = os.path.join(HERE, 'boot_test.sh')
+        assert 'without --route' in submit_refusal({'cmd': [bt, '--app', '{APP}', '--out', 'o']})
+        assert submit_refusal({'cmd': [bt, '--app', '{APP}', '--route', 'r.route']}) is None
+        assert 'bench_rounds' in submit_refusal({'app': app, 'cmd': [bt, '--route', rt], 'class': CLASSES['bench']})
+        open(rt, 'w').write('REX_BENCH_FRAMES = 600\n')
+        assert submit_refusal({'app': app, 'cmd': [bt, '--route', rt], 'class': CLASSES['bench']}) is None
+        assert 'needs a bench route' in submit_refusal({'app': app, 'cmd': ['x'], 'class': CLASSES['bench']})
+        assert 'clock_frame_lock_hz' in submit_refusal({'app': app, 'cmd': ['x'], 'env': {'REX_CLOCK_FRAME_LOCK_HZ': '60'}})
+        assert submit_refusal({'app': app, 'cmd': ['x']}) is None
+        shutil.rmtree(tmp, ignore_errors=True)
+        print('guardrails ok: pause past midnight, lane_safe, submit refusals')
+    elif sub == '_freeze-watchdog':
+        freeze_watchdog(argv[0], int(argv[1]))
     elif sub == '_quiet-wait':
         if argv and argv[0] == '--':
             argv = argv[1:]
@@ -2561,18 +4457,15 @@ def main():
             print(f'power-machine gate failed: measured perf requires AC and an adapter rated at least '
                   f'{min_adapter_w} W; detected {power["watts"]} W', flush=True)
             sys.exit(2)
-        start = time.monotonic()
-        capped = False
-        while loadavg()[0] >= QUIET_LOAD_LIMIT:
-            remaining = QUIET_WAIT_CAP_S - (time.monotonic() - start)
-            if remaining <= 0:
-                capped = True
-                break
-            time.sleep(min(2, remaining))
-        waited = round(time.monotonic() - start, 1)
-        load = loadavg()[0]
-        print(f'quiet-machine gate: waited_s={waited} load1={load:.2f} limit={QUIET_LOAD_LIMIT} '
-              f'cap_s={QUIET_WAIT_CAP_S} capped={str(capped).lower()}', flush=True)
+        gate = quiet_gate(float(os.environ.get('RUNQ_QUIET_CORES', QUIET_OUTSIDE_MAX_CORES)),
+                          float(os.environ.get('RUNQ_QUIET_CALM_S', QUIET_CALM_S)),
+                          float(os.environ.get('RUNQ_QUIET_WAIT_CAP_S', QUIET_GATE_CAP_S)))
+        top = ','.join(f"{re.sub(r'[^A-Za-z0-9_.-]', '_', k)}:{v:.1f}" for k, v in gate['top']) or '-'
+        print(f"quiet-machine gate: waited_s={gate['waited_s']} load1={loadavg()[0]:.2f} limit={QUIET_LOAD_LIMIT} "
+              f"cap_s={int(float(os.environ.get('RUNQ_QUIET_WAIT_CAP_S', QUIET_GATE_CAP_S)))} "
+              f"capped={str(gate['capped']).lower()} outside_cores={gate['outside_cores']} "
+              f"max_cores={os.environ.get('RUNQ_QUIET_CORES', QUIET_OUTSIDE_MAX_CORES)} calm_s={gate['calm_s']} "
+              f"top_cpu_s={top}", flush=True)
         if os.environ.get('RUNQ_PERF_GUARD') == 'true' and not perf_build_gate():
             sys.exit(2)
         os.execvpe(argv[0], argv, os.environ)
@@ -2596,9 +4489,6 @@ def main():
         clear = [j['id'] for j in fake if not defer_perf_for_activity(j, False, False, False)]
         assert drained == ['proof'] and compiling == ['proof'], (drained, compiling)
         assert clear == ['perf-a', 'perf-b', 'proof'], clear
-        waiting = [(str(i), {'id': f'p{i}', 'class': CLASSES['perf'], 'submitted_t': 990 + i})
-                   for i in range(3)]
-        assert choose_perf_batch(waiting, 1000, 3, 1800, {}, {})[0] == ['p0', 'p1', 'p2']
         late = {'compiler_activity': {2718: {'pid': 2718, 'cpu_delta_s': 2.47, 'observed_s': 0.0},
                                       2900: {'pid': 2900, 'cpu_delta_s': 2.47, 'observed_s': 0.0}}, 'quiet_pids': []}
         sent = []
@@ -2607,22 +4497,12 @@ def main():
         assert [p['pid'] for p in meaningful_compiler_activity(late['compiler_activity'])] == [2900]  # outside one still counts
         assert freeze_late_buildq_compilers(late, {2900}, 1020.0, 1000.0, kill=lambda p, s_: sent.append(p)) == []
         assert [p['pid'] for p in meaningful_compiler_activity(late['compiler_activity'])] == [2900]
-        assert choose_perf_batch(waiting[:2], 1000, 3, 1800, {}, {})[0] == []
-        assert choose_perf_batch(waiting[:1], 2800, 3, 1800, {}, {})[0] == ['p0']
-        urgent = [("u", {'id': 'u', 'class': CLASSES['perf'], 'urgent': True, 'submitted_t': 999}), *waiting]
-        assert choose_perf_batch(urgent, 1000, 3, 1800, {}, {})[:2] == (['u'], 'urgent')
-        bump_waiting = [('q-stutter', {'id': 'stutter', 'class': CLASSES['perf'], 'owner': 'stutter',
-                                       'bump': True, 'bump_t': 1000}),
-                        ('q-perfvar', {'id': 'perfvar', 'class': CLASSES['perf'], 'owner': 'perf-variance'})]
-        selected, kind, _ = choose_perf_batch(bump_waiting, 1000, 3, 1800,
-                                              {'perf-variance': 0, 'stutter': 0}, {})
-        assert (selected, kind) == (['stutter'], 'bump'), (selected, kind)
+        bump_waiting = [{'id': 'stutter', 'class': CLASSES['perf'], 'owner': 'stutter', 'bump': True}]
         already_open = {'perfvar-B1'}
-        assert bumped_perf_jobs(bump_waiting, {'stutter', 'perfvar'}) == {'stutter'}
-        assert already_open | bumped_perf_jobs(bump_waiting, {'stutter', 'perfvar'}) == {'perfvar-B1', 'stutter'}
         assert allowed_during_perf_batch({'id': 'stutter', 'class': CLASSES['ship']}, already_open, False)
         assert not allowed_during_perf_batch({'id': 'long-ab', 'class': CLASSES['perf'] + 1},
                                              already_open, False)
+        assert allowed_during_perf_batch({'id': 'bench-solo', 'class': CLASSES['bench'], 'solo': True}, already_open, False)
         assert not allowed_during_perf_batch({'id': 'unselected', 'class': CLASSES['perf']},
                                              already_open, False)
         perf = {'id': 'p', 'class': CLASSES['perf']}
@@ -2630,6 +4510,7 @@ def main():
         assert defer_perf_for_activity(perf, False, True, False, False)
         assert not defer_perf_for_activity(perf, False, True, False, True)
         assert defer_perf_for_activity(perf, False, True, True, True)
+        test_phases(bump_waiting)
         assert should_open_build_window(11, 300)
         assert not should_open_build_window(11, 299)
         assert not should_open_build_window(0, 600)
@@ -2643,6 +4524,17 @@ def main():
         assert not quiet_fps_required(custom_quiet)
         assert not quiet_missing_summary_invalid(custom_quiet, 'done')
         assert quiet_missing_summary_invalid({'quiet_machine': True, 'cmd': ['/runq/bin/boot_test.sh']}, 'done')
+        with tempfile.TemporaryDirectory() as htmp:
+            with open(os.path.join(htmp, 'perf.tsv'), 'w') as f:   # 6 min at 50 fps, minute 4 drops to 10 fps
+                f.write('# route\tx\nframe\tt_ms\ta\tb\tc\td\te\tdelta\n')
+                t = 0.0
+                for minute in range(6):
+                    for _ in range(600 if minute == 4 else 3000):
+                        t += 100.0 if minute == 4 else 20.0
+                        f.write(f'0\t{t}\t0\t0\t0\t0\t0\t1\n')
+            h = perf_tsv_health(htmp)
+            assert h and h[0] < COLLAPSE_RATIO * h[1], h
+        assert perf_tsv_health('/nonexistent') is None
         assert restorable_external_activity(1000, 'outside') == 1000
         assert restorable_external_activity(1000, None) is None
         buildq_tree = [{'pid': 100, 'ppid': 1}, {'pid': 101, 'ppid': 100},
@@ -2745,6 +4637,97 @@ def main():
         assert len(top) == 10 and top[0]['pid'] == 11 and top[-1]['pid'] == 2, top
         assert not can_finish_daemon_shutdown(0, 1, 0)
         assert can_finish_daemon_shutdown(0, 0, 0)
+        # ---- outside-load meter, quiet gate, invalid reasons (runq-quiet-measure)
+        assert busy_cores([0, 0, 0, 0], [300, 100, 1400, 0], 1.0) == 4.0
+        assert busy_cores(None, [1, 1, 1, 1], 1.0) is None
+        ticks_seq = iter([[0, 0, 0, 0]] + [[i * 800, i * 100, 0, 0] for i in range(1, 40)] +
+                         [[40 * 800 + i * 100, 4000 + i * 50, 0, 0] for i in range(1, 80)])   # 9 cores, then 1.5 cores
+        clock = [0.0]
+        def fake_sleep(d):
+            clock[0] += d
+        gate = quiet_gate(4.0, 20, 600, sleep=fake_sleep, ticks=lambda: next(ticks_seq), mono=lambda: clock[0],
+                          procs=lambda: [])
+        assert not gate['capped'] and gate['calm_s'] >= 20 and 55 <= gate['waited_s'] <= 62, gate
+        clock[0] = 0.0
+        busy_seq = iter([[0, 0, 0, 0]] + [[i * 800, i * 100, 0, 0] for i in range(1, 100)])
+        gate = quiet_gate(4.0, 20, 30, sleep=fake_sleep, ticks=lambda: next(busy_seq), mono=lambda: clock[0],
+                          procs=lambda: [])
+        assert gate['capped'] and gate['outside_cores'] >= 8.9, gate
+        meter = ContentionMeter(max_cores=4.0, window_s=10.0)
+        for _ in range(60):
+            meter.add(1.0, 2.0, 2.5, {'WindowServer': 0.6})
+        assert contention_invalid_reason(meter.summary()) is None
+        for _ in range(25):
+            meter.add(1.0, 7.0, 2.5, {'clang': 4.0, 'WindowServer': 0.6})
+        sm = meter.summary()
+        assert sm['hot_windows'] == 2 and sm['hot_s'] == 20 and sm['hot_offenders'][0]['name'] == 'clang', sm
+        reason = contention_invalid_reason(sm)
+        assert reason and 'clang' in reason and 'over 4.0 cores for 20 s' in reason, reason
+        one_burst = ContentionMeter(max_cores=4.0, window_s=10.0)
+        for i in range(60):
+            one_burst.add(1.0, 9.0 if i < 8 else 2.0, 2.5, {})
+        assert contention_invalid_reason(one_burst.summary()) is None      # an 8 s burst fits inside one window average
+        assert parse_therm('Note: No thermal warning level has been recorded\nNote: No CPU power status has been recorded', 18) \
+            == {'limited': False, 'detail': ''}
+        assert parse_therm('CPU_Scheduler_Limit = 75\nCPU_Available_CPUs = 12\nCPU_Speed_Limit = 80', 18)['limited']
+        assert machine_state_invalid_reason({'pressure_max': 1, 'thermal_limited': False}) is None
+        assert 'memory pressure level 2' in machine_state_invalid_reason({'pressure_max': 2, 'swap_used_mb_end': 9})
+        assert 'thermal' in machine_state_invalid_reason({'thermal_limited': True, 'thermal_detail': 'CPU_Speed_Limit=80'})
+        gsum = summarize_gauges([(0, {'pressure': 1, 'swap_used_mb': 100.0, 'swapouts': 5, 'gpu': 50}),
+                                 (10, {'pressure': 1, 'swap_used_mb': 140.0, 'swapouts': 25, 'gpu': 60})])
+        assert gsum['swapouts_delta'] == 20 and gsum['gpu_util_max'] == 60 and not gsum['thermal_limited'], gsum
+        assert DEMOTE_EXE.match('Paseo Helper (Renderer)') and DEMOTE_EXE.match('bfs') and not DEMOTE_EXE.match('claude')
+        assert is_freezable_heavy({'exe': 'codesign', 'command': 'codesign --force --sign - x.app'})
+        assert is_freezable_heavy({'exe': 'rg', 'command': 'rg foo /tmp'})
+        assert is_freezable_heavy({'exe': 'Python', 'command': 'python3 /x/pack_app.py --out y'})
+        assert not is_freezable_heavy({'exe': 'Python', 'command': 'python3 /x/analyze.py'})
+        assert not is_freezable_heavy({'exe': 'claude', 'command': 'claude --resume'})
+        assert not is_freezable_heavy({'exe': 'WindowServer', 'command': 'WindowServer -daemon'})
+        assert not is_freezable_heavy({'exe': 'runq', 'command': 'runq _daemon'})
+        assert process_descendants([{'pid': 2, 'ppid': 1}, {'pid': 3, 'ppid': 2}, {'pid': 4, 'ppid': 3},
+                                    {'pid': 9, 'ppid': 1}], 2) == {2, 3, 4}
+        deltas_prev = {1: 1.0, 2: 5.0}
+        assert exe_cpu_deltas(deltas_prev, [{'pid': 1, 'exe': 'a', 'cpu_s': 3.0}, {'pid': 2, 'exe': 'b', 'cpu_s': 5.0},
+                                            {'pid': 3, 'exe': 'c', 'cpu_s': 9.0}], exclude={3}) == {'a': 2.0}
+        with tempfile.TemporaryDirectory() as ftmp:     # ct2-A5 shape: frames end at 114 s, the run lasted 392 s
+            with open(os.path.join(ftmp, 'perf.tsv'), 'w') as f:
+                f.write('# route\ttown4\nframe\tt_ms\ta\tb\tc\td\te\tdelta\n')
+                for i in range(300):
+                    f.write(f'{i}\t{114000.0 - (299 - i) * 20}\t0\t0\t0\t0\t0\t1\n')
+            assert 'game stopped drawing' in frames_stopped_reason(ftmp, 392.6, 0.0)
+            assert frames_stopped_reason(ftmp, 120.0, 0.0) is None
+            assert frames_stopped_reason(ftmp, 392.6 + 90, 90.0) is not None
+            os.makedirs(os.path.join(ftmp, 'logs'))
+            with open(os.path.join(ftmp, 'logs', 'g.log'), 'w') as f:
+                f.write('[error] Unhandled guest access violation: write of guest 0x0\nfine\n' * 3)
+            assert game_fault_count(ftmp) == 3
+        gate_line, _ = parse_quiet_machine_log('quiet-machine gate: waited_s=41.0 load1=7.00 limit=16 cap_s=600 capped=false '
+                                               'outside_cores=3.4 max_cores=6.0 calm_s=20.0 top_cpu_s=clang:4.0,rg:1.2\n')
+        assert gate_line['outside_cores'] == 3.4 and gate_line['top_cpu_s'] == 'clang:4.0,rg:1.2', gate_line
+        def synth_work(fps, secs=200, instr_per_frame=50e6):    # a starved run draws fewer frames, same work per frame
+            samples, frames, t = [], [], 5.0
+            for sec in range(secs):
+                age = float(sec)
+                samples.append({'age_s': age, 'proc': {'user_ms': age * 1500 * fps / 40, 'sys_ms': age * 100 * fps / 40,
+                                                       'puser_ms': age * 900 * fps / 40, 'psys_ms': age * 60 * fps / 40,
+                                                       'instr': max(0.0, age - 5) * fps * instr_per_frame,
+                                                       'cycles': max(0.0, age - 5) * fps * 20e6,
+                                                       'pinstr': max(0.0, age - 5) * fps * 30e6,
+                                                       'pcycles': max(0.0, age - 5) * fps * 10e6, 'runnable_ms': 0.0},
+                                'threads': {7: {'name': 'GPU cmd', 'v': (max(0.0, age - 5) * fps * 1e6, 0, age * fps, 0, 0, 0)}}})
+            while t < secs:
+                frames.append({'t': t, 'frame_ms': 1000.0 / fps, 'cpu_ms': 1.0, 'gpu_ms': 8.0, 'wait_ms': 3.0, 'enc_ms': 0.1,
+                               'draws': 10})
+                t += 1.0 / fps
+            return work_per_frame(samples, frames)
+        w40, w20 = synth_work(40.0), synth_work(20.0)
+        assert w40 and w20 and abs(w40['instr_m_per_frame'] - 50.0) < 0.5 and abs(w20['instr_m_per_frame'] - 50.0) < 0.5, (w40, w20)
+        assert abs(w40['cpu_ms_per_frame'] / w20['cpu_ms_per_frame'] - 1.0) < 0.02 and w40['gpu_ms_per_frame'] == 8.0
+        assert w40['p_instr_share'] == 0.6 and w40['threads'][0]['thread'] == 'GPU cmd', w40
+        assert work_per_frame([], []) is None
+        live = proc_work_counters(os.getpid())
+        assert live and live['instr'] > 0 and live['age_s'] > 0, live
+        assert any(v['v'][0] + v['v'][3] > 0 for v in thread_work_counters(os.getpid()).values())
         print('runq scheduling dry-run passed: build drain, FIFO batch threshold, 30-minute age, urgent single, '
               'solo speed jobs, five-minute build-window trigger, non-solo smoke allowance, registered buildq waiters, '
               'CPU-delta compiler detection, sticky outside-build cooldown, hold-perf status, top-process sampling, '
@@ -2769,6 +4752,8 @@ def main():
         cmd_submit(argv)
     elif sub == 'wait':
         sys.exit(cmd_wait(argv))
+    elif sub == 'quiet':
+        sys.exit(cmd_quiet(argv))
     elif sub == 'status':
         cmd_status(argv)
     elif sub == 'cancel':
@@ -2789,6 +4774,8 @@ def main():
         sys.exit(cmd_priority(argv))
     elif sub == 'bump':
         sys.exit(cmd_priority(argv, bump=True))
+    elif sub == 'restart':
+        cmd_restart(argv)
     elif sub == 'solo':
         sys.exit(cmd_solo(argv))
     elif sub == 'result':

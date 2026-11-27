@@ -1,0 +1,4 @@
+#!/bin/bash
+# ccache hit rate and size for the shared bo2 cache (all worktrees). -z resets counters, -C clears the cache.
+export CCACHE_CONFIGPATH=$(cd "$(dirname "$0")" && pwd)/ccache.conf
+exec ccache "${@:--s}"

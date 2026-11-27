@@ -39,7 +39,7 @@ fi
 _xd="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"
 _bin="$([ -n "$exe" ] && echo "$exe" || ls "$app/Contents/MacOS/$gamebinary" 2>/dev/null)"
 if grep -q '^BO2ZM_TEST_BUTTONS.*wait_log' "$route" 2>/dev/null; then
-  if [ "$pads" = sdk ] && grep -l 'wait_log' "$_bin" "$_xd"/*.dylib 2>/dev/null | grep -q .; then
+  if [ "$pads" = sdk ] && grep -l 'wait_log' ${_bin:+"$_bin"} "$_xd"/*.dylib 2>/dev/null | grep -q .; then
     echo "wait_log: supported by this build, using the event route $(basename "$route")"
   elif [ -f "$route.timed" ]; then
     echo "wait_log: NOT supported by this build (or --pads game), using $(basename "$route").timed"; route="$route.timed"
@@ -54,7 +54,7 @@ mkdir -p "$out/support" "$out/logs" "$out/captures"
 grep -q '^PLACEHOLDER *= *true' "$route" && echo "note: $rname is a placeholder route, its input script is empty"
 
 # ---- route -> environment ----
-duration=60; players=1; quad=0; envs=(); allow_relaunch=0; scripted=0
+duration=60; players=1; quad=0; envs=(); allow_relaunch=0; scripted=0; bench=0
 CHECK_PATTERNS='unregistered function|MISMATCH|lost wake'
 # known defects of the 23:37 build, logged on every run: counted and printed, they fail the run only with --strict
 KNOWN_PATTERNS='not in the library'
@@ -65,18 +65,23 @@ KNOWN_PATTERNS='not in the library'
 while IFS= read -r line; do
   line="${line%%#*}"; [[ "$line" == *=* ]] || continue
   k="$(echo "${line%%=*}" | tr -d ' ')"; v="$(echo "${line#*=}" | sed 's/^ *//;s/ *$//')"
+  [[ "$k" =~ ^(REX_)?BO2ZM_BENCHMARK$ && "$v" == true ]] && bench=1
   case "$k" in duration_s) duration="$v";; players) players="$v";; compare_quadrants) [ "$v" = true ] && quad=1;;
-    allow_relaunch) [ "$v" = true ] && allow_relaunch=1;; PLACEHOLDER) ;;
+    allow_relaunch) [ "$v" = true ] && allow_relaunch=1;;
+    PLACEHOLDER) ;;
     BO2ZM_TEST_BUTTONS*) [ -n "$v" ] && scripted=1; [ "$pads" = game ] && [ -n "$v" ] && envs+=("${k#REX_}=$v");;
     BO2ZM_*|AUDIO_*|REX_*) [ -n "$v" ] && envs+=("${k#REX_}=$v");; esac
 done < "$route"
 envs+=(LOG_LEVEL=info BO2ZM_TEST_EXIT_ON_ERROR=true AUDIO_MUTE=true WINDOW_START_MINIMIZED=true BO2ZM_PERF_LOG="$out/perf.tsv" BO2ZM_CAPTURE_EVERY_S=${CAPTURE_EVERY_S:-15} BO2ZM_CAPTURE_MAX=${CAPTURE_MAX:-60})
 [ "$video" = 1 ] && envs+=(BO2ZM_VIDEO_RGBA="$out/capture.rgba")   # hook for the build agent, see docs/mac/README.md
 fullenv=(); for e in "${envs[@]}"; do fullenv+=("REX_$e"); done
-[ "$pads" = sdk ] && [ "$scripted" = 1 ] && fullenv+=(REX_HID_VIRTUAL_PAD_SCRIPT="$(cd "$(dirname "$route")" && pwd)/$(basename "$route")")
+# v0.11 SDKs read the pad script from hid.script.file with the script driver selected; older ones from REX_HID_VIRTUAL_PAD_SCRIPT.
+[ "$pads" = sdk ] && [ "$scripted" = 1 ] && { _ps="$(cd "$(dirname "$route")" && pwd)/$(basename "$route")"; fullenv+=(REX_HID_VIRTUAL_PAD_SCRIPT="$_ps" REX_HID_DRIVERS=sdl3,script REX_HID_SCRIPT_FILE="$_ps"); }
 [ -n "$portoff" ] && fullenv+=(REX_NET_SYSTEM_PORT_OFFSET="$portoff")   # explicit offset; otherwise a free one is picked below. other instances bind UDP 31000/31001; each test run uses its own ports
-fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
+fullenv+=(REX_UI_SDL_START_MINIMIZED=true REX_UI_FULLSCREEN=false REX_APU_MUTE=true   # v0.11 canonical names; the old aliases are ignored there
+          SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
           MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs"
+          METAL360_SUPPORT_DIR="$out/support" METAL360_LOG_DIR="$out/logs"   # metal360 apps' launcher
           BO2ZM_ROUTE="$rname" BO2ZM_PLAYERS="$players")   # the perf log's route and players header lines
 fullenv+=("${envprefix}_NO_DIALOG=1" "${envprefix}_SUPPORT_DIR=$out/support" "${envprefix}_LOG_DIR=$out/logs")
 [ -n "$data" ] && fullenv+=("${envprefix}_DATA=$data")
@@ -123,6 +128,10 @@ mkdir -p "$out/shots"
 # END_ON_LOG: end the run (as a pass) once the game log has END_ON_LOG_COUNT (default 1) lines containing this
 # text, END_GRACE_S (default 2) seconds later; short scenes end on their last capture instead of the full duration.
 # END_ON_CMD: each time the game logs a new capture, run this command; exit 0 ends the run the same way.
+# A benchmark route measures up to its own summary line; the rest of duration_s (~70 s on town4) produces nothing the
+# result uses (perf_summary windows to the last segment, runq reads that), so end on that line unless the caller set
+# END_ON_LOG or asked for the full route (BOOT_TEST_FULL_ROUTE=1).
+if [ "$bench" = 1 ] && [ -z "${END_ON_LOG:-}" ] && [ "${BOOT_TEST_FULL_ROUTE:-0}" != 1 ]; then END_ON_LOG=' FPS average, median'; fi
 ncap=0
 for ((i = 0; i < duration; i++)); do
   sleep 1
@@ -142,8 +151,8 @@ for ((i = 0; i < duration; i++)); do
       sleep "${END_GRACE_S:-2}"; ended=1; echo "ended on the log line \"$END_ON_LOG\" at ${i} s"; break
     fi
   fi
-  # a screenshot every SHOT_EVERY_S seconds (default 20) and one just before the end; needs Screen Recording permission
-  if [ $((i % ${SHOT_EVERY_S:-20})) = 5 ] || [ "$i" = "$((duration - 2))" ]; then screencapture -x -t jpg "$out/shots/t$(printf %04d $i).jpg" 2>/dev/null; fi
+  # OFF by default (owner rule: no desktop capture; this grabs the whole screen). BOOT_TEST_DESKTOP_SHOTS=1 turns it on: a screenshot every SHOT_EVERY_S seconds (default 20) and one just before the end; needs Screen Recording permission
+  if [ "${BOOT_TEST_DESKTOP_SHOTS:-0}" = 1 ] && { [ $((i % ${SHOT_EVERY_S:-20})) = 5 ] || [ "$i" = "$((duration - 2))" ]; }; then screencapture -x -t jpg "$out/shots/t$(printf %04d $i).jpg" 2>/dev/null; fi
   if ! kill -0 "$pid" 2>/dev/null && ! pgrep -f "$pat" >/dev/null 2>&1; then
     [ "$i" -lt "$((duration - 5))" ] && crashed=1
     early=1; break

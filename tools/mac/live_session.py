@@ -111,8 +111,8 @@ def main():
     ap.add_argument('--ff', type=float, default=0, help='guest time scale until ready (2 is safe for routes)')
     ap.add_argument('--support-from', help='seed the support folder (saves, settings) from this folder')
     ap.add_argument('--patch', help='patch library loaded at start-up (patch_library cvar)')
+    ap.add_argument('--keep', type=int, default=0)   # read by the queue daemon's idle guard
     ap.add_argument('--lifetime', type=float, default=2700)
-    ap.add_argument('--pads', type=int, default=0, help='virtual pads for live input (default: the route\'s, else 1)')
     ap.add_argument('--arg', action='append', default=[], help='extra game argument, e.g. --arg=--foo=1')
     ap.add_argument('--env', action='append', default=[])
     a = ap.parse_args()
@@ -157,8 +157,6 @@ def main():
         env['REX_NET_SYSTEM_PORT_OFFSET'] = str(free_port_offset())   # like boot_test.sh: never share UDP ports
     if route:
         env.update(route_env(route))
-    if a.pads or not route:   # live press/stick need a virtual pad on every player they drive
-        env['REX_HID_VIRTUAL_PADS'] = str(min(max(a.pads, 1), 4))
     if a.ff and a.ff != 1:
         env['REX_GUEST_TIME_SCALE'] = str(a.ff)
         env['REX_HID_VIRTUAL_PAD_GUEST_TIME'] = 'true'   # the route keeps its pace in guest time
@@ -168,7 +166,7 @@ def main():
         k, v = kv.split('=', 1)
         env[k] = v
 
-    state = {'state': 'starting', 'app': app, 'out': out, 'control': control, 'route': route, 'ff': a.ff, 'pads': a.pads,
+    state = {'state': 'starting', 'app': app, 'out': out, 'control': control, 'route': route, 'ff': a.ff,
              'pid': None, 'started': time.time(), 'lifetime_s': a.lifetime, 'runq_job': env.get('RUNQ_JOB')}
     wjson(state_path, state)
     t0 = time.monotonic()
@@ -234,7 +232,7 @@ def main():
             time.sleep(0.5)
     if a.ff and a.ff != 1:
         state['timescale_reply'] = control_request(control, 'timescale 1', 10, alive)   # iterate at real time
-    state.update(state='ready', ready_s=round(time.monotonic() - t0, 1), log=latest_log(logs))
+    state.update(state='ready', ready_at=time.time(), ready_s=round(time.monotonic() - t0, 1), log=latest_log(logs))
     wjson(state_path, state)
     print(f'live_session: ready after {state["ready_s"]} s (pid {proc.pid}, control {control})', flush=True)
 
@@ -244,6 +242,9 @@ def main():
             break
         time.sleep(0.5)
     died = not alive() and not stopping and not os.path.exists(os.path.join(out, 'stop'))
+    idle_stop = json.load(open(os.path.join(out, 'IDLE-STOP.json'))) if os.path.exists(os.path.join(out, 'IDLE-STOP.json')) else None
+    if idle_stop:
+        state['reason'] = idle_stop['message']
     stop_game()
     state.update(state='stopped' if not died else 'failed', ended=time.time(), exit=proc.returncode,
                  reason=state.get('reason') or ('game exited on its own' if died else 'stop requested'))
