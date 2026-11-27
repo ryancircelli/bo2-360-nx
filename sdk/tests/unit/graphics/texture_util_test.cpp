@@ -168,3 +168,28 @@ TEST_CASE("tiled 3D lower bound is the tile minimum", "[texture_util]") {
     }
   }
 }
+
+// Canary c332733af: the 3D upper bound is the exact end of the last block, not
+// a closed-form estimate that pulled in an extra page.
+TEST_CASE("tiled 3D upper bound is exact", "[texture_util]") {
+  for (uint32_t bpb_log2 = 0; bpb_log2 <= 4; ++bpb_log2) {
+    for (uint32_t back : {1u, 4u, 6u}) {
+      for (uint32_t bottom : {8u, 40u, 64u}) {
+        for (uint32_t right : {16u, 40u, 64u, 72u}) {
+          int64_t max_end = 0;
+          for (uint32_t z = 0; z < back; ++z) {
+            for (uint32_t y = 0; y < bottom; ++y) {
+              for (uint32_t x = 0; x < right; ++x) {
+                max_end = std::max(max_end, Tiled3D(x, y, z, bpb_log2) + (int64_t(1) << bpb_log2));
+              }
+            }
+          }
+          INFO("bpb_log2=" << bpb_log2 << " right=" << right << " bottom=" << bottom
+                           << " back=" << back);
+          CHECK(int64_t(texture_util::GetTiledAddressUpperBound3D(right, bottom, back, kPitch3D,
+                                                                  kHeight3D, bpb_log2)) == max_end);
+        }
+      }
+    }
+  }
+}
