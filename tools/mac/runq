@@ -2621,20 +2621,7 @@ class Daemon:
             except (ProcessLookupError, PermissionError):
                 pass
 
-    def run(self):
-        mkdirs()
-        lk = os.open(DAEMON_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return  # another daemon has it
-        # TERM / `runq restart`: hand over now. Running games and builds are not touched (each game has its own session
-        # and exit-code wrapper); the next daemon adopts them. USR1 keeps the old behaviour: stop launching, wait for
-        # every job and build to drain, then exit (needs a quiet machine, which a busy queue never gets).
-        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'handoff', True))
-        signal.signal(signal.SIGUSR1, lambda *_: setattr(self, 'stop_requested', True))
-        if os.getpriority(os.PRIO_PROCESS, 0) > 0:
-            self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
+    def adopt(self):
         # jobs left in running/ by an earlier daemon: adopt the ones still alive (same pid, same process group; the
         # exit code comes from the job wrapper's exit file), record the dead ones as lost
         for f in os.listdir(D['running']):
@@ -2668,179 +2655,199 @@ class Daemon:
             if stale:
                 self.resume_builds(stale)
                 wjson(os.path.join(D['queue'], qf), job)
+
+    def tick(self):
+        """One pass of the daemon loop; True = exit."""
+        self.c = cfg()
+        pinned = pin_pause(self.c)
+        if pinned:
+            self.log(f'paused_until pinned to {pinned}')
+            self.c = cfg()
+        OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
+        self.reap()
+        want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
+        if want_mode is not None and want_mode != getattr(self, 'power_mode', None):
+            ok = set_power_mode(want_mode)
+            self.log(f'power mode -> {"low" if want_mode == 1 else "high"}'
+                     f'{"" if ok else " FAILED (sudoers entry missing?)"}')
+            self.power_mode = want_mode
+        q = self.queued()
+        qjobs = [(qf, rjson(os.path.join(D['queue'], qf)) or {}) for qf in q]
+        needs_power = any(j.get('quiet_machine') or job_class(j) == CLASSES['perf'] for _, j in qjobs)
+        if needs_power and time.time() - self.power_checked_at >= 15:
+            try:
+                self.power_status = power_source()
+            except RuntimeError as e:
+                self.power_status = {'error': str(e)}
+            self.power_checked_at = time.time()
+        if needs_power:
+            self.power_hold = next((reason for _, job in qjobs
+                                    if (reason := adapter_hold_reason(job, self.power_status))), None)
+        else:
+            self.power_hold = None
+        activity = external_build_activity()
+        now = time.time()
+        if now - self.outside_builds_t >= 10:   # who is compiling outside buildq (it invalidates speed runs)
+            self.outside_builds_t = now
+            act = (activity or [])[:12]
+            cwds = process_cwds([a['pid'] for a in act]) if act else {}
+            self.outside_builds = [{'pid': a['pid'], 'exe': a['exe'], 'cwd': cwds.get(a['pid'], '?')} for a in act]
+        if activity is None:
+            self.last_external_build_activity = now
+            self.last_external_build_activity_source = 'unknown'
+        elif activity:
+            self.last_external_build_activity = now
+            self.last_external_build_activity_source = 'outside'
+        self.perf_hold = (perf_activity_hold_reason(os.path.exists(HOLD_PERF_FILE),
+                                                   self.last_external_build_activity, now)
+                          if any(j.get('quiet_machine') or job_class(j) == CLASSES['perf']
+                                 for _, j in qjobs) else None)
+        # Bounded wait: outside builds (cmake/ninja started without buildq) never go quiet on a busy day, so a
+        # speed job held by one for perf_hold_max_s (default 900) runs anyway; launch() freezes those builds
+        # for the run and resumes them after.
+        self.freeze_outside = False
+        if self.perf_hold == 'held: outside build':
+            oldest = max((now - j.get('submitted_t', now) for _, j in qjobs
+                          if j.get('quiet_machine') or job_class(j) == CLASSES['perf']), default=0)
+            if oldest >= float(self.c.get('perf_hold_max_s', PERF_HOLD_MAX_S)):
+                self.perf_hold, self.freeze_outside = None, True
+                if not getattr(self, 'freeze_logged', False):
+                    self.log(f'speed job waited {int(oldest)}s behind outside builds: it runs now and the '
+                             'outside builds are frozen for the run')
+                self.freeze_logged = True
+            else:
+                self.freeze_logged = False
+        qids = {j.get('id') for _, j in qjobs}
+        power_eligible = {j.get('id') for _, j in qjobs
+                          if not adapter_hold_reason(j, self.power_status)}
+        perf_eligible = {j.get('id') for _, j in qjobs if j.get('id') in power_eligible and
+                         (not (j.get('quiet_machine') or job_class(j) == CLASSES['perf']) or
+                          self.perf_hold is None)}
+        # Held speed work must not keep a batch open and block builds or non-speed jobs.
+        self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
+        self.perf_batch.intersection_update(qids | set(self.jobs))
+        # Alternating windows (runq-fairness): a solo window runs up to solo_batch_n solo jobs back to back,
+        # then an ordinary window runs games (up to slots at once) for ord_window_s or until none wait.
+        # Neither kind waits for the other's whole backlog. Fair order inside each kind is sched_key.
+        solos_w = [j for _, j in qjobs if is_solo(j) and j.get('id') in perf_eligible]
+        ords_w = [j for _, j in qjobs if not is_solo(j) and j.get('id') in power_eligible]
+        new_phase = phase_step(self.phase, time.time(), solos_w, ords_w, not (self.fg_jobs() or self.outside),
+                               any(is_solo(j['job']) for j in self.jobs.values()), self.c)
+        if new_phase is not self.phase:
+            if new_phase['phase'] != self.phase['phase']:
+                self.log(f'window -> {new_phase["phase"]} ({len(solos_w)} solo, {len(ords_w)} ordinary waiting; '
+                         f'previous {self.phase["phase"]} window ran {int(time.time() - self.phase["t0"])}s, '
+                         f'{self.phase.get("solo_started", 0)} solo started)')
+            self.phase = new_phase
+        self.lane_sync()
+        if self.phase['phase'] == 'solo' and not self.stop_requested:
+            self.perf_batch = {j.get('id') for _, j in qjobs
+                               if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible} | \
+                              {k for k, v in self.jobs.items() if job_class(v['job']) == CLASSES['perf']}
+        else:
+            self.perf_batch = set()
+        if self.stop_requested and not self.jobs:
+            # A TERM stops new launches; release the perf hold so token-waiting buildq jobs can finish.
+            self.perf_batch.clear()
+            self.build_interleave_until = 0.0
+        self.outside = (games_outside({j['proc'].pid for j in self.jobs.values()})
+                        if self.c.get('count_outside_games', True) else [])
+        free = self.c['slots'] - len(self.outside)
+        solo_running = any(is_solo(j['job']) for j in self.jobs.values())
+        # Speed-run starvation clock. It restarts while a speed job runs or none is waiting; a hold (outside
+        # build, power) neither restarts it nor counts as starved, so checks keep flowing during a hold.
+        perf_waiting = any(job_class(j) == CLASSES['perf'] and j.get('id') in power_eligible for _, j in qjobs)
+        if not perf_waiting or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
+            self.perf_seen = time.time()
+        starved = perf_starved(getattr(self, 'perf_seen', 0.0), time.time(), bool(self.perf_batch),
+                               self.perf_hold)
+        if starved and not getattr(self, 'starve_logged', False):
+            self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
+        self.starve_logged = starved
+        while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
+            if self.phase['phase'] == 'solo':
+                self.build_interleave_until = 0.0   # builds wait for the ordinary window; the batch is short
+            interleave_active = self.build_interleave_active()
+            compiler_busy = (not self.freeze_outside and
+                             (outside_compile_procs() if self.perf_batch else compile_procs()) != 0)
+            builds_busy = active_builds() > 0
+            jobs_per_owner = []
+            if time.time() - getattr(self, 'hist_t', 0) > 60:
+                self.hist, self.hist_t = history_wall(), time.time()
+            solo_waiting = any(is_solo(j) and not adapter_hold_reason(j, self.power_status) for _, j in qjobs)
+            machine_empty = not (self.fg_jobs() or self.outside)
+            lane_ok = sum(bool(v.get('lane')) for v in self.jobs.values()) < LANE_MAX
+            for qf in q:
+                job = rjson(os.path.join(D['queue'], qf)) or {}
+                if not phase_admits(self.phase, is_solo(job), time.time(), machine_empty,
+                                    estimate_s(job, self.hist), time.time() - job.get('submitted_t', time.time()),
+                                    solo_waiting, interleave_active, self.c, lane_ok and lane_safe(job)):
+                    continue
+                if adapter_hold_reason(job, self.power_status):
+                    continue
+                if not mac_may_run(job):
+                    continue
+                if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
+                    continue
+                if not allowed_during_perf_batch(job, self.perf_batch, interleave_active, starved):
+                    continue
+                if not self.perf_batch and job_class(job) == CLASSES['perf']:
+                    continue
+                if defer_perf_for_activity(job, interleave_active, builds_busy, compiler_busy,
+                                           bool(self.perf_batch)):
+                    continue
+                if defer_solo_for_build_window(job, interleave_active):
+                    continue
+                jobs_per_owner.append((qf, job))
+            non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
+            non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
+            candidates = [qf for qf, job in jobs_per_owner if is_solo(job) or non_speed_running < non_speed_cap]
+            if not candidates:
+                break
+            qf = self.pick(candidates)
+            if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
+                solo_running = True   # (a solo job is only admitted on an empty machine)
+                self.phase = dict(self.phase, solo_started=self.phase.get('solo_started', 0) + 1)
+            q.remove(qf)
+            self.launch(qf)
+        if time.time() - getattr(self, 'remote_checked', 0) >= 5:
+            self.remote_checked = time.time()
+            try:
+                reap_remote()
+            except Exception as e:   # never let laptop bookkeeping stop the Mac queue
+                self.log(f'reap_remote failed: {e!r}')
+        self.throttle()
+        self.write_state()
+        if self.handoff:
+            self.log(f'handoff: daemon exits now; {len(self.jobs)} running job(s) and all builds keep going '
+                     'and are adopted by the next daemon')
+            return True
+        if self.stop_requested and can_finish_daemon_shutdown(
+                len(self.jobs), active_builds(), compile_procs()):
+            self.log('graceful daemon stop: runq jobs and buildq/compiler activity drained')
+            return True
+        return False
+
+    def run(self):
+        mkdirs()
+        lk = os.open(DAEMON_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # another daemon has it
+        # TERM / `runq restart`: hand over now. Running games and builds are not touched (each game has its own session
+        # and exit-code wrapper); the next daemon adopts them. USR1 keeps the old behaviour: stop launching, wait for
+        # every job and build to drain, then exit (needs a quiet machine, which a busy queue never gets).
+        signal.signal(signal.SIGTERM, lambda *_: setattr(self, 'handoff', True))
+        signal.signal(signal.SIGUSR1, lambda *_: setattr(self, 'stop_requested', True))
+        if os.getpriority(os.PRIO_PROCESS, 0) > 0:
+            self.log(f'WARNING: the daemon runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}; games inherit it')
+        self.adopt()
         self.pool_open()
         self.log(f'daemon up pid {os.getpid()}, slots {self.c["slots"]}, build cap {self.c["idle_cap"]} idle / '
                  f'{self.c.get("run_cap", 12)} unmeasured games / {self.c["game_cap"]} measured')
         try:
-            while True:
-                self.c = cfg()
-                pinned = pin_pause(self.c)
-                if pinned:
-                    self.log(f'paused_until pinned to {pinned}')
-                    self.c = cfg()
-                OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
-                self.reap()
-                want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
-                if want_mode is not None and want_mode != getattr(self, 'power_mode', None):
-                    ok = set_power_mode(want_mode)
-                    self.log(f'power mode -> {"low" if want_mode == 1 else "high"}'
-                             f'{"" if ok else " FAILED (sudoers entry missing?)"}')
-                    self.power_mode = want_mode
-                q = self.queued()
-                qjobs = [(qf, rjson(os.path.join(D['queue'], qf)) or {}) for qf in q]
-                needs_power = any(j.get('quiet_machine') or job_class(j) == CLASSES['perf'] for _, j in qjobs)
-                if needs_power and time.time() - self.power_checked_at >= 15:
-                    try:
-                        self.power_status = power_source()
-                    except RuntimeError as e:
-                        self.power_status = {'error': str(e)}
-                    self.power_checked_at = time.time()
-                if needs_power:
-                    self.power_hold = next((reason for _, job in qjobs
-                                            if (reason := adapter_hold_reason(job, self.power_status))), None)
-                else:
-                    self.power_hold = None
-                activity = external_build_activity()
-                now = time.time()
-                if now - self.outside_builds_t >= 10:   # who is compiling outside buildq (it invalidates speed runs)
-                    self.outside_builds_t = now
-                    act = (activity or [])[:12]
-                    cwds = process_cwds([a['pid'] for a in act]) if act else {}
-                    self.outside_builds = [{'pid': a['pid'], 'exe': a['exe'], 'cwd': cwds.get(a['pid'], '?')} for a in act]
-                if activity is None:
-                    self.last_external_build_activity = now
-                    self.last_external_build_activity_source = 'unknown'
-                elif activity:
-                    self.last_external_build_activity = now
-                    self.last_external_build_activity_source = 'outside'
-                self.perf_hold = (perf_activity_hold_reason(os.path.exists(HOLD_PERF_FILE),
-                                                           self.last_external_build_activity, now)
-                                  if any(j.get('quiet_machine') or job_class(j) == CLASSES['perf']
-                                         for _, j in qjobs) else None)
-                # Bounded wait: outside builds (cmake/ninja started without buildq) never go quiet on a busy day, so a
-                # speed job held by one for perf_hold_max_s (default 900) runs anyway; launch() freezes those builds
-                # for the run and resumes them after.
-                self.freeze_outside = False
-                if self.perf_hold == 'held: outside build':
-                    oldest = max((now - j.get('submitted_t', now) for _, j in qjobs
-                                  if j.get('quiet_machine') or job_class(j) == CLASSES['perf']), default=0)
-                    if oldest >= float(self.c.get('perf_hold_max_s', PERF_HOLD_MAX_S)):
-                        self.perf_hold, self.freeze_outside = None, True
-                        if not getattr(self, 'freeze_logged', False):
-                            self.log(f'speed job waited {int(oldest)}s behind outside builds: it runs now and the '
-                                     'outside builds are frozen for the run')
-                        self.freeze_logged = True
-                    else:
-                        self.freeze_logged = False
-                qids = {j.get('id') for _, j in qjobs}
-                power_eligible = {j.get('id') for _, j in qjobs
-                                  if not adapter_hold_reason(j, self.power_status)}
-                perf_eligible = {j.get('id') for _, j in qjobs if j.get('id') in power_eligible and
-                                 (not (j.get('quiet_machine') or job_class(j) == CLASSES['perf']) or
-                                  self.perf_hold is None)}
-                # Held speed work must not keep a batch open and block builds or non-speed jobs.
-                self.perf_batch.intersection_update(perf_eligible | set(self.jobs))
-                self.perf_batch.intersection_update(qids | set(self.jobs))
-                # Alternating windows (runq-fairness): a solo window runs up to solo_batch_n solo jobs back to back,
-                # then an ordinary window runs games (up to slots at once) for ord_window_s or until none wait.
-                # Neither kind waits for the other's whole backlog. Fair order inside each kind is sched_key.
-                solos_w = [j for _, j in qjobs if is_solo(j) and j.get('id') in perf_eligible]
-                ords_w = [j for _, j in qjobs if not is_solo(j) and j.get('id') in power_eligible]
-                new_phase = phase_step(self.phase, time.time(), solos_w, ords_w, not (self.fg_jobs() or self.outside),
-                                       any(is_solo(j['job']) for j in self.jobs.values()), self.c)
-                if new_phase is not self.phase:
-                    if new_phase['phase'] != self.phase['phase']:
-                        self.log(f'window -> {new_phase["phase"]} ({len(solos_w)} solo, {len(ords_w)} ordinary waiting; '
-                                 f'previous {self.phase["phase"]} window ran {int(time.time() - self.phase["t0"])}s, '
-                                 f'{self.phase.get("solo_started", 0)} solo started)')
-                    self.phase = new_phase
-                self.lane_sync()
-                if self.phase['phase'] == 'solo' and not self.stop_requested:
-                    self.perf_batch = {j.get('id') for _, j in qjobs
-                                       if job_class(j) == CLASSES['perf'] and j.get('id') in perf_eligible} | \
-                                      {k for k, v in self.jobs.items() if job_class(v['job']) == CLASSES['perf']}
-                else:
-                    self.perf_batch = set()
-                if self.stop_requested and not self.jobs:
-                    # A TERM stops new launches; release the perf hold so token-waiting buildq jobs can finish.
-                    self.perf_batch.clear()
-                    self.build_interleave_until = 0.0
-                self.outside = (games_outside({j['proc'].pid for j in self.jobs.values()})
-                                if self.c.get('count_outside_games', True) else [])
-                free = self.c['slots'] - len(self.outside)
-                solo_running = any(is_solo(j['job']) for j in self.jobs.values())
-                # Speed-run starvation clock. It restarts while a speed job runs or none is waiting; a hold (outside
-                # build, power) neither restarts it nor counts as starved, so checks keep flowing during a hold.
-                perf_waiting = any(job_class(j) == CLASSES['perf'] and j.get('id') in power_eligible for _, j in qjobs)
-                if not perf_waiting or any(job_class(j['job']) == CLASSES['perf'] for j in self.jobs.values()):
-                    self.perf_seen = time.time()
-                starved = perf_starved(getattr(self, 'perf_seen', 0.0), time.time(), bool(self.perf_batch),
-                                       self.perf_hold)
-                if starved and not getattr(self, 'starve_logged', False):
-                    self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
-                self.starve_logged = starved
-                while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
-                    if self.phase['phase'] == 'solo':
-                        self.build_interleave_until = 0.0   # builds wait for the ordinary window; the batch is short
-                    interleave_active = self.build_interleave_active()
-                    compiler_busy = (not self.freeze_outside and
-                                     (outside_compile_procs() if self.perf_batch else compile_procs()) != 0)
-                    builds_busy = active_builds() > 0
-                    jobs_per_owner = []
-                    if time.time() - getattr(self, 'hist_t', 0) > 60:
-                        self.hist, self.hist_t = history_wall(), time.time()
-                    solo_waiting = any(is_solo(j) and not adapter_hold_reason(j, self.power_status) for _, j in qjobs)
-                    machine_empty = not (self.fg_jobs() or self.outside)
-                    lane_ok = sum(bool(v.get('lane')) for v in self.jobs.values()) < LANE_MAX
-                    for qf in q:
-                        job = rjson(os.path.join(D['queue'], qf)) or {}
-                        if not phase_admits(self.phase, is_solo(job), time.time(), machine_empty,
-                                            estimate_s(job, self.hist), time.time() - job.get('submitted_t', time.time()),
-                                            solo_waiting, interleave_active, self.c, lane_ok and lane_safe(job)):
-                            continue
-                        if adapter_hold_reason(job, self.power_status):
-                            continue
-                        if not mac_may_run(job):
-                            continue
-                        if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
-                            continue
-                        if not allowed_during_perf_batch(job, self.perf_batch, interleave_active, starved):
-                            continue
-                        if not self.perf_batch and job_class(job) == CLASSES['perf']:
-                            continue
-                        if defer_perf_for_activity(job, interleave_active, builds_busy, compiler_busy,
-                                                   bool(self.perf_batch)):
-                            continue
-                        if defer_solo_for_build_window(job, interleave_active):
-                            continue
-                        jobs_per_owner.append((qf, job))
-                    non_speed_running = sum(job_class(j['job']) != CLASSES['perf'] for j in self.jobs.values())
-                    non_speed_cap = max(1, int(self.c.get('non_speed_parallel', self.c['slots'])))
-                    candidates = [qf for qf, job in jobs_per_owner if is_solo(job) or non_speed_running < non_speed_cap]
-                    if not candidates:
-                        break
-                    qf = self.pick(candidates)
-                    if is_solo(rjson(os.path.join(D['queue'], qf)) or {}):
-                        solo_running = True   # (a solo job is only admitted on an empty machine)
-                        self.phase = dict(self.phase, solo_started=self.phase.get('solo_started', 0) + 1)
-                    q.remove(qf)
-                    self.launch(qf)
-                if time.time() - getattr(self, 'remote_checked', 0) >= 5:
-                    self.remote_checked = time.time()
-                    try:
-                        reap_remote()
-                    except Exception as e:   # never let laptop bookkeeping stop the Mac queue
-                        self.log(f'reap_remote failed: {e!r}')
-                self.throttle()
-                self.write_state()
-                if self.handoff:
-                    self.log(f'handoff: daemon exits now; {len(self.jobs)} running job(s) and all builds keep going '
-                             'and are adopted by the next daemon')
-                    break
-                if self.stop_requested and can_finish_daemon_shutdown(
-                        len(self.jobs), active_builds(), compile_procs()):
-                    self.log('graceful daemon stop: runq jobs and buildq/compiler activity drained')
-                    break
+            while not self.tick():
                 time.sleep(1)
         finally:
             for j in self.jobs.values():
