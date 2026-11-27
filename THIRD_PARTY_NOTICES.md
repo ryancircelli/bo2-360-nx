@@ -55,6 +55,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | Xenia Canary `92ada8ebc` (Michael Oliver) | two-component scalar operand `b` is Z when the paired vector op uses source 3 | `sdk/src/graphics/pipeline/shader/translator.cpp`, `sdk/src/graphics/pipeline/shader/interpreter.cpp`, `sdk/include/rex/graphics/format/ucode.h`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
 | Xenia Canary `e20f26963` (SaveEditors) | GPU registers start at hardware reset defaults | `sdk/src/graphics/register_file.cpp` |
 | Xenia Canary `89609297c` (bomabomaboma) | tiled resolve destination offsets below 32bpp | `sdk/src/graphics/util/draw.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
+| Xenia Canary `d8731edc9` (goldislead) | volume resolve slice spacing from RB_COPY_SURFACE_SLICE | `sdk/src/graphics/util/draw.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
 
 ## Libraries
 

@@ -23987,7 +23987,7 @@ index ec0df7c..7ac9cdd 100644
 +}  // namespace gpu
 +}  // namespace xe
 diff --git a/src/graphics/util/draw.cpp b/src/graphics/util/draw.cpp
-index ef1c2f8..3b882f9 100644
+index c26e6ee..d40cd6f 100644
 --- a/src/graphics/util/draw.cpp
 +++ b/src/graphics/util/draw.cpp
 @@ -9,45 +9,48 @@
@@ -24913,7 +24913,7 @@ index ef1c2f8..3b882f9 100644
      }
    }
  
-@@ -947,33 +1195,42 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -947,10 +1195,11 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    uint32_t copy_dest_base_adjusted = rb_copy_dest_base;
    uint32_t copy_dest_extent_start, copy_dest_extent_end;
    auto rb_copy_dest_pitch = regs.Get<reg::RB_COPY_DEST_PITCH>();
@@ -24926,11 +24926,22 @@ index ef1c2f8..3b882f9 100644
 +                texture_address::kStoragePitchHeightAlignmentBlocks);
 +  info_out.copy_dest_coordinate_info.pitch_aligned_div_32 =
 +      copy_dest_pitch_aligned >> 5;
-+  const uint32_t copy_dest_height_aligned =
-+      rex::align(rb_copy_dest_pitch.copy_dest_height,
-+                texture_address::kStoragePitchHeightAlignmentBlocks);
+   // For volume resolves.
+   // D3D writes pitch * level height in blocks to RB_COPY_SURFACE_SLICE.
+   // Only use copy_dest_height, which instead includes the top of a source
+@@ -959,32 +1208,40 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+   if (rb_copy_dest_info.copy_dest_array) {
+     uint32_t rb_copy_surface_slice = regs[XE_GPU_REG_RB_COPY_SURFACE_SLICE];
+     if (rb_copy_surface_slice && rb_copy_dest_pitch.copy_dest_pitch) {
+-      copy_dest_height = rb_copy_surface_slice / rb_copy_dest_pitch.copy_dest_pitch;
++      copy_dest_height =
++          rb_copy_surface_slice / rb_copy_dest_pitch.copy_dest_pitch;
+     }
+   }
++  const uint32_t copy_dest_height_aligned = rex::align(
++      copy_dest_height, texture_address::kStoragePitchHeightAlignmentBlocks);
    info_out.copy_dest_coordinate_info.height_aligned_div_32 =
--      (rb_copy_dest_pitch.copy_dest_height + (xenos::kTextureTileWidthHeight - 1)) >>
+-      (copy_dest_height + (xenos::kTextureTileWidthHeight - 1)) >>
 -      xenos::kTextureTileWidthHeightLog2;
 +      copy_dest_height_aligned >> 5;
    const FormatInfo& dest_format_info = *FormatInfo::Get(dest_format);
@@ -24973,7 +24984,7 @@ index ef1c2f8..3b882f9 100644
            dest_macro_tile_bytes_log2;
        dest_addr_base -= dest_macro_phase << dest_macro_tile_bytes_log2;
        dest_addr_x0 += dest_macro_phase << xenos::kTextureTileWidthHeightLog2;
-@@ -982,41 +1239,45 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -993,41 +1250,45 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
      uint32_t dest_addr_y1 = dest_addr_y0 + uint32_t(y1 - y0);
      copy_dest_base_adjusted = dest_addr_base;
      info_out.copy_dest_coordinate_info.offset_x_div_8 =
@@ -24991,7 +25002,7 @@ index ef1c2f8..3b882f9 100644
        // 3-bit).
 -      copy_dest_base_adjusted += texture_util::GetTiledOffset3D(
 -          int32_t(dest_base_x), int32_t(dest_base_y), 0, rb_copy_dest_pitch.copy_dest_pitch,
--          rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+-          copy_dest_height, bpp_log2);
 +      copy_dest_base_adjusted += uint32_t(texture_address::Tiled3D(
 +          int32_t(dest_base_x), int32_t(dest_base_y), 0,
 +          copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
@@ -24999,7 +25010,7 @@ index ef1c2f8..3b882f9 100644
 -          dest_addr_base + texture_util::GetTiledAddressLowerBound3D(
 -                               dest_addr_x0, dest_addr_y0, rb_copy_dest_info.copy_dest_slice,
 -                                  rb_copy_dest_pitch.copy_dest_pitch,
--                                  rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+-                                  copy_dest_height, bpp_log2);
 +          dest_addr_base +
 +          uint32_t(texture_util::GetTiledAddressLowerBound3D(
 +              dest_addr_x0, dest_addr_y0, rb_copy_dest_info.copy_dest_slice,
@@ -25008,7 +25019,7 @@ index ef1c2f8..3b882f9 100644
 -          dest_addr_base + texture_util::GetTiledAddressUpperBound3D(
 -                               dest_addr_x1, dest_addr_y1, rb_copy_dest_info.copy_dest_slice + 1,
 -                                  rb_copy_dest_pitch.copy_dest_pitch,
--                                  rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+-                                  copy_dest_height, bpp_log2);
 +          dest_addr_base +
 +          uint32_t(texture_util::GetTiledAddressUpperBound3D(
 +              dest_addr_x1, dest_addr_y1, rb_copy_dest_info.copy_dest_slice + 1,
@@ -25041,7 +25052,7 @@ index ef1c2f8..3b882f9 100644
      copy_dest_extent_start = copy_dest_base_adjusted;
      copy_dest_extent_end = copy_dest_base_adjusted;
    }
-@@ -1025,11 +1286,14 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1036,11 +1297,14 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    assert_true(copy_dest_extent_end >= copy_dest_extent_start);
    info_out.copy_dest_base = copy_dest_base_adjusted;
    info_out.copy_dest_extent_start = copy_dest_extent_start;
@@ -25059,7 +25070,7 @@ index ef1c2f8..3b882f9 100644
    uint32_t x0_samples = uint32_t(x0) << sample_count_log2_x;
    uint32_t y0_samples = uint32_t(y0) << sample_count_log2_y;
    uint32_t base_offset_x_tiles = x0_samples / xenos::kEdramTileWidthSamples;
-@@ -1037,9 +1301,10 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1048,9 +1312,10 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    info_out.coordinate_info.edram_offset_x_div_8 =
        (x0_samples % xenos::kEdramTileWidthSamples) >> (sample_count_log2_x + 3);
    info_out.coordinate_info.edram_offset_y_div_8 =
@@ -25073,7 +25084,7 @@ index ef1c2f8..3b882f9 100644
    uint32_t edram_base_offset_tiles =
        base_offset_y_tiles * surface_pitch_tiles + base_offset_x_tiles;
  
-@@ -1048,7 +1313,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1059,7 +1324,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
        (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) &&
        REXCVAR_GET(resolve_resolution_scale_fill_half_pixel_offset) &&
        REXCVAR_GET(half_pixel_offset) &&
@@ -25083,7 +25094,7 @@ index ef1c2f8..3b882f9 100644
    int32_t exp_bias = is_depth ? 0 : rb_copy_dest_info.copy_dest_exp_bias;
    ResolveEdramInfo depth_edram_info;
    depth_edram_info.packed = 0;
-@@ -1058,7 +1324,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1069,7 +1335,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
      depth_edram_info.is_depth = 1;
      // If wrapping happens, it's fine, it doesn't matter how many times and
      // where modulo xenos::kEdramTileCount is applied in this context.
@@ -25093,7 +25104,7 @@ index ef1c2f8..3b882f9 100644
      depth_edram_info.format = uint32_t(rb_depth_info.depth_format);
      depth_edram_info.format_is_64bpp = 0;
      depth_edram_info.fill_half_pixel_offset = uint32_t(fill_half_pixel_offset);
-@@ -1072,21 +1339,25 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1083,21 +1350,25 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    if (!is_depth) {
      // Color.
      auto color_info = regs.Get<reg::RB_COLOR_INFO>(
@@ -25123,7 +25134,7 @@ index ef1c2f8..3b882f9 100644
        // The texture expects 0x8001 = -32, 0x7FFF = 32, but the hack making
        // 0x8001 = -1, 0x7FFF = 1 is used - revert (this won't be correct if the
        // requested exponent bias is 27 or above, but it's a hack anyway, no need
-@@ -1115,7 +1386,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1126,7 +1397,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    info_out.rb_color_clear = regs[XE_GPU_REG_RB_COLOR_CLEAR];
    info_out.rb_color_clear_lo = regs[XE_GPU_REG_RB_COLOR_CLEAR_LO];
  
@@ -25133,7 +25144,7 @@ index ef1c2f8..3b882f9 100644
        "Resolve: {},{} <= x,y < {},{}, {} -> {} at 0x{:08X} (potentially "
        "modified memory range 0x{:08X} to 0x{:08X})",
        x0, y0, x1, y1,
-@@ -1123,26 +1395,26 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1134,26 +1406,26 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
                       xenos::DepthRenderTargetFormat(depth_edram_info.format))
                 : xenos::GetColorRenderTargetFormatName(
                       xenos::ColorRenderTargetFormat(color_edram_info.format)),
@@ -25174,7 +25185,7 @@ index ef1c2f8..3b882f9 100644
      if (edram_info.msaa_samples >= xenos::MsaaSamples::k4X) {
        shader = source_is_64bpp ? ResolveCopyShaderIndex::kFast64bpp4xMSAA
                                 : ResolveCopyShaderIndex::kFast32bpp4xMSAA;
-@@ -1181,17 +1453,19 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
+@@ -1192,17 +1464,19 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
    constants_out.dest_base = copy_dest_base;
  
    if (shader != ResolveCopyShaderIndex::kUnknown) {
@@ -25204,7 +25215,7 @@ index ef1c2f8..3b882f9 100644
      assert_always();
      group_count_x_out = 0;
      group_count_y_out = 0;
-@@ -1200,4 +1474,6 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
+@@ -1211,4 +1485,6 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
    return shader;
  }
  
