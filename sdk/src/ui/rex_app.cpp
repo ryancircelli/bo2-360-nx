@@ -11,6 +11,10 @@
 
 #include <rex/rex_app.h>
 
+#if defined(__APPLE__)
+#include <copyfile.h>
+#endif
+
 #include <cstdlib>
 #include <stdexcept>
 
@@ -110,7 +114,9 @@ void IsolateInstancePaths(PathConfig& paths, int instance) {
   const auto own = std::filesystem::path("instances") / std::to_string(instance);
   const auto user = paths.user_data_root;
   paths.user_data_root /= own;
-  paths.cache_root = paths.cache_root == user / "cache" ? paths.user_data_root / "cache" : paths.cache_root / own;
+  const auto main_cache = paths.cache_root;
+  const bool default_cache = main_cache == user / "cache";
+  paths.cache_root = default_cache ? paths.user_data_root / "cache" : main_cache / own;
   const auto main_config = paths.config_path;
   paths.config_path = paths.user_data_root / main_config.filename();
   std::error_code ec;
@@ -119,6 +125,16 @@ void IsolateInstancePaths(PathConfig& paths, int instance) {
   if (!std::filesystem::exists(paths.config_path, ec) && std::filesystem::exists(main_config, ec)) {
     std::filesystem::copy_file(main_config, paths.config_path, ec);
     if (ec) throw std::runtime_error("Could not seed the instance settings: " + ec.message());
+  }
+  // A new copy starts from the main shader cache, so it does not compile every shader again (BO2: ~400 MB).
+  // Only for the default layout: a custom cache root holds the copies' folders inside itself.
+  if (default_cache && !std::filesystem::exists(paths.cache_root, ec) && std::filesystem::is_directory(main_cache, ec)) {
+#if defined(__APPLE__)
+    // APFS clone: no extra disk space; falls back to a plain copy on other volumes.
+    if (copyfile(main_cache.c_str(), paths.cache_root.c_str(), nullptr, COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_CLONE) != 0)
+#endif
+      std::filesystem::copy(main_cache, paths.cache_root, std::filesystem::copy_options::recursive, ec);
+    // A failed seed only costs compile time; the copy builds its own cache.
   }
 }
 }  // namespace
