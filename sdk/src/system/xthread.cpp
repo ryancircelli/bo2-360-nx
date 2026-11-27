@@ -891,7 +891,6 @@ void XThread::DeliverAPCs() {
     PERF_counter_inc(kApcQueueDepth);
     XAPC* apc = user_apc_queue.HeadObject(mem);
     uint32_t apc_ptr = mem->HostToGuestVirtual(apc);
-    bool needs_freeing = apc->kernel_routine != XAPC::kDummyKernelRoutine;
 
     util::XeRemoveEntryList(&apc->list_entry, mem);
     apc->enqueued = 0;
@@ -915,7 +914,6 @@ void XThread::DeliverAPCs() {
       }
     } else {
       mem->SystemHeapFree(apc_ptr);
-      needs_freeing = false;
     }
 
     uint32_t normal_routine = memory::load_and_swap<uint32_t>(scratch_ptr + 0);
@@ -936,10 +934,7 @@ void XThread::DeliverAPCs() {
     REXSYS_DEBUG("Completed delivery of APC to {:08X} ({:08X}, {:08X}, {:08X})", normal_routine,
                  normal_context, arg1, arg2);
 
-    if (needs_freeing) {
-      mem->SystemHeapFree(apc_ptr);
-    }
-
+    // A real kernel routine means the game owns the KAPC (and usually frees it in that routine).
     old_irql = kernel::xboxkrnl::xeKeKfAcquireSpinLock(ctx, &kthread->apc_lock);
   }
 
@@ -1264,19 +1259,7 @@ void RecordDelay(const std::string& name, uint32_t requested_ms, std::chrono::st
 }  // namespace
 
 X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t interval) {
-  int64_t timeout_ticks = interval;
-  uint32_t timeout_ms;
-  if (timeout_ticks > 0) {
-    // Absolute time, based on January 1, 1601.
-    // TODO(benvanik): convert time to relative time.
-    assert_always();
-    timeout_ms = 0;
-  } else if (timeout_ticks < 0) {
-    // Relative time.
-    timeout_ms = uint32_t(-timeout_ticks / 10000);  // Ticks -> MS
-  } else {
-    timeout_ms = 0;
-  }
+  uint32_t timeout_ms = TimeoutTicksToMs(int64_t(interval));
   timeout_ms = chrono::Clock::ScaleGuestDurationMillis(timeout_ms);
   CheckTitleTermination();
   if (alertable) {

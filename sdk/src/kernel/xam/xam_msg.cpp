@@ -16,6 +16,7 @@
 #include <rex/kernel/xboxkrnl/error.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xevent.h>
@@ -137,6 +138,6 @@ REX_EXPORT(__imp__XMsgCancelIORequest, rex::kernel::xam::XMsgCancelIORequest_ent
 REX_EXPORT(__imp__XMsgCompleteIORequest, rex::kernel::xam::XMsgCompleteIORequest_entry)
 REX_EXPORT(__imp__XamGetOverlappedResult, rex::kernel::xam::XamGetOverlappedResult_entry)
 
-REX_EXPORT_STUB(__imp__XMsgAcquireAsyncMessageFromOverlapped);
-REX_EXPORT_STUB(__imp__XMsgProcessRequest);
-REX_EXPORT_STUB(__imp__XMsgReleaseAsyncMessageToOverlapped);
+REX_EXPORT_QUIET_RETURN(__imp__XMsgAcquireAsyncMessageFromOverlapped, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XMsgProcessRequest, 0x65B);
+REX_EXPORT_QUIET_RETURN(__imp__XMsgReleaseAsyncMessageToOverlapped, 0x65B);

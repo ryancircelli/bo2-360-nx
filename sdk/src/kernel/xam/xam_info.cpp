@@ -21,6 +21,7 @@
 #include <rex/logging.h>
 #include <rex/hook.h>
 #include <rex/types.h>
+#include "title_id_utils.h"
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
@@ -39,6 +40,24 @@ namespace rex {
 namespace kernel {
 namespace xam {
 using namespace rex::system;
+
+u32 XamIsSystemExperienceTitleId_entry(u32 title_id) {
+  return IsSystemExperienceTitle(title_id);
+}
+u32 XamIsSystemTitleId_entry(u32 title_id) {
+  return IsSystemTitle(title_id);
+}
+u32 XamIsXbox1TitleId_entry(u32 title_id) {
+  return IsOriginalXboxTitle(title_id);
+}
+
+// Count guest UTF-16 code units, including a surrogate pair as two units.
+u32 lstrlenW_entry(mapped_u16 string) {
+  if (!string) return 0;
+  uint32_t length = 0;
+  while (string[length] != 0) ++length;
+  return length;
+}
 
 u32 XamFeatureEnabled_entry(u32 unk) {
   return 0;
@@ -334,6 +353,30 @@ u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
   return X_STATUS_SUCCESS;
 }
 
+// Dash context is a plain value; xenia also broadcasts a dash-context-changed notification, which we skip (nothing listens).
+static uint32_t g_dash_context = 0;
+u32 XamSetDashContext_entry(u32 value) {
+  g_dash_context = value;
+  return 0;
+}
+u32 XamGetDashContext_entry() { return g_dash_context; }
+
+// 0xFFFE07D1 is the dashboard title id; titles here never run as the dash.
+u32 XamIsCurrentTitleDash_entry() { return REX_KERNEL_STATE()->title_id() == 0xFFFE07D1u; }
+
+// Local profiles are never child accounts.
+u32 XamIsChildAccountSignedIn_entry() { return 0; }
+
+// IPTV retail flag is never set: xenia returns X_E_FAIL in that case.
+u32 XamIsIptvEnabled_entry() { return X_E_FAIL; }
+
+// Relative 100ns timeout (negative) for -1 = infinite -> returns 0 (null pointer); else writes it and returns its guest address.
+u32 XapiFormatTimeOut_entry(mapped_u64 result, u32 milliseconds) {
+  if (milliseconds == 0xFFFFFFFFu || !result) return 0;
+  *result = static_cast<uint64_t>(-10000ll * static_cast<int64_t>(milliseconds));
+  return result.guest_address();
+}
+
 namespace {
 // Disc swap (idea from xenia-canary XamSwapDisc, BSD-3): every disc is a folder in the game folder
 // (data/game = boot disc, data/disc<N> = the others) and a swap replaces the device behind game:/d:.
@@ -394,9 +437,22 @@ void XamLoaderGetMediaInfo_entry(mapped_u32 media_type, mapped_u32 title_id) {
   XamLoaderGetMediaInfoEx_entry(media_type, title_id, mapped_u32());
 }
 
+// Xenia's behaviour: report the disc verified and fire the completion callback. As a stub,
+// r3 kept the first argument, so BO2 saw a failure and re-ran the check every 2 s.
+u32 XamMediaVerificationVerify_entry(u32 unk, mapped_void overlapped, u32 callback) {
+  (void)unk;
+  (void)overlapped;
+  if (callback) {
+    XThread::GetCurrentThread()->EnqueueApc(callback & ~1u, 0, 0, 0);
+  }
+  return X_ERROR_SUCCESS;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
+
+REX_EXPORT(__imp__XamMediaVerificationVerify, rex::kernel::xam::XamMediaVerificationVerify_entry)
 
 REX_EXPORT(__imp__XamFeatureEnabled, rex::kernel::xam::XamFeatureEnabled_entry)
 REX_EXPORT(__imp__XamGetOnlineSchema, rex::kernel::xam::XamGetOnlineSchema_entry)
@@ -427,6 +483,12 @@ REX_EXPORT(__imp__XamAlloc, rex::kernel::xam::XamAlloc_entry)
 REX_EXPORT(__imp__XamFree, rex::kernel::xam::XamFree_entry)
 REX_EXPORT(__imp__XamQueryLiveHiveW, rex::kernel::xam::XamQueryLiveHiveW_entry)
 REX_EXPORT(__imp__XamLoaderGetDvdTrayState, rex::kernel::xam::XamLoaderGetDvdTrayState_entry)
+REX_EXPORT(__imp__XamSetDashContext, rex::kernel::xam::XamSetDashContext_entry)
+REX_EXPORT(__imp__XamGetDashContext, rex::kernel::xam::XamGetDashContext_entry)
+REX_EXPORT(__imp__XamIsCurrentTitleDash, rex::kernel::xam::XamIsCurrentTitleDash_entry)
+REX_EXPORT(__imp__XamIsChildAccountSignedIn, rex::kernel::xam::XamIsChildAccountSignedIn_entry)
+REX_EXPORT(__imp__XamIsIptvEnabled, rex::kernel::xam::XamIsIptvEnabled_entry)
+REX_EXPORT(__imp__XapiFormatTimeOut, rex::kernel::xam::XapiFormatTimeOut_entry)
 REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)
 REX_EXPORT(__imp__XamLoaderGetMediaInfo, rex::kernel::xam::XamLoaderGetMediaInfo_entry)
 REX_EXPORT(__imp__XamLoaderGetMediaInfoEx, rex::kernel::xam::XamLoaderGetMediaInfoEx_entry)
@@ -438,3 +500,9 @@ REXCVAR_DEFINE_COMMAND_ARGS(
       rex::kernel::xam::SwapDiscMedia(static_cast<uint32_t>(std::atoi(std::string(args).c_str())));
     },
     "Kernel", "Swap to disc N of a multi-disc game (data/disc<N> next to data/game)");
+
+REX_EXPORT(__imp__XamIsSystemExperienceTitleId, rex::kernel::xam::XamIsSystemExperienceTitleId_entry)
+REX_EXPORT(__imp__XamIsSystemTitleId, rex::kernel::xam::XamIsSystemTitleId_entry)
+REX_EXPORT(__imp__XamIsXbox1TitleId, rex::kernel::xam::XamIsXbox1TitleId_entry)
+
+REX_EXPORT(__imp__lstrlenW, rex::kernel::xam::lstrlenW_entry)

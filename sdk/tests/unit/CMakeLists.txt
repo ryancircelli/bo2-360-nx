@@ -186,3 +186,8 @@ add_executable(guest_stack_range_tests runtime_stack_range_test.cpp)
 target_include_directories(guest_stack_range_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(guest_stack_range_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME guest_stack_range_tests COMMAND guest_stack_range_tests)
+
+add_executable(xam_info_tests kernel/xam_info_test.cpp)
+target_include_directories(xam_info_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xam_info_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME xam_info_tests COMMAND xam_info_tests)

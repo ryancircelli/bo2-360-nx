@@ -13,6 +13,7 @@
 #include <rex/kernel/xboxkrnl/video.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xtypes.h>
@@ -38,7 +39,7 @@ u32 XGetVideoCapabilities_entry() {
 REX_EXPORT(__imp__XGetVideoMode, rex::kernel::xam::XGetVideoMode_entry)
 REX_EXPORT(__imp__XGetVideoCapabilities, rex::kernel::xam::XGetVideoCapabilities_entry)
 
-REX_EXPORT_STUB(__imp__XGetVideoFlags);
-REX_EXPORT_STUB(__imp__XGetVideoStandard);
-REX_EXPORT_STUB(__imp__XamLoadExtraAVCodecs2);
-REX_EXPORT_STUB(__imp__XamUnloadExtraAVCodecs2);
+REX_EXPORT_QUIET_RETURN(__imp__XGetVideoFlags, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XGetVideoStandard, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XamLoadExtraAVCodecs2, 0);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XamUnloadExtraAVCodecs2, 0);  // no reference; deliberate family default, behaviour unknown

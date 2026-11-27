@@ -1123,24 +1123,24 @@ u32 KfRaiseIrql_entry(u32 new_irql) {
                        static_cast<unsigned char>(static_cast<uint32_t>(new_irql)));
 }
 
-void NtQueueApcThread_entry(u32 thread_handle, mapped_void apc_routine,
+u32 NtQueueApcThread_entry(u32 thread_handle, mapped_void apc_routine,
                             mapped_void apc_routine_context, mapped_void arg1, mapped_void arg2) {
   auto mem = REX_KERNEL_MEMORY();
   auto thread = REX_KERNEL_OBJECTS()->LookupObject<XThread>(thread_handle);
 
   if (!thread) {
     REXKRNL_ERROR("NtQueueApcThread: Incorrect thread handle! Might cause crash");
-    return;
+    return X_STATUS_INVALID_HANDLE;
   }
 
   if (!apc_routine) {
     REXKRNL_ERROR("NtQueueApcThread: Incorrect apc routine! Might cause crash");
-    return;
+    return X_STATUS_INVALID_PARAMETER;
   }
 
   uint32_t apc_ptr = mem->SystemHeapAlloc(XAPC::kSize);
   if (!apc_ptr) {
-    return;
+    return X_STATUS_NO_MEMORY;
   }
   XAPC* apc = mem->TranslateVirtual<XAPC*>(apc_ptr);
   xeKeInitializeApc(apc, thread->guest_object(), XAPC::kDummyKernelRoutine, 0,
@@ -1150,11 +1150,12 @@ void NtQueueApcThread_entry(u32 thread_handle, mapped_void apc_routine,
   if (!xeKeInsertQueueApc(apc, arg1.guest_address(), arg2.guest_address(), 0,
                           current_ppc_context())) {
     mem->SystemHeapFree(apc_ptr);
-    return;
+    return X_STATUS_UNSUCCESSFUL;
   }
   // Match Edge/Canary behavior: callback is only a wakeup hint.
   // APC delivery happens via alertable wait handling.
   thread->thread()->QueueUserCallback([]() {});
+  return X_STATUS_SUCCESS;
 }
 
 void KeInitializeApc_entry(ppc_ptr_t<XAPC> apc, mapped_void thread_ptr, mapped_void kernel_routine,

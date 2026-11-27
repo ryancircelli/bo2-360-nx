@@ -452,7 +452,8 @@ u32 NetDll_WSAWaitForMultipleEvents_entry(u32 num_events, mapped_u32 events, u32
     return ~0u;
   }
 
-  uint64_t timeout_wait = (uint64_t)timeout;
+  // WSA takes milliseconds; the kernel wait takes 100 ns ticks, negative = relative.
+  uint64_t timeout_wait = uint64_t(-int64_t(uint32_t(timeout)) * 10000);
 
   X_STATUS result = 0;
   do {
@@ -465,7 +466,8 @@ u32 NetDll_WSAWaitForMultipleEvents_entry(u32 num_events, mapped_u32 events, u32
     XThread::SetLastError(error);
     return ~0u;
   }
-  return 0;
+  // WSA_WAIT_EVENT_0 + index, WSA_WAIT_TIMEOUT (0x102) and WSA_WAIT_IO_COMPLETION (0xC0) share the status values.
+  return result;
 }
 
 u32 NetDll_WSACreateEvent_entry() {

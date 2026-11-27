@@ -12,6 +12,7 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xnotifylistener.h>
@@ -119,11 +120,11 @@ REX_EXPORT(__imp__XNotifyGetNext, rex::kernel::xam::XNotifyGetNext_entry)
 REX_EXPORT(__imp__XNotifyDelayUI, rex::kernel::xam::XNotifyDelayUI_entry)
 REX_EXPORT(__imp__XNotifyPositionUI, rex::kernel::xam::XNotifyPositionUI_entry)
 
-REX_EXPORT_STUB(__imp__XNotifyBroadcast);
-REX_EXPORT_STUB(__imp__XNotifyQueueUI);
-REX_EXPORT_STUB(__imp__XNotifyQueueUIEx);
-REX_EXPORT_STUB(__imp__XNotifyRegisterArea);
-REX_EXPORT_STUB(__imp__XNotifyUIGetOptions);
-REX_EXPORT_STUB(__imp__XNotifyUISetOptions);
-REX_EXPORT_STUB(__imp__XamNotifyCreateListenerRangeInternal);
-REX_EXPORT_STUB(__imp__XamNotifyDelayUIInternal);
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyBroadcast, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyQueueUI, 0x80004005);  // no reference; deliberate family default, behaviour unknown
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyQueueUIEx, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyRegisterArea, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyUIGetOptions, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XNotifyUISetOptions, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamNotifyCreateListenerRangeInternal, 0x80004005);
+REX_EXPORT_QUIET_RETURN(__imp__XamNotifyDelayUIInternal, 0x80004005);
