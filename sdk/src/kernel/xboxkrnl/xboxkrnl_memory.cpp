@@ -522,7 +522,10 @@ u32 MmQueryStatistics_entry(ppc_ptr_t<X_MM_QUERY_STATISTICS_RESULT> stats_ptr) {
       REX_KERNEL_MEMORY()->LookupHeapByType(true, 0x10000),
       REX_KERNEL_MEMORY()->LookupHeapByType(true, 0x1000000)};
 
-  REX_KERNEL_MEMORY()->GetHeapsPageStatsSummary(physical_heaps, std::size(physical_heaps),
+  // no_phys_alias: 4K and 16MB physical pages share the 0xC0000000 heap; count it once.
+  const size_t physical_heap_count =
+      physical_heaps[0] == physical_heaps[2] ? 2 : std::size(physical_heaps);
+  REX_KERNEL_MEMORY()->GetHeapsPageStatsSummary(physical_heaps, physical_heap_count,
                                                 unreserved_pages, reserved_pages, used_pages,
                                                 reserved_pages_bytes);
 

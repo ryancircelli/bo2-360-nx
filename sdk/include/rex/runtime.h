@@ -73,6 +73,7 @@ struct RuntimeConfig {
   std::function<std::unique_ptr<system::IInputSystem>(bool tool_mode)> input_factory;
   std::function<void(Runtime*, system::KernelState*)> kernel_init;
   bool tool_mode = false;
+  bool no_phys_alias = false;  ///< Set by Setup(image_info, ...) from PPCCodegenFlags::no_phys_alias
 };
 
 /// Helper macros for populating RuntimeConfig with concrete backends.

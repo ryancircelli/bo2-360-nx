@@ -115,6 +115,10 @@ struct RecompilerConfig {
   /// non-volatile registers and poison the volatile ones dead at a return
   /// (rex/ppc/abi_poison.h).
   bool abiPoisonChecks = false;
+  /// 4K-page physical memory is handed out at 0xC0000000 instead of 0xE0000000, so the generated
+  /// accesses drop the 0xE0000000 page-offset fix-up (REX_PHYS_HOST_OFFSET becomes 0). Sets
+  /// PPCCodegenFlags::no_phys_alias, which Memory reads; the 0xE0000000 view is then no-access.
+  bool noPhysAlias = false;
 
   // === Analysis tuning (optional) ===
   uint32_t maxJumpExtension = 65536;  ///< Max bytes to extend function for jump table targets

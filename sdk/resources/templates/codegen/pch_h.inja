@@ -16,6 +16,7 @@
 {% endif %}{% if config_flags.cr_as_local %}#define REX_CONFIG_CR_AS_LOCAL
 {% endif %}{% if config_flags.non_argument_as_local %}#define REX_CONFIG_NON_ARGUMENT_AS_LOCAL
 {% endif %}{% if config_flags.non_volatile_as_local %}#define REX_CONFIG_NON_VOLATILE_AS_LOCAL
+{% endif %}{% if config_flags.no_phys_alias %}#define REX_CONFIG_NO_PHYS_ALIAS
 {% endif %}
 #define REX_IMAGE_BASE {{ image_base }}ull
 #define REX_IMAGE_SIZE {{ image_size }}ull
@@ -136,7 +137,11 @@ extern PPCFuncMapping PPCFuncMappings[];
 // Memory Access
 //=============================================================================
 
-#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && REX_ARCH_ARM64)
+// no_phys_alias: nothing is ever allocated at 0xE0000000 (Memory serves 4K physical pages at
+// 0xC0000000 and makes the 0xE0000000 view no-access), so no access needs the fix-up.
+#if defined(REX_CONFIG_NO_PHYS_ALIAS)
+#define REX_PHYS_HOST_OFFSET(addr) 0u
+#elif REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && REX_ARCH_ARM64)
 #define REX_PHYS_HOST_OFFSET(addr) (((u32)(addr) >= 0xE0000000u) ? 0x1000u : 0u)
 #else
 #define REX_PHYS_HOST_OFFSET(addr) 0u
