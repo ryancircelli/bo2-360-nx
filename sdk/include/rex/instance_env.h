@@ -26,4 +26,15 @@ inline int InstanceIndex() {
   return end && *end == '\0' && instance >= 0 && instance < 16 ? int(instance) : -1;
 }
 
+inline constexpr int kMaxInstanceCount = 8;  // one SDL pad registry holds 8 pads
+
+// Copies sharing this machine's split-screen grid (2..8), or -1 when unset or malformed.
+inline int InstanceCount() {
+  const char* value = InstanceCountEnv();
+  if (!value) return -1;
+  char* end = nullptr;
+  const long count = std::strtol(value, &end, 10);
+  return end && *end == '\0' && count >= 2 && count <= kMaxInstanceCount ? int(count) : -1;
+}
+
 }  // namespace rex

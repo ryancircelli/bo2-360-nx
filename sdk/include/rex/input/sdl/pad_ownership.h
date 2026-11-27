@@ -1,5 +1,5 @@
 /**
- * Cross-process ownership for local SDL pads shared by BO2 instances.
+ * Cross-process ownership for local SDL pads shared by copies of one game (REX_INSTANCE).
  */
 #pragma once
 

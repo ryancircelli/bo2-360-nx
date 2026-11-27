@@ -15,7 +15,6 @@
 #include <rex/ui/window_sdl.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -99,27 +98,20 @@ uint32_t ResolveWindowHeight(uint32_t requested_height) {
 }
 
 bool TileInstanceWindow(SDL_Window* window) {
-  const char* instance_value = rex::InstanceEnv();
-  const char* count_value = rex::InstanceCountEnv();
-  if (!instance_value || !count_value) {
+  if (!rex::InstanceEnv() || !rex::InstanceCountEnv()) {
     return false;
   }
-  int instance = -1;
-  int count = 0;
-  const std::string_view instance_text(instance_value);
-  const std::string_view count_text(count_value);
-  const auto parsed_instance = std::from_chars(instance_text.data(), instance_text.data() + instance_text.size(), instance);
-  const auto parsed_count = std::from_chars(count_text.data(), count_text.data() + count_text.size(), count);
-  if (parsed_instance.ec != std::errc{} || parsed_instance.ptr != instance_text.data() + instance_text.size() ||
-      parsed_count.ec != std::errc{} || parsed_count.ptr != count_text.data() + count_text.size() ||
-      count < 2 || count > 4 || instance < 0 || instance >= count) {
-    REXLOG_WARN("Ignoring invalid instance window tile ({}/{})", instance_value, count_value);
+  const int instance = rex::InstanceIndex();
+  const int count = rex::InstanceCount();
+  if (instance < 0 || count < 0 || instance >= count) {
+    REXLOG_WARN("Ignoring invalid instance window tile ({}/{})", rex::InstanceEnv(), rex::InstanceCountEnv());
     return false;
   }
 
   const SDL_DisplayID display = SDL_GetPrimaryDisplay();
   SDL_Rect bounds{};
-  if (!display || !SDL_GetDisplayBounds(display, &bounds) || bounds.w <= 0 || bounds.h <= 0) {
+  // Usable bounds: macOS keeps windows below the menu bar, so full bounds would push the top row into the next.
+  if (!display || !SDL_GetDisplayUsableBounds(display, &bounds) || bounds.w <= 0 || bounds.h <= 0) {
     REXLOG_WARN("Could not read the main display bounds for instance tiling: {}", SDL_GetError());
     return false;
   }
@@ -135,6 +127,7 @@ bool TileInstanceWindow(SDL_Window* window) {
   const int top = bounds.y + row * bounds.h / rows;
   const int right = bounds.x + (column + 1) * bounds.w / columns;
   const int bottom = bounds.y + (row + 1) * bounds.h / rows;
+  SDL_SetWindowBordered(window, false);
   SDL_SetWindowSize(window, right - left, bottom - top);
   SDL_SetWindowPosition(window, left, top);
   REXLOG_INFO("Tiled instance {}/{} at {},{} {}x{} on the main display", instance, count, left, top,

@@ -12,12 +12,14 @@
 #include <rex/rex_app.h>
 
 #include <cstdlib>
+#include <stdexcept>
 
 #include <rex/assert.h>
 #include <rex/cvar.h>
 #include <rex/ui/flags.h>
 #include <rex/kernel/crt/heap.h>
 #include <rex/filesystem.h>
+#include <rex/instance_env.h>
 #include <rex/logging/sink.h>
 #include <rex/logging.h>
 #include <rex/ui/overlay/achievement_toast.h>
@@ -101,6 +103,24 @@ namespace rex {
 namespace {
 std::filesystem::path GlitchRoot();
 std::filesystem::path GlitchPending();
+
+// Copy i of a game sharing this machine (REX_INSTANCE) keeps its own profile, console id, saves, settings and caches
+// under <user>/instances/<i>, so copies never fight over a file. Its settings start as a copy of the main ones.
+void IsolateInstancePaths(PathConfig& paths, int instance) {
+  const auto own = std::filesystem::path("instances") / std::to_string(instance);
+  const auto user = paths.user_data_root;
+  paths.user_data_root /= own;
+  paths.cache_root = paths.cache_root == user / "cache" ? paths.user_data_root / "cache" : paths.cache_root / own;
+  const auto main_config = paths.config_path;
+  paths.config_path = paths.user_data_root / main_config.filename();
+  std::error_code ec;
+  std::filesystem::create_directories(paths.user_data_root, ec);
+  if (ec) throw std::runtime_error("Could not create the instance folder: " + ec.message());
+  if (!std::filesystem::exists(paths.config_path, ec) && std::filesystem::exists(main_config, ec)) {
+    std::filesystem::copy_file(main_config, paths.config_path, ec);
+    if (ec) throw std::runtime_error("Could not seed the instance settings: " + ec.message());
+  }
+}
 }  // namespace
 
 
@@ -204,6 +224,11 @@ bool ReXApp::SetupEnvironment() {
   PathConfig path_config{game_dir,  user_dir,     update_dir,
                          cache_dir, metadata_dir, config_path};
   OnConfigurePaths(path_config);
+  if (const int instance = rex::InstanceIndex(); instance >= 0) {
+    IsolateInstancePaths(path_config, instance);
+  } else if (rex::InstanceEnv()) {
+    throw std::runtime_error("REX_INSTANCE must be an integer from 0 to 15");
+  }
   game_data_root_ = path_config.game_data_root;
   user_data_root_ = path_config.user_data_root;
   update_data_root_ = path_config.update_data_root;
@@ -216,6 +241,13 @@ bool ReXApp::SetupEnvironment() {
   if (std::filesystem::exists(config_path_))
     rex::cvar::LoadConfig(config_path_);
   OnConfigLoaded();
+  if (rex::InstanceCountEnv()) {
+    const int count = rex::InstanceCount();
+    if (count < 0 || rex::InstanceIndex() < 0 || rex::InstanceIndex() >= count) {
+      throw std::runtime_error("REX_INSTANCE_COUNT must be 2 to 8 and REX_INSTANCE below it");
+    }
+    rex::cvar::SetFlagByName("fullscreen", "false");  // the copies share the display as a tiled grid
+  }
 
   // Late-phase logging
   std::string log_file_cvar = REXCVAR_GET(log_file);

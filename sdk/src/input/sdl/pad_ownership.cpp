@@ -1,6 +1,8 @@
 #include <rex/input/sdl/pad_ownership.h>
+#include <rex/cvar.h>
 #include <rex/instance_env.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -20,11 +22,14 @@
 #include <unistd.h>
 #endif
 
+REXCVAR_DEFINE_INT32(instance_pads, 1, "Input",
+                     "Pads each copy keeps when several copies share one machine (REX_INSTANCE); a game with native "
+                     "split screen raises it in its game.toml [defaults]");
+
 namespace rex::input::sdl {
 namespace {
 
 constexpr size_t kMaxPads = 8;
-constexpr size_t kPadsPerInstance = 4;
 
 class FileLock {
  public:
@@ -100,7 +105,7 @@ std::filesystem::path RegistryPath() {
   std::error_code ec;
   auto dir = std::filesystem::temp_directory_path(ec);
   if (ec) return {};
-  return dir / "rex-bo2-sdl-pad-ownership-v1.txt";
+  return dir / "rex-sdl-pad-ownership-v1.txt";
 }
 
 using Assignments = std::map<std::string, int>;
@@ -200,7 +205,7 @@ bool PadOwnership::Owns(std::string_view identity) const {
   if (assignments.size() >= kMaxPads) return false;
   size_t owned = 0;
   for (const auto& [key, owner] : assignments) owned += owner == *instance_;
-  if (owned >= kPadsPerInstance) return false;
+  if (owned >= size_t(std::clamp(REXCVAR_GET(instance_pads), 1, int(kMaxPads)))) return false;
   assignments.emplace(std::string(identity), *instance_);
   return WriteAssignments(path, assignments);
 }

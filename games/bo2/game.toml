@@ -16,6 +16,7 @@ first_link_port = 1000               # BO2's VDP port; 1001 (UDP) and the side c
 [defaults]
 # Local MP and Zombies expose an offline profile for each controller port.
 offline_user_count = 4
+instance_pads = 4                    # copies on one Mac (REX_INSTANCE) each keep 4 pads: 2 copies = 8 players
 
 [renderer]
 # The Metal backend settings BO2 was measured and shipped with. They are the SDK's
