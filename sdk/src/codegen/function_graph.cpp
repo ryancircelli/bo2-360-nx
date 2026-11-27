@@ -622,7 +622,13 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
       blockBase += 4;
       ++data;
     }
-    if (fallThroughs().contains(blockEnd)) {
+    const auto last = ppc::decode_instruction(blockEnd - 4, load_and_swap<uint32_t>(data - 1));
+    const bool terminal = last.opcode == ppc::Opcode::b || last.opcode == ppc::Opcode::ba ||
+        last.isTrapAlways() ||
+        ((last.opcode == ppc::Opcode::bclr || last.opcode == ppc::Opcode::bcctr) && last.XL.BO == 20) ||
+        ((last.opcode == ppc::Opcode::bl || last.opcode == ppc::Opcode::bla) &&
+         last.branch_target && ctx.graph.isNoReturn(*last.branch_target));
+    if (fallThroughs().contains(blockEnd) && !terminal) {
       BuilderContext builderCtx{body, ctx, *this, insn, blockEnd, data,
                                 localVariables, csrState, nullptr};
       builderCtx.emit_function_call(blockEnd);
@@ -784,6 +790,7 @@ FunctionNode* FunctionGraph::addFunction(uint32_t base, uint32_t size, FunctionA
   auto node = std::make_unique<FunctionNode>(base, size, authority);
   FunctionNode* nodePtr = node.get();
   functions_[base] = std::move(node);
+  noReturn_.reset();
   functionsByBase_[base] = nodePtr;
 
   // Track xrefs for merge eligibility
@@ -802,6 +809,170 @@ FunctionNode* FunctionGraph::addFunction(uint32_t base, uint32_t size, FunctionA
     node->setName(std::string(name));
   }
   return node;
+}
+
+namespace {
+
+using rex::codegen::ppc::Instruction;
+using rex::codegen::ppc::Opcode;
+
+constexpr uint32_t kBranchAlways = 20;
+
+/**
+ * Finds the fixed point of the functions that never return.
+ */
+class NoReturnSolver {
+ public:
+  /**
+   * Creates a solver over a graph.
+   *
+   * @param graph The graph whose functions are sealed.
+   */
+  explicit NoReturnSolver(const FunctionGraph& graph) : graph_(graph) {}
+
+  /**
+   * Computes the entry points of the functions that never return.
+   *
+   * @return The entry points.
+   */
+  std::unordered_set<uint32_t> Solve() {
+    std::vector<Flow> flows;
+    for (const auto& [base, node] : graph_.functions()) {
+      if (node->isImport() || !node->isSealed() || node->instructions().empty())
+        continue;
+      Flow flow{node.get(), {node->instructions().begin(), node->instructions().end()}};
+      std::ranges::sort(flow.insns, {}, &Instruction::address);
+      flows.push_back(std::move(flow));
+    }
+    for (bool changed = true; changed;) {
+      changed = false;
+      for (const Flow& flow : flows) {
+        if (!no_return_.contains(flow.node->base()) && !MayReturn(flow)) {
+          no_return_.insert(flow.node->base());
+          changed = true;
+        }
+      }
+    }
+    return std::move(no_return_);
+  }
+
+ private:
+  struct Flow {
+    const FunctionNode* node;
+    std::vector<const Instruction*> insns;
+  };
+
+  /**
+   * Reports whether control that reaches a function entry can come back.
+   *
+   * @param target Entry point address.
+   * @return False for an import that never returns or a function already known not to return.
+   */
+  bool Returns(uint32_t target) const {
+    return !graph_.isDeclaredNoReturn(target) && !no_return_.contains(target);
+  }
+
+  /**
+   * Reports whether any path from the entry of a function leaves it by a return, by a jump to a
+   * function that returns or by a jump to an address no instruction of the function covers.
+   *
+   * @param flow The function and its instructions in address order.
+   * @return True when the function may return.
+   */
+  bool MayReturn(const Flow& flow) const {
+    const auto& insns = flow.insns;
+    const uint32_t base = flow.node->base();
+    std::vector<bool> seen(insns.size());
+    std::vector<size_t> stack;
+
+    const auto find = [&](uint32_t addr) {
+      const auto it = std::ranges::lower_bound(insns, addr, {}, &Instruction::address);
+      return it != insns.end() && (*it)->address == addr ? it - insns.begin() : -1;
+    };
+    const auto go = [&](uint32_t target) {
+      if (!Returns(target))
+        return false;
+      if (target != base && graph_.getFunction(target))
+        return true;
+      const auto at = find(target);
+      if (at < 0)
+        return true;
+      stack.push_back(static_cast<size_t>(at));
+      return false;
+    };
+
+    if (go(base))
+      return true;
+    while (!stack.empty()) {
+      const size_t at = stack.back();
+      stack.pop_back();
+      if (seen[at])
+        continue;
+      seen[at] = true;
+
+      const Instruction& insn = *insns[at];
+      const uint32_t next = insn.address + 4;
+      switch (insn.opcode) {
+        case Opcode::b:
+        case Opcode::ba:
+          if (!insn.branch_target || go(*insn.branch_target))
+            return true;
+          break;
+        case Opcode::bl:
+        case Opcode::bla:
+          if (insn.branch_target && !Returns(*insn.branch_target))
+            break;
+          if (go(next))
+            return true;
+          break;
+        case Opcode::bc:
+        case Opcode::bca:
+          if (!insn.branch_target || go(*insn.branch_target) || go(next))
+            return true;
+          break;
+        case Opcode::bclr:
+          return true;
+        case Opcode::bcctr: {
+          if (insn.XL.BO != kBranchAlways)
+            return true;
+          const auto& tables = flow.node->jumpTables();
+          const auto table = std::ranges::find(tables, insn.address, &JumpTable::bctrAddress);
+          if (table == tables.end())
+            return true;
+          for (uint32_t target : table->targets) {
+            if (go(target))
+              return true;
+          }
+          break;
+        }
+        default:
+          if (!insn.isTrapAlways() && go(next))
+            return true;
+          break;
+      }
+    }
+    return false;
+  }
+
+  const FunctionGraph& graph_;
+  std::unordered_set<uint32_t> no_return_;
+};
+
+}  // namespace
+
+bool FunctionGraph::isNoReturn(uint32_t entry) const {
+  if (isDeclaredNoReturn(entry))
+    return true;
+  if (!getFunction(entry))
+    return false;
+  if (!noReturn_)
+    noReturn_ = NoReturnSolver(*this).Solve();
+  return noReturn_->contains(entry);
+}
+
+void FunctionGraph::declareNoReturn(uint32_t address) {
+  declaredNoReturn_.insert(address);
+  noReturn_.reset();
 }
 
 FunctionNode* FunctionGraph::addImportFunction(uint32_t address, std::string_view resolvedName) {
@@ -829,6 +1000,7 @@ bool FunctionGraph::removeFunction(uint32_t entryPoint) {
   REXCODEGEN_TRACE("FunctionGraph: removing absorbed function 0x{:08X}", entryPoint);
   functionsByBase_.erase(entryPoint);
   functions_.erase(it);
+  noReturn_.reset();
   functionHasXrefs_.erase(entryPoint);  // Clean up xref tracking
   return true;
 }

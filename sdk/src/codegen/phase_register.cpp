@@ -492,6 +492,10 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
         unresolvedCount++;
       }
 
+      // Upstream e9c1a0f6 export list, keyed by library and ordinal.
+      if (((lib_name == "xboxkrnl" || lib_name == "xboxkrnl.exe" || lib_name == "xboxkrnl.xex") && ordinal == 0x19) ||
+          ((lib_name == "xam" || lib_name == "xam.xex") && (ordinal == 0x1A4 || ordinal == 0x1A5)))
+        graph.declareNoReturn(sym.address);
       auto* node = graph.addImportFunction(sym.address, resolvedName);
       if (node && node->canDiscover()) {
         node->discoverAsImport();
@@ -506,6 +510,9 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
         "Analyze: loaded {} imports ({} resolved, {} unresolved, {} variables skipped)",
         importCount, resolvedCount, unresolvedCount, variableCount);
   }
+
+  if (config.longJmpAddress != 0)
+    graph.declareNoReturn(config.longJmpAddress);
 
   // Register save/restore helpers
   auto registerHelpers = [&](uint32_t base14, const char* prefix, size_t stride, size_t endReg,

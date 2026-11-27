@@ -353,6 +353,10 @@ struct Instruction {
    */
   bool is_call() const;
 
+  bool isTrapAlways() const {
+    return (opcode == Opcode::twi && D.RT == 31) || (opcode == Opcode::tw && X.RT == 31);
+  }
+
   /**
    * Check if this is a return instruction (blr)
    */

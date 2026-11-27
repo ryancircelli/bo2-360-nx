@@ -17,7 +17,7 @@ struct Fixture {
       data.insert(data.end(), {uint8_t(w >> 24), uint8_t(w >> 16), uint8_t(w >> 8), uint8_t(w)});
     module.Load(kBase, data.data(), data.size());
     ctx.emplace(CodegenContext::Create(BinaryView::fromModule(module), RecompilerConfig{}));
-    ctx->decoded().decode();
+    ctx->initDecoded();
   }
   BlockDiscoveryResult scan(std::unordered_set<uint32_t> known, uint32_t size = 0) {
     return discoverBlocks(ctx->decoded(), kBase, {kBase, kBase + uint32_t(data.size())}, known, size);
@@ -57,4 +57,67 @@ TEST_CASE("A branch to the entry remains an internal loop", "[codegen][boundary]
   CHECK(result.labels.contains(kBase));
   CHECK(result.fallThroughs.empty());
   CHECK(result.tailCalls.empty());
+}
+
+// No-return regressions adapted from Tom Clay's rexglue e9c1a0f6 (BSD-3-Clause).
+namespace {
+FunctionNode* Discover(Fixture& fx, uint32_t entry, uint32_t size,
+                       const std::unordered_set<uint32_t>& known) {
+  auto* node = fx.ctx->graph.addFunction(entry, size, FunctionAuthority::PDATA, true);
+  auto result = discoverBlocks(fx.ctx->decoded(), entry,
+      {kBase, kBase + uint32_t(fx.data.size())}, known, size);
+  node->discover(std::move(result.blocks), std::move(result.instructions), std::move(result.labels));
+  node->setFallThroughs(std::move(result.fallThroughs));
+  node->seal();
+  return node;
+}
+std::string Emit(Fixture& fx, const FunctionNode* node) {
+  EmitContext emit{fx.ctx->binary(), fx.ctx->Config(), fx.ctx->graph, kBase, nullptr, nullptr};
+  return node->emitCpp(emit);
+}
+}
+TEST_CASE("Calls to no-return functions suppress synthetic fall-through", "[codegen][noreturn]") {
+  // A calls B, B calls a declared no-return import, with a follower after each.
+  Fixture fx{0x48000009, 0x4E800020, 0x48000009, 0x4E800020, 0x4E800020};
+  auto& graph = fx.ctx->graph;
+  graph.declareNoReturn(kBase + 16);
+  const std::unordered_set<uint32_t> known{kBase, kBase + 4, kBase + 8, kBase + 12, kBase + 16};
+  auto* a = Discover(fx, kBase, 4, known);
+  auto* b = Discover(fx, kBase + 8, 4, known);
+  Discover(fx, kBase + 4, 4, known);
+  Discover(fx, kBase + 12, 4, known);
+  auto* imp = graph.addImportFunction(kBase + 16, "__imp__ExTerminateThread");
+  imp->discoverAsImport();
+  imp->seal();
+  CHECK(graph.isNoReturn(kBase));
+  CHECK(graph.isNoReturn(kBase + 8));
+  CHECK_FALSE(graph.isNoReturn(kBase + 4));
+  CHECK_FALSE(graph.isNoReturn(kBase + 0x100));
+  CHECK(Emit(fx, a).find("sub_82000004(ctx, base);") == std::string::npos);
+  CHECK(Emit(fx, b).find("sub_8200000C(ctx, base);") == std::string::npos);
+}
+TEST_CASE("Unknown calls and a conditional return conservatively may return", "[codegen][noreturn]") {
+  SECTION("unknown call") {
+    Fixture fx{0x48000011};
+    Discover(fx, kBase, 4, {kBase});
+    CHECK_FALSE(fx.ctx->graph.isNoReturn(kBase));
+  }
+  SECTION("conditional return before no-return call") {
+    Fixture fx{0x4D820020, 0x4800000D};
+    Discover(fx, kBase, 8, {kBase});
+    fx.ctx->graph.declareNoReturn(kBase + 16);
+    CHECK_FALSE(fx.ctx->graph.isNoReturn(kBase));
+  }
+}
+TEST_CASE("Loops and unconditional traps never return", "[codegen][noreturn]") {
+  SECTION("self loop") {
+    Fixture fx{0x48000000};
+    Discover(fx, kBase, 4, {kBase});
+    CHECK(fx.ctx->graph.isNoReturn(kBase));
+  }
+  SECTION("trap") {
+    Fixture fx{0x0FE00000};
+    Discover(fx, kBase, 4, {kBase});
+    CHECK(fx.ctx->graph.isNoReturn(kBase));
+  }
 }
