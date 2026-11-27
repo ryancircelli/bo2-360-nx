@@ -1,0 +1,14 @@
+# NFSMW deterministic bench: career resume -> safe house -> free roam (same inputs as tools/gates/routes/nfsmw-drive.route),
+# guest time steps 1/60 s per presented frame, pads follow guest time. The window arms when INGAMEB.LZC (free roam) opens,
+# runs 300 frames of warmup, then 4 rounds x 600 frames from one in-memory save point.
+duration_s = 560
+players = 1
+pad1 = 115-116:start, 135-136:start, 147-148:a, 160-161:a, 0:until_log "CAREER_SAFEHOUSE.LZC" 240, 10-10.25:a, 13-13.25:left, 16-16.25:a, 0:until_log "INGAMEB.LZC" 120, 0-200:rt
+REX_CLOCK_FRAME_LOCK_HZ = 60
+REX_HID_VIRTUAL_PAD_GUEST_TIME = true
+REX_BENCH_FRAMES = 600
+REX_BENCH_ROUNDS = 4
+REX_BENCH_WARMUP_FRAMES = 300
+REX_BENCH_ROUND_WARMUP_FRAMES = 60
+REX_BENCH_ARM_ON_LOG = INGAMEB.LZC
+REX_GUEST_TIME_SCALE = 2
