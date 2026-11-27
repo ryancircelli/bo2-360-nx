@@ -179,6 +179,8 @@ class Runner:
             rule = next((r for r in self.recipe['navigation'] if re.search(r['text'], joined, re.I) and not r.get('_done')), None)
             if rule:
                 if rule.get('once'): rule['_done'] = True
+                if rule.get('reset'):
+                    for r in self.recipe['navigation']: r.pop('_done', None)
                 for cmd in rule['commands']:
                     self.command(cmd)
                 if rule.get('mark_on_seen'):

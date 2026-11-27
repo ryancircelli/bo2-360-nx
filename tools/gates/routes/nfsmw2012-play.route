@@ -6,6 +6,10 @@
   "play_timeout_s": 480,
   "navigation": [
     {
+      "text": "a criterion game|electronic arts",
+      "commands": []
+    },
+    {
       "text": "press.*start",
       "commands": [
         "press start 600"
