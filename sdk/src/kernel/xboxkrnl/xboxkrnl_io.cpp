@@ -819,6 +819,18 @@ u32 NtReadFileScatter_entry(u32 file_handle, u32 event_handle, mapped_void apc_r
   return result;
 }
 
+// All file I/O completes synchronously, so there is never a pending request to cancel.
+u32 NtCancelIoFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block) {
+  if (!REX_KERNEL_OBJECTS()->LookupObject<XFile>(file_handle)) {
+    return X_STATUS_INVALID_HANDLE;
+  }
+  if (io_status_block) {
+    io_status_block->status = X_STATUS_SUCCESS;
+    io_status_block->information = 0;
+  }
+  return X_STATUS_SUCCESS;
+}
+
 u32 NtWriteFile_entry(u32 file_handle, u32 event_handle, u32 apc_routine, mapped_void apc_context,
                       ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block, mapped_void buffer,
                       u32 buffer_length, mapped_u64 byte_offset_ptr) {
@@ -1274,7 +1286,7 @@ REX_EXPORT_STUB(__imp__NtSetSystemTime);
 REX_EXPORT_STUB_RETURN(__imp__NtWriteFileGather, 0xC0000002);
 REX_EXPORT_STUB(__imp__IoAcquireCancelSpinLock);
 REX_EXPORT_STUB(__imp__IoReleaseCancelSpinLock);
-REX_EXPORT_STUB_RETURN(__imp__NtCancelIoFile, 0);
+REX_EXPORT(__imp__NtCancelIoFile, rex::kernel::xboxkrnl::NtCancelIoFile_entry)
 REX_EXPORT_STUB(__imp__NtCancelIoFileEx);
 REX_EXPORT_STUB(__imp__SvodCreateDevice);
 
