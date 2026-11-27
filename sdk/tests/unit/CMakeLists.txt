@@ -82,6 +82,24 @@ target_include_directories(metal_readback_merge_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/graphics/metal/port)
 add_test(NAME metal_readback_merge_tests COMMAND metal_readback_merge_tests)
 
+# rexgpu-xenos is a shared plugin with hidden symbols, so compile the sources under test.
+add_executable(texture_util_tests graphics/texture_util_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/util.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/info.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/texture/info_formats.cpp)
+target_link_libraries(texture_util_tests PRIVATE rexruntime xxHash::xxhash Catch2::Catch2WithMain)
+add_test(NAME texture_util_tests COMMAND texture_util_tests)
+
+# Shader parsing compiled directly: rexgpu-xenos hides its symbols.
+add_executable(shader_parse_tests graphics/shader_parse_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/shader/translator.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/shader/translator_disasm.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/shader/shader.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/format/ucode.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/flags.cpp)
+target_link_libraries(shader_parse_tests PRIVATE rexruntime xxHash::xxhash renderdoc Catch2::Catch2WithMain)
+add_test(NAME shader_parse_tests COMMAND shader_parse_tests)
+
 add_executable(patch_loader_tests patch/patch_loader_test.cpp)
 target_include_directories(patch_loader_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(patch_loader_tests PRIVATE rexruntime)

@@ -951,8 +951,19 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
       (rb_copy_dest_pitch.copy_dest_pitch + (xenos::kTextureTileWidthHeight - 1)) >>
       xenos::kTextureTileWidthHeightLog2;
   info_out.copy_dest_coordinate_info.pitch_aligned_div_32 = copy_dest_pitch_aligned_div_32;
+  // For volume resolves.
+  // D3D writes pitch * level height in blocks to RB_COPY_SURFACE_SLICE.
+  // Only use copy_dest_height, which instead includes the top of a source
+  // rectangle, as a fallback.
+  uint32_t copy_dest_height = rb_copy_dest_pitch.copy_dest_height;
+  if (rb_copy_dest_info.copy_dest_array) {
+    uint32_t rb_copy_surface_slice = regs[XE_GPU_REG_RB_COPY_SURFACE_SLICE];
+    if (rb_copy_surface_slice && rb_copy_dest_pitch.copy_dest_pitch) {
+      copy_dest_height = rb_copy_surface_slice / rb_copy_dest_pitch.copy_dest_pitch;
+    }
+  }
   info_out.copy_dest_coordinate_info.height_aligned_div_32 =
-      (rb_copy_dest_pitch.copy_dest_height + (xenos::kTextureTileWidthHeight - 1)) >>
+      (copy_dest_height + (xenos::kTextureTileWidthHeight - 1)) >>
       xenos::kTextureTileWidthHeightLog2;
   const FormatInfo& dest_format_info = *FormatInfo::Get(dest_format);
   if (is_depth || dest_format_info.type == FormatType::kResolvable) {
@@ -963,38 +974,56 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
     uint32_t dest_base_relative_y_mask = (UINT32_C(1) << xenos::GetTextureTiledYBaseGranularityLog2(
                                               bool(rb_copy_dest_info.copy_dest_array), bpp_log2)) -
                                          1;
+    // D3D advances RB_COPY_DEST_BASE in 32x32 macro tiles based on the
+    // destination point. 8bpp/16bpp macro tiles are smaller than 4KB, so part
+    // of the x offset can be left in the base's low bits. Move that part back
+    // into dest_addr_x0 before the usual tiled calculation.
+    uint32_t dest_addr_base = rb_copy_dest_base;
+    uint32_t dest_addr_x0 = uint32_t(x0);
+    uint32_t dest_addr_y0 = uint32_t(y0);
+    if (!rb_copy_dest_info.copy_dest_array) {
+      uint32_t dest_macro_tile_bytes_log2 = 2 * xenos::kTextureTileWidthHeightLog2 + bpp_log2;
+      uint32_t dest_macro_phase =
+          (rb_copy_dest_base & (xenos::kTextureSubresourceAlignmentBytes - 1)) >>
+          dest_macro_tile_bytes_log2;
+      dest_addr_base -= dest_macro_phase << dest_macro_tile_bytes_log2;
+      dest_addr_x0 += dest_macro_phase << xenos::kTextureTileWidthHeightLog2;
+    }
+    uint32_t dest_addr_x1 = dest_addr_x0 + uint32_t(x1 - x0);
+    uint32_t dest_addr_y1 = dest_addr_y0 + uint32_t(y1 - y0);
+    copy_dest_base_adjusted = dest_addr_base;
     info_out.copy_dest_coordinate_info.offset_x_div_8 =
-        (uint32_t(x0) & dest_base_relative_x_mask) >> xenos::kResolveAlignmentPixelsLog2;
+        (dest_addr_x0 & dest_base_relative_x_mask) >> xenos::kResolveAlignmentPixelsLog2;
     info_out.copy_dest_coordinate_info.offset_y_div_8 =
-        (uint32_t(y0) & dest_base_relative_y_mask) >> xenos::kResolveAlignmentPixelsLog2;
-    uint32_t dest_base_x = uint32_t(x0) & ~dest_base_relative_x_mask;
-    uint32_t dest_base_y = uint32_t(y0) & ~dest_base_relative_y_mask;
+        (dest_addr_y0 & dest_base_relative_y_mask) >> xenos::kResolveAlignmentPixelsLog2;
+    uint32_t dest_base_x = dest_addr_x0 & ~dest_base_relative_x_mask;
+    uint32_t dest_base_y = dest_addr_y0 & ~dest_base_relative_y_mask;
     if (rb_copy_dest_info.copy_dest_array) {
       // The base pointer is already adjusted to the Z / 8 (copy_dest_slice is
       // 3-bit).
       copy_dest_base_adjusted += texture_util::GetTiledOffset3D(
           int32_t(dest_base_x), int32_t(dest_base_y), 0, rb_copy_dest_pitch.copy_dest_pitch,
-          rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+          copy_dest_height, bpp_log2);
       copy_dest_extent_start =
-          rb_copy_dest_base + texture_util::GetTiledAddressLowerBound3D(
-                                  uint32_t(x0), uint32_t(y0), rb_copy_dest_info.copy_dest_slice,
+          dest_addr_base + texture_util::GetTiledAddressLowerBound3D(
+                               dest_addr_x0, dest_addr_y0, rb_copy_dest_info.copy_dest_slice,
                                   rb_copy_dest_pitch.copy_dest_pitch,
-                                  rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+                                  copy_dest_height, bpp_log2);
       copy_dest_extent_end =
-          rb_copy_dest_base + texture_util::GetTiledAddressUpperBound3D(
-                                  uint32_t(x1), uint32_t(y1), rb_copy_dest_info.copy_dest_slice + 1,
+          dest_addr_base + texture_util::GetTiledAddressUpperBound3D(
+                               dest_addr_x1, dest_addr_y1, rb_copy_dest_info.copy_dest_slice + 1,
                                   rb_copy_dest_pitch.copy_dest_pitch,
-                                  rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+                                  copy_dest_height, bpp_log2);
     } else {
       copy_dest_base_adjusted += texture_util::GetTiledOffset2D(
           int32_t(dest_base_x), int32_t(dest_base_y), rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
       copy_dest_extent_start =
-          rb_copy_dest_base +
-          texture_util::GetTiledAddressLowerBound2D(uint32_t(x0), uint32_t(y0),
+          dest_addr_base +
+          texture_util::GetTiledAddressLowerBound2D(dest_addr_x0, dest_addr_y0,
                                                     rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
-      copy_dest_extent_end = rb_copy_dest_base + texture_util::GetTiledAddressUpperBound2D(
-                                                     uint32_t(x1), uint32_t(y1),
-                                                     rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
+      copy_dest_extent_end = dest_addr_base + texture_util::GetTiledAddressUpperBound2D(
+                                                  dest_addr_x1, dest_addr_y1,
+                                                  rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
     }
   } else {
     REXGPU_ERROR("Tried to resolve to format {}, which is not a ColorFormat",

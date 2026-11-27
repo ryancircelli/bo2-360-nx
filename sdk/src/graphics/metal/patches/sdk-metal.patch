@@ -5090,7 +5090,7 @@ index 4d85a2b..0d8cf9a 100644
 +
 +#endif  // XENIA_GPU_SHARED_MEMORY_H_
 diff --git a/include/rex/graphics/util/draw.h b/include/rex/graphics/util/draw.h
-index 3da182d..220b960 100644
+index 82d7443..90d112a 100644
 --- a/include/rex/graphics/util/draw.h
 +++ b/include/rex/graphics/util/draw.h
 @@ -1,4 +1,3 @@
@@ -5652,7 +5652,7 @@ index 3da182d..220b960 100644
      assert_true(IsClearingColor());
      // Not doing -32...32 to -1...1 clamping here as a hack for k_16_16 and
      // k_16_16_16_16 blending emulation when using host render targets as it
-@@ -557,13 +735,15 @@ struct ResolveInfo {
+@@ -567,13 +745,15 @@ struct ResolveInfo {
      constants_out.coordinate_info = coordinate_info;
    }
  
@@ -5672,7 +5672,7 @@ index 3da182d..220b960 100644
      if (samples >= xenos::MsaaSamples::k2X) {
        height_samples_div_8 <<= 1;
        if (samples >= xenos::MsaaSamples::k4X) {
-@@ -572,7 +752,8 @@ struct ResolveInfo {
+@@ -582,7 +762,8 @@ struct ResolveInfo {
      }
      width_samples_div_8 *= draw_resolution_scale_x;
      height_samples_div_8 *= draw_resolution_scale_y;
@@ -5682,7 +5682,7 @@ index 3da182d..220b960 100644
    }
  };
  
-@@ -581,9 +762,115 @@ struct ResolveInfo {
+@@ -591,9 +772,115 @@ struct ResolveInfo {
  // color render target formats are properly emulated as -32...32, true if
  // emulated as snorm, with range limited to -1...1, but with correct blending
  // within that range.
@@ -17215,7 +17215,7 @@ index a7d508a..0b35b57 100644
 +}  // namespace gpu
 +}  // namespace xe
 diff --git a/src/graphics/pipeline/shader/interpreter.cpp b/src/graphics/pipeline/shader/interpreter.cpp
-index e481560..5338057 100644
+index 5ad6b87..40df01d 100644
 --- a/src/graphics/pipeline/shader/interpreter.cpp
 +++ b/src/graphics/pipeline/shader/interpreter.cpp
 @@ -9,24 +9,21 @@
@@ -17778,7 +17778,14 @@ index e481560..5338057 100644
          }
        } break;
        default: {
-@@ -580,37 +627,43 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -575,45 +622,51 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+   bool scalar_src_absolute = false;
+   switch (scalar_opcode_info.operand_count) {
+     case 1: {
+-      // r#/c#.w or r#/c#.wx.
++      // r#/c#.w, or r#/c#.wx unless the paired vector opcode has three
++      // operands, in which case r#/c#.wz.
+       const float* scalar_src_ptr;
        uint32_t scalar_src_register = instr.src_reg(3);
        std::array<float, 4> scalar_src_float_constant;
        if (instr.src_is_temp(3)) {
@@ -17806,11 +17813,14 @@ index e481560..5338057 100644
 +      scalar_operand_component_count =
 +          scalar_opcode_info.single_operand_is_two_component ? 2 : 1;
        for (uint32_t i = 0; i < scalar_operand_component_count; ++i) {
+-        // `b` is Z instead of X when the paired vector operation uses source 3.
+         uint32_t source_component =
+             i == 0 ? 3 : (vector_opcode_info.GetOperandCount() == 3 ? 2 : 0);
 -        scalar_operands[i] = scalar_src_ptr[ucode::AluInstruction::GetSwizzledComponentIndex(
--            scalar_src_swizzle, (3 + i) & 3)];
+-            scalar_src_swizzle, source_component)];
 +        scalar_operands[i] =
 +            scalar_src_ptr[ucode::AluInstruction::GetSwizzledComponentIndex(
-+                scalar_src_swizzle, (3 + i) & 3)];
++                scalar_src_swizzle, source_component)];
        }
      } break;
      case 2: {
@@ -17838,7 +17848,7 @@ index e481560..5338057 100644
      } break;
    }
    if (scalar_operand_component_count) {
-@@ -619,7 +672,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -622,7 +675,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
      for (uint32_t i = 0; i < scalar_operand_component_count; ++i) {
        float scalar_operand = FlushDenormal(scalar_operands[i]);
        *reinterpret_cast<uint32_t*>(&scalar_operand) =
@@ -17848,7 +17858,7 @@ index e481560..5338057 100644
            scalar_src_negate_bit;
        scalar_operands[i] = scalar_operand;
      }
-@@ -648,25 +702,30 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -651,25 +705,30 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
                                     : 0.0f;
      } break;
      case ucode::AluScalarOpcode::kMulsPrev2: {
@@ -17890,7 +17900,7 @@ index e481560..5338057 100644
      } break;
      case ucode::AluScalarOpcode::kSeqs: {
        state_.previous_scalar = float(scalar_operands[0] == 0.0f);
-@@ -675,13 +734,15 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -678,13 +737,15 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
        state_.previous_scalar = float(std::isgreater(scalar_operands[0], 0.0f));
      } break;
      case ucode::AluScalarOpcode::kSges: {
@@ -17908,7 +17918,7 @@ index e481560..5338057 100644
      } break;
      case ucode::AluScalarOpcode::kTruncs: {
        state_.previous_scalar = std::trunc(scalar_operands[0]);
-@@ -740,18 +801,20 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -743,18 +804,20 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
        state_.previous_scalar = 1.0f / std::sqrt(scalar_operands[0]);
      } break;
      case ucode::AluScalarOpcode::kMaxAs: {
@@ -17939,7 +17949,7 @@ index e481560..5338057 100644
      } break;
      case ucode::AluScalarOpcode::kSubs:
      case ucode::AluScalarOpcode::kSubsc0:
-@@ -780,7 +843,9 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -783,7 +846,9 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
      case ucode::AluScalarOpcode::kSetpInv: {
        state_.predicate = scalar_operands[0] == 1.0f;
        state_.previous_scalar =
@@ -17950,7 +17960,7 @@ index e481560..5338057 100644
      } break;
      case ucode::AluScalarOpcode::kSetpPop: {
        float new_counter = scalar_operands[0] - 1.0f;
-@@ -804,7 +869,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -807,7 +872,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
        state_.previous_scalar = float(std::isgreater(scalar_operands[0], 0.0f));
      } break;
      case ucode::AluScalarOpcode::kKillsGe: {
@@ -17960,7 +17970,7 @@ index e481560..5338057 100644
      } break;
      case ucode::AluScalarOpcode::kKillsNe: {
        state_.previous_scalar = float(scalar_operands[0] != 0.0f);
-@@ -833,16 +899,18 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -836,16 +902,18 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
        vector_result[i] = rex::saturate(vector_result[i]);
      }
    }
@@ -17983,7 +17993,7 @@ index e481560..5338057 100644
        for (uint32_t i = 0; i < 4; ++i) {
          uint32_t export_component_bit = UINT32_C(1) << i;
          float export_component = 0.0f;
-@@ -857,13 +925,15 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -860,13 +928,15 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
          }
          export_value[i] = export_component;
        }
@@ -18003,7 +18013,7 @@ index e481560..5338057 100644
        for (uint32_t i = 0; i < 4; ++i) {
          if (vector_result_write_mask & (UINT32_C(1) << i)) {
            vector_dest[i] = vector_result[i];
-@@ -871,7 +941,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -874,7 +944,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
        }
      }
      if (scalar_result_write_mask) {
@@ -18013,7 +18023,7 @@ index e481560..5338057 100644
        for (uint32_t i = 0; i < 4; ++i) {
          if (scalar_result_write_mask & (UINT32_C(1) << i)) {
            scalar_dest[i] = scalar_result;
-@@ -881,8 +952,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
+@@ -884,8 +955,8 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
    }
  }
  
@@ -18024,7 +18034,7 @@ index e481560..5338057 100644
    float* dest_data = GetTempRegister(dest, is_dest_relative);
    for (uint32_t i = 0; i < 4; ++i) {
      ucode::FetchDestinationSwizzle component_swizzle =
-@@ -915,7 +986,8 @@ void ShaderInterpreter::StoreFetchResult(uint32_t dest, bool is_dest_relative, u
+@@ -918,7 +989,8 @@ void ShaderInterpreter::StoreFetchResult(uint32_t dest, bool is_dest_relative, u
    }
  }
  
@@ -18034,7 +18044,7 @@ index e481560..5338057 100644
    // FIXME(Triang3l): Bit scan loops over components cause a link-time
    // optimization internal error in Visual Studio 2019, mainly in the format
    // unpacking. Using loops with up to 4 iterations here instead.
-@@ -924,15 +996,17 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -927,15 +999,17 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
      state_.vfetch_full_last = instr;
    }
  
@@ -18058,7 +18068,7 @@ index e481560..5338057 100644
    }
  
    // TODO(Triang3l): Find the default values for unused components.
-@@ -945,11 +1019,12 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -948,11 +1022,12 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
        used_result_components |= UINT32_C(1) << dest_component_swizzle;
      }
    }
@@ -18074,7 +18084,7 @@ index e481560..5338057 100644
      uint32_t buffer_end_dwords = fetch_constant.address + fetch_constant.size;
      uint32_t dword_0_address_dwords =
          uint32_t(int32_t(state_.vfetch_address_dwords) + instr.offset());
-@@ -961,7 +1036,12 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -964,7 +1039,12 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
        uint32_t dword_address_dwords = dword_0_address_dwords + i;
        if (dword_address_dwords >= fetch_constant.address &&
            dword_address_dwords < buffer_end_dwords) {
@@ -18088,7 +18098,7 @@ index e481560..5338057 100644
        }
        data[i] = dword_value;
      }
-@@ -974,7 +1054,8 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -977,7 +1057,8 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
      switch (instr.data_format()) {
        case xenos::VertexFormat::k_8_8_8_8: {
          packed_components = 0b1111;
@@ -18098,7 +18108,7 @@ index e481560..5338057 100644
          packed_offsets[1] = 8;
          packed_offsets[2] = 16;
          packed_offsets[3] = 24;
-@@ -1008,7 +1089,8 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -1011,7 +1092,8 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
        } break;
        case xenos::VertexFormat::k_16_16_16_16: {
          packed_components = 0b1111;
@@ -18108,7 +18118,7 @@ index e481560..5338057 100644
          packed_offsets[1] = packed_offsets[3] = 16;
          packed_dwords[1] = data[1];
        } break;
-@@ -1037,7 +1119,8 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -1040,7 +1122,8 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
              result[i] = float(int32_t(data[i]));
            }
            if (instr.is_normalized()) {
@@ -18118,7 +18128,7 @@ index e481560..5338057 100644
                for (uint32_t i = 0; i < 4; ++i) {
                  result[i] = (result[i] + 0.5f) / 2147483647.5f;
                }
-@@ -1081,25 +1164,29 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -1084,25 +1167,29 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
              continue;
            }
            uint32_t packed_width = packed_widths[i];
@@ -18155,7 +18165,7 @@ index e481560..5338057 100644
              }
            }
          }
-@@ -1134,7 +1221,9 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
+@@ -1137,7 +1224,9 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(ucode::VertexFetchInstruct
      }
    }
  
@@ -18314,7 +18324,7 @@ index a53a222..346cd2d 100644
 +}  //  namespace gpu
 +}  //  namespace xe
 diff --git a/src/graphics/pipeline/shader/translator.cpp b/src/graphics/pipeline/shader/translator.cpp
-index e472251..60f25ea 100644
+index 9d23a41..60a9cb4 100644
 --- a/src/graphics/pipeline/shader/translator.cpp
 +++ b/src/graphics/pipeline/shader/translator.cpp
 @@ -9,20 +9,15 @@
@@ -19033,7 +19043,7 @@ index e472251..60f25ea 100644
    uint32_t swizzle = op.src_swizzle();
    for (uint32_t j = 0; j < src_op.component_count; ++j, swizzle >>= 2) {
      src_op.components[j] = GetSwizzleFromComponentIndex(swizzle & 0x3);
-@@ -1163,20 +1217,24 @@ static void ParseAluInstructionOperand(const AluInstruction& op, uint32_t i,
+@@ -1164,20 +1218,24 @@ static void ParseAluInstructionOperand(const AluInstruction& op, uint32_t i,
      out_op.storage_source = InstructionStorageSource::kRegister;
      out_op.storage_index = AluInstruction::src_temp_reg(reg);
      out_op.is_absolute_value = AluInstruction::is_src_temp_value_absolute(reg);
@@ -19064,7 +19074,17 @@ index e472251..60f25ea 100644
      }
      out_op.is_absolute_value = op.abs_constants();
    }
-@@ -1200,20 +1258,26 @@ static void ParseAluInstructionOperand(const AluInstruction& op, uint32_t i,
+@@ -1189,7 +1247,8 @@ static void ParseAluInstructionOperand(const AluInstruction& op, uint32_t i,
+   } else if (swizzle_component_count == 2) {
+     // Scalar left-hand `a` (W) and right-hand `b` (X or Z).
+     out_op.components[0] = GetSwizzledAluSourceComponent(swizzle, 3);
+-    out_op.components[1] = GetSwizzledAluSourceComponent(swizzle, scalar_second_component);
++    out_op.components[1] =
++        GetSwizzledAluSourceComponent(swizzle, scalar_second_component);
+   } else if (swizzle_component_count == 3) {
+     assert_always();
+   } else if (swizzle_component_count == 4) {
+@@ -1201,20 +1260,26 @@ static void ParseAluInstructionOperand(const AluInstruction& op, uint32_t i,
  
  bool ParsedAluInstruction::IsVectorOpDefaultNop() const {
    if (vector_opcode != ucode::AluVectorOpcode::kMax ||
@@ -19097,7 +19117,7 @@ index e472251..60f25ea 100644
      if (vector_and_constant_result.storage_index != 0 ||
          vector_and_constant_result.storage_addressing_mode !=
              InstructionStorageAddressingMode::kAbsolute) {
-@@ -1232,7 +1296,8 @@ bool ParsedAluInstruction::IsVectorOpDefaultNop() const {
+@@ -1233,7 +1298,8 @@ bool ParsedAluInstruction::IsVectorOpDefaultNop() const {
    return true;
  }
  
@@ -19107,7 +19127,7 @@ index e472251..60f25ea 100644
                           ParsedAluInstruction& instr) {
    instr.is_predicated = op.is_predicated();
    instr.predicate_condition = op.predicate_condition();
-@@ -1250,30 +1315,33 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
+@@ -1251,30 +1317,33 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
      } else if (export_register >= ExportRegister::kExportData0 &&
                 export_register <= ExportRegister::kExportData4) {
        storage_target = InstructionStorageTarget::kExportData;
@@ -19147,7 +19167,7 @@ index e472251..60f25ea 100644
            "ShaderTranslator::ParseAluInstruction: Unsupported write to export "
            "{}",
            uint32_t(export_register));
-@@ -1330,13 +1398,15 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
+@@ -1331,13 +1400,15 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
    instr.scalar_opcode_name = scalar_opcode_info.name;
  
    instr.scalar_result.storage_target = storage_target;
@@ -19165,19 +19185,21 @@ index e472251..60f25ea 100644
      }
    }
    instr.scalar_result.is_clamped = op.scalar_clamp();
-@@ -1348,8 +1418,9 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
-   instr.scalar_operand_count = scalar_opcode_info.operand_count;
-   if (instr.scalar_operand_count) {
-     if (instr.scalar_operand_count == 1) {
+@@ -1352,9 +1423,10 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
+       // The scalar operation shares source 3 with the vector operation. If the
+       // vector operation uses source 3, the scalar `b` component is Z;
+       // otherwise it is X.
 -      ParseAluInstructionOperand(op, 3, scalar_opcode_info.single_operand_is_two_component ? 2 : 1,
--                                 instr.scalar_operands[0]);
+-                                 instr.scalar_operands[0],
+-                                 vector_opcode_info.GetOperandCount() == 3 ? 2 : 0);
 +      ParseAluInstructionOperand(
 +          op, 3, scalar_opcode_info.single_operand_is_two_component ? 2 : 1,
-+          instr.scalar_operands[0]);
++          instr.scalar_operands[0],
++          vector_opcode_info.GetOperandCount() == 3 ? 2 : 0);
      } else {
        // Constant and temporary register.
  
-@@ -1367,10 +1438,12 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
+@@ -1372,10 +1444,12 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
            const_op.storage_addressing_mode =
                InstructionStorageAddressingMode::kAddressRegisterRelative;
          } else {
@@ -19192,7 +19214,7 @@ index e472251..60f25ea 100644
        }
        const_op.component_count = 1;
        const_op.components[0] = GetSwizzledAluSourceComponent(src3_swizzle, 3);
-@@ -1381,7 +1454,8 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
+@@ -1386,7 +1460,8 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
        temp_op.is_absolute_value = op.abs_constants();
        temp_op.storage_source = InstructionStorageSource::kRegister;
        temp_op.storage_index = op.scalar_const_reg_op_src_temp_reg();
@@ -19202,7 +19224,7 @@ index e472251..60f25ea 100644
        temp_op.component_count = 1;
        temp_op.components[0] = GetSwizzledAluSourceComponent(src3_swizzle, 0);
      }
-@@ -1389,13 +1463,14 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
+@@ -1394,13 +1469,14 @@ void ParseAluInstruction(const AluInstruction& op, xenos::ShaderType shader_type
  }
  
  bool ParsedAluInstruction::IsScalarOpDefaultNop() const {
@@ -19220,7 +19242,7 @@ index e472251..60f25ea 100644
        return false;
      }
    }
-@@ -1406,22 +1481,27 @@ bool ParsedAluInstruction::IsScalarOpDefaultNop() const {
+@@ -1411,22 +1487,27 @@ bool ParsedAluInstruction::IsScalarOpDefaultNop() const {
  
  bool ParsedAluInstruction::IsNop() const {
    return scalar_opcode == ucode::AluScalarOpcode::kRetainPrev &&
@@ -23957,7 +23979,7 @@ index ec0df7c..7ac9cdd 100644
 +}  // namespace gpu
 +}  // namespace xe
 diff --git a/src/graphics/util/draw.cpp b/src/graphics/util/draw.cpp
-index 305380e..ed5253c 100644
+index c26e6ee..d40cd6f 100644
 --- a/src/graphics/util/draw.cpp
 +++ b/src/graphics/util/draw.cpp
 @@ -9,45 +9,48 @@
@@ -24777,6 +24799,17 @@ index 305380e..ed5253c 100644
    // Top-left - include .5 (0.128 treated as 0 covered, 0.129 as 0 not covered).
    x0 = (x0 + 127) >> 8;
    y0 = (y0 + 127) >> 8;
+@@ -845,8 +1081,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+   // rectangle internally to 8. While all the alignment should have already been
+   // done by Direct3D 9, just for safety of host implementation of resolve,
+   // force-align the rectangle by expanding (D3D9 expands to the right/bottom
+-  // for some reason, haven't found how left/top is rounded, but logically it
+-  // would make sense to expand to the left/top too).
++  // for some reason and takes the left/top as given, only requiring them to be
++  // aligned, but logically it would make sense to expand to the left/top too).
+   x0 &= ~int32_t(xenos::kResolveAlignmentPixels - 1);
+   y0 &= ~int32_t(xenos::kResolveAlignmentPixels - 1);
+   x1 = rex::align(x1, int32_t(xenos::kResolveAlignmentPixels));
 @@ -856,7 +1092,7 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    if (rb_surface_info.msaa_samples > xenos::MsaaSamples::k4X) {
      // Safety check because a lot of code assumes up to 4x.
@@ -24872,7 +24905,7 @@ index 305380e..ed5253c 100644
      }
    }
  
-@@ -947,58 +1195,67 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -947,10 +1195,11 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    uint32_t copy_dest_base_adjusted = rb_copy_dest_base;
    uint32_t copy_dest_extent_start, copy_dest_extent_end;
    auto rb_copy_dest_pitch = regs.Get<reg::RB_COPY_DEST_PITCH>();
@@ -24885,11 +24918,22 @@ index 305380e..ed5253c 100644
 +                texture_address::kStoragePitchHeightAlignmentBlocks);
 +  info_out.copy_dest_coordinate_info.pitch_aligned_div_32 =
 +      copy_dest_pitch_aligned >> 5;
-+  const uint32_t copy_dest_height_aligned =
-+      rex::align(rb_copy_dest_pitch.copy_dest_height,
-+                texture_address::kStoragePitchHeightAlignmentBlocks);
+   // For volume resolves.
+   // D3D writes pitch * level height in blocks to RB_COPY_SURFACE_SLICE.
+   // Only use copy_dest_height, which instead includes the top of a source
+@@ -959,32 +1208,40 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+   if (rb_copy_dest_info.copy_dest_array) {
+     uint32_t rb_copy_surface_slice = regs[XE_GPU_REG_RB_COPY_SURFACE_SLICE];
+     if (rb_copy_surface_slice && rb_copy_dest_pitch.copy_dest_pitch) {
+-      copy_dest_height = rb_copy_surface_slice / rb_copy_dest_pitch.copy_dest_pitch;
++      copy_dest_height =
++          rb_copy_surface_slice / rb_copy_dest_pitch.copy_dest_pitch;
+     }
+   }
++  const uint32_t copy_dest_height_aligned = rex::align(
++      copy_dest_height, texture_address::kStoragePitchHeightAlignmentBlocks);
    info_out.copy_dest_coordinate_info.height_aligned_div_32 =
--      (rb_copy_dest_pitch.copy_dest_height + (xenos::kTextureTileWidthHeight - 1)) >>
+-      (copy_dest_height + (xenos::kTextureTileWidthHeight - 1)) >>
 -      xenos::kTextureTileWidthHeightLog2;
 +      copy_dest_height_aligned >> 5;
    const FormatInfo& dest_format_info = *FormatInfo::Get(dest_format);
@@ -24909,42 +24953,68 @@ index 305380e..ed5253c 100644
 +        (UINT32_C(1) << xenos::GetTextureTiledYBaseGranularityLog2(
 +             bool(rb_copy_dest_info.copy_dest_array), bpp_log2)) -
 +        1;
+     // D3D advances RB_COPY_DEST_BASE in 32x32 macro tiles based on the
+-    // destination point. 8bpp/16bpp macro tiles are smaller than 4KB, so part
+-    // of the x offset can be left in the base's low bits. Move that part back
+-    // into dest_addr_x0 before the usual tiled calculation.
++    // destination point. 8bpp/16bpp macro tiles are smaller than 4KB,
++    // so part of the x offset can be left in the base's low bits.
++    // So this moves that part back into dest_addr_x0 before doing the usual
++    // tiled calculation. 534307D5's water refraction texture's middle 5_6_5
++    // strip hits this at x=480.
+     uint32_t dest_addr_base = rb_copy_dest_base;
+     uint32_t dest_addr_x0 = uint32_t(x0);
+     uint32_t dest_addr_y0 = uint32_t(y0);
+     if (!rb_copy_dest_info.copy_dest_array) {
+-      uint32_t dest_macro_tile_bytes_log2 = 2 * xenos::kTextureTileWidthHeightLog2 + bpp_log2;
++      uint32_t dest_macro_tile_bytes_log2 =
++          2 * xenos::kTextureTileWidthHeightLog2 + bpp_log2;
+       uint32_t dest_macro_phase =
+-          (rb_copy_dest_base & (xenos::kTextureSubresourceAlignmentBytes - 1)) >>
++          (rb_copy_dest_base &
++           (xenos::kTextureSubresourceAlignmentBytes - 1)) >>
+           dest_macro_tile_bytes_log2;
+       dest_addr_base -= dest_macro_phase << dest_macro_tile_bytes_log2;
+       dest_addr_x0 += dest_macro_phase << xenos::kTextureTileWidthHeightLog2;
+@@ -993,41 +1250,45 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+     uint32_t dest_addr_y1 = dest_addr_y0 + uint32_t(y1 - y0);
+     copy_dest_base_adjusted = dest_addr_base;
      info_out.copy_dest_coordinate_info.offset_x_div_8 =
--        (uint32_t(x0) & dest_base_relative_x_mask) >> xenos::kResolveAlignmentPixelsLog2;
-+        (uint32_t(x0) & dest_base_relative_x_mask) >>
+-        (dest_addr_x0 & dest_base_relative_x_mask) >> xenos::kResolveAlignmentPixelsLog2;
++        (dest_addr_x0 & dest_base_relative_x_mask) >>
 +        xenos::kResolveAlignmentPixelsLog2;
      info_out.copy_dest_coordinate_info.offset_y_div_8 =
--        (uint32_t(y0) & dest_base_relative_y_mask) >> xenos::kResolveAlignmentPixelsLog2;
-+        (uint32_t(y0) & dest_base_relative_y_mask) >>
+-        (dest_addr_y0 & dest_base_relative_y_mask) >> xenos::kResolveAlignmentPixelsLog2;
++        (dest_addr_y0 & dest_base_relative_y_mask) >>
 +        xenos::kResolveAlignmentPixelsLog2;
-     uint32_t dest_base_x = uint32_t(x0) & ~dest_base_relative_x_mask;
-     uint32_t dest_base_y = uint32_t(y0) & ~dest_base_relative_y_mask;
+     uint32_t dest_base_x = dest_addr_x0 & ~dest_base_relative_x_mask;
+     uint32_t dest_base_y = dest_addr_y0 & ~dest_base_relative_y_mask;
      if (rb_copy_dest_info.copy_dest_array) {
        // The base pointer is already adjusted to the Z / 8 (copy_dest_slice is
        // 3-bit).
 -      copy_dest_base_adjusted += texture_util::GetTiledOffset3D(
 -          int32_t(dest_base_x), int32_t(dest_base_y), 0, rb_copy_dest_pitch.copy_dest_pitch,
--          rb_copy_dest_pitch.copy_dest_height, bpp_log2);
+-          copy_dest_height, bpp_log2);
 +      copy_dest_base_adjusted += uint32_t(texture_address::Tiled3D(
 +          int32_t(dest_base_x), int32_t(dest_base_y), 0,
 +          copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
        copy_dest_extent_start =
--          rb_copy_dest_base + texture_util::GetTiledAddressLowerBound3D(
--                                  uint32_t(x0), uint32_t(y0), rb_copy_dest_info.copy_dest_slice,
+-          dest_addr_base + texture_util::GetTiledAddressLowerBound3D(
+-                               dest_addr_x0, dest_addr_y0, rb_copy_dest_info.copy_dest_slice,
 -                                  rb_copy_dest_pitch.copy_dest_pitch,
--                                  rb_copy_dest_pitch.copy_dest_height, bpp_log2);
-+          rb_copy_dest_base +
+-                                  copy_dest_height, bpp_log2);
++          dest_addr_base +
 +          uint32_t(texture_util::GetTiledAddressLowerBound3D(
-+              uint32_t(x0), uint32_t(y0), rb_copy_dest_info.copy_dest_slice,
++              dest_addr_x0, dest_addr_y0, rb_copy_dest_info.copy_dest_slice,
 +              copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
        copy_dest_extent_end =
--          rb_copy_dest_base + texture_util::GetTiledAddressUpperBound3D(
--                                  uint32_t(x1), uint32_t(y1), rb_copy_dest_info.copy_dest_slice + 1,
+-          dest_addr_base + texture_util::GetTiledAddressUpperBound3D(
+-                               dest_addr_x1, dest_addr_y1, rb_copy_dest_info.copy_dest_slice + 1,
 -                                  rb_copy_dest_pitch.copy_dest_pitch,
--                                  rb_copy_dest_pitch.copy_dest_height, bpp_log2);
-+          rb_copy_dest_base +
+-                                  copy_dest_height, bpp_log2);
++          dest_addr_base +
 +          uint32_t(texture_util::GetTiledAddressUpperBound3D(
-+              uint32_t(x1), uint32_t(y1), rb_copy_dest_info.copy_dest_slice + 1,
++              dest_addr_x1, dest_addr_y1, rb_copy_dest_info.copy_dest_slice + 1,
 +              copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
      } else {
 -      copy_dest_base_adjusted += texture_util::GetTiledOffset2D(
@@ -24953,18 +25023,18 @@ index 305380e..ed5253c 100644
 +          texture_address::Tiled2D(int32_t(dest_base_x), int32_t(dest_base_y),
 +                                   copy_dest_pitch_aligned, bpp_log2);
        copy_dest_extent_start =
-           rb_copy_dest_base +
--          texture_util::GetTiledAddressLowerBound2D(uint32_t(x0), uint32_t(y0),
+           dest_addr_base +
+-          texture_util::GetTiledAddressLowerBound2D(dest_addr_x0, dest_addr_y0,
 -                                                    rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
--      copy_dest_extent_end = rb_copy_dest_base + texture_util::GetTiledAddressUpperBound2D(
--                                                     uint32_t(x1), uint32_t(y1),
--                                                     rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
+-      copy_dest_extent_end = dest_addr_base + texture_util::GetTiledAddressUpperBound2D(
+-                                                  dest_addr_x1, dest_addr_y1,
+-                                                  rb_copy_dest_pitch.copy_dest_pitch, bpp_log2);
 +          texture_util::GetTiledAddressLowerBound2D(
-+              uint32_t(x0), uint32_t(y0), copy_dest_pitch_aligned, bpp_log2);
++              dest_addr_x0, dest_addr_y0, copy_dest_pitch_aligned, bpp_log2);
 +      copy_dest_extent_end =
-+          rb_copy_dest_base +
++          dest_addr_base +
 +          texture_util::GetTiledAddressUpperBound2D(
-+              uint32_t(x1), uint32_t(y1), copy_dest_pitch_aligned, bpp_log2);
++              dest_addr_x1, dest_addr_y1, copy_dest_pitch_aligned, bpp_log2);
      }
    } else {
 -    REXGPU_ERROR("Tried to resolve to format {}, which is not a ColorFormat",
@@ -24974,7 +25044,7 @@ index 305380e..ed5253c 100644
      copy_dest_extent_start = copy_dest_base_adjusted;
      copy_dest_extent_end = copy_dest_base_adjusted;
    }
-@@ -1007,11 +1264,14 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1036,11 +1297,14 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    assert_true(copy_dest_extent_end >= copy_dest_extent_start);
    info_out.copy_dest_base = copy_dest_base_adjusted;
    info_out.copy_dest_extent_start = copy_dest_extent_start;
@@ -24992,7 +25062,7 @@ index 305380e..ed5253c 100644
    uint32_t x0_samples = uint32_t(x0) << sample_count_log2_x;
    uint32_t y0_samples = uint32_t(y0) << sample_count_log2_y;
    uint32_t base_offset_x_tiles = x0_samples / xenos::kEdramTileWidthSamples;
-@@ -1019,9 +1279,10 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1048,9 +1312,10 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    info_out.coordinate_info.edram_offset_x_div_8 =
        (x0_samples % xenos::kEdramTileWidthSamples) >> (sample_count_log2_x + 3);
    info_out.coordinate_info.edram_offset_y_div_8 =
@@ -25006,7 +25076,7 @@ index 305380e..ed5253c 100644
    uint32_t edram_base_offset_tiles =
        base_offset_y_tiles * surface_pitch_tiles + base_offset_x_tiles;
  
-@@ -1030,7 +1291,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1059,7 +1324,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
        (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) &&
        REXCVAR_GET(resolve_resolution_scale_fill_half_pixel_offset) &&
        REXCVAR_GET(half_pixel_offset) &&
@@ -25016,7 +25086,7 @@ index 305380e..ed5253c 100644
    int32_t exp_bias = is_depth ? 0 : rb_copy_dest_info.copy_dest_exp_bias;
    ResolveEdramInfo depth_edram_info;
    depth_edram_info.packed = 0;
-@@ -1040,7 +1302,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1069,7 +1335,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
      depth_edram_info.is_depth = 1;
      // If wrapping happens, it's fine, it doesn't matter how many times and
      // where modulo xenos::kEdramTileCount is applied in this context.
@@ -25026,7 +25096,7 @@ index 305380e..ed5253c 100644
      depth_edram_info.format = uint32_t(rb_depth_info.depth_format);
      depth_edram_info.format_is_64bpp = 0;
      depth_edram_info.fill_half_pixel_offset = uint32_t(fill_half_pixel_offset);
-@@ -1054,21 +1317,25 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1083,21 +1350,25 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    if (!is_depth) {
      // Color.
      auto color_info = regs.Get<reg::RB_COLOR_INFO>(
@@ -25056,7 +25126,7 @@ index 305380e..ed5253c 100644
        // The texture expects 0x8001 = -32, 0x7FFF = 32, but the hack making
        // 0x8001 = -1, 0x7FFF = 1 is used - revert (this won't be correct if the
        // requested exponent bias is 27 or above, but it's a hack anyway, no need
-@@ -1097,7 +1364,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1126,7 +1397,8 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
    info_out.rb_color_clear = regs[XE_GPU_REG_RB_COLOR_CLEAR];
    info_out.rb_color_clear_lo = regs[XE_GPU_REG_RB_COLOR_CLEAR_LO];
  
@@ -25066,7 +25136,7 @@ index 305380e..ed5253c 100644
        "Resolve: {},{} <= x,y < {},{}, {} -> {} at 0x{:08X} (potentially "
        "modified memory range 0x{:08X} to 0x{:08X})",
        x0, y0, x1, y1,
-@@ -1105,26 +1373,26 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
+@@ -1134,26 +1406,26 @@ bool GetResolveInfo(const RegisterFile& regs, const memory::Memory& memory,
                       xenos::DepthRenderTargetFormat(depth_edram_info.format))
                 : xenos::GetColorRenderTargetFormatName(
                       xenos::ColorRenderTargetFormat(color_edram_info.format)),
@@ -25107,7 +25177,7 @@ index 305380e..ed5253c 100644
      if (edram_info.msaa_samples >= xenos::MsaaSamples::k4X) {
        shader = source_is_64bpp ? ResolveCopyShaderIndex::kFast64bpp4xMSAA
                                 : ResolveCopyShaderIndex::kFast32bpp4xMSAA;
-@@ -1163,17 +1431,19 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
+@@ -1192,17 +1464,19 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
    constants_out.dest_base = copy_dest_base;
  
    if (shader != ResolveCopyShaderIndex::kUnknown) {
@@ -25137,7 +25207,7 @@ index 305380e..ed5253c 100644
      assert_always();
      group_count_x_out = 0;
      group_count_y_out = 0;
-@@ -1182,4 +1452,6 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
+@@ -1211,4 +1485,6 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(uint32_t draw_resolution_scale
    return shader;
  }
  

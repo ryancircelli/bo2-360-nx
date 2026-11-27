@@ -1063,6 +1063,12 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
     case PM4_VIZ_QUERY:
       result = ExecutePacketType3_VIZ_QUERY(reader, packet, count);
       break;
+    case PM4_WAIT_IB_PFD_COMPLETE:
+      // Waits for earlier INDIRECT_BUFFER_PFD base and size writes. No wait is
+      // needed since we process indirect buffers synchronously.
+      reader->AdvanceRead(count * sizeof(uint32_t));
+      result = true;
+      break;
 
     case PM4_SET_BIN_MASK_LO: {
       uint32_t value = reader->ReadAndSwap<uint32_t>();

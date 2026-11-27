@@ -933,6 +933,20 @@ void MslShaderTranslator::ProcessVertexFetchInstruction(
     }
   }
   Close();
+  // Words at or past the end of the fetch buffer read as 0, like the hardware
+  // (the shared memory binding covers all of physical memory, so they would
+  // otherwise load unrelated guest data). Games rely on it: an overallocated
+  // draw expects the vertices it never wrote to collapse into degenerate
+  // primitives. Size in words is bits 2:25 of the second fetch constant word.
+  std::string end = NewTemp("vend");
+  Line("uint {} = (({} >> 2u) & 0xFFFFFFu) * 4u + ({} & {});", end, fc1, fc0,
+       U(~uint32_t(3)));
+  for (uint32_t i = 0; i < 4; ++i) {
+    if (needed_words & (1u << i)) {
+      Line("if (uint(xe_vfetch_address + {}) >= {}) {}.{} = 0u;",
+           (base_words + int32_t(i)) * 4, end, w, kComp[i]);
+    }
+  }
   // Endian swap.
   std::string e = NewTemp("ve");
   std::string wm = Mask(needed_words);

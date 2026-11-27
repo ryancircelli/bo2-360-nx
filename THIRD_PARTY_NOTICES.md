@@ -51,6 +51,21 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `11742bf` and `6384603` `module_stub.cpp` (Tom Clay) | a function that runs off its end tail-calls the function there; test harness tail-call edges | `sdk/src/codegen/function_graph.cpp`, `sdk/src/codegen/test_support.cpp` |
 | ReXGlue SDK `6384603` `tests/ppc/asm` (Tom Clay, Xenia contributors) | PPC instruction test cases | `sdk/tests/ppc/asm/` |
 
+| Xenia Canary `4a863a0e1` (goldislead) | keep a separate base page when mip_min_level is nonzero; base map samples level 0 | `sdk/src/graphics/pipeline/texture/util.cpp`, `sdk/src/graphics/metal/port/rex/graphics/metal/metal_texture_cache.cc`, `sdk/src/graphics/vulkan/texture_cache.cpp` |
+| Xenia Canary `344fca758` (bomabomaboma) | 2x1 packed mip tails laid out along X | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `bc6b7a020` (goldislead) | 2D array and volume mip layout | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `81e3deaee` (goldislead) | rounded dimensions for packed base slice strides | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `19da17403` (goldislead) | linear 96bpp mip row pitch | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `c9c8e483b` (goldislead) | tiled 3D address lower bound | `sdk/include/rex/graphics/pipeline/texture/util.h` |
+| Xenia Canary `c332733af` (goldislead) | exact tiled 3D address upper bound | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `3e9d62ffc` (knuckleslee) | PM4_WAIT_IB_PFD_COMPLETE is skipped instead of ending the ring buffer | `sdk/src/graphics/command_processor.cpp` |
+| Xenia Canary `92ada8ebc` (Michael Oliver) | two-component scalar operand `b` is Z when the paired vector op uses source 3 | `sdk/src/graphics/pipeline/shader/translator.cpp`, `sdk/src/graphics/pipeline/shader/interpreter.cpp`, `sdk/include/rex/graphics/format/ucode.h`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
+| Xenia Canary `e20f26963` (SaveEditors) | GPU registers start at hardware reset defaults | `sdk/src/graphics/register_file.cpp` |
+| Xenia Canary `89609297c` (bomabomaboma) | tiled resolve destination offsets below 32bpp | `sdk/src/graphics/util/draw.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
+| Xenia Canary `d8731edc9` (goldislead) | volume resolve slice spacing from RB_COPY_SURFACE_SLICE | `sdk/src/graphics/util/draw.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
+| Xenia Canary `16e1eb8e2` (goldislead) | 64bpp clear values: RB_COLOR_CLEAR_LO is the low dword | `sdk/include/rex/graphics/util/draw.h`, `sdk/src/graphics/metal/port/rex/graphics/metal/metal_render_target_cache.cc`, `sdk/src/graphics/vulkan/render_target_cache.cpp`, `sdk/src/graphics/d3d12/render_target_cache.cpp`, `sdk/src/graphics/metal/patches/sdk-metal.patch` |
+| Xenia Canary `9e9d3cdd3` (goldislead, has207) | out-of-bounds vertex fetch words read as 0 (re-expressed in our MSL translator) | `sdk/src/graphics/metal/port/rex/graphics/metal/metal_msl_translator.cc` |
+
 ## Libraries
 
 Libraries used by the SDK, the NRO and the code generator, fetched from the submodules of ReXGlue SDK v0.10.0
