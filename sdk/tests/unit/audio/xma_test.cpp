@@ -8,6 +8,7 @@
 #include <rex/audio/xma/context.h>
 #include <rex/audio/xma/helpers.h>
 
+using rex::audio::XMA_CONTEXT_DATA;
 using rex::audio::XmaContext;
 namespace xma = rex::audio::xma;
 
@@ -114,4 +115,30 @@ TEST_CASE("ConvertFrame rounds to nearest and saturates", "[xma]") {
   CHECK(be16(stereo, 0) == 2);  // L0
   CHECK(be16(stereo, 1) == 3);  // R0, interleaved
   CHECK(be16(stereo, 2) == -2);
+}
+
+TEST_CASE("Loop end below the packet header is no loop end", "[xma]") {
+  // Synthetic looped stream: frames start at these bit offsets in packet 0 (header is 32 bits).
+  const uint32_t frames[] = {32, 1200, 2600, 4100};
+  static const uint32_t kZero[sizeof(XMA_CONTEXT_DATA) / 4] = {};
+  auto loop_hits = [&](uint32_t loop_end) {
+    XMA_CONTEXT_DATA data(kZero);
+    data.loop_count = 2;
+    data.loop_end = loop_end;
+    int hits = 0;
+    for (uint32_t f : frames) {
+      data.input_buffer_read_offset = f;
+      hits += XmaContext::IsLoopEnd(data);
+    }
+    return hits;
+  };
+  CHECK(loop_hits(2600) == 1);  // a real loop end still loops
+  CHECK(loop_hits(32) == 1);    // a loop end on the first frame is valid
+  CHECK(loop_hits(0) == 0);     // unset loop end: was clamped to 32 and looped on frame 0
+  CHECK(loop_hits(31) == 0);    // inside the header
+
+  XMA_CONTEXT_DATA off(kZero);
+  off.loop_end = 2600;
+  off.input_buffer_read_offset = 2600;
+  CHECK_FALSE(XmaContext::IsLoopEnd(off));  // loop_count 0: looping disabled
 }

@@ -227,6 +227,13 @@ class XmaContext {
   // FFmpeg float planar PCM of one frame to big-endian int16, interleaved when stereo.
   static void ConvertFrame(const uint8_t** samples, bool is_two_channel, uint8_t* output_buffer);
 
+  // True when the read offset sits on an active loop end. A loop_end inside the packet header
+  // (0 when the title never set one) is no loop end at all (rexglue PR 638).
+  static bool IsLoopEnd(const XMA_CONTEXT_DATA& data) {
+    return data.loop_count > 0 && data.loop_end >= kBitsPerPacketHeader &&
+           data.input_buffer_read_offset == data.loop_end;
+  }
+
   // Savepoint (same-process save/load): the host-side decode state that the guest context data
   // does not hold. Called only while every other thread is parked, so no lock is taken.
   struct SavepointState {
