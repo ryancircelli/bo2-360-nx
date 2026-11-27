@@ -1,6 +1,9 @@
 // Guest texture layout and fetch-constant checks for fixes ported from Xenia
 // Canary (BSD-3-Clause).
 
+#include <algorithm>
+#include <cstdint>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <rex/graphics/pipeline/texture/util.h>
@@ -130,4 +133,38 @@ TEST_CASE("linear mip row pitch", "[texture_util]") {
       xenos::DataDimension::k2DOrStacked, 2, 64, 64, 1, false, xenos::TextureFormat::k_8_8_8_8,
       false, true, 1);
   CHECK(rgba8.mips[1].row_pitch_bytes == 256);
+}
+
+namespace {
+constexpr uint32_t kPitch3D = 64, kHeight3D = 64;
+int64_t Tiled3D(uint32_t x, uint32_t y, uint32_t z, uint32_t bpb_log2) {
+  return texture_util::GetTiledOffset3D(int32_t(x), int32_t(y), int32_t(z), kPitch3D, kHeight3D,
+                                        bpb_log2);
+}
+}  // namespace
+
+// Canary c9c8e483b: the lowest address in a 3D tile of an odd Z/4 group is at
+// Y=8, and the Z alignment mask was missing its -1.
+TEST_CASE("tiled 3D lower bound is the tile minimum", "[texture_util]") {
+  for (uint32_t bpb_log2 = 0; bpb_log2 <= 4; ++bpb_log2) {
+    for (uint32_t front : {0u, 2u, 4u, 5u}) {
+      for (uint32_t top : {0u, 40u}) {
+        for (uint32_t left : {0u, 33u}) {
+          uint32_t x0 = left & ~31u, y0 = top & ~31u, z0 = front & ~3u;
+          int64_t tile_min = INT64_MAX;
+          for (uint32_t z = z0; z < z0 + 4; ++z) {
+            for (uint32_t y = y0; y < y0 + 32; ++y) {
+              for (uint32_t x = x0; x < x0 + 32; ++x) {
+                tile_min = std::min(tile_min, Tiled3D(x, y, z, bpb_log2));
+              }
+            }
+          }
+          INFO("bpb_log2=" << bpb_log2 << " left=" << left << " top=" << top
+                           << " front=" << front);
+          CHECK(int64_t(texture_util::GetTiledAddressLowerBound3D(
+                    left, top, front, kPitch3D, kHeight3D, bpb_log2)) == tile_min);
+        }
+      }
+    }
+  }
 }
