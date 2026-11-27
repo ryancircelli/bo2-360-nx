@@ -1,0 +1,35 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "me2",
+  "status": "unproven",
+  "navigation_timeout_s": 900,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "new game|male|normal|confirm|accept|options",
+      "commands": [
+        "press a 800"
+      ]
+    },
+    {
+      "text": "no time to argue|gave you an order|there.s no|wheel",
+      "commands": [
+        "stick l 1 0",
+        "press a 600",
+        "stick l off"
+      ]
+    }
+  ],
+  "controls": {
+    "movement": "stick l 0 1 1500",
+    "camera-left": "stick r -0.45 0 300",
+    "camera-right": "stick r 0.45 0 300",
+    "action": "press a 500"
+  }
+}

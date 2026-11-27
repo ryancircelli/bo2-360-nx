@@ -22,6 +22,9 @@ _driving_spec = importlib.util.spec_from_file_location("gate_driving", os.path.j
 _driving = importlib.util.module_from_spec(_driving_spec)
 _driving_spec.loader.exec_module(_driving)
 verify_driving = _driving.verify
+_condition_spec = importlib.util.spec_from_file_location('gate_condition_routes', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'condition_routes.py'))
+_condition = importlib.util.module_from_spec(_condition_spec)
+_condition_spec.loader.exec_module(_condition)
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,16 +38,18 @@ RUNS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'runs', 'gates')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
-    'me2': dict(app='Mass Effect 2.app', drive='me2-menu', scene_s=90, settle_s=60, seed='me2-360'),
-    'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
+    'halo3': dict(app='Halo 3.app', drive='halo3-play', scene_s=180, settle_s=60, seed='halo3-360'),
+    'fallout3': dict(app='Fallout 3.app', drive='fallout3-play', scene_s=180, settle_s=60, seed='fallout3-360'),
+    'me2': dict(app='Mass Effect 2.app', drive='me2-play', scene_s=90, settle_s=60, seed='me2-360'),
+    'gears': dict(app='Gears of War.app', drive='gears-play', scene_s=180, settle_s=60, seed='gears-360'),
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None),
     'nfsmw': dict(app='Need for Speed Most Wanted.app',   drive='nfsmw-drive', scene_s=200, settle_s=75, seed='nfsmw-360'),
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
     # new games (boot + shot gates; drive needs a rule in driving.py and a route): nfsmw2012 has no drive route, so its drive gate FAILs closed
-    'ac1': dict(app="Assassin's Creed.app", drive='ac1-drive', scene_s=150, settle_s=60, seed='ac1-360'),
-    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive=None, scene_s=180, settle_s=75, seed='nfsmw2012-360'),
+    'ac1': dict(app="Assassin's Creed.app", drive='ac1-play', scene_s=150, settle_s=60, seed='ac1-360'),
+    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive='nfsmw2012-play', scene_s=180, settle_s=75, seed='nfsmw2012-360'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
@@ -96,6 +101,9 @@ def resolve_route(game, route):
 
 def route_len(path):
     """Seconds a pad script runs: the largest time in `padN = a-b:button, ...` lines, or duration_s."""
+    conditional = _condition.load(path)
+    if conditional:
+        return conditional.get('navigation_timeout_s', 900) + conditional.get('play_timeout_s', 480)
     best = 0.0
     for line in open(path):
         line = line.split('#', 1)[0]
@@ -110,6 +118,8 @@ def route_len(path):
 
 def route_env(route):
     """The route's environment, like boot_test.sh / live_session.py build it for SDK pads."""
+    if _condition.load(route):
+        return {'REX_HID_VIRTUAL_PADS': '1'}
     env = {}
     for line in open(route):
         line = line.split('#', 1)[0]
@@ -372,6 +382,8 @@ def g_boot(a, G):
 
 
 def g_shot(a, G):
+    if a.route_file and _condition.load(a.route_file):
+        return g_play(a, G)
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
     at = a.at or GAMES[a.game]['scene_s']
@@ -400,6 +412,8 @@ def g_shot(a, G):
 
 
 def g_drive(a, G):
+    if a.route_file and _condition.load(a.route_file):
+        return g_play(a, G)
     route = a.route_file
     length = route_len(route) if route else a.secs
     if not G.wait_ready(a.ready_timeout):
@@ -437,6 +451,28 @@ def g_drive(a, G):
     if new is not None:
         facts += f' new-kinds {len(new)}'
     return out_line('PASS' if ok else 'FAIL', 'drive', a.game, facts, a.out, a.out)
+
+
+def g_play(a, G):
+    if not G.wait_ready(a.ready_timeout):
+        return fail_start(a, G, 'control channel never answered')
+    recipe = _condition.load(a.route_file)
+    try:
+        if recipe['game'] != a.game:
+            raise ValueError('route game differs from the selected game')
+        run = _condition.Runner(G, recipe, a.out, _driving).run()
+        text = G.log_text()
+        alive, crash = G.alive(), CRASH.search(text)
+        proof = verify_driving(a.game, a.out, text)
+        ok = alive and not crash and proof['passed'] and run['complete']
+        facts = f'gameplay {proof["passed"]} {proof["reason"]}'
+        if run.get('error'):
+            facts += ' route-error ' + run['error']
+        if crash:
+            facts += ' LOG ' + log_hit(crash)
+        return out_line('PASS' if ok else 'FAIL', a.gate, a.game, facts, a.out, a.out)
+    finally:
+        G.stop()
 
 
 def g_guide(a, G):
@@ -835,7 +871,7 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2', 'halo3': 'halo', 'fallout3': 'fallout'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli

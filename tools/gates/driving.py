@@ -16,6 +16,86 @@ LOG_MARKER = {'gears': re.compile(r'default_checkpoint\.sav')}
 TEXT_MARKER = {'ac1': re.compile(r'press any button to interact|hidden blade|notoriety|synchroni[sz]', re.I)}
 GAMES = RACERS + SHOOTERS + ('fh1', 'nfshp') + tuple(LOG_MARKER) + tuple(TEXT_MARKER)
 MENU = re.compile(r'safe\s*house|resume free roam|select car|career menu|pause menu|leave.*safe|main menu|photo mode|sponsor challenges|resume game|restart level|quit game', re.I)
+NEW_GAMES = ('gears', 'ac1', 'nfsmw2012', 'halo3', 'fallout3', 'me2')
+GAMES += ('halo3', 'fallout3', 'me2')
+FRONTEND = re.compile(r'press.*start|main menu|new game|new campaign|gene projection|select difficulty|achievements|resume game|memory paused|options', re.I)
+CAMPAIGN = {
+    'gears': re.compile(r'default_checkpoint\.sav', re.I),
+    'ac1': re.compile(r'assassin\.(?:sav|dat)', re.I),
+    'halo3': re.compile(r'010_jungle', re.I),
+    'fallout3': re.compile(r'XamShowKeyboardUI.*answered', re.I),
+    'me2': re.compile(r'BIO[AD]_[^\r\n]*Pro(?:Cer|Nor|L)', re.I),
+}
+
+
+def play_state(game, words, log):
+    """State evidence is necessary but never sufficient: drive also needs interventions."""
+    text = ' '.join(w['text'] for w in words)
+    if FRONTEND.search(text) or MENU.search(text):
+        return False
+    if game == 'nfsmw2012':
+        return hud_present(words)
+    if game == 'ac1' and re.search(r'first person|vision|high profile|synchroni[sz]|interact', text, re.I):
+        return True
+    if game == 'halo3' and any(w['x'] > .7 and w['y'] < .2 and re.search(r'\d{2,3}', w['text']) for w in words):
+        return True
+    return bool(game in CAMPAIGN and CAMPAIGN[game].search(log))
+
+
+def verify_play(game, out, log):
+    """Reject historical alive/cinematic-only runs, even if a save was opened earlier."""
+    proof = dict(game=game, passed=False, errors=[], reason='missing condition-driven gameplay evidence')
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('gate_condition_routes', os.path.join(HERE, 'condition_routes.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with open(os.path.join(out, 'play.json')) as f:
+            run = json.load(f)
+        if run.get('version') != 1 or run.get('game') != game or not run.get('complete'):
+            raise ValueError('conditional route did not complete')
+        start, end = run['play_started'], run['play_ended']
+        if end - start < 120:
+            raise ValueError('less than 120 seconds of verified gameplay')
+        observations = {s['path']: s for s in run['observations']}
+        active = [s for s in run['observations'] if start <= s['at'] <= end]
+        if len(active) < 3 or any(not s['state'] or not play_state(game, s['words'], log) for s in active):
+            raise ValueError('menu/cutscene/unknown state in the gameplay interval')
+        stamps = [s['at'] for s in active]
+        if stamps != sorted(stamps) or any(b-a > 30 for a,b in zip(stamps, stamps[1:])):
+            raise ValueError('gameplay observations have a gap greater than 30 seconds')
+        commands = [e['command'] for e in run['events'] if 'command' in e and e.get('reply', '').startswith('ok')]
+        if not any(c.startswith('record ') for c in commands) or run.get('record_error'):
+            raise ValueError('live input recording failed')
+        counts = dict(movement=0, action=0, **{'camera-left': 0, 'camera-right': 0})
+        proof['trials'] = []
+        for trial in run['trials']:
+            a, b = observations[trial['before']], observations[trial['after']]
+            if not (start <= a['at'] < b['at'] <= end) or trial['command'] not in commands:
+                continue
+            delta = scene_change(a['path'], b['path'])
+            passed = delta is not None and delta >= 4
+            kind = trial['kind']
+            result = dict(kind=kind, delta=delta)
+            if kind.startswith('camera-'):
+                shift, confidence = module.horizontal_motion(a['path'], b['path'])
+                result.update(shift=shift, confidence=confidence)
+                passed = passed and confidence >= 1.08 and (shift >= 1 if kind == 'camera-left' else shift <= -1)
+            if passed and kind in counts:
+                counts[kind] += 1
+            result['passed'] = bool(passed)
+            proof['trials'].append(result)
+        proof['counts'] = counts
+        proof['duration_s'] = end-start
+        proof['passed'] = (counts['movement'] >= 2 and counts['action'] >= 2
+                           and counts['camera-left'] >= 2 and counts['camera-right'] >= 2)
+        proof['reason'] = ('120s gameplay, movement/action and repeated camera reversals verified' if proof['passed']
+                           else 'missing movement/action or input-correlated camera reversals')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        proof['errors'].append(str(error))
+    with open(os.path.join(out, 'driving.json'), 'w') as f:
+        json.dump(proof, f, indent=2)
+    return proof
 
 
 def recognize(path):
@@ -111,6 +191,8 @@ def scene_change(before, after):
 
 
 def verify(game, out, log):
+    if game in NEW_GAMES:
+        return verify_play(game, out, log)
     proof = {'game': game, 'passed': False, 'samples': [], 'pairs': [], 'errors': []}
     if game not in GAMES:
         proof['reason'] = f'no gameplay rule for {game}: add one to tools/gates/driving.py'

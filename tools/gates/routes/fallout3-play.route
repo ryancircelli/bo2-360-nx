@@ -1,0 +1,39 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "fallout3",
+  "status": "unproven",
+  "navigation_timeout_s": 900,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "continue|new|yes|male|female|confirm",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "gene projection|race|face|hair",
+      "commands": [
+        "press rt 600"
+      ]
+    },
+    {
+      "text": "finished|done|is this",
+      "commands": [
+        "press a 600"
+      ]
+    }
+  ],
+  "controls": {
+    "movement": "stick l 0 1 1500",
+    "camera-left": "stick r -0.45 0 300",
+    "camera-right": "stick r 0.45 0 300",
+    "action": "press a 500"
+  }
+}
