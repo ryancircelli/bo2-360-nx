@@ -1,15 +1,9 @@
 # The macOS app of this game: read by tools/mac/pack_app.py --game me2 (tools/mac/make_game_app.sh me2).
 # Game facts the executable needs (title id, executable, renderer defaults) are in game.toml; this file only says how
-# the app around it is named, where it keeps saves and logs, and where it looks for the game data.
+# the app around it is named. Saves folder, data path, bundle id and the rest follow from the folder name
+# (tools/mac/pack_app.py game_manifest) unless set here.
 name = "Mass Effect 2"                         # the app's name and its launcher (CFBundleExecutable)
-executable = "me2"                    # the game binary in the build folder
-bundle_id = "io.github.ryancircelli.me2-360"
-version = "0.1.0"
-support_folder = "me2-360"             # ~/Library/Application Support/<this> (saves, settings) and ~/Library/Logs/<this>
-env_prefix = "ME2"                 # ME2_DATA, ME2_SUPPORT_DIR, ME2_LOG_DIR, ...
 data_path = "~/Games/Xbox360/me2/data"       # the extracted disc (default.xex at its top); never copied into the app
-settings = "app_settings.toml"               # first settings file; the app keeps the live copy in the support folder
-shaders = false                              # no Vulkan shader library: draws with Metal
 microphone = "Mass Effect 2 uses the microphone only if the game asks for it."
 
 # What tools/mac/build_app.py builds this app from. The recompiled code is made from these exact executables: another
