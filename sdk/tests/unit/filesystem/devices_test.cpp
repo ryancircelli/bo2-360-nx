@@ -229,3 +229,36 @@ TEST_CASE("STFS container mounts a synthetic package and reads chained files", "
 
   CHECK(device.ResolvePath("nope.txt") == nullptr);
 }
+
+TEST_CASE("Range cache keys on the absolute path so game: and update: with one relative path stay apart",
+          "[vfs][host]") {
+  using namespace rex::filesystem;
+  Temp temp;
+  constexpr size_t kSize = 512 * 1024;  // above switch_io_ranges_min_kb so the range cache is eligible
+  for (const char* dir : {"game", "update"}) {
+    std::filesystem::create_directories(temp.path / dir);
+    std::ofstream out(temp.path / dir / "data.bin", std::ios::binary);
+    std::string content(kSize, dir[0]);
+    out.write(content.data(), content.size());
+  }
+  VirtualFileSystem vfs;
+  REQUIRE(vfs.RegisterDevice(std::make_unique<HostPathDevice>("\\Device\\Game", temp.path / "game", true)));
+  REQUIRE(vfs.RegisterDevice(std::make_unique<HostPathDevice>("\\Device\\Update", temp.path / "update", true)));
+  REQUIRE(vfs.RegisterSymbolicLink("game:", "\\Device\\Game"));
+  REQUIRE(vfs.RegisterSymbolicLink("update:", "\\Device\\Update"));
+  for (int pass = 0; pass < 2; ++pass) {  // second pass would hit the cache
+    for (auto [path, expect] : {std::pair{"game:\\data.bin", 'g'}, std::pair{"update:\\data.bin", 'u'}}) {
+      rex::filesystem::File* raw = nullptr;
+      auto* entry = vfs.ResolvePath(path);
+      REQUIRE(entry);
+      REQUIRE(entry->Open(FileAccess::kGenericRead, &raw) == X_STATUS_SUCCESS);
+      FilePtr file(raw);
+      std::vector<uint8_t> buf(kSize);
+      size_t n = 0;
+      REQUIRE(file->ReadSync(buf, 0, &n) == X_STATUS_SUCCESS);
+      CHECK(n == kSize);
+      CHECK(buf[0] == uint8_t(expect));
+      CHECK(buf[kSize - 1] == uint8_t(expect));
+    }
+  }
+}
