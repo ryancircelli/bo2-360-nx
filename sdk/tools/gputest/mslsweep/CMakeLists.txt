@@ -18,5 +18,5 @@ add_executable(rexgpu-mslsweep mslsweep.cpp
     ${S}/pipeline/shader/dxbc_translator_om.cpp ${P}/thirdparty/dxbc/DXBCChecksum.cpp
     ${M}/metal_flags.cpp ${M}/port/rex/graphics/metal/metal_msl_translator.cc)
 target_include_directories(rexgpu-mslsweep BEFORE PRIVATE ${M}/port ${P}/include ${P} ${M})
-target_compile_options(rexgpu-mslsweep PRIVATE -include ${M}/compat.h -fno-strict-aliasing -fno-char8_t)
+target_compile_options(rexgpu-mslsweep PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/compat_host.h -fno-strict-aliasing -fno-char8_t)
 target_link_libraries(rexgpu-mslsweep PRIVATE rexruntime xxHash::xxhash renderdoc)
