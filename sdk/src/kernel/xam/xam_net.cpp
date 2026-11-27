@@ -33,7 +33,6 @@
 #include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/logging.h>
 #include <cstdio>
-#include <random>
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/string.h>
@@ -230,11 +229,18 @@ u32 NetDll_XNetGetOpt_entry(u32 one, u32 option_id, mapped_void buffer_ptr,
   }
 }
 
-u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer_ptr, u32 length) {
-  // For now, constant values.
-  // This makes replicating things easier.
-  std::memset(buffer_ptr, 0xBB, length);
-
+u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer, u32 length) {
+  // Match the credited Xenia reference's null/empty-buffer handling. Random
+  // nonces must differ across peers and calls; a fixed fill breaks that contract.
+  if (!buffer || !length) return 0;
+  std::random_device random;
+  auto* bytes = buffer.as<uint8_t*>();
+  for (u32 offset = 0; offset < length;) {
+    const uint32_t value = random();
+    const u32 count = std::min(length - offset, u32(sizeof(value)));
+    std::memcpy(bytes + offset, &value, count);
+    offset += count;
+  }
   return 0;
 }
 
@@ -696,13 +702,8 @@ u32 NetDll_XNetGetTitleXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
 // XNetCreateKey(caller, XNKID* key_id, XNKEY* key): fills the 8-byte id and 16-byte key with random bytes.
 u32 NetDll_XNetCreateKey_entry(u32 caller, mapped_void key_id, mapped_void key) {
   if (!key_id || !key) return 0x2726;  // WSAEINVAL
-  std::random_device rd;
-  auto fill = [&](void* p, size_t n) {
-    auto* b = static_cast<uint8_t*>(p);
-    for (size_t i = 0; i < n; ++i) b[i] = uint8_t(rd());
-  };
-  fill(key_id.host_address(), 8);
-  fill(key.host_address(), 16);
+  NetDll_XNetRandom_entry(caller, key_id, 8);
+  NetDll_XNetRandom_entry(caller, key, 16);
   return 0;
 }
 

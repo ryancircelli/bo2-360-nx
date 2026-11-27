@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -212,4 +213,39 @@ TEST_CASE("XBDM services copy mapped memory, validate ranges, and identify the r
     ok &= DmFreePool_entry(source) == kDmSuccess;
     return ok;
   });
+}
+
+TEST_CASE("XNet random fills and session keys vary without writing outside their buffers", "[kernel][net]") {
+  using namespace rex;
+  using namespace rex::kernel::xam;
+  std::array<uint8_t, 66> first{}, second{};
+  first.fill(0x5A);
+  second.fill(0x5A);
+  REQUIRE(NetDll_XNetRandom_entry(1, mapped_void(first.data() + 1, 0), 64) == 0);
+  REQUIRE(NetDll_XNetRandom_entry(1, mapped_void(second.data() + 1, 0), 64) == 0);
+  CHECK(first != second);
+  CHECK(first.front() == 0x5A);
+  CHECK(first.back() == 0x5A);
+  CHECK(second.front() == 0x5A);
+  CHECK(second.back() == 0x5A);
+  REQUIRE(NetDll_XNetRandom_entry(1, nullptr, 0) == 0);
+  REQUIRE(NetDll_XNetRandom_entry(1, nullptr, 32) == 0);
+  // Partial native random words must not overwrite even a one-byte buffer.
+  first.fill(0x5A);
+  REQUIRE(NetDll_XNetRandom_entry(1, mapped_void(first.data() + 1, 0), 1) == 0);
+  CHECK(first[0] == 0x5A);
+  CHECK(first[2] == 0x5A);
+  first.fill(0x5A);
+  second.fill(0x5A);
+  REQUIRE(NetDll_XNetCreateKey_entry(1, mapped_void(first.data() + 1, 0),
+                                      mapped_void(first.data() + 17, 0)) == 0);
+  REQUIRE(NetDll_XNetCreateKey_entry(1, mapped_void(second.data() + 1, 0),
+                                      mapped_void(second.data() + 17, 0)) == 0);
+  CHECK(std::memcmp(first.data() + 1, second.data() + 1, 8) != 0);
+  CHECK(std::memcmp(first.data() + 17, second.data() + 17, 16) != 0);
+  CHECK(first[0] == 0x5A);
+  CHECK(first[9] == 0x5A);
+  CHECK(first[16] == 0x5A);
+  CHECK(first[33] == 0x5A);
+  CHECK(NetDll_XNetCreateKey_entry(1, nullptr, mapped_void(first.data(), 0)) == 10022);
 }
