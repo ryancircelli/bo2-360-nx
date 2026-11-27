@@ -65,7 +65,7 @@ class FunctionGraph {
 
   // Add a resolved import as a callable function with __imp__ name
   // Address is the thunk address that bl instructions target
-  FunctionNode* addImportFunction(uint32_t address, std::string_view resolvedName);
+  FunctionNode* addImportFunction(uint32_t address, std::string_view resolvedName, uint32_t size = 4);
 
   // Adapted from rexglue e9c1a0f6: unknown targets conservatively may return.
   void declareNoReturn(uint32_t address);

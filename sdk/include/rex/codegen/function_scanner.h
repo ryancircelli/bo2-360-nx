@@ -282,4 +282,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
                                          const CodeRegion& containingRegion, uint32_t funcStart,
                                          uint32_t funcEnd);
 
+// Lowest return cut not crossed by a conditional/table edge or a backward edge.
+std::optional<uint32_t> findReturnCut(const BlockDiscoveryResult& result, uint32_t entryPoint);
+
 }  // namespace rex::codegen

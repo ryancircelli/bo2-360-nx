@@ -35,6 +35,24 @@ namespace rex::codegen {
 
 namespace {
 
+// Adapted from rexglue a86428b0: thunk loader words precede mtctr/bctr.
+uint32_t importThunkSize(const BinaryView& binary, uint32_t address) {
+  for (uint32_t i = 0; i < 8; ++i) {
+    const auto* data = binary.translate(address + i * 4);
+    if (!data) break;
+    const auto word = load_and_swap<uint32_t>(data);
+    if (i > 0 && word == 0x4E800420) {
+      const auto* prev = binary.translate(address + (i - 1) * 4);
+      if ((load_and_swap<uint32_t>(prev) & 0xFC1FFFFF) == 0x7C0903A6)
+        return (i + 1) * 4;
+    }
+    const auto insn = rex::codegen::ppc::decode_instruction(address + i * 4, word);
+    if (insn.is_return() || (insn.is_branch() && !insn.is_call())) break;
+  }
+  return 4;
+}
+
+
 //=============================================================================
 // PE Structures
 //=============================================================================
@@ -496,7 +514,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
       if (((lib_name == "xboxkrnl" || lib_name == "xboxkrnl.exe" || lib_name == "xboxkrnl.xex") && ordinal == 0x19) ||
           ((lib_name == "xam" || lib_name == "xam.xex") && (ordinal == 0x1A4 || ordinal == 0x1A5)))
         graph.declareNoReturn(sym.address);
-      auto* node = graph.addImportFunction(sym.address, resolvedName);
+      auto* node = graph.addImportFunction(sym.address, resolvedName, importThunkSize(binary, sym.address));
       if (node && node->canDiscover()) {
         node->discoverAsImport();
         if (node->canSeal()) {

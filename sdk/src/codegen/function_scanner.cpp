@@ -1854,6 +1854,7 @@ BlockDiscoveryResult discoverBlocks(
 
   // Function extent - use pdataSize when available
   uint32_t funcEnd = (pdataSize > 0) ? (entryPoint + pdataSize) : containingRegion.end;
+  const uint32_t declaredEnd = funcEnd;
 
   REXCODEGEN_TRACE(
       "discoverBlocks: entry=0x{:08X} pdataSize={} funcEnd=0x{:08X} region=[0x{:08X}-0x{:08X}]",
@@ -1883,7 +1884,10 @@ BlockDiscoveryResult discoverBlocks(
     block.base = blockStart;
     block.size = 0;
 
-    while (isWithinFunction(addr)) {
+    const bool pastDeclaredEnd = blockStart >= declaredEnd;
+    while (isWithinFunction(addr) ||
+           (pastDeclaredEnd && addr == funcEnd && addr < containingRegion.end)) {
+      funcEnd = std::max(funcEnd, addr + 4);
       auto* insn = decoded.get(addr);
       if (!insn) {
         REXCODEGEN_TRACE("discoverBlocks: 0x{:08X} no instruction at addr, breaking", entryPoint);
@@ -2104,6 +2108,45 @@ BlockDiscoveryResult discoverBlocks(
                    result.blocks.size(), result.instructions.size(), result.labels.size());
 
   return result;
+}
+
+std::optional<uint32_t> findReturnCut(const BlockDiscoveryResult& result, uint32_t entry_point) {
+  struct Edge {
+    uint32_t site;
+    uint32_t target;
+  };
+  std::vector<Edge> guards;
+  std::vector<Edge> branches;
+  for (const ppc::Instruction* insn : result.instructions) {
+    if (!insn->branch_target || insn->is_call())
+      continue;
+    branches.push_back({insn->address, *insn->branch_target});
+    if (insn->is_conditional() && result.labels.contains(*insn->branch_target))
+      guards.push_back({insn->address, *insn->branch_target});
+  }
+  for (const JumpTable& table : result.jumpTables) {
+    for (uint32_t target : table.targets) {
+      if (target == 0)
+        continue;
+      branches.push_back({table.bctrAddress, target});
+      if (result.labels.contains(target))
+        guards.push_back({table.bctrAddress, target});
+    }
+  }
+
+  for (const ppc::Instruction* insn : result.instructions) {
+    const uint32_t at = insn->address;
+    if (!insn->is_return() || at == result.instructions.back()->address)
+      continue;
+    const bool guarded = std::ranges::any_of(
+        guards, [&](const Edge& edge) { return edge.site <= at && edge.target > at; });
+    const bool closed = std::ranges::none_of(branches, [&](const Edge& edge) {
+      return edge.site > at && edge.target > entry_point && edge.target <= at;
+    });
+    if (!guarded && closed)
+      return at + 4;
+  }
+  return std::nullopt;
 }
 
 }  // namespace rex::codegen

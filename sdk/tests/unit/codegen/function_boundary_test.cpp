@@ -3,6 +3,7 @@
 #include <rex/codegen/codegen_context.h>
 #include <rex/codegen/function_scanner.h>
 #include <rex/codegen/test_support.h>
+#include <rex/codegen/phases.h>
 #include "codegen/decoded_binary.h"
 
 using namespace rex::codegen;
@@ -38,6 +39,7 @@ TEST_CASE("Linear discovery stops before a known function and emits a tail call"
   auto* node = graph.addFunction(kBase, 0, FunctionAuthority::DISCOVERED, true);
   node->discover(std::move(result.blocks), std::move(result.instructions), std::move(result.labels));
   node->setFallThroughs(std::move(result.fallThroughs));
+  graph.addTailCallToFunction(kBase, kBase + 4, CallTarget::function(next));
   node->seal();
   EmitContext emit{fx.ctx->binary(), fx.ctx->Config(), graph, kBase, nullptr, nullptr};
   const auto cpp = node->emitCpp(emit);
@@ -68,7 +70,11 @@ FunctionNode* Discover(Fixture& fx, uint32_t entry, uint32_t size,
       {kBase, kBase + uint32_t(fx.data.size())}, known, size);
   node->discover(std::move(result.blocks), std::move(result.instructions), std::move(result.labels));
   node->setFallThroughs(std::move(result.fallThroughs));
-  node->seal();
+  for (const auto& branch : result.unresolvedBranches)
+    fx.ctx->graph.addUnresolvedJumpToFunction(entry, branch.site, branch.target, branch.isCall,
+                                             branch.isConditional);
+  fx.ctx->graph.tryResolveFunction(entry);
+  if (node->canSeal()) node->seal();
   return node;
 }
 std::string Emit(Fixture& fx, const FunctionNode* node) {
@@ -89,10 +95,15 @@ TEST_CASE("Calls to no-return functions suppress synthetic fall-through", "[code
   auto* imp = graph.addImportFunction(kBase + 16, "__imp__ExTerminateThread");
   imp->discoverAsImport();
   imp->seal();
+  graph.tryResolveFunction(kBase);
+  graph.tryResolveFunction(kBase + 8);
+  graph.sealAllReady();
   CHECK(graph.isNoReturn(kBase));
   CHECK(graph.isNoReturn(kBase + 8));
   CHECK_FALSE(graph.isNoReturn(kBase + 4));
   CHECK_FALSE(graph.isNoReturn(kBase + 0x100));
+  CHECK(Emit(fx, a).find("sub_82000008(ctx, base);") != std::string::npos);
+  CHECK(Emit(fx, a).find("REX_FATAL") == std::string::npos);
   CHECK(Emit(fx, a).find("sub_82000004(ctx, base);") == std::string::npos);
   CHECK(Emit(fx, b).find("sub_8200000C(ctx, base);") == std::string::npos);
 }
@@ -119,5 +130,79 @@ TEST_CASE("Loops and unconditional traps never return", "[codegen][noreturn]") {
     Fixture fx{0x0FE00000};
     Discover(fx, kBase, 4, {kBase});
     CHECK(fx.ctx->graph.isNoReturn(kBase));
+  }
+}
+
+TEST_CASE("Return cuts preserve guarded and backward-connected code", "[codegen][boundary]") {
+  SECTION("unguarded return cuts an overgrown gap function") {
+    Fixture fx{0x4E800020, 0x38600001, 0x4E800020};
+    BlockDiscoveryResult result;
+    for (uint32_t a = kBase; a < kBase + 12; a += 4)
+      result.instructions.push_back(fx.ctx->decoded().get(a));
+    CHECK(findReturnCut(result, kBase) == kBase + 4);
+  }
+  SECTION("conditional branch guards later code") {
+    Fixture fx{0x41820008, 0x4E800020, 0x4E800020};
+    auto result = fx.scan({kBase});
+    CHECK_FALSE(findReturnCut(result, kBase));
+  }
+  SECTION("later branch connects back into the prefix") {
+    Fixture fx{0x60000000, 0x4E800020, 0x4BFFFFFC};
+    BlockDiscoveryResult result;
+    for (uint32_t a = kBase; a < kBase + 12; a += 4)
+      result.instructions.push_back(fx.ctx->decoded().get(a));
+    CHECK_FALSE(findReturnCut(result, kBase));
+  }
+}
+TEST_CASE("Out-of-line switch cases are scanned past their first instruction", "[codegen][boundary]") {
+  Fixture fx{0x4E800420, 0x60000000, 0x38600001, 0x38630001, 0x4E800020};
+  JumpTable table;
+  table.bctrAddress = kBase;
+  table.targets = {kBase + 8};
+  const std::unordered_map<uint32_t, JumpTable> tables{{kBase, table}};
+  const auto result = discoverBlocks(fx.ctx->decoded(), kBase, {kBase, kBase + 20},
+                                     {kBase}, 4, &tables);
+  REQUIRE(result.blocks.size() == 2);
+  CHECK(result.blocks.back().base == kBase + 8);
+  CHECK(result.blocks.back().size == 12);
+}
+
+TEST_CASE("Gap discovery registers uncovered code after a nonreturning branch", "[codegen][gapfill]") {
+  // The old whole-region splitter never split at b ., so it missed +4 entirely.
+  Fixture fx{0x48000000, 0x38600001, 0x4E800020};
+  Discover(fx, kBase, 4, {kBase});
+  fx.ctx->scan.codeRegions = {{kBase, kBase + 12}};
+  REQUIRE(phases::GapFill(*fx.ctx, nullptr));
+  const auto* gap = fx.ctx->graph.getFunction(kBase + 4);
+  REQUIRE(gap != nullptr);
+  CHECK(gap->authority() == FunctionAuthority::GAP_FILL);
+  CHECK(gap->end() == kBase + 12);
+}
+
+TEST_CASE("Declared-end fall-through calls the next function without a recorded edge", "[codegen][boundary]") {
+  Fixture fx{0x38600001, 0x38600002, 0x4E800020};
+  auto* node = Discover(fx, kBase, 4, {kBase});
+  Discover(fx, kBase + 4, 8, {kBase + 4});
+  const auto cpp = Emit(fx, node);
+  CHECK(cpp.find("sub_82000004(ctx, base);") != std::string::npos);
+  CHECK(cpp.find("REX_FATAL") == std::string::npos);
+}
+
+TEST_CASE("Gap discovery accepts instructions supported by the emitter's decoder", "[codegen][gapfill]") {
+  SECTION("VMX128 from NFSMW 8269DA60") {
+    Fixture fx{0x48000000, 0x81630000, 0x1000038C, 0x18C407F0, 0x4E800020};
+    Discover(fx, kBase, 4, {kBase});
+    fx.ctx->scan.codeRegions = {{kBase, kBase + 20}};
+    REQUIRE(phases::GapFill(*fx.ctx, nullptr));
+    const auto* gap = fx.ctx->graph.getFunction(kBase + 4);
+    REQUIRE(gap != nullptr);
+    CHECK(gap->end() == kBase + 20);
+  }
+  SECTION("integer carry instruction from NFSMW 821DF948") {
+    Fixture fx{0x48000000, 0x3964FFFF, 0x7D6A0194, 0x4E800020};
+    Discover(fx, kBase, 4, {kBase});
+    fx.ctx->scan.codeRegions = {{kBase, kBase + 16}};
+    REQUIRE(phases::GapFill(*fx.ctx, nullptr));
+    REQUIRE(fx.ctx->graph.getFunction(kBase + 4) != nullptr);
   }
 }

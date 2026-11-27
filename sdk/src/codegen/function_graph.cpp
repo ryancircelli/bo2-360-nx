@@ -628,10 +628,14 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
         ((last.opcode == ppc::Opcode::bclr || last.opcode == ppc::Opcode::bcctr) && last.XL.BO == 20) ||
         ((last.opcode == ppc::Opcode::bl || last.opcode == ppc::Opcode::bla) &&
          last.branch_target && ctx.graph.isNoReturn(*last.branch_target));
-    if (fallThroughs().contains(blockEnd) && !terminal) {
+    const auto* next = ctx.graph.getFunction(blockEnd);
+    if ((fallThroughs().contains(blockEnd) || (!isWithinBounds(blockEnd) && next && !next->isImport())) && !terminal) {
       BuilderContext builderCtx{body, ctx, *this, insn, blockEnd, data,
                                 localVariables, csrState, nullptr};
-      builderCtx.emit_function_call(blockEnd);
+      if (fallThroughs().contains(blockEnd))
+        builderCtx.emit_function_call(blockEnd);
+      else
+        builderCtx.emit_call_to_function(next, true);
       emit_println(body, "\treturn;");
     }
   }
@@ -975,9 +979,9 @@ void FunctionGraph::declareNoReturn(uint32_t address) {
   noReturn_.reset();
 }
 
-FunctionNode* FunctionGraph::addImportFunction(uint32_t address, std::string_view resolvedName) {
+FunctionNode* FunctionGraph::addImportFunction(uint32_t address, std::string_view resolvedName, uint32_t size) {
   // Add as function with IMPORT authority
-  auto* node = addFunction(address, 4, FunctionAuthority::IMPORT, resolvedName, true);
+  auto* node = addFunction(address, size, FunctionAuthority::IMPORT, resolvedName, true);
   REXCODEGEN_TRACE("FunctionGraph: added import function 0x{:08X} -> {}", address, resolvedName);
   return node;
 }
