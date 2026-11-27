@@ -293,6 +293,13 @@ class Game:
             pass
         return ''
 
+    def drops(self):
+        """Silently dropped draws / skipped resolves so far (live command `drops`); '-' on builds without it."""
+        r = self.ctl('drops', 5) if self.alive() else ''
+        r = r[3:] if r.startswith('ok ') else '-'
+        open(os.path.join(self.out, 'drops.txt'), 'w').write(r + '\n')
+        return r.replace(' ', ',')
+
     def wait_ready(self, timeout):
         """True once the control channel answers a ping."""
         while time.monotonic() - self.t0 < timeout and self.alive():
@@ -383,12 +390,13 @@ def g_boot(a, G):
     alive = G.alive()
     frames = G.frames() if alive else None
     png, st = G.shot('boot') if alive else (None, None)
+    drops = G.drops()
     text = G.log_text()
     crash = CRASH.search(text)
     G.stop()
     new = baseline_diff(G, a.kinds_from, a.out)
     ok = alive and not crash and (frames is None or frames > 0) and (st is None or st[0] > 3 or st[1] > 3)
-    facts = f'ready {t_ready:.0f}s alive {secs}s frames {frames} image {"mean %.0f sd %.0f" % st if st else "none"}'
+    facts = f'ready {t_ready:.0f}s alive {secs}s frames {frames} image {"mean %.0f sd %.0f" % st if st else "none"} drops {drops}'
     if crash:
         facts += f' LOG {log_hit(crash)}'
     if new:
@@ -415,10 +423,11 @@ def g_shot(a, G):
             ok_any = ok_any or (st and (st[0] > 8 or st[1] > 8))
         time.sleep(2)
     alive = G.alive()
+    drops = G.drops()
     crash = CRASH.search(G.log_text())
     G.stop()
     ok = alive and ok_any and not crash
-    facts = f'scene at {at}s (ff {ff}) shots {len(shots)} ' + (f'mean {shots[-1][1][0]:.0f} sd {shots[-1][1][1]:.0f}' if shots and shots[-1][1] else 'none')
+    facts = f'scene at {at}s (ff {ff}) shots {len(shots)} ' + (f'mean {shots[-1][1][0]:.0f} sd {shots[-1][1][1]:.0f}' if shots and shots[-1][1] else 'none') + f' drops {drops}'
     if crash:
         facts += f' LOG {log_hit(crash)}'
     return out_line('PASS' if ok else 'FAIL', 'shot', a.game, facts, os.path.join(a.out, 'shots'), a.out)
@@ -448,6 +457,7 @@ def g_drive(a, G):
     alive = G.alive()
     if alive:
         G.shot('drive-end')
+    drops = G.drops()
     text = G.log_text()
     crash = CRASH.search(text)
     G.stop()
@@ -460,7 +470,7 @@ def g_drive(a, G):
     # from a save point the scene was proven when it was saved; what the load must show is a live picture
     # (the driving proof needs input-driven movement, which a car parked at a wall or idle players lack)
     ok = alive and not crash and not frozen and (proof["passed"] or bool(a.savepoint))
-    facts = f'gameplay {proof["passed"]} route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
+    facts = f'gameplay {proof["passed"]} route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1} drops {drops}'
     if frozen:
         facts += ' FROZEN (first and last shots identical)'
     if died is not None:
