@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -87,4 +88,43 @@ TEST_CASE("A load through another base keeps the offset form", "[codegen][stack]
   const auto code = Generate({kLwzR3FromR4, kBlr});
   CHECK(Has(code, "REX_LOAD_U32"));
   CHECK_FALSE(Has(code, "REX_STACK_LOAD"));
+}
+
+namespace {
+
+constexpr uint32_t DForm(uint32_t op, uint32_t rt, uint32_t ra) {
+  return op << 26 | rt << 21 | ra << 16 | 8;
+}
+constexpr uint32_t XForm(uint32_t xo, uint32_t rt, uint32_t ra) {
+  return 31u << 26 | rt << 21 | ra << 16 | 5u << 11 | xo << 1;
+}
+
+// r1-based emission with the stack macros renamed back and r1 renamed to r4 must
+// equal the r4-based emission: only the macro changes, update forms still write rA.
+void CheckOnlyMacroDiffers(uint32_t r1Word, uint32_t r4Word) {
+  const auto stack = Generate({r1Word, kBlr});
+  INFO(stack);
+  CHECK(Has(stack, "REX_STACK_"));
+  const auto plain = Generate({r4Word, kBlr});
+  CHECK_FALSE(Has(plain, "REX_STACK_"));
+  auto normal = std::regex_replace(stack, std::regex("REX_STACK_"), "REX_");
+  normal = std::regex_replace(normal, std::regex("\\br1\\b"), "r4");
+  CHECK(normal == plain);
+}
+
+}  // namespace
+
+TEST_CASE("Previously uncovered D-form ops through r1 use the stack macro", "[codegen][stack]") {
+  // lhau, lfsu, lfdu, stfsu, stfdu, stmw r30
+  for (uint32_t op : {43u, 49u, 51u, 53u, 55u}) {
+    CheckOnlyMacroDiffers(DForm(op, 3, 1), DForm(op, 3, 4));
+  }
+  CheckOnlyMacroDiffers(DForm(47, 30, 1), DForm(47, 30, 4));
+}
+
+TEST_CASE("Previously uncovered X-form ops with r1 as rA use the stack macro", "[codegen][stack]") {
+  // lwaux, lhaux, lwbrx, lfsux, lfdux, stfsux, stfdux, lhbrx
+  for (uint32_t xo : {373u, 375u, 534u, 567u, 631u, 695u, 759u, 790u}) {
+    CheckOnlyMacroDiffers(XForm(xo, 3, 1), XForm(xo, 3, 4));
+  }
 }

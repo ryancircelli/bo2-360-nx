@@ -101,7 +101,7 @@ bool build_lhau(BuilderContext& ctx) {
   // Load Halfword Algebraic with Update: sign-extend then update rA
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.s64 = int16_t(REX_LOAD_U16({}));", ctx.r(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.s64 = int16_t({}({}));", ctx.r(ctx.insn.operands[0]), ctx.insn.operands[2] == 1 ? "REX_STACK_LOAD_U16" : "REX_LOAD_U16", ctx.ea());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
   return true;
 }
@@ -110,7 +110,7 @@ bool build_lhaux(BuilderContext& ctx) {
   // Load Halfword Algebraic with Update Indexed: EA = rA + rB; rD = EXTS(MEM16(EA)); rA = EA
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.s64 = int16_t(REX_LOAD_U16({}));", ctx.r(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.s64 = int16_t({}({}));", ctx.r(ctx.insn.operands[0]), ctx.insn.operands[1] == 1 ? "REX_STACK_LOAD_U16" : "REX_LOAD_U16", ctx.ea());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
 }
@@ -118,7 +118,8 @@ bool build_lhaux(BuilderContext& ctx) {
 bool build_lhbrx(BuilderContext& ctx) {
   // Load Halfword Byte-Reverse Indexed
   ctx.print("\t{}.u64 = __builtin_bswap16({}(", ctx.r(ctx.insn.operands[0]),
-            ctx.mmio_check_x_form() ? "REX_MM_LOAD_U16" : "REX_LOAD_U16");
+            ctx.mmio_check_x_form() ? "REX_MM_LOAD_U16"
+            : ctx.stack_x_form() ? "REX_STACK_LOAD_U16" : "REX_LOAD_U16");
   if (ctx.insn.operands[1] != 0)
     ctx.print("{}.u32 + ", ctx.r(ctx.insn.operands[1]));
   ctx.println("{}.u32));", ctx.r(ctx.insn.operands[2]));
@@ -138,7 +139,7 @@ bool build_lwaux(BuilderContext& ctx) {
   // Load Word Algebraic with Update Indexed: EA = rA + rB; rD = EXTS(MEM32(EA)); rA = EA
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.s64 = int32_t(REX_LOAD_U32({}));", ctx.r(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.s64 = int32_t({}({}));", ctx.r(ctx.insn.operands[0]), ctx.insn.operands[1] == 1 ? "REX_STACK_LOAD_U32" : "REX_LOAD_U32", ctx.ea());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
 }
@@ -170,7 +171,8 @@ bool build_lwzux(BuilderContext& ctx) {
 
 bool build_lwbrx(BuilderContext& ctx) {
   ctx.print("\t{}.u64 = __builtin_bswap32({}(", ctx.r(ctx.insn.operands[0]),
-            ctx.mmio_check_x_form() ? "REX_MM_LOAD_U32" : "REX_LOAD_U32");
+            ctx.mmio_check_x_form() ? "REX_MM_LOAD_U32"
+            : ctx.stack_x_form() ? "REX_STACK_LOAD_U32" : "REX_LOAD_U32");
   if (ctx.insn.operands[1] != 0)
     ctx.print("{}.u32 + ", ctx.r(ctx.insn.operands[1]));
   ctx.println("{}.u32));", ctx.r(ctx.insn.operands[2]));
@@ -266,7 +268,7 @@ bool build_lfdu(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.u64 = REX_LOAD_U64({});", ctx.f(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.u64 = {}({});", ctx.f(ctx.insn.operands[0]), ctx.insn.operands[2] == 1 ? "REX_STACK_LOAD_U64" : "REX_LOAD_U64", ctx.ea());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
   return true;
 }
@@ -276,7 +278,7 @@ bool build_lfdux(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.u64 = REX_LOAD_U64({});", ctx.f(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.u64 = {}({});", ctx.f(ctx.insn.operands[0]), ctx.insn.operands[1] == 1 ? "REX_STACK_LOAD_U64" : "REX_LOAD_U64", ctx.ea());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
 }
@@ -286,7 +288,7 @@ bool build_lfsu(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.u32 = REX_LOAD_U32({});", ctx.temp(), ctx.ea());
+  ctx.println("\t{}.u32 = {}({});", ctx.temp(), ctx.insn.operands[2] == 1 ? "REX_STACK_LOAD_U32" : "REX_LOAD_U32", ctx.ea());
   ctx.println("\t{}.f64 = double({}.f32);", ctx.f(ctx.insn.operands[0]), ctx.temp());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
   return true;
@@ -297,7 +299,7 @@ bool build_lfsux(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}.u32 = REX_LOAD_U32({});", ctx.temp(), ctx.ea());
+  ctx.println("\t{}.u32 = {}({});", ctx.temp(), ctx.insn.operands[1] == 1 ? "REX_STACK_LOAD_U32" : "REX_LOAD_U32", ctx.ea());
   ctx.println("\t{}.f64 = double({}.f32);", ctx.f(ctx.insn.operands[0]), ctx.temp());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
@@ -395,7 +397,7 @@ bool build_stmw(BuilderContext& ctx) {
   else
     ctx.println("\t{} = {};", ctx.ea(), offset);
   for (uint32_t i = rS; i <= 31; ++i) {
-    ctx.println("\tREX_STORE_U32({} + {}, {}.u32);", ctx.ea(), (i - rS) * 4, ctx.r(i));
+    ctx.println("\t{}({} + {}, {}.u32);", rA == 1 ? "REX_STACK_STORE_U32" : "REX_STORE_U32", ctx.ea(), (i - rS) * 4, ctx.r(i));
   }
   return true;
 }
@@ -478,7 +480,7 @@ bool build_stfdux(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\tREX_STORE_U64({}, {}.u64);", ctx.ea(), ctx.f(ctx.insn.operands[0]));
+  ctx.println("\t{}({}, {}.u64);", ctx.insn.operands[1] == 1 ? "REX_STACK_STORE_U64" : "REX_STORE_U64", ctx.ea(), ctx.f(ctx.insn.operands[0]));
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
 }
@@ -520,7 +522,7 @@ bool build_stfdu(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\tREX_STORE_U64({}, {}.u64);", ctx.ea(), ctx.f(ctx.insn.operands[0]));
+  ctx.println("\t{}({}, {}.u64);", ctx.insn.operands[2] == 1 ? "REX_STACK_STORE_U64" : "REX_STORE_U64", ctx.ea(), ctx.f(ctx.insn.operands[0]));
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
   return true;
 }
@@ -531,7 +533,7 @@ bool build_stfsu(BuilderContext& ctx) {
   ctx.println("\t{} = {} + {}.u32;", ctx.ea(), static_cast<int32_t>(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
   ctx.println("\t{}.f32 = float({}.f64);", ctx.temp(), ctx.f(ctx.insn.operands[0]));
-  ctx.println("\tREX_STORE_U32({}, {}.u32);", ctx.ea(), ctx.temp());
+  ctx.println("\t{}({}, {}.u32);", ctx.insn.operands[2] == 1 ? "REX_STACK_STORE_U32" : "REX_STORE_U32", ctx.ea(), ctx.temp());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[2]), ctx.ea());
   return true;
 }
@@ -542,7 +544,8 @@ bool build_stfsux(BuilderContext& ctx) {
   ctx.println("\t{}.f32 = float({}.f64);", ctx.temp(), ctx.f(ctx.insn.operands[0]));
   ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
               ctx.r(ctx.insn.operands[2]));
-  ctx.println("\t{}({}, {}.u32);", ctx.mmio_check_x_form() ? "REX_MM_STORE_U32" : "REX_STORE_U32",
+  ctx.println("\t{}({}, {}.u32);", ctx.mmio_check_x_form() ? "REX_MM_STORE_U32"
+            : ctx.stack_x_form() ? "REX_STACK_STORE_U32" : "REX_STORE_U32",
               ctx.ea(), ctx.temp());
   ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
