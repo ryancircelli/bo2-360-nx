@@ -1,0 +1,28 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "ac1",
+  "status": "unproven",
+  "navigation_timeout_s": 900,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "continue|new|memory|interact|press any",
+      "commands": [
+        "press a 600"
+      ]
+    }
+  ],
+  "controls": {
+    "movement": "stick l 0 -1 1200",
+    "camera-left": "stick r -0.45 0 600",
+    "camera-right": "stick r 0.45 0 600",
+    "action": "press y 500",
+    "movement-alternate": "stick l 0 1 800"
+  }
+}

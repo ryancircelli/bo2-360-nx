@@ -1,0 +1,64 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "fallout3",
+  "status": "unproven",
+  "navigation_timeout_s": 2700,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "one year later|1 year later",
+      "commands": [],
+      "mark": "nursery"
+    },
+    {
+      "text": "sure you want|your character",
+      "commands": [
+        "press down 600",
+        "press a 600"
+      ]
+    },
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "choose sex|\\bBoy\\b|\\bGirl\\b",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "continue|new|yes|male|female|confirm",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "gene projection|race|face|hair",
+      "commands": [
+        "press rt 600"
+      ]
+    },
+    {
+      "text": "finished|done|is this",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "LEGAL CARD|Bethesda Softworks|ZeniMax",
+      "commands": [
+        "press b 600"
+      ]
+    }
+  ],
+  "controls": {
+    "movement": "stick l 0 1 1500",
+    "camera-left": "stick r -0.45 0 300",
+    "camera-right": "stick r 0.45 0 300",
+    "action": "press y 500",
+    "movement-alternate": "stick l 0 -1 1500"
+  }
+}

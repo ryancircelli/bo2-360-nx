@@ -1,0 +1,40 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "gears",
+  "status": "unproven",
+  "navigation_timeout_s": 900,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "to follow dominic",
+      "commands": [],
+      "mark": "prison-controls",
+      "mark_on_seen": true
+    },
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "campaign|continue|casual|normal|new campaign|single player",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "training|combat",
+      "commands": [
+        "press a 600"
+      ]
+    }
+  ],
+  "controls": {
+    "movement": "stick l 0 1 1500",
+    "camera-left": "stick r -0.45 0 300",
+    "camera-right": "stick r 0.45 0 300",
+    "action": "press a 600",
+    "movement-alternate": "stick l 0 -1 1500"
+  }
+}

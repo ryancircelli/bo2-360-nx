@@ -27,6 +27,12 @@ verify_driving = _driving.verify
 _ig_spec = importlib.util.spec_from_file_location("gate_install_guard", os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_guard.py"))
 install_guard = importlib.util.module_from_spec(_ig_spec)
 _ig_spec.loader.exec_module(install_guard)
+_condition_spec = importlib.util.spec_from_file_location('gate_condition_routes', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'condition_routes.py'))
+_condition = importlib.util.module_from_spec(_condition_spec)
+_condition_spec.loader.exec_module(_condition)
+_save_spec = importlib.util.spec_from_file_location('gate_savefiles', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'savefiles.py'))
+_saves = importlib.util.module_from_spec(_save_spec)
+_save_spec.loader.exec_module(_saves)
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,10 +47,10 @@ SAVEPOINTS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'savepoints')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
-    'halo3': dict(app='Halo 3.app', drive='halo3-play', scene_s=180, settle_s=60, seed=None),   # boot/open only until gate-routes-newgames lands
-    'fallout3': dict(app='Fallout 3.app', drive='fallout3-play', scene_s=180, settle_s=60, seed=None),
-    'me2': dict(app='Mass Effect 2.app', drive='me2-menu', scene_s=90, settle_s=60, seed='me2-360'),
-    'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
+    'halo3': dict(app='Halo 3.app', drive='halo3-play', scene_s=180, settle_s=60, seed='halo3-360'),
+    'fallout3': dict(app='Fallout 3.app', drive='fallout3-play', scene_s=180, settle_s=60, seed='fallout3-360'),
+    'me2': dict(app='Mass Effect 2.app', drive='me2-play', scene_s=90, settle_s=60, seed='me2-360'),
+    'gears': dict(app='Gears of War.app', drive='gears-play', scene_s=180, settle_s=60, seed='gears-360'),
     # save_log: `save` counts --at from this log line (boot time varies with machine load; a save on a loading screen is useless)
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None,
                   save_log='[cheats] guest memory in a match', save_after_s=30),
@@ -53,12 +59,17 @@ GAMES = {
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
     # new games (boot + shot gates; drive needs a rule in driving.py and a route): nfsmw2012 has no drive route, so its drive gate FAILs closed
-    'ac1': dict(app="Assassin's Creed.app", drive='ac1-drive', scene_s=150, settle_s=60, seed='ac1-360'),
-    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive=None, scene_s=180, settle_s=75, seed='nfsmw2012-360'),
+    'ac1': dict(app="Assassin's Creed.app", drive='ac1-play', scene_s=150, settle_s=60, seed='ac1-360'),
+    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive='nfsmw2012-play', scene_s=180, settle_s=75, seed='nfsmw2012-360'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
 # MISMATCH only as its own word and never as a zero counter: the Metal plugin logs `verify_mismatch=0` in every perf line.
+def state_obs(out):
+    with open(os.path.join(out, 'play.json')) as f:
+        return json.load(f)['observations']
+
+
 CRASH = re.compile(r'(Guest access violation|unregistered function|(?<![\w])MISMATCH(?![\w]*\s*[=:]\s*0\b)|verify_mismatch=[1-9]|lost wake|Assertion failed|fatal error|Segmentation|EXC_BAD)')
 
 
@@ -119,6 +130,9 @@ def resolve_route(game, route):
 
 def route_len(path):
     """Seconds a pad script runs: the largest time in `padN = a-b:button, ...` lines, or duration_s."""
+    conditional = _condition.load(path)
+    if conditional:
+        return conditional.get('navigation_timeout_s', 900) + conditional.get('play_timeout_s', 480)
     best = 0.0
     for line in open(path):
         line = line.split('#', 1)[0]
@@ -133,6 +147,8 @@ def route_len(path):
 
 def route_env(route):
     """The route's environment, like boot_test.sh / live_session.py build it for SDK pads."""
+    if _condition.load(route):
+        return {'REX_HID_VIRTUAL_PADS': '1'}
     env = {}
     for line in open(route):
         line = line.split('#', 1)[0]
@@ -218,6 +234,7 @@ class Game:
         if seed and src and os.path.isdir(src) and not os.path.exists(self.support):
             subprocess.run(['cp', '-cR', src, self.support], check=True)   # APFS clone of the owner profile; the owner's copy is never written
         os.makedirs(self.support, exist_ok=True)
+        self.initial_saves = _saves.inventory(self.support, game)
         e = dict(os.environ)
         e.update({
             'REX_AUDIO_MUTE': 'true', 'REX_APU_MUTE': 'true', 'REX_WINDOW_START_MINIMIZED': 'true',
@@ -324,7 +341,10 @@ class Game:
             return None, None
         ppm = r[3:].strip()
         dst = os.path.join(self.out, 'shots', name + '.ppm')
-        shutil.copy(ppm, dst)
+        shutil.move(ppm, dst)  # consume the unique capture; do not keep a second PPM in control/
+        metadata = os.path.splitext(ppm)[0] + '.capture.json'
+        if os.path.exists(metadata):
+            shutil.move(metadata, os.path.splitext(dst)[0] + '.capture.json')
         return to_png(dst), image_stats(dst)
 
     def frames(self):
@@ -397,6 +417,8 @@ def g_boot(a, G):
 
 
 def g_shot(a, G):
+    if a.route_file and _condition.load(a.route_file):
+        return g_play(a, G)
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
     at = a.at or GAMES[a.game]['scene_s']
@@ -425,6 +447,8 @@ def g_shot(a, G):
 
 
 def g_drive(a, G):
+    if a.route_file and _condition.load(a.route_file):
+        return g_play(a, G)
     route = a.route_file
     length = route_len(route) if route else a.secs
     if not G.wait_ready(a.ready_timeout):
@@ -470,6 +494,88 @@ def g_drive(a, G):
     if new is not None:
         facts += f' new-kinds {len(new)}'
     return out_line('PASS' if ok else 'FAIL', 'drive', a.game, facts, a.out, a.out)
+
+
+def g_play(a, G):
+    if not G.wait_ready(a.ready_timeout):
+        return fail_start(a, G, 'control channel never answered')
+    recipe = _condition.load(a.route_file)
+    try:
+        if recipe['game'] != a.game:
+            raise ValueError('route game differs from the selected game')
+        run = _condition.Runner(G, recipe, a.out, _driving).run()
+        text = G.log_text()
+        alive, crash = G.alive(), CRASH.search(text)
+        proof = verify_driving(a.game, a.out, text)
+        ok = alive and not crash and proof['passed'] and run['complete']
+        facts = f'gameplay {proof["passed"]} {proof["reason"]}'
+        if run.get('error'):
+            facts += ' route-error ' + run['error']
+        if crash:
+            facts += ' LOG ' + log_hit(crash)
+        return out_line('PASS' if ok else 'FAIL', a.gate, a.game, facts, a.out, a.out)
+    finally:
+        G.stop()
+
+
+def g_savefile(a, G):
+    """Write a title save, then reopen it in a fresh process with a private profile."""
+    evidence = dict(game=a.game, passed=False, before=G.initial_saves)
+    reload_game = None
+    try:
+        if not G.wait_ready(a.ready_timeout):
+            raise RuntimeError('control channel never answered')
+        recipe = _condition.load(a.route_file)
+        if not recipe or recipe['game'] != a.game:
+            raise ValueError('save requires the matching conditional gameplay route')
+        run = _condition.Runner(G, recipe, a.out, _driving).run()
+        proof = verify_driving(a.game, a.out, G.log_text())
+        if not run['complete'] or not proof['passed'] or CRASH.search(G.log_text()):
+            raise RuntimeError('write run did not prove gameplay')
+        G.stop()  # Include writes flushed during orderly title shutdown.
+        after = _saves.inventory(G.support, a.game)
+        writes = _saves.changed(G.initial_saves, after)
+        evidence.update(after=after, writes=writes)
+        if not writes:
+            raise RuntimeError('no new or changed nonempty title save; unchanged seed data is not a save proof')
+        reload_out = os.path.join(a.out, 'reload')
+        os.makedirs(reload_out, exist_ok=True)
+        shutil.copytree(G.support, os.path.join(reload_out, 'support'))
+        reload_game = Game(a.app, reload_out, a.game, seed=False, env={'REX_HID_VIRTUAL_PADS': '1'})
+        if not reload_game.wait_ready(a.ready_timeout):
+            raise RuntimeError('fresh reload control channel never answered')
+        recipe = dict(recipe, navigation_timeout_s=300)
+        if a.game == 'gears':
+            # The single-player menu defaults to New Campaign even when a save
+            # exists. Explicitly select Continue during the reload half.
+            # Never accept New Campaign in the reload half: back out of its prompts and re-pick Continue.
+            # The hub screen needs exactly one A; repeats land on the single-player menu and start New Campaign.
+            recipe['navigation'] = [dict(text=r'SPLIT.?SCREEN', commands=['press a 600'], once=True),
+                                    dict(text=r'SPLIT.?SCREEN', commands=[])] + [dict(text=r'SELECT\s+DIFFICULTY|CHECKPOINT\s+OVERWRITE', commands=['press b 600'], reset=True, once=True),
+                                    dict(text=r'CONTINUE.{0,20}LOAD\s+PREV',
+                                         commands=['press down 600'], once=True)] + recipe['navigation']
+        state = _condition.Runner(reload_game, recipe, reload_out, _driving).navigate()
+        evidence['reload_state'] = state
+        # The title may rewrite its checkpoint after loading it; a New Campaign
+        # overwrite/difficulty prompt on screen is what disqualifies the reload.
+        seen = ' '.join(w['text'] for o in state_obs(reload_out) for w in o['words'])
+        evidence['reopened'] = _saves.reopened(reload_game.log_text(), writes,
+                                               allow_rewrite=not re.search(r'CHECKPOINT\s+OVERWRITE', seen, re.I))
+        evidence['copied_written_bytes'] = all(reload_game.initial_saves.get(name) == value for name, value in writes.items())
+        evidence['passed'] = bool(evidence['reopened'] and evidence['copied_written_bytes']
+                                  and state['state'] and not CRASH.search(reload_game.log_text()))
+        if not evidence['passed']:
+            raise RuntimeError('fresh process did not reopen written save and reach controllable gameplay')
+    except (OSError, ValueError, RuntimeError) as error:
+        evidence['error'] = str(error)
+    finally:
+        G.stop()
+        if reload_game:
+            reload_game.stop()
+        with open(os.path.join(a.out, 'saving.json'), 'w') as f:
+            json.dump(evidence, f, indent=2)
+    facts = ('title save written and reopened in fresh process' if evidence['passed'] else evidence.get('error', 'save proof incomplete'))
+    return out_line('PASS' if evidence['passed'] else 'FAIL', 'savefile', a.game, facts, a.out, a.out)
 
 
 def g_guide(a, G):
@@ -522,6 +628,9 @@ def g_open(a, G):
 def g_speedrun(a, G):
     """One speed run of a non-BO2 game: drive route, then OUT/run/perf.tsv from the game's frame csv so abverdict can read it."""
     route = a.route_file
+    if _condition.load(route):
+        G.stop()
+        return out_line('FAIL', 'speedrun', a.game, 'use a proven recorded.route for timed speed replay', a.out, a.out)
     length = route_len(route)
     if not G.wait_ready(a.ready_timeout):
         return fail_start(a, G, 'control channel never answered')
@@ -618,7 +727,7 @@ def fail_start(a, G, why):
     return out_line('FAIL', a.gate, a.game, f'{why} (exit {died}) log tail: {tail}', a.out, a.out)
 
 
-INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun, save=g_save)
+INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun, save=g_save, savefile=g_savefile)
 
 
 def run_inner(a):
@@ -646,7 +755,9 @@ def run_inner(a):
             # racing games: hold the throttle so the drive proof sees movement (the saved route's inputs count from boot)
             open(pads, 'w').write(''.join(players) + (GAMES[a.game].get('load_pads', '') + '\n' if GAMES[a.game].get('load_pads') else ''))
             env.setdefault('REX_HID_VIRTUAL_PAD_SCRIPT', pads)
-    need_route = a.gate in ('shot', 'drive', 'speedrun', 'save') and not a.savepoint
+    need_route = a.gate in ('shot', 'drive', 'speedrun', 'save', 'savefile') and not a.savepoint
+    if a.gate == 'savefile' and a.game not in _saves.PATTERNS:
+        return out_line('FAIL', 'savefile', a.game, 'no verified early title-save path for this game yet', a.out, a.out)
     if need_route or a.route:
         a.route_file = resolve_route(a.game, a.route) if (a.route or GAMES[a.game]['drive']) else None
     if need_route and not a.route_file and a.gate != 'shot':
@@ -655,7 +766,7 @@ def run_inner(a):
         t = a.at or GAMES[a.game]['settle_s']
         a.route_file = os.path.join(a.out, 'guide.route')
         open(a.route_file, 'w').write(f'players = 1\npad1 = {t}-{t + 0.4}:guide, {t + 3}-{t + 3.4}:rb, {t + 6}-{t + 6.4}:lb, {t + 9}-{t + 9.4}:guide\n')
-    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun', 'save') and not a.no_seed
+    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun', 'save', 'savefile') and not a.no_seed
     try:
         G = Game(a.app, a.out, a.game, route=a.route_file, ff=a.ff,
                  seed=seed, via_open=(a.gate == 'open'), env=env)
@@ -738,6 +849,12 @@ def queue_gate(a, gate=None, game=None):
         b.app, b.out = app, out
         return run_inner(b)
     timeout = {'boot': 300, 'shot': 900, 'drive': 1500, 'guide': 600, 'open': 400, 'save': 900}.get(gate, 900)
+    if gate in ('shot', 'drive', 'savefile'):
+        route = resolve_route(game, a.route)
+        if route and _condition.load(route):
+            timeout = int(a.ready_timeout + route_len(route) + 120)
+            if gate == 'savefile':
+                timeout += int(a.ready_timeout + 420)
     args = ['--'] + inner_args(b, out)
     r = runq_submit(args, f'gate-{game}-{gate}', app, out, a.klass, timeout,
                     extra=['--window'] if gate == 'open' else [])   # open tests the real window: runq keeps it on-screen
@@ -999,13 +1116,13 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2', 'halo3': 'halo 3', 'fallout3': 'fallout 3'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'gears': 'gears of war', 'ac1': "assassin's creed", 'nfsmw2012': 'most wanted 2012', 'me2': 'mass effect 2', 'halo3': 'halo', 'fallout3': 'fallout'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'save', 'selftest'])
+    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay', 'save', 'savefile', 'selftest'])
     p.add_argument('game', nargs='*')
     p.add_argument('--app', help='app to test (default: the installed one); for install: the NEW app')
     p.add_argument('--out')

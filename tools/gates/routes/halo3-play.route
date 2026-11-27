@@ -1,0 +1,39 @@
+{
+  "format": "gameplay-route-v1",
+  "game": "halo3",
+  "status": "unproven",
+  "navigation_timeout_s": 900,
+  "play_timeout_s": 480,
+  "navigation": [
+    {
+      "text": "press.*start",
+      "commands": [
+        "press start 600"
+      ]
+    },
+    {
+      "text": "campaign|solo|normal|start game|resume",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
+      "text": "look up|look.*sky",
+      "commands": [
+        "stick r 0 1 2000"
+      ]
+    },
+    {
+      "text": "look down",
+      "commands": [
+        "stick r 0 -1 2000"
+      ]
+    }
+  ],
+  "controls": {
+    "movement": "stick l 0 1 1500",
+    "camera-left": "stick r -0.45 0 300",
+    "camera-right": "stick r 0.45 0 300",
+    "action": "trigger r 1 600"
+  }
+}

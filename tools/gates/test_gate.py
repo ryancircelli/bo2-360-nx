@@ -80,8 +80,7 @@ class HeadlessMarker(unittest.TestCase):
 
 class GameTable(unittest.TestCase):
     def test_every_gate_game_has_a_gameplay_rule(self):
-        # me2 has a menu route only; halo3/fallout3 are boot/open only until gate-routes-newgames lands: their drive gates fail closed.
-        self.assertEqual(sorted(set(gate.GAMES) - set(driving.GAMES) - {'me2', 'halo3', 'fallout3'}), [], 'drive would fail closed for these: add a rule')
+        self.assertEqual(sorted(set(gate.GAMES) - set(driving.GAMES)), [], 'drive would fail closed for these: add a rule')
 
     def test_drive_routes_exist(self):
         for game, g in gate.GAMES.items():
