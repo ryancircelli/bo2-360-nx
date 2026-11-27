@@ -1327,8 +1327,11 @@ void XeCryptAesCtr_entry(ppc_ptr_t<XECRYPT_AES_STATE> st, mapped_void inp, u32 s
 u32 XeCryptBnQwNeModExp_entry(mapped_u64 out, mapped_u64 base, mapped_u64 exp, mapped_u64 mod,
                               u32 n) {
   if (!n) return 0;
-  for (u32 i = 0; i < n; i++) out[i] = 0;
-  if (!(uint64_t(mod[0]) & 1)) return 0;
+  // out may alias base/exp/mod (in-place calls): zero it only on the failure path.
+  if (!(uint64_t(mod[0]) & 1)) {
+    for (u32 i = 0; i < n; i++) out[i] = 0;
+    return 0;
+  }
   // ModMul wants inverse = mod^-1 mod 2^64 (Newton)
   uint64_t m0 = mod[0], inv = m0;
   for (int i = 0; i < 6; i++) inv *= 2 - m0 * inv;
