@@ -22,6 +22,7 @@
 //   rt_grow   render-target shrink grows (new texture, flush, copy)
 //   tex       texture requests (cache lookups, loads, uploads)
 //   present   guest-output refresh (presenter)
+//   enc       blocked draining the Metal encode thread (DeferredRenderEncoder::Drain)
 //   other     the rest of the interval (draw processing, encoding)
 // Cost: two mach_absolute_time reads per scope; scopes are on rare or per-draw-batch paths.
 #include <mach/mach.h>
@@ -48,13 +49,14 @@ enum Cat : int {
   kRtGrow,
   kTex,
   kPresent,
+  kEnc,
   kCount
 };
 
 inline const char* CatName(int c) {
   static const char* const names[kCount] = {"idle",   "slot",   "sync",    "pso_wait",
                                             "pso_emu", "pso_rt", "pso_xfer", "pso_xclr", "xlate",  "rt_grow",
-                                            "tex",    "present"};
+                                            "tex",    "present", "enc"};
   return names[c];
 }
 

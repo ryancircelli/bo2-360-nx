@@ -1740,7 +1740,7 @@ void MetalCommandProcessor::EncodePrecommitWait(MTL::CommandBuffer* cmd) {
     return;
   }
   if (cmd == current_command_buffer_) {
-    render_encoder_recorder_.Barrier();
+    render_encoder_recorder_.Barrier("precommit_wait");
   }
   cmd->encodeWait(precommit_event_, precommit_event_value_);
   precommit_waited_value_ = precommit_event_value_;
@@ -1763,7 +1763,7 @@ void MetalCommandProcessor::EncodeMainCommandBufferEnd() {
   if (!current_command_buffer_) {
     return;
   }
-  render_encoder_recorder_.Barrier();
+  render_encoder_recorder_.Barrier("cb_end");
   CommitSharedMemoryPrecommit();
   // Also keeps the current command buffer's completion (and the release of
   // the pre-commit staging buffers tagged with its submission) after the
@@ -2321,7 +2321,7 @@ void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
   hitch::Scope hitch_scope(hitch::kSync);
   // Phase 1: commit the active command buffer and wait for it.
   if (current_command_buffer_) {
-    render_encoder_recorder_.Barrier();
+    render_encoder_recorder_.Barrier("flush_wait");
     ++UploadTrace().cbend_wait;
     EndSharedMemoryUploadBlitEncoder(
         SharedMemoryUploadEncoderEndReason::kCommandBufferEnd);
@@ -11304,7 +11304,7 @@ static DeferredRenderEncoder* g_xpass_recorder = nullptr;
 
 MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   ProcessCompletedSubmissions();
-  render_encoder_recorder_.Barrier();
+  render_encoder_recorder_.Barrier("ensure_cb");
   if (current_command_buffer_) {
     return current_command_buffer_;
   }
@@ -13647,8 +13647,8 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
           pass_trace::BeginRender(current_command_buffer_, pass_descriptor, "draw");
       if (encode_thread_active_ && cmdcost_all_active_) {
         // Cross-pass encode thread: the worker creates the encoder.
-        pass_trace::SetEncodeBarrier([](MTL::CommandBuffer*) {
-          if (g_xpass_recorder) g_xpass_recorder->Barrier();
+        pass_trace::SetEncodeBarrier([](MTL::CommandBuffer* cmd, const char* site) {
+          if (g_xpass_recorder) g_xpass_recorder->Barrier(site, cmd);
         });
         g_xpass_recorder = &render_encoder_recorder_;
         current_render_encoder_ = render_encoder_recorder_.OpenXpass(

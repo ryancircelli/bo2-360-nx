@@ -103,7 +103,7 @@ class MetalCommandProcessor final : public CommandProcessor {
   // Callers may encode into the returned buffer, so wait for the encode
   // thread (cross-pass mode) first. Use PeekCurrentCommandBuffer to compare.
   MTL::CommandBuffer* GetCurrentCommandBuffer() const {
-    render_encoder_recorder_.Barrier();
+    render_encoder_recorder_.Barrier("get_cb");
     return current_command_buffer_;
   }
   MTL::CommandBuffer* PeekCurrentCommandBuffer() const {
