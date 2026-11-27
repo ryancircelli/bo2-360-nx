@@ -4,10 +4,12 @@
 # REXGLUE_PPC_PREBUILT_BIN_DIR: use .bin/.map assembled elsewhere (the binutils are x86-64 Linux),
 # e.g. to run the cases on an arm64 Mac.
 set(REXGLUE_PPC_PREBUILT_BIN_DIR "" CACHE PATH "Prebuilt .bin/.map files for the PPC instruction tests")
+# REXGLUE_PPC_ASM_DIR: run another set of .s cases in the same format, e.g. xenia-canary's.
+set(REXGLUE_PPC_ASM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/asm CACHE PATH "PPC instruction test .s files")
 
 set(PPC_GEN_DIR ${CMAKE_BINARY_DIR}/tests/ppc/generated)
 file(MAKE_DIRECTORY ${PPC_GEN_DIR})
-file(GLOB ASM_FILES ${CMAKE_CURRENT_SOURCE_DIR}/asm/*.s)
+file(GLOB ASM_FILES ${REXGLUE_PPC_ASM_DIR}/*.s)
 
 if(REXGLUE_PPC_PREBUILT_BIN_DIR)
     set(PPC_BIN_DIR ${REXGLUE_PPC_PREBUILT_BIN_DIR})
@@ -34,7 +36,7 @@ set(PPC_GENERATED
 add_custom_command(
     OUTPUT ${PPC_GENERATED}
     COMMAND $<TARGET_FILE:rexglue> recompile-tests --output=${PPC_GEN_DIR} --bin-dir=${PPC_BIN_DIR}
-            --asm-dir=${CMAKE_CURRENT_SOURCE_DIR}/asm
+            --asm-dir=${REXGLUE_PPC_ASM_DIR}
     DEPENDS ${TEST_BINS} ${ASM_FILES} rexglue
     COMMENT "Generating PPC instruction tests with rexglue recompile-tests"
     VERBATIM
