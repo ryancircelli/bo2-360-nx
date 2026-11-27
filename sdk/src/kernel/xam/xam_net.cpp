@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include "net_socket.h"
+#include "xhttp_url.h"
 
 #include <algorithm>
 #include <climits>
@@ -1432,29 +1433,17 @@ REX_EXPORT(__imp__NetDll_WSARecv, rex::kernel::xam::NetDll_WSARecv_entry)
 REX_EXPORT(__imp__NetDll_WSASend, rex::kernel::xam::NetDll_WSASend_entry)
 REX_EXPORT(__imp__NetDll_WSAStartupEx, rex::kernel::xam::NetDll_WSAStartupEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCloseHandle, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpConnect, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCrackUrl, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCrackUrlW, 0x0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCreateUrl, 0x0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCreateUrlW, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpDoWork, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpGetPerfCounters, 0x0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpen, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpenRequest, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpenRequestUsingMemory, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryAuthSchemes, 0x0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryHeaders, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryOption, 0x0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReadData, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReceiveResponse, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpResetPerfCounters, 0x0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSendRequest, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetCredentials, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetOption, 1);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetStatusCallback, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpShutdown, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpStartup, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpWriteData, 0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpStartup, 1);
 REX_EXPORT(__imp__NetDll_XNetConnect, rex::kernel::xam::NetDll_XNetConnect_entry)
 REX_EXPORT(__imp__NetDll_XNetCreateKey, rex::kernel::xam::NetDll_XNetCreateKey_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseLookup, 0x2af9);
@@ -1537,3 +1526,150 @@ u32 NetDll_XNetGetXnAddrPlatform_entry(u32 caller, u32 xnaddr, mapped_u32 platfo
 }  // namespace rex::kernel::xam
 REX_EXPORT(__imp__NetDll_XNetGetSystemLinkPort, rex::kernel::xam::NetDll_XNetGetSystemLinkPort_entry)
 REX_EXPORT(__imp__NetDll_XNetGetXnAddrPlatform, rex::kernel::xam::NetDll_XNetGetXnAddrPlatform_entry)
+
+// ---- XHttp URL helpers (WinHttpCrackUrl / WinHttpCreateUrl behaviour, 32-bit guest URL_COMPONENTS) ----
+namespace rex::kernel::xam {
+namespace {
+constexpr uint32_t kHttpInvalidUrl = 12005, kInsufficientBuffer = 122;
+// URL_COMPONENTS field offsets: size, scheme(ptr,len), nScheme, host(ptr,len), port(u16), user, pass, path, extra.
+constexpr uint32_t kOffScheme = 4, kOffNScheme = 12, kOffHost = 16, kOffPort = 24, kOffUser = 28,
+                   kOffPass = 36, kOffPath = 44, kOffExtra = 52;
+
+uint32_t RdU32(uint8_t* base, uint32_t off) {
+  return rex::byte_swap(*reinterpret_cast<uint32_t*>(base + off));
+}
+void WrU32(uint8_t* base, uint32_t off, uint32_t v) {
+  *reinterpret_cast<uint32_t*>(base + off) = rex::byte_swap(v);
+}
+template <typename C>
+std::string ReadStr(uint32_t guest, uint32_t len) {
+  std::string out;
+  if (!guest) return out;
+  auto* p = REX_KERNEL_MEMORY()->TranslateVirtual<C*>(guest);
+  for (uint32_t i = 0; (len ? i < len : true); ++i) {
+    C c = p[i];
+    if constexpr (sizeof(C) == 2) c = rex::byte_swap(c);
+    if (!len && !c) break;
+    out.push_back(char(c));
+  }
+  return out;
+}
+// Fill one component per WinHttpCrackUrl: buffer given -> copy (NUL-terminated); no buffer but a
+// non-zero length -> point into the source URL; neither -> untouched.
+template <typename C>
+bool CrackField(uint8_t* comps, uint32_t off, std::string_view url, UrlSpan sp, uint32_t url_guest) {
+  uint32_t ptr = RdU32(comps, off), cap = RdU32(comps, off + 4);
+  if (ptr) {
+    if (cap < sp.len + 1) {
+      WrU32(comps, off + 4, sp.len + 1);
+      return false;
+    }
+    auto* d = REX_KERNEL_MEMORY()->TranslateVirtual<C*>(ptr);
+    for (uint32_t i = 0; i < sp.len; ++i) {
+      C c = C(uint8_t(url[sp.off + i]));
+      if constexpr (sizeof(C) == 2) c = rex::byte_swap(c);
+      d[i] = c;
+    }
+    d[sp.len] = 0;
+    WrU32(comps, off + 4, sp.len);
+  } else if (cap) {
+    WrU32(comps, off, url_guest + sp.off * sizeof(C));
+    WrU32(comps, off + 4, sp.len);
+  }
+  return true;
+}
+template <typename C>
+u32 CrackImpl(u32 url_guest, u32 len, u32 comps_guest) {
+  if (!url_guest || !comps_guest) {
+    XThread::SetLastError(87);
+    return 0;
+  }
+  std::string url = ReadStr<C>(url_guest, len);
+  UrlParts p;
+  if (!ParseUrl(url, p)) {
+    XThread::SetLastError(kHttpInvalidUrl);
+    return 0;
+  }
+  auto* c = REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(comps_guest);
+  bool ok = CrackField<C>(c, kOffScheme, url, p.scheme, url_guest) &&
+            CrackField<C>(c, kOffHost, url, p.host, url_guest) &&
+            CrackField<C>(c, kOffUser, url, p.user, url_guest) &&
+            CrackField<C>(c, kOffPass, url, p.pass, url_guest) &&
+            CrackField<C>(c, kOffPath, url, p.path, url_guest) &&
+            CrackField<C>(c, kOffExtra, url, p.extra, url_guest);
+  if (!ok) {
+    XThread::SetLastError(kInsufficientBuffer);
+    return 0;
+  }
+  WrU32(c, kOffNScheme, p.scheme_id);
+  *reinterpret_cast<uint16_t*>(c + kOffPort) = rex::byte_swap(p.port);
+  return 1;
+}
+template <typename C>
+u32 CreateImpl(u32 comps_guest, u32 out_guest, u32 len_guest) {
+  if (!comps_guest || !len_guest) {
+    XThread::SetLastError(87);
+    return 0;
+  }
+  auto* c = REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(comps_guest);
+  auto field = [&](uint32_t off) { return ReadStr<C>(RdU32(c, off), RdU32(c, off + 4)); };
+  uint16_t port = rex::byte_swap(*reinterpret_cast<uint16_t*>(c + kOffPort));
+  std::string url = BuildUrl(RdU32(c, kOffNScheme), field(kOffScheme), field(kOffHost), port,
+                             field(kOffUser), field(kOffPass), field(kOffPath), field(kOffExtra));
+  auto* plen = REX_KERNEL_MEMORY()->TranslateVirtual<uint32_t*>(len_guest);
+  uint32_t cap = rex::byte_swap(*plen);
+  if (!out_guest || cap < url.size() + 1) {
+    *plen = rex::byte_swap(uint32_t(url.size() + 1));
+    XThread::SetLastError(kInsufficientBuffer);
+    return 0;
+  }
+  auto* d = REX_KERNEL_MEMORY()->TranslateVirtual<C*>(out_guest);
+  for (size_t i = 0; i < url.size(); ++i) {
+    C ch = C(uint8_t(url[i]));
+    if constexpr (sizeof(C) == 2) ch = rex::byte_swap(ch);
+    d[i] = ch;
+  }
+  d[url.size()] = 0;
+  *plen = rex::byte_swap(uint32_t(url.size()));
+  return 1;
+}
+}  // namespace
+u32 NetDll_XHttpCrackUrl_entry(u32 caller, u32 url, u32 len, u32 flags, u32 comps) {
+  return CrackImpl<char>(url, len, comps);
+}
+u32 NetDll_XHttpCrackUrlW_entry(u32 caller, u32 url, u32 len, u32 flags, u32 comps) {
+  return CrackImpl<char16_t>(url, len, comps);
+}
+u32 NetDll_XHttpCreateUrl_entry(u32 caller, u32 comps, u32 flags, u32 out, u32 len) {
+  return CreateImpl<char>(comps, out, len);
+}
+u32 NetDll_XHttpCreateUrlW_entry(u32 caller, u32 comps, u32 flags, u32 out, u32 len) {
+  return CreateImpl<char16_t>(comps, out, len);
+}
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__NetDll_XHttpCrackUrl, rex::kernel::xam::NetDll_XHttpCrackUrl_entry)
+REX_EXPORT(__imp__NetDll_XHttpCrackUrlW, rex::kernel::xam::NetDll_XHttpCrackUrlW_entry)
+REX_EXPORT(__imp__NetDll_XHttpCreateUrl, rex::kernel::xam::NetDll_XHttpCreateUrl_entry)
+REX_EXPORT(__imp__NetDll_XHttpCreateUrlW, rex::kernel::xam::NetDll_XHttpCreateUrlW_entry)
+
+// XHttp offline: there is no HTTP session layer (the games' servers are gone), so requests refuse cleanly with
+// ERROR_WINHTTP_NAME_NOT_RESOLVED (12007) as the last error.
+namespace rex::kernel::xam {
+u32 XHttpRefuse() { XThread::SetLastError(12007); return 0; }
+u32 NetDll_XHttpOpen_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpConnect_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpOpenRequest_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpSendRequest_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpReceiveResponse_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpQueryHeaders_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpReadData_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpWriteData_entry() { return XHttpRefuse(); }
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__NetDll_XHttpOpen, rex::kernel::xam::NetDll_XHttpOpen_entry)
+REX_EXPORT(__imp__NetDll_XHttpConnect, rex::kernel::xam::NetDll_XHttpConnect_entry)
+REX_EXPORT(__imp__NetDll_XHttpOpenRequest, rex::kernel::xam::NetDll_XHttpOpenRequest_entry)
+REX_EXPORT(__imp__NetDll_XHttpSendRequest, rex::kernel::xam::NetDll_XHttpSendRequest_entry)
+REX_EXPORT(__imp__NetDll_XHttpReceiveResponse, rex::kernel::xam::NetDll_XHttpReceiveResponse_entry)
+REX_EXPORT(__imp__NetDll_XHttpQueryHeaders, rex::kernel::xam::NetDll_XHttpQueryHeaders_entry)
+REX_EXPORT(__imp__NetDll_XHttpReadData, rex::kernel::xam::NetDll_XHttpReadData_entry)
+REX_EXPORT(__imp__NetDll_XHttpWriteData, rex::kernel::xam::NetDll_XHttpWriteData_entry)

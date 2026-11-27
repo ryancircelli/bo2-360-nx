@@ -110,3 +110,8 @@ add_executable(net_socket_tests kernel/net_socket_test.cpp)
 target_include_directories(net_socket_tests PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(net_socket_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME net_socket_tests COMMAND net_socket_tests)
+
+add_executable(xhttp_url_tests kernel/xhttp_url_test.cpp)
+target_include_directories(xhttp_url_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(xhttp_url_tests PRIVATE Catch2::Catch2WithMain)
+add_test(NAME xhttp_url_tests COMMAND xhttp_url_tests)
