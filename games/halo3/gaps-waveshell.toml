@@ -28,13 +28,9 @@
 "0x88053968" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xa4(r31)
 "0x88053B80" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xe4(r31)
 "0x88055168" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xa4(r31)
-"0x88055560" = { }   # 16 B: lwz r11, 0(r3)
 "0x880568E0" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xe4(r31)
 "0x88056B68" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xe4(r31)
 "0x88056DF0" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xe4(r31)
-"0x88057C50" = { }   # 16 B: lwz r11, 0(r3)
-"0x88057C60" = { }   # 16 B: lwz r11, 0(r3)
-"0x88057C70" = { }   # 16 B: lwz r11, 0(r3)
 "0x88058FE4" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: b 0x88058fe8
 "0x88058FE8" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lbz r3, 0x50(r31)
 "0x88059084" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: b 0x88059088
@@ -49,6 +45,5 @@
 "0x880599DC" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r3, 0x50(r31)
 "0x88059A80" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r3, 0x50(r31)
 "0x8805D3D0" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r3, 0xd4(r31)
-"0x88065DB8" = { }   # 116 B: lwz r10, 0(r6)
 "0x88078ED8" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r3, 0x50(r31)
 "0x8807C264" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: mr r3, r29

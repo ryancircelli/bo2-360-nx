@@ -7,6 +7,3 @@
 [functions]
 "0x8B91673C" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: lwz r30, 0xa4(r31)
 "0x8B926C04" = { }   # referenced as a function pointer (lis+addi), inside the body walk of an earlier function: mr r3, r29
-"0x8B926D30" = { }   # 12 B: li r5, 0xa
-"0x8B926D50" = { }   # 12 B: li r5, 0xa
-"0x8B92FC68" = { }   # 32 B: li r11, 4
