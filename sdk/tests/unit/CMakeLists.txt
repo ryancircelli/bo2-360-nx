@@ -53,6 +53,7 @@ add_executable(shader_parse_tests graphics/shader_parse_test.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/shader/translator.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/shader/translator_disasm.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/pipeline/shader/shader.cpp
+    ${PROJECT_SOURCE_DIR}/src/graphics/format/ucode.cpp
     ${PROJECT_SOURCE_DIR}/src/graphics/flags.cpp)
 target_link_libraries(shader_parse_tests PRIVATE rexruntime xxHash::xxhash renderdoc Catch2::Catch2WithMain)
 add_test(NAME shader_parse_tests COMMAND shader_parse_tests)
