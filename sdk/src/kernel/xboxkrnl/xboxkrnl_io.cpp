@@ -831,8 +831,9 @@ u32 NtCancelIoFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status
   return X_STATUS_SUCCESS;
 }
 
-// Writes `length` bytes, one 4 KB page per segment element, in order (Win32 WriteFileGather shape;
-// layout of the 360 element is checked at runtime: a 64-bit big-endian union has a zero high word).
+// Xbox FILE_SEGMENT_ELEMENT entries are 32-bit guest pointers (Xenia ReadScatter),
+// unlike the desktop Win32 union. Stage pages into one guest buffer so XFile::Write
+// performs one locked request and emits exactly one completion notification.
 u32 NtWriteFileGather_entry(u32 file_handle, u32 event_handle, u32 apc_routine,
                             mapped_void apc_context, ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block,
                             mapped_u32 segment_array, u32 length, mapped_u64 byte_offset_ptr) {
@@ -841,36 +842,43 @@ u32 NtWriteFileGather_entry(u32 file_handle, u32 event_handle, u32 apc_routine,
   X_STATUS result = X_STATUS_SUCCESS;
   if ((event_handle && !ev) || !file) {
     result = X_STATUS_INVALID_HANDLE;
+  } else if (length && !segment_array) {
+    result = X_STATUS_INVALID_PARAMETER;
   }
-  uint32_t total = 0;
+
+  uint32_t written = 0;
   if (XSUCCEEDED(result)) {
-    constexpr uint32_t kPage = 4096;
-    uint32_t stride = (segment_array[0] == 0 && segment_array[1] != 0) ? 2 : 1;
-    uint32_t base_off = stride - 1;
-    uint64_t offset = byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : -1;
-    for (uint32_t i = 0; total < length; ++i) {
-      uint32_t n = std::min(kPage, length - total);
-      uint32_t written = 0;
-      uint64_t off = (offset != uint64_t(-1) && offset != uint64_t(-2)) ? offset + total : offset;
-      result = file->Write(segment_array[i * stride + base_off], n, off, &written,
-                           apc_context.guest_address());
-      total += written;
-      if (XFAILED(result) || written != n) {
-        break;
+    auto* memory = REX_KERNEL_MEMORY();
+    const uint32_t staging_address = length ? memory->SystemHeapAlloc(length) : 0;
+    if (length && !staging_address) {
+      result = X_STATUS_NO_MEMORY;
+    } else {
+      auto release = [memory, staging_address](uint8_t*) {
+        if (staging_address) memory->SystemHeapFree(staging_address);
+      };
+      std::unique_ptr<uint8_t, decltype(release)> staging(
+          length ? memory->TranslateVirtual(staging_address) : nullptr, release);
+      for (uint32_t offset = 0; offset < length;) {
+        const uint32_t bytes = std::min(4096u, length - offset);
+        std::memcpy(staging.get() + offset,
+                    memory->TranslateVirtual(segment_array[offset / 4096]), bytes);
+        offset += bytes;
       }
+      result = file->Write(staging_address, length,
+                           byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : uint64_t(-1),
+                           &written, apc_context.guest_address());
+      if (io_status_block) {
+        io_status_block->status = result;
+        io_status_block->information = written;
+      }
+      if ((apc_routine & ~1u) && apc_context) {
+        XThread::GetCurrentThread()->EnqueueApc(apc_routine & ~1u, apc_context.guest_address(),
+                                               io_status_block.guest_address(), 0);
+      }
+      if (ev) ev->Set(0, false);
+      // Match NtWriteFile's synchronous implementation of asynchronous handles.
+      return file->is_synchronous() ? result : X_STATUS_PENDING;
     }
-    if (io_status_block) {
-      io_status_block->status = result;
-      io_status_block->information = total;
-    }
-    if (static_cast<uint32_t>(apc_routine) & ~1u && apc_context) {
-      XThread::GetCurrentThread()->EnqueueApc(apc_routine & ~1u, apc_context.guest_address(),
-                                              io_status_block.guest_address(), 0);
-    }
-    if (ev) {
-      ev->Set(0, false);
-    }
-    return result;
   }
   if (io_status_block) {
     io_status_block->status = result;

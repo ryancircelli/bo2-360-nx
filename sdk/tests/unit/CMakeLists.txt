@@ -105,3 +105,11 @@ add_test(NAME bench_clock_tests COMMAND bench_clock_tests)
 add_executable(sha512_selfcheck crypto/sha512_selfcheck.cpp)
 target_include_directories(sha512_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
 add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
+
+add_executable(kernel_backfill_tests
+    kernel/stub_backfill_test.cpp
+    kernel/gather_write_test.cpp)
+target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(kernel_backfill_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
