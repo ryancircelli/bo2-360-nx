@@ -96,3 +96,20 @@ TEST_CASE("Stub families return deliberate codes", "[kernel][stubs]") {
   __imp__XamShowGamerCardUI(ctx, base);
   CHECK(ctx.r3.u64 == 0x4C7);
 }
+
+extern "C" void __imp__XGetVideoFlags(PPCContext&, uint8_t*);
+extern "C" void __imp__XamAvatarEnumAssets(PPCContext&, uint8_t*);
+extern "C" void __imp__XuiAlloc(PPCContext&, uint8_t*);
+extern "C" void __imp__XamInputGetKeystrokeHud(PPCContext&, uint8_t*);
+TEST_CASE("Video, avatar, XUI, input stub families", "[kernel][stubs]") {
+  PPCContext ctx{};
+  uint8_t base[16]{};
+  __imp__XGetVideoFlags(ctx, base);
+  CHECK(ctx.r3.u64 == 0x0F);
+  __imp__XamAvatarEnumAssets(ctx, base);
+  CHECK(ctx.r3.u64 == 0x80070012);
+  __imp__XuiAlloc(ctx, base);
+  CHECK(ctx.r3.u64 == 0);
+  __imp__XamInputGetKeystrokeHud(ctx, base);
+  CHECK(ctx.r3.u64 == 0x10D2);
+}
