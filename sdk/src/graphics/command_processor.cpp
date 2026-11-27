@@ -1260,6 +1260,16 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
         break;
     }
     if (!matched) {
+      static const bool savepoint_diag = std::getenv("REX_SAVEPOINT_DIAG") != nullptr;
+      if (savepoint_diag) {  // what a stuck CP waits for (fresh-load freeze diagnosis)
+        static auto last = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(2)) {
+          last = now;
+          std::fprintf(stderr, "[savepoint-cp] WAIT_REG_MEM %s %08X value %08X mask %08X func %u ref %08X\n",
+                       is_memory ? "mem" : "reg", poll_reg_addr, value, mask, wait_info & 7, ref);
+        }
+      }
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();

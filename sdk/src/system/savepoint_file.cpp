@@ -5,9 +5,10 @@
  * File (little endian): "REXSP2\0\0", u32 version, u8 uuid[16] (main executable LC_UUID ^ librexruntime LC_UUID), u32 frame,
  *   u32 heap count, per heap {u32 base, u32 physical, u32 unreserved pages, u32 n, u64 page entries[n]},
  *   u32 region count, per region {u32 space (0 virtual, 1 physical), u32 base, u32 size, u32 protect,
- *   bytes}, u32 GPU state size, GPU state bytes (GraphicsFileHook), u32 'END!'.
- * Physical bytes already carry the pages only the GPU copy held (resolves are not read back to guest
- * memory). Function tables (host pointers) are written but never loaded.
+ *   bytes}, u32 GPU state size, GPU state bytes (GraphicsFileHook), u32 GPU-written pages size, the pages
+ *   ({u32 physical address, u32 size, bytes} each), u32 'END!'.
+ * Guest memory is saved as the CPU sees it; the pages only the GPU copy holds current go back into the GPU
+ * copy (marked GPU-written), as in the live process. Function tables (host pointers) are written but never loaded.
  */
 
 #include <rex/system/savepoint.h>
@@ -86,7 +87,7 @@ void VisitInProcessSnapshot(
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr char kMagic[8] = {'R', 'E', 'X', 'S', 'P', '2', 0, 0};
-constexpr uint32_t kVersion = 11;  // 10: fibers, 11: procedure thunks
+constexpr uint32_t kVersion = 12;  // 10: fibers, 11: procedure thunks, 12: GPU pages kept apart
 constexpr uint64_t kArenaSize = 0x120000000ull;  // virtual + physical guest views (xmemory.cpp)
 constexpr uint32_t kEnd = 0x21444E45;  // "END!"
 
@@ -286,6 +287,25 @@ std::vector<std::pair<uint64_t, uint64_t>> ExeDataRanges() {
   }
   return r;
 }
+
+// Switch jump tables sit inside their function's own code (Forza resumed with a table base in x27, faulted on the
+// stale one). An old-image value inside a function on the thread's own call chain is such a pointer and moves with
+// the image; other 0x1_0xxxxxxx values are left alone (recompiled code's 64-bit guest sums share that range).
+struct TextWindows {
+  int64_t delta;
+  std::vector<std::pair<uint64_t, uint64_t>> w;
+  void Add(uint64_t old_pc) {
+    Dl_info info{};
+    if (!old_pc || !dladdr(reinterpret_cast<void*>(old_pc + delta), &info) || !info.dli_saddr) return;
+    const uint64_t start = reinterpret_cast<uint64_t>(info.dli_saddr) - delta;
+    w.push_back({start, start + 0x40000});  // shortcut: function end unknown; 256 KB covers its inline tables
+  }
+  uint64_t operator()(uint64_t v) const {
+    for (auto [lo, hi] : w)
+      if (v >= lo && v < hi) return v + delta;
+    return v;
+  }
+};
 
 // A host function as {image file name, offset}: images load at another address in the next process.
 bool FuncToFile(::PPCFunc* f, std::string& image, uint64_t& offset) {
@@ -756,19 +776,6 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   // Same command-processor safe point as the capture: nothing has been drawn since.
   std::vector<uint8_t> gpu_state, gpu_pages;
   if (!hook(gfx, 0, gpu_state, gpu_pages)) return "error GPU save failed (drain timed out?)";
-  struct Page {
-    uint32_t address, size;
-    const uint8_t* data;
-  };
-  std::vector<Page> pages;
-  for (size_t at = 0; at + 8 <= gpu_pages.size();) {
-    Page pg;
-    std::memcpy(&pg.address, &gpu_pages[at], 4);
-    std::memcpy(&pg.size, &gpu_pages[at + 4], 4);
-    pg.data = &gpu_pages[at + 8];
-    at += 8 + pg.size;
-    pages.push_back(pg);
-  }
 
   std::error_code ec;  // runq live save puts files in <session>/savepoints/, which may not exist yet
   std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
@@ -804,25 +811,16 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
     out.Put(s->pages.data(), s->pages.size() * 8);
   }
   out.U32(uint32_t(regions.size()));
-  uint64_t overlaid = 0;
-  std::vector<uint8_t> patched;
   for (auto& r : regions) {
     out.U32(r.space), out.U32(r.base), out.U32(r.size), out.U32(r.protect);
     const uint8_t* data = r.data;
-    if (r.space == 1) {
-      for (auto& pg : pages) {
-        uint64_t lo = std::max<uint64_t>(pg.address, r.base);
-        uint64_t hi = std::min<uint64_t>(uint64_t(pg.address) + pg.size, uint64_t(r.base) + r.size);
-        if (lo >= hi) continue;
-        if (data != patched.data()) patched.assign(r.data, r.data + r.size), data = patched.data();
-        std::memcpy(patched.data() + (lo - r.base), pg.data + (lo - pg.address), hi - lo);
-        overlaid += hi - lo;
-      }
-    }
     out.Put(data, r.size);
   }
   out.U32(uint32_t(gpu_state.size()));
   out.Put(gpu_state.data(), gpu_state.size());
+  // Not laid over guest memory: a fence the CPU reset after a GPU write (Forza) must keep the CPU's value.
+  out.U32(uint32_t(gpu_pages.size()));
+  out.Put(gpu_pages.data(), gpu_pages.size());
   // head[6]: queued DPCs (the list head is host state, the entries guest memory; a DPC marked queued but not
   // on the list is never inserted again).
   uint64_t head[7] = {reinterpret_cast<uint64_t>(mem->virtual_membase()), exe.first, exe.second, ticks, time_base,
@@ -857,7 +855,7 @@ std::string WriteSavepointFile(const std::string& path, int frame) {
   std::snprintf(buf, sizeof buf,
                 "ok file frame=%d mb=%llu gpu_pages_kb=%llu capture_ms=%.1f write_ms=%.1f threads=%u guest_threads=%zu "
                 "kernel_kb=%zu tries=%d", frame,
-                (unsigned long long)(out.bytes >> 20), (unsigned long long)(overlaid >> 10), Ms(t0, t1),
+                (unsigned long long)(out.bytes >> 20), (unsigned long long)(gpu_pages.size() >> 10), Ms(t0, t1),
                 Ms(t1, t2), st.threads_parked, threads.size(), kernel_len >> 10, tries + 1);
   REXSYS_INFO("[savepoint] wrote {}: {}", path, buf);
   return buf;
@@ -1072,8 +1070,10 @@ bool LoadSavepointFile(const std::string& path) {
     std::memcpy(mem->TranslateVirtual<uint8_t*>(base), saved.data(), saved.size());
   }
 
-  std::vector<uint8_t> gpu_state(in.U32()), unused;
+  std::vector<uint8_t> gpu_state(in.U32());
   if (auto* s = in.Take(gpu_state.size())) std::memcpy(gpu_state.data(), s, gpu_state.size());
+  std::vector<uint8_t> gpu_pages(in.U32());
+  if (auto* s = in.Take(gpu_pages.size())) std::memcpy(gpu_pages.data(), s, gpu_pages.size());
   uint64_t head[7] = {};
   if (auto* h = in.Take(sizeof head)) std::memcpy(head, h, sizeof head);
   std::vector<uint8_t> kernel(in.U32());
@@ -1214,7 +1214,7 @@ bool LoadSavepointFile(const std::string& path) {
   auto t1 = Clock::now();
   auto* gfx = g_gfx.load(std::memory_order_acquire);
   auto hook = g_gfx_hook.load(std::memory_order_acquire);
-  if (!gfx || !hook || !hook(gfx, 1, gpu_state, unused)) {
+  if (!gfx || !hook || !hook(gfx, 1, gpu_state, gpu_pages)) {
     SPLOAD_ERR("[savepoint] load: GPU state restore failed");
     return false;
   }
@@ -1341,14 +1341,25 @@ bool LoadSavepointFile(const std::string& path) {
     }
     // Return addresses: walk the frame records (now in the new band) from the innermost game frame.
     uint32_t moved_returns = 0;
+    TextWindows tw{int64_t(exe.first - head[1]), {}};
+    tw.Add(arm_thread_state64_get_pc(rec.gp));
+    std::vector<uint64_t> ret_slots;
     for (uint64_t r = rl(arm_thread_state64_get_fp(rec.gp)); r && r != rec.record + sd;) {
       if (r < new_top - rec.band.size() || r + 16 > new_top) {
         SPLOAD_ERR("[savepoint] load: thread {:08X} frame record {:X} outside its band", rec.handle, r);
         return false;
       }
       auto* fr = reinterpret_cast<uint64_t*>(r);
+      tw.Add(fr[1]), ret_slots.push_back(r + 8);
       fr[1] = code(fr[1]), ++moved_returns;
       r = fr[0];
+    }
+    uint32_t moved_tables = 0;
+    for (uint64_t a = new_top - rec.band.size(); a + 8 <= new_top; a += 8) {
+      if (std::find(ret_slots.begin(), ret_slots.end(), a) != ret_slots.end()) continue;
+      uint64_t v;
+      std::memcpy(&v, reinterpret_cast<void*>(a), 8);
+      if (const uint64_t n = tw(v); n != v) std::memcpy(reinterpret_cast<void*>(a), &n, 8), ++moved_tables;
     }
     auto* record = reinterpret_cast<uint64_t*>(rec.record + sd);  // oldest game frame returns to the landing
     record[0] = 0;
@@ -1360,6 +1371,9 @@ bool LoadSavepointFile(const std::string& path) {
     // frames never get this (their 64-bit guest sums share the 0x1_0xxxxxxx range).
     if (rec.blocked == 2)
       for (int r = 19; r <= 28; ++r) gp.__x[r] = code(gp.__x[r]);
+    else
+      for (int r = 19; r <= 28; ++r)
+        if (const uint64_t n = tw(gp.__x[r]); n != gp.__x[r]) gp.__x[r] = n, ++moved_tables;
     arm_thread_state64_set_fp(gp, rl(arm_thread_state64_get_fp(rec.gp)));
     arm_thread_state64_set_sp(gp, rl(arm_thread_state64_get_sp(rec.gp)));
     arm_thread_state64_set_lr_fptr(gp, reinterpret_cast<void*>(code(arm_thread_state64_get_lr(rec.gp))));
@@ -1372,9 +1386,9 @@ bool LoadSavepointFile(const std::string& path) {
     if (std::getenv("REX_SAVEPOINT_DIAG")) {
       Dl_info di{};
       dladdr(reinterpret_cast<void*>(arm_thread_state64_get_pc(gp)), &di);
-      std::fprintf(stderr, "[savepoint] thread %s %s pc %llx (%s) band %zu KB, %u return addresses moved%s\n", hex,
+      std::fprintf(stderr, "[savepoint] thread %s %s pc %llx (%s) band %zu KB, %u return addresses + %u code pointers moved%s\n", hex,
                    rec.blocked == 2 ? "woken" : rec.blocked ? "blocked" : "running", (unsigned long long)arm_thread_state64_get_pc(gp),
-                   di.dli_sname ? di.dli_sname : "?", rec.band.size() >> 10, moved_returns, resume ? "" : ", left parked");
+                   di.dli_sname ? di.dli_sname : "?", rec.band.size() >> 10, moved_returns, moved_tables, resume ? "" : ", left parked");
       std::fprintf(stderr, "[savepoint]   tls old %llx-%llx new %llx-%llx; x19-x28 old/new:", (unsigned long long)rec.tls_lo,
                    (unsigned long long)rec.tls_hi, (unsigned long long)ntls.first, (unsigned long long)ntls.second);
       for (int r = 19; r <= 28; ++r)

@@ -20,6 +20,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <rex/graphics/register_file.h>
 #include <rex/kernel.h>
@@ -124,6 +126,9 @@ class GraphicsSystem : public system::IGraphicsSystem {
   uint32_t interrupt_callback_data_ = 0;
   std::atomic<bool> interrupts_held_{false};
   std::atomic<int> interrupts_running_{0};
+  std::mutex held_mutex_;  // command-processor interrupts that came while held, given on release
+  std::vector<std::pair<uint32_t, uint32_t>> held_interrupts_;
+  std::atomic<bool> held_pending_{false};  // released with interrupts still queued
 
   std::atomic<bool> vsync_worker_running_;
   system::object_ref<system::XHostThread> vsync_worker_thread_;

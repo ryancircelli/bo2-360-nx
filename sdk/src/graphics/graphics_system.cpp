@@ -12,6 +12,7 @@
 #include <rex/graphics/graphics_system.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 
 #include <algorithm>
@@ -329,7 +330,27 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
   }
   interrupts_running_.fetch_add(1);
   struct Done { std::atomic<int>& n; ~Done() { n.fetch_sub(1); } } done{interrupts_running_};
-  if (interrupts_held_.load()) return;
+  if (interrupts_held_.load()) {
+    // vblanks (source 0) recur; a command-processor interrupt is one-shot and the game may wait on it
+    if (source != 0) {
+      std::lock_guard<std::mutex> lock(held_mutex_);
+      held_interrupts_.push_back({source, cpu});
+      if (std::getenv("REX_SAVEPOINT_DIAG")) std::fprintf(stderr, "[savepoint] interrupt source %u held\n", source);
+    }
+    return;
+  }
+  // Interrupts held during a load go out first, on the next thread that dispatches (the vblank thread):
+  // the command processor may be stuck in a WAIT_REG_MEM that only their handler releases.
+  if (held_pending_.load()) {
+    std::vector<std::pair<uint32_t, uint32_t>> held;
+    {
+      std::lock_guard<std::mutex> lock(held_mutex_);
+      held.swap(held_interrupts_);
+      held_pending_.store(false);
+    }
+    if (std::getenv("REX_SAVEPOINT_DIAG")) std::fprintf(stderr, "[savepoint] delivering %zu held interrupts\n", held.size());
+    for (auto [s, c] : held) DispatchInterruptCallback(s, c);
+  }
 
   auto thread = system::XThread::GetCurrentThread();
   assert_not_null(thread);
@@ -351,6 +372,10 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
 void GraphicsSystem::HoldInterrupts(bool hold) {
   interrupts_held_.store(hold);
   while (hold && interrupts_running_.load()) std::this_thread::yield();
+  if (!hold) {
+    std::lock_guard<std::mutex> lock(held_mutex_);
+    held_pending_.store(!held_interrupts_.empty());
+  }
 }
 
 void GraphicsSystem::MarkVblank() {

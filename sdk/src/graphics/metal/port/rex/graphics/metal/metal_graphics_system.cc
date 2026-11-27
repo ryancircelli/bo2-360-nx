@@ -105,6 +105,20 @@ bool FileHook(rex::system::IGraphicsSystem* interface, int op, std::vector<uint8
     std::memcpy(regs, state.data() + 4 + gs_len, sizeof(regs));
     cp->ResumeFromCheckpoint();
     graphics->InvalidateGpuMemory();
+    // Pages only the GPU copy held current go back there (guest memory keeps the CPU's view, as live).
+    cp->CallInThread([cp, gpu_pages = std::move(gpu_pages)] {  // queued after the invalidation
+      auto* sm = cp->shared_memory();
+      uint8_t* gpu = static_cast<uint8_t*>(sm->GetBuffer()->contents());
+      for (size_t at = 0; at + 8 <= gpu_pages.size();) {
+        uint32_t address, size;
+        std::memcpy(&address, &gpu_pages[at], 4);
+        std::memcpy(&size, &gpu_pages[at + 4], 4);
+        if (at + 8 + size > gpu_pages.size()) break;
+        std::memcpy(gpu + address, &gpu_pages[at + 8], size);
+        sm->RangeWrittenByGpu(address, size);
+        at += 8 + size;
+      }
+    });
     uint32_t swap[9];
     std::memcpy(swap, state.data() + 4 + gs_len + sizeof(regs), sizeof(swap));
     CommandProcessor* base_cp = cp;  // IssueSwap is public on the base class only
