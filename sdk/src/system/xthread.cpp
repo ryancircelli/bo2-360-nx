@@ -1292,8 +1292,7 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
       if (priority_ <= rex::thread::ThreadPriority::kBelowNormal) {
         rex::thread::Sleep(std::chrono::microseconds(100));
       } else {
-        rex::thread::MaybeYield();
-        rex::thread::NoteGuestPoll();
+        rex::thread::GuestPoll();
       }
     } else if (DelayReported(thread_name_)) {
       const auto before = std::chrono::steady_clock::now();

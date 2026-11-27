@@ -277,8 +277,7 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
       // Only after a zero-timeout poll. After a real timed wait the thread has already given up
       // the core for the whole timeout.
       if (!opt_timeout || *opt_timeout == 0) {
-        rex::thread::MaybeYield();
-        rex::thread::NoteGuestPoll();
+        rex::thread::GuestPoll();
       }
       return X_STATUS_TIMEOUT;
     default:
@@ -306,8 +305,8 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
       // Or X_STATUS_ALERTED?
       return X_STATUS_USER_APC;
     case rex::thread::WaitResult::kTimeout:
-      rex::thread::MaybeYield();
-      if (timeout_ms.count() == 0) rex::thread::NoteGuestPoll();
+      // Only after a zero-timeout poll, as Wait: after a real timed wait the thread already gave up the core.
+      if (timeout_ms.count() == 0) rex::thread::GuestPoll();
       return X_STATUS_TIMEOUT;
     default:
     case rex::thread::WaitResult::kAbandoned:
@@ -352,8 +351,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
         // Or X_STATUS_ALERTED?
         return X_STATUS_USER_APC;
       case rex::thread::WaitResult::kTimeout:
-        rex::thread::MaybeYield();
-        if (timeout_ms.count() == 0) rex::thread::NoteGuestPoll();
+        if (timeout_ms.count() == 0) rex::thread::GuestPoll();  // as Wait: no yield after a real timed wait
         return X_STATUS_TIMEOUT;
       default:
       case rex::thread::WaitResult::kAbandoned:
@@ -375,8 +373,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
         // Or X_STATUS_ALERTED?
         return X_STATUS_USER_APC;
       case rex::thread::WaitResult::kTimeout:
-        rex::thread::MaybeYield();
-        if (timeout_ms.count() == 0) rex::thread::NoteGuestPoll();
+        if (timeout_ms.count() == 0) rex::thread::GuestPoll();  // as Wait: no yield after a real timed wait
         return X_STATUS_TIMEOUT;
       default:
       case rex::thread::WaitResult::kAbandoned:

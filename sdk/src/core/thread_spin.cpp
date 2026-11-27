@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <thread>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -19,6 +20,13 @@ REXCVAR_DEFINE_INT32(spin_wait_gap_us, 200, "Kernel",
                      "Two polls closer together than this are one spin; a longer gap of other work ends it");
 REXCVAR_DEFINE_INT32(spin_wait_step_us, 10, "Kernel", "Each poll in a spin sleeps this much longer than the last");
 REXCVAR_DEFINE_INT32(spin_wait_max_us, 200, "Kernel", "The longest a spinning guest thread sleeps in one poll");
+REXCVAR_DEFINE_BOOL(spin_wait_sleep_without_yield, false, "Kernel",
+                    "Bench knob (off = old behaviour): a poll that backs off sleeps without the sched_yield before it, "
+                    "and a poll's own yield no longer counts as a gap of other work, so a yield that returns late on "
+                    "a loaded machine does not end the spin");
+REXCVAR_DEFINE_BOOL(spin_wait_coarse_sleep, false, "Kernel",
+                    "Bench knob (off = old behaviour): backoff sleeps use a plain nanosleep, which macOS may coalesce "
+                    "and wake late, instead of the precise timer mac_precise_sleep gives every guest sleep");
 
 namespace rex::thread {
 
@@ -43,10 +51,24 @@ uint64_t NowNs() {
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count());
 }
+
+void BackoffSleep(uint32_t us) {
+  if (REXCVAR_GET(spin_wait_coarse_sleep)) {
+    SpinScope spin;  // counted as spin like Sleep
+    std::this_thread::sleep_for(std::chrono::microseconds(us));
+  } else {
+    Sleep(std::chrono::microseconds(us));
+  }
+}
 }  // namespace
 
-void NoteGuestPoll() {
-  if (!REXCVAR_GET(spin_wait_backoff)) return;
+void GuestPoll() {
+  if (!REXCVAR_GET(spin_wait_backoff)) {
+    MaybeYield();
+    return;
+  }
+  const bool yield_only_if_awake = REXCVAR_GET(spin_wait_sleep_without_yield);
+  if (!yield_only_if_awake) MaybeYield();
   SpinTracker::Config c;
   c.gap_ns = uint32_t(std::max(1, REXCVAR_GET(spin_wait_gap_us))) * 1000u;
   c.threshold = uint32_t(std::max(1, REXCVAR_GET(spin_wait_threshold)));
@@ -58,7 +80,7 @@ void NoteGuestPoll() {
   if (us) {
     g_backoffs.fetch_add(1, std::memory_order_relaxed);
     g_slept_us.fetch_add(us, std::memory_order_relaxed);
-    Sleep(std::chrono::microseconds(us));
+    BackoffSleep(us);
     uint64_t last = g_last_log_ns.load(std::memory_order_relaxed);
     const uint64_t after = NowNs();
     if (after - last > 30'000'000'000ull && g_last_log_ns.compare_exchange_strong(last, after)) {
@@ -67,6 +89,7 @@ void NoteGuestPoll() {
     }
     t_tracker.OnReturn(after);
   } else {
+    if (yield_only_if_awake) MaybeYield();
     t_tracker.OnReturn(NowNs());
   }
 }

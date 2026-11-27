@@ -33,9 +33,9 @@ struct SpinTracker {
   void OnReturn(uint64_t now_ns) { last_end_ns = now_ns; }
 };
 
-// Called by the guest's poll paths (NtYieldExecution, zero-timeout delays and waits). Cheap when spin_wait_backoff is
-// off. Sleeps the calling thread when the detector says it is spinning.
-void NoteGuestPoll();
+// The guest's poll paths (NtYieldExecution, zero-timeout delays and waits) call this instead of MaybeYield: it yields,
+// and when spin_wait_backoff is on and the detector says the thread is spinning, it also sleeps.
+void GuestPoll();
 
 // Totals for the log and tests.
 struct SpinStats {
