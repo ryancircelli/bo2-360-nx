@@ -319,7 +319,9 @@ TextureGuestLayout GetGuestTextureLayout(xenos::DataDimension dimension,
     uint32_t z_slice_stride_texel_rows_unaligned;
     if (is_base) {
       row_pitch_texels_unaligned = base_pitch_texels_div_32 << 5;
-      z_slice_stride_texel_rows_unaligned = height_texels;
+      // Level 0 packed tails use power-of-two dimensions like the other mips.
+      z_slice_stride_texel_rows_unaligned =
+          layout.packed_level == 0 ? rex::next_pow2(height_texels) : height_texels;
     } else {
       row_pitch_texels_unaligned = std::max(rex::next_pow2(width_texels) >> level, uint32_t(1));
       z_slice_stride_texel_rows_unaligned =
@@ -348,7 +350,9 @@ TextureGuestLayout GetGuestTextureLayout(xenos::DataDimension dimension,
     uint32_t z_stride_bytes = level_layout.array_slice_stride_bytes;
     if (dimension == xenos::DataDimension::k3D) {
       level_layout.array_slice_stride_bytes *=
-          rex::align(is_base ? depth : std::max(rex::next_pow2(depth) >> level, uint32_t(1)),
+          rex::align(is_base && layout.packed_level != 0
+                         ? depth
+                         : std::max(rex::next_pow2(depth) >> level, uint32_t(1)),
                      xenos::kTextureTileDepth);
     }
     level_layout.array_slice_stride_bytes =
