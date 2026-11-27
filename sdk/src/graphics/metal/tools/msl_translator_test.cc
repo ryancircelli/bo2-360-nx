@@ -81,6 +81,11 @@ void Require(bool condition, const char* message, const std::string& source) {
 void CompileMetal(const std::filesystem::path& directory, const char* name,
                   const std::string& source) {
   std::filesystem::path input = directory / (std::string(name) + ".metal");
+#ifndef __APPLE__
+  // Linux check: no Metal toolchain; the text assertions above still ran. Only write the source.
+  std::ofstream(input) << source;
+  return;
+#endif
   std::filesystem::path output = directory / (std::string(name) + ".air");
   {
     std::ofstream stream(input);
