@@ -434,7 +434,9 @@ def game_manifest(game):
         'support_folder': f'{game}-360',                     # ~/Library/Application Support/<this> and ~/Library/Logs/<this>
         'env_prefix': game.upper(),                          # <PREFIX>_DATA, <PREFIX>_SUPPORT_DIR, <PREFIX>_LOG_DIR, ...
         'data_path': f'~/Games/Xbox360/{game}/disc',         # the extracted disc; never copied into the app
-        'settings': 'app_settings.toml',                     # first settings file; the live copy is in the support folder
+        # first settings file; the live copy is in the support folder
+        'settings': 'app_settings.toml' if (path.parent / 'app_settings.toml').is_file()
+                    else str(ROOT / 'tools/mac/game_app_settings.toml'),
         'shaders': False,                                    # no Vulkan shader library: draws with Metal
         'microphone': f"{m['name']} uses the microphone only if the game asks for it.",
     }
