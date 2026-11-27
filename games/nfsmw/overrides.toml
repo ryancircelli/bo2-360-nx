@@ -8,6 +8,7 @@
 setjmp_address = 0x826BF180
 longjmp_address = 0x826BCD30
 
+no_phys_alias = true  # phys-offset-removal measurement
 [functions]
 
 # --- Standalone thunks the analyzer never claimed -----------------------------

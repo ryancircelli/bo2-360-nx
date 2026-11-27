@@ -2,6 +2,7 @@
 # Pinyon Shift contributors). Retain this notice with any source or binary
 # distribution of derived material.
 
+no_phys_alias = true  # phys-offset-removal measurement
 [functions]
 "0x88055B80" = { size = 16 }
 "0x882435D8" = { size = 16 }

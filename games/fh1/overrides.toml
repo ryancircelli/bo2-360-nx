@@ -4,6 +4,7 @@
 setjmp_address = 0x82A81E80
 longjmp_address = 0x82A81950
 
+no_phys_alias = true  # phys-offset-removal measurement
 [functions]
 
 # XAPI fiber functions served by the SDK's host fibers (sdk/src/kernel/crt/threading.cpp).
