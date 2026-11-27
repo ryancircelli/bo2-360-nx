@@ -17,7 +17,7 @@ namespace {
 
 constexpr uint32_t kPdataA = 0x1000, kPdataC = 0x1008, kPdataE = 0x1010;
 constexpr uint32_t kBeginA = 0x2010, kBeginC = 0x3010, kBeginE = 0x2810;
-constexpr uint32_t kCSpecificThunk = 0x4000, kCxxHandler = 0x4100;
+constexpr uint32_t kCSpecificThunk = 0x4000, kCxxHandler = 0x4100, kCrtHandler = 0x4200;
 constexpr uint32_t kScopesA = 0x5000, kScopesC = 0x5100;
 constexpr uint32_t kFilter = 0x6000, kFinally = 0x6100, kCatchFunclet = 0x6200;
 constexpr uint32_t kRecord = 0x7000, kStackTop = 0xF000;
@@ -176,13 +176,35 @@ void cxxHandler(PPCContext& ctx, uint8_t*) {
   FAIL("Unwind returned");
 }
 
+// The FH1 C++ runtime's way: unwind back to itself, run the funclet, then
+// jump to the continuation through a restored context.
+constexpr uint32_t kCrtReturn = 0x830FC9E4, kResumeContext = 0x8000;
+void crtHandler(PPCContext& ctx, uint8_t*) {
+  const uint32_t record = ctx.r3.u32, establisher = ctx.r4.u32;
+  auto* rec = env.at<X_EXCEPTION_RECORD>(record);
+  if (rec->exception_flags & kExceptionUnwind) {
+    ++obs.cxx_unwind_calls;
+    obs.cxx_target_unwinds += (rec->exception_flags & kExceptionTargetUnwind) != 0;
+    ctx.r3.u64 = kExceptionContinueSearch;
+    return;
+  }
+  ctx.lr = kCrtReturn;
+  CHECK(Unwind(env, ctx, establisher, kCrtReturn, record, 0));
+  functions[kCatchFunclet](ctx, env.membase);
+  auto* context = env.at<X_CONTEXT>(kResumeContext);
+  context->gpr[1] = establisher;
+  context->gpr[3] = 7;
+  context->iar = ctx.r3.u32;
+  ResumeContext(env, ctx, kResumeContext);
+}
+
 void setup(uint32_t code) {
   mem.assign(0x10000, 0);
   env.membase = mem.data();
   env.call = [](PPCContext& ctx, uint32_t address) { functions.at(address)(ctx, env.membase); };
   functions = {{kCSpecificThunk, cSpecificThunk}, {kFilter, filter},
                {kFinally, finallyBlock},          {kCatchFunclet, catchFunclet},
-               {kCxxHandler, cxxHandler}};
+               {kCxxHandler, cxxHandler},         {kCrtHandler, crtHandler}};
   pdata(kPdataA, kBeginA, kCSpecificThunk, kScopesA);
   pdata(kPdataC, kBeginC, kCSpecificThunk, kScopesC);
   pdata(kPdataE, kBeginE, kCxxHandler, 0x5200);
@@ -262,5 +284,22 @@ TEST_CASE("no registered frames: raise unhandled, RtlUnwind returns", "[guest_eh
   fnB(ctx, env.membase);  // C registers, but its __finally scope has no filter
   CHECK(obs.unhandled == 1);
   CHECK(!Unwind(env, ctx, 0x1234, 0, 0, 0));
+  CHECK(tls_handler_frames == nullptr);
+}
+
+TEST_CASE("C++ runtime style: unwind to self, funclet, resume through a context", "[guest_eh]") {
+  setup(kCxxCode);
+  pdata(kPdataE, kBeginE, kCrtHandler, 0x5200);
+  PPCContext ctx{};
+  ctx.r1.u64 = kStackTop;
+  fnE(ctx, env.membase);
+  CHECK(obs.resumed);
+  CHECK(obs.funclet_r31 == 0x5678);
+  CHECK(obs.finally_calls == 1);
+  CHECK(obs.cxx_target_unwinds == 1);
+  CHECK(obs.resumed_r3 == 7);
+  CHECK(obs.resumed_r1 == obs.establisher);
+  CHECK(obs.resumed_r31 == 0x5678);
+  CHECK(ctx.r1.u32 == kStackTop);
   CHECK(tls_handler_frames == nullptr);
 }

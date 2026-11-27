@@ -144,7 +144,9 @@ bool Dispatch(const Env& env, PPCContext& ctx, uint32_t record_address);
 
 // RtlUnwind: runs the unwind handlers of every frame from the innermost to the
 // one whose establisher frame is target_frame, then throws GuestUnwind for it.
-// Returns (false) only when no registered frame matches.
+// Returns false when no registered frame matches, and true (after the
+// handlers ran) when target_ip is RtlUnwind's own return address: the C++
+// runtime unwinds that way, then jumps with ResumeContext.
 bool Unwind(const Env& env, PPCContext& ctx, uint32_t target_frame, uint32_t target_ip,
             uint32_t record_address, uint64_t return_value);
 
@@ -152,6 +154,12 @@ bool Unwind(const Env& env, PPCContext& ctx, uint32_t target_frame, uint32_t tar
 uint32_t CSpecificHandler(const Env& env, PPCContext& ctx, uint32_t record_address,
                           uint32_t establisher_frame, uint32_t context_address,
                           uint32_t dispatcher_context_address);
+
+// The C++ runtime's restore-context helper (FH1 sub_830FC89C: loads every
+// register from an X_CONTEXT, then bctr to its Iar): resumes the registered
+// frame whose establisher is the context's r1 at its Iar, r3 from the context.
+// Codegen replaces the helper with a call to this.
+[[noreturn]] void ResumeContext(const Env& env, PPCContext& ctx, uint32_t context_address);
 
 [[noreturn]] void BadResume(uint32_t function_entry, uint32_t target_ip);
 
