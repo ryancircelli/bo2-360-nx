@@ -18,6 +18,7 @@
 #include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
+#include <rex/runtime/thread_state.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 
@@ -60,10 +61,8 @@ REX_EXPORT_STUB_RETURN(__imp__KeEnablePFMInterrupt, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeDisablePFMInterrupt, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetProfilerISR, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeGetVidInfo, 0);
-REX_EXPORT_STUB_RETURN(__imp__KeExecuteOnProtectedStack, 0);
 REX_EXPORT_STUB_RETURN(__imp__EmaExecute, 0xC000009D);
 REX_EXPORT_STUB_RETURN(__imp__ExRegisterThreadNotification, 0);
-REX_EXPORT_STUB_RETURN(__imp__ExTerminateTitleProcess, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExReadModifyWriteXConfigSettingUlong, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExRegisterXConfigNotification, 0);
 REX_EXPORT_STUB_RETURN(__imp__ExCancelAlarm, 0);
@@ -78,8 +77,6 @@ REX_EXPORT_STUB_RETURN(__imp__KeSetPowerMode, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetPRVRegister, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetSocRegister, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetSpecialPurposeRegister, 0);
-REX_EXPORT_STUB_RETURN(__imp__KeCallAndBlockOnDpcRoutine, 0);
-REX_EXPORT_STUB_RETURN(__imp__KeCallAndWaitForDpcRoutine, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeSetPageRelocationCallback, 0);
 REX_EXPORT_STUB_RETURN(__imp__KeRegisterSwapNotification, 0);
 
@@ -90,7 +87,6 @@ REX_EXPORT_STUB_RETURN(__imp__IptvSetBoundaryKey, 0xC0000001);
 REX_EXPORT_STUB_RETURN(__imp__IptvSetSessionKey, 0xC0000001);
 REX_EXPORT_STUB_RETURN(__imp__IptvVerifyOmac1Signature, 0xC0000001);
 REX_EXPORT_STUB_RETURN(__imp__McaDeviceRequest, 0xC000009D);
-REX_EXPORT_STUB_RETURN(__imp__MicDeviceRequest, 0xC000009D);
 REX_EXPORT_STUB_RETURN(__imp__MtpdBeginTransaction, 0xC000009D);
 REX_EXPORT_STUB_RETURN(__imp__MtpdCancelTransaction, 0xC000009D);
 REX_EXPORT_STUB_RETURN(__imp__MtpdEndTransaction, 0xC000009D);
@@ -187,3 +183,27 @@ void ExFreeDebugPool_entry(u32 addr) {
 }  // namespace rex::kernel::xboxkrnl
 REX_EXPORT(__imp__KeGetSpecialPurposeRegister, rex::kernel::xboxkrnl::KeGetSpecialPurposeRegister_entry)
 REX_EXPORT(__imp__ExFreeDebugPool, rex::kernel::xboxkrnl::ExFreeDebugPool_entry)
+
+// ---- krnl2: guest-calling and terminate entries (spec: FROM-stub-noref-research.md) ----
+// Run fn(arg) inline on the calling guest thread (no separate DPC level / protected stack here).
+static uint64_t RunGuestInline(uint32_t fn, uint32_t arg) {
+  if (!fn) return 0;
+  auto* ts = rex::runtime::ThreadState::Get();
+  uint64_t args[1] = {arg};
+  return rex::system::kernel_state()->function_dispatcher()->Execute(ts, fn, args, 1);
+}
+#define KRNL2_EXPORT(NAME, BODY)                                                   \
+  extern "C" REX_FUNC(__imp__##NAME) {                                             \
+    (void)base;                                                                    \
+    BODY                                                                           \
+  }                                                                                \
+  static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_k2_##NAME("__imp__" #NAME, &__imp__##NAME);
+KRNL2_EXPORT(KeCallAndBlockOnDpcRoutine, RunGuestInline(ctx.r3.u32, ctx.r4.u32);)
+KRNL2_EXPORT(KeCallAndWaitForDpcRoutine, RunGuestInline(ctx.r3.u32, ctx.r4.u32);)
+KRNL2_EXPORT(KeExecuteOnProtectedStack, ctx.r3.u64 = RunGuestInline(ctx.r3.u32, ctx.r4.u32);)
+KRNL2_EXPORT(ExTerminateTitleProcess,
+             REXKRNL_ERROR("ExTerminateTitleProcess({:#x}): title asked to terminate", ctx.r3.u32);
+             REX_KERNEL_STATE()->TerminateTitle();)
+// canary: NULL request -> INVALID_PARAMETER; no mic is ever attached -> DEVICE_NOT_CONNECTED.
+// (user_index/request_type range checks need the X_MIC_DEVICE layout, not reversed)
+KRNL2_EXPORT(MicDeviceRequest, ctx.r3.u64 = ctx.r3.u32 ? 0xC000009D : 0xC000000D;)
