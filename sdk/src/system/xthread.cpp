@@ -560,6 +560,7 @@ X_STATUS XThread::Create() {
 
   // Always retain when starting - the thread owns itself until exited.
   RetainHandle();
+  TakeHostRef();
 
   rex::thread::Thread::CreationParameters params;
   params.stack_size = size_t(REXCVAR_GET(guest_thread_host_stack_mb)) * 1_MiB;  // the host stack the code runs on
@@ -606,11 +607,13 @@ X_STATUS XThread::Create() {
 
     // Release the self-reference to the thread.
     ReleaseHandle();
+    DropHostRef();
   });
 
   if (!thread_) {
     // TODO(benvanik): translate error?
     REXSYS_ERROR("CreateThread failed");
+    DropHostRef();
     return X_STATUS_NO_MEMORY;
   }
 
@@ -691,6 +694,7 @@ X_STATUS XThread::Exit(int exit_code) {
 
   running_ = false;
   ReleaseHandle();
+  DropHostRef();  // `self` keeps the object alive until pthread_exit
 
   // NOTE: this does not return!
   rex::thread::Thread::Exit(exit_code);
@@ -714,11 +718,13 @@ X_STATUS XThread::Terminate(int exit_code) {
     auto self = retain_object(this);
     FreeStack();
     ReleaseHandle();
+    DropHostRef();
     rex::thread::Thread::Exit(exit_code);
   } else {
     thread_->Terminate(exit_code);
     FreeStack();
     ReleaseHandle();
+    DropHostRef();  // last use of this
   }
 
   return X_STATUS_SUCCESS;
@@ -1631,6 +1637,7 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state, stream::ByteStre
 
     // Always retain when starting - the thread owns itself until exited.
     thread->RetainHandle();
+    thread->TakeHostRef();
 
     rex::thread::Thread::CreationParameters params;
     params.create_suspended = true;  // Not done restoring yet.
@@ -1669,6 +1676,7 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state, stream::ByteStre
 
       // Release the self-reference to the thread.
       thread->ReleaseHandle();
+      thread->DropHostRef();
     });
     assert_not_null(thread->thread_);
 
