@@ -33,6 +33,13 @@ void XeCryptSha512Final_entry(ppc_ptr_t<uint8_t>, ppc_ptr_t<uint8_t>, u32);
 
 void XeCryptRotSumSha_entry(mapped_void, u32, mapped_void, u32, mapped_void, u32);
 
+void XeCryptSha384_entry(mapped_void, u32, mapped_void, u32, mapped_void, u32, mapped_void, u32);
+void XeCryptSha512_entry(mapped_void, u32, mapped_void, u32, mapped_void, u32, mapped_void, u32);
+struct XECRYPT_DES_STATE;
+void XeCryptDesKey_entry(ppc_ptr_t<XECRYPT_DES_STATE>, mapped_u64);
+void XeCryptDesEcb_entry(ppc_ptr_t<XECRYPT_DES_STATE>, mapped_u64, mapped_u64, u32);
+void XeCryptDesCbc_entry(ppc_ptr_t<XECRYPT_DES_STATE>, mapped_u64, u32, mapped_u64, mapped_u64, u32);
+
 }
 using namespace rex::kernel::xboxkrnl;
 
@@ -431,4 +438,51 @@ TEST_CASE("RotSumSha partial words reference vector and truncated output", "[ker
       mapped_void::from_host(b.data()), b.size(), mapped_void::from_host(digest.data()), 7);
   CHECK(std::equal(expected.begin(), expected.begin() + 7, digest.begin()));
   CHECK(digest[7] == 0xa5);
+}
+
+TEST_CASE("Wide SHA one-shot agrees with streaming and clamps digest writes", "[kernel][crypt]") {
+  char message[] = "abc";
+  for (bool wide : {false, true}) {
+    std::array<uint8_t, 200> state;
+    std::array<uint8_t, 65> streaming, oneshot;
+    streaming.fill(0xa5); oneshot.fill(0xa5);
+    auto st = ppc_ptr_t<uint8_t>::from_host(state.data());
+    auto initialize = wide ? XeCryptSha512Init_entry : XeCryptSha384Init_entry;
+    auto update = wide ? XeCryptSha512Update_entry : XeCryptSha384Update_entry;
+    auto finish = wide ? XeCryptSha512Final_entry : XeCryptSha384Final_entry;
+    auto one = wide ? XeCryptSha512_entry : XeCryptSha384_entry;
+    initialize(st);
+    update(st, mapped_void::from_host(message), 3);
+    finish(st, ppc_ptr_t<uint8_t>::from_host(streaming.data()), streaming.size());
+    one(mapped_void::from_host(message), 1, mapped_void::from_host(message + 1), 1,
+        mapped_void::from_host(message + 2), 1, mapped_void::from_host(oneshot.data()), oneshot.size());
+    CHECK(streaming == oneshot);
+    CHECK(oneshot[wide ? 64 : 48] == 0xa5);
+  }
+}
+
+TEST_CASE("Single DES known answer and in-place CBC chaining", "[kernel][crypt]") {
+  alignas(8) std::array<uint8_t, 128> state;
+  auto st = ppc_ptr_t<XECRYPT_DES_STATE>::from_host(
+      reinterpret_cast<XECRYPT_DES_STATE*>(state.data()));
+  rex::be_u64 key = 0x133457799bbcdff1ull;
+  rex::be_u64 plain = 0x0123456789abcdefull, cipher = 0, decoded = 0;
+  XeCryptDesKey_entry(st, mapped_u64::from_host(&key));
+  XeCryptDesEcb_entry(st, mapped_u64::from_host(&plain), mapped_u64::from_host(&cipher), 1);
+  CHECK(uint64_t(cipher) == 0x85e813540f0ab405ull);
+  XeCryptDesEcb_entry(st, mapped_u64::from_host(&cipher), mapped_u64::from_host(&decoded), 0);
+  CHECK(uint64_t(decoded) == uint64_t(plain));
+  std::array<rex::be_u64, 2> blocks = {plain, plain};
+  rex::be_u64 feed = 0;
+  XeCryptDesCbc_entry(st, mapped_u64::from_host(blocks.data()), 16,
+      mapped_u64::from_host(blocks.data()), mapped_u64::from_host(&feed), 1);
+  CHECK(uint64_t(blocks[0]) == 0x85e813540f0ab405ull);
+  CHECK(uint64_t(feed) == uint64_t(blocks[1]));
+  const uint64_t last = feed;
+  feed = 0;
+  XeCryptDesCbc_entry(st, mapped_u64::from_host(blocks.data()), 16,
+      mapped_u64::from_host(blocks.data()), mapped_u64::from_host(&feed), 0);
+  CHECK(uint64_t(blocks[0]) == uint64_t(plain));
+  CHECK(uint64_t(blocks[1]) == uint64_t(plain));
+  CHECK(uint64_t(feed) == last);
 }

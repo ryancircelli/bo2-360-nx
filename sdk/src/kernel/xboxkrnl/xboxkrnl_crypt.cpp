@@ -1046,7 +1046,7 @@ static void ShaWideOneShot(bool sha384, mapped_void in1, u32 n1, mapped_void in2
   ShaWideUpdate(p, in1, n1);
   ShaWideUpdate(p, in2, n2);
   ShaWideUpdate(p, in3, n3);
-  ShaWideFinal(p, ppc_ptr_t<uint8_t>::from_host(out.as<uint8_t*>()), out_size);
+  ShaWideFinal(p, ppc_ptr_t<uint8_t>::from_host(out.as<uint8_t*>()), out_size, sha384);
 }
 void XeCryptSha384_entry(mapped_void in1, u32 n1, mapped_void in2, u32 n2, mapped_void in3, u32 n3,
                          mapped_void out, u32 out_size) {
