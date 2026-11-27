@@ -497,6 +497,8 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
 
   ppc_insn insn;
   std::unordered_set<size_t> emittedLabels;
+  uint32_t lastEnd = 0, lastWord = 0;
+  int lastId = -1;
 
   for (const auto& block : blocks()) {
     auto blockBase = block.base;
@@ -619,8 +621,35 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
         }
       }
 
+      if (blockBase + 4 > lastEnd) {
+        lastEnd = blockBase + 4;
+        lastId = insn.opcode ? insn.opcode->id : -1;
+        lastWord = load_and_swap<uint32_t>(data);
+      }
       blockBase += 4;
       ++data;
+    }
+  }
+
+  // Code that runs off the function's end continues in the function there (a helper's
+  // mid-entry, or a function the scanner split): tail-call it with this function's registers.
+  // Upstream rexglue-sdk 11742bf4 does the same.
+  if (lastId != -1 && lastId != PPC_INST_B && lastId != PPC_INST_BLR && lastId != PPC_INST_BCTR &&
+      lastWord != 0x7FE00008u /* trap */) {
+    const FunctionNode* next = ctx.graph.getFunction(lastEnd);
+    if (next && next != this && next->authority() != FunctionAuthority::IMPORT) {
+      const std::string nextName =
+          next->name().empty() ? fmt::format("sub_{:08X}", lastEnd) : next->name();
+      if (ctx.referenceBlocked)
+        *ctx.referenceBlocked = true;
+      ctx.reference(nextName);
+      BuilderContext builderCtx{body,           ctx,      *this,   insn, lastEnd - 4, nullptr,
+                                localVariables, csrState, nullptr};
+      builderCtx.emit_call_sharing_registers(fmt::format("{}(ctx, base);", nextName), false, "\t");
+      emit_println(body, "\treturn;");
+    } else if (lastId != PPC_INST_BL) {
+      REXCODEGEN_WARN("0x{:08X} runs off its end into 0x{:08X}, which is not a function", base(),
+                      lastEnd);
     }
   }
 
