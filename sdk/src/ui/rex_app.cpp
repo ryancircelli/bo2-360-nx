@@ -91,6 +91,10 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
 REXCVAR_DEFINE_BOOL(glitch_savepoint, false, "UI",
                     "Report a glitch also writes a savepoint (all guest memory, hundreds of MB) next to the report");
 
+REXCVAR_DEFINE_INT32(guest_capture_every_s, 0, "UI",
+                     "Write the guest output as captures/guest-NNNN.png next to the log every N seconds (0 = off); for hidden test runs")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 namespace rex {
 
 namespace {
@@ -1003,6 +1007,24 @@ void ReXApp::LaunchModule() {
       main_thread->Resume();
     }
 
+    if (const int every = REXCVAR_GET(guest_capture_every_s); every > 0 && !capture_thread_.joinable()) {
+      capture_thread_ = std::thread([this, every]() {
+        auto* gfx = runtime_ ? runtime_->graphics_system() : nullptr;
+        const auto dir = GlitchRoot().parent_path() / "captures";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        for (int n = 0, waited = 0; !g_glitch_stop && !shutting_down_.load(std::memory_order_acquire);) {
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+          if (++waited < every) continue;
+          waited = 0;
+          rex::ui::Presenter* presenter = gfx ? gfx->presenter() : nullptr;
+          rex::ui::RawImage img;
+          if (presenter && presenter->CaptureGuestOutput(img) && img.width && img.height)
+            WritePng(dir / fmt::format("guest-{:04d}.png", n++), img);
+        }
+      });
+    }
+
     module_thread_ = std::thread([this, main_thread = std::move(main_thread)]() mutable {
       main_thread->Wait(0, 0, 0, nullptr);
       OnGuestThreadExit(main_thread.get());
@@ -1174,6 +1196,7 @@ void ReXApp::OnDestroy() {
     module_thread_.join();
   }
   g_glitch_stop = true;
+  if (capture_thread_.joinable()) capture_thread_.join();
   if (glitch_thread_.joinable()) {
     glitch_thread_.join();
   }

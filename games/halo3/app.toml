@@ -1,0 +1,14 @@
+name = "Halo 3"
+executable = "halo3"
+bundle_id = "io.github.ryancircelli.halo3-360"
+version = "0.1.0"
+support_folder = "halo3-360"
+env_prefix = "HALO3"
+data_path = "~/Games/Xbox360/halo3/disc"
+settings = "app_settings.toml"
+shaders = false
+microphone = "Halo 3 uses the microphone only if the game asks for it."
+
+[source]
+executables = { "default.xex" = "98743335129649210f5ef8b1c11b20e9d68beb441e563b7f7369842a5a140899", "WaveShell-Xbox.dll" = "09e50b2213e68a1641fa282e285dc9bc34899ef51d76da82673e7668eea94e57", "WavesLibDLL.dll" = "1b71b96587935fa9d3a52bd09a95ab2f4e5dbc12c3c4d7b170419b1ed3004e42", "waves/L360.dll" = "3e2408cc5aba7e3b6e6f08ec89813feb818601037b4974fac6f26aed8d6b9bd5", "waves/Q10.dll" = "9134e102d79e6ae0abaf4ad1fe1d5e02736db0da714b7bb114ffa3a3e941c9dc" }
+codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]

@@ -36,6 +36,7 @@
 #include "crypto/sha256.cpp"
 #include "crypto/sha256.h"
 #include "sha512.h"
+#include "rsa_public.h"
 
 extern "C" {
 #include "aes_128/aes.h"
@@ -274,11 +275,13 @@ u32 XeCryptBnQwNeRsaPubCrypt_entry(ppc_ptr_t<uint64_t> qw_a, ppc_ptr_t<uint64_t>
                                    ppc_ptr_t<XECRYPT_RSA> rsa) {
   // 0 indicates failure (but not a BOOL return value)
 #if !REX_PLATFORM_WIN32
-  REXKRNL_ERROR(
-      "XeCryptBnQwNeRsaPubCrypt called but no implementation available for "
-      "this platform!");
-  assert_always();
-  return 1;
+  const uint32_t words = rsa->size;
+  if (!words || words > 128) return 0;
+  const size_t bytes = size_t(words) * 8;
+  return RsaPublicQwordNe(
+      {reinterpret_cast<const uint8_t*>(static_cast<uint64_t*>(qw_a)), bytes},
+      {reinterpret_cast<uint8_t*>(static_cast<uint64_t*>(qw_b)), bytes},
+      {reinterpret_cast<const uint8_t*>(&rsa[1]), bytes}, rsa->public_exponent) ? 1 : 0;
 #else
   uint32_t modulus_size = rsa->size * 8;
 

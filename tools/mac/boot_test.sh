@@ -26,10 +26,18 @@ while [ $# -gt 0 ]; do case "$1" in
 [ -f "$route" ] || { [ -f "$here/routes/$route.route.timed" ] && route="$here/routes/$route.route.timed"; }
 [ -f "$route" ] || { echo "no route file: $route" >&2; exit 2; }
 [ -n "$app$exe" ] || { echo "--app or --exe is required" >&2; exit 2; }
+launcher="Black Ops II"; gamebinary=bo2zm; envprefix=BO2
+if [ -n "$app" ]; then
+  plist="$app/Contents/Info.plist"
+  launcher=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
+  gamebinary=$(/usr/libexec/PlistBuddy -c 'Print :RexGameExecutable' "$plist" 2>/dev/null || echo bo2zm)
+  envprefix=$(/usr/libexec/PlistBuddy -c 'Print :RexEnvPrefix' "$plist" 2>/dev/null || echo BO2)
+fi
+
 # Event routes (wait_log steps) need an SDK with the wait_log step. Look for the string in the binary and its dylibs;
 # without it (or with --pads game) the route's .timed twin is used, when it has one.
 _xd="$([ -n "$exe" ] && dirname "$exe" || echo "$app/Contents/MacOS")"
-_bin="$([ -n "$exe" ] && echo "$exe" || ls "$app"/Contents/MacOS/bo2zm 2>/dev/null)"
+_bin="$([ -n "$exe" ] && echo "$exe" || ls "$app/Contents/MacOS/$gamebinary" 2>/dev/null)"
 if grep -q '^BO2ZM_TEST_BUTTONS.*wait_log' "$route" 2>/dev/null; then
   if [ "$pads" = sdk ] && grep -l 'wait_log' "$_bin" "$_xd"/*.dylib 2>/dev/null | grep -q .; then
     echo "wait_log: supported by this build, using the event route $(basename "$route")"
@@ -70,7 +78,8 @@ fullenv=(); for e in "${envs[@]}"; do fullenv+=("REX_$e"); done
 fullenv+=(SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0 SDL_WINDOW_ACTIVATE_WHEN_RAISED=0 SDL_HINT_MAC_BACKGROUND_APP=1
           MVK_CONFIG_FAST_MATH_ENABLED=0 BO2_NO_DIALOG=1 BO2_SUPPORT_DIR="$out/support" BO2_LOG_DIR="$out/logs"
           BO2ZM_ROUTE="$rname" BO2ZM_PLAYERS="$players")   # the perf log's route and players header lines
-[ -n "$data" ] && fullenv+=(BO2_DATA="$data")
+fullenv+=("${envprefix}_NO_DIALOG=1" "${envprefix}_SUPPORT_DIR=$out/support" "${envprefix}_LOG_DIR=$out/logs")
+[ -n "$data" ] && fullenv+=("${envprefix}_DATA=$data")
 # Another copy of the game on the default ports makes the socket bind fail, and the game then reboots itself over and
 # over (an empty perf log). Unless the caller or the route chose one, pick an offset whose UDP ports (offset + 1000 and
 # + 1001) are free.
@@ -85,7 +94,7 @@ if [ -z "$portoff" ] && [ -z "${REX_NET_SYSTEM_PORT_OFFSET:-}" ] && [[ " ${envs[
 fi
 
 # ---- stop leftovers ----
-pat="${app:-$exe}"; pat="$(cd "$(dirname "$pat")" && pwd)/$(basename "$pat")"; [ -n "$app" ] && pat="$pat/Contents/MacOS/bo2zm"
+pat="${app:-$exe}"; pat="$(cd "$(dirname "$pat")" && pwd)/$(basename "$pat")"; [ -n "$app" ] && pat="$pat/Contents/MacOS/$gamebinary"
 # PIDs whose command is exactly the game binary (never kill by name or pattern).
 game_pids() { local p c; for p in $(pgrep -f "$pat" 2>/dev/null); do c="$(ps -o command= -p "$p" 2>/dev/null)"; { [ "$c" = "$pat" ] || [[ "$c" == "$pat "* ]]; } && echo "$p"; done; }
 kill_game() { local sig="$1" p; for p in $(game_pids); do kill "$sig" "$p" 2>/dev/null; done; }
@@ -100,9 +109,9 @@ perl -MTime::HiRes=time -e 'printf "%.3f\n", time' > "$out/launch_time.txt"   # 
 if [ -n "$app" ] && [ "$useopen" = 1 ]; then
   oargs=(); for e in "${fullenv[@]}"; do oargs+=(--env "$e"); done
   open -g -j -n "${oargs[@]}" "$app" || { echo "open failed" >&2; exit 2; }
-  sleep 3; pid="$(pgrep -f "$app/Contents/MacOS/bo2zm" | head -1)"
+  sleep 3; pid="$(pgrep -f "$app/Contents/MacOS/$gamebinary" | head -1)"
 elif [ -n "$app" ]; then
-  env "${fullenv[@]}" "$app/Contents/MacOS/Black Ops II" >"$out/stdout.txt" 2>&1 & pid=$!
+  env "${fullenv[@]}" "$app/Contents/MacOS/$launcher" >"$out/stdout.txt" 2>&1 & pid=$!
 else
   args=(); [ -n "$data" ] && args=(--game_data_root="$data/game" --update_data_root="$data/update")
   env "${fullenv[@]}" "$exe" ${args[@]+"${args[@]}"} --user_data_root="$out/support" --log_file="$out/logs/bo2zm.log" >"$out/stdout.txt" 2>&1 & pid=$!

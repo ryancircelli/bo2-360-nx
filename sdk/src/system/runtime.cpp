@@ -379,6 +379,18 @@ bool Runtime::SetupVfs() {
     return false;
   }
 
+  // Games that open named files on cache0:\ / cache1:\ (drive-letter style cache
+  // volumes) get their own writable host dirs, separate from cache:.
+  for (const char* name : {"cache0", "cache1"}) {
+    const auto mount = std::string("\\Device\\Harddisk0\\Partition") + name;
+    auto dev = std::make_unique<rex::filesystem::HostPathDevice>(
+        mount, std::filesystem::absolute(user_data_root_) / "cache" / name, false);
+    if (!dev->Initialize() || !file_system_->RegisterDevice(std::move(dev)) ||
+        !file_system_->RegisterSymbolicLink(std::string(name) + ":", mount)) {
+      REXSYS_WARN("Runtime::SetupVfs: could not mount {}:", name);
+    }
+  }
+
   // Setup NullDevice for raw HDD partition accesses
   // Cache/STFC code baked into games tries reading/writing to these
   // Using a NullDevice returns success to all IO requests, allowing games
