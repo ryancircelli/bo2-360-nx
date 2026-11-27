@@ -408,8 +408,14 @@ def g_drive(a, G):
     crash = CRASH.search(text)
     G.stop()
     new = baseline_diff(G, a.kinds_from, a.out)
-    ok = alive and not crash
+    sd = os.path.join(G.out, 'shots')
+    first, last = (os.path.join(sd, f) for f in ('drive00.png', 'drive-end.png'))
+    # a drive that keeps a picture identical start to end has stopped (a fresh load can freeze a few frames in)
+    frozen = alive and os.path.exists(first) and os.path.exists(last) and open(first, 'rb').read() == open(last, 'rb').read()
+    ok = alive and not crash and not frozen
     facts = f'route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
+    if frozen:
+        facts += ' FROZEN (first and last shots identical)'
     if died is not None:
         facts += f' exited {died}'
     if crash:
