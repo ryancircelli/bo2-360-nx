@@ -189,6 +189,11 @@ struct XNetStartupParams {
 
 XNetStartupParams xnet_startup_params = {};
 
+u32 NetDll_XNetStartup_entry(u32 caller, ppc_ptr_t<XNetStartupParams> params);
+u32 NetDll_XNetStartupEx_entry(u32 caller, ppc_ptr_t<XNetStartupParams> params, u32 /*requested*/) {
+  return NetDll_XNetStartup_entry(caller, params);
+}
+
 u32 NetDll_XNetStartup_entry(u32 caller, ppc_ptr_t<XNetStartupParams> params) {
   if (params) {
     assert_true(params->cfgSizeOfStruct == sizeof(XNetStartupParams));
@@ -373,6 +378,11 @@ u32 NetDll_WSAStartup_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_p
   */
 
   return ret;
+}
+
+// The Ex variants take one extra trailing argument (a version request); shortcut: ignored, behaves as the plain call.
+u32 NetDll_WSAStartupEx_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_ptr, u32 /*requested*/) {
+  return NetDll_WSAStartup_entry(caller, version, data_ptr);
 }
 
 u32 NetDll_WSACleanup_entry(u32 caller) {
@@ -1288,7 +1298,7 @@ REX_EXPORT_STUB(__imp__NetDll_UpnpStartup);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_WSAEventSelect, 0xFFFFFFFF);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_WSARecv, 0xFFFFFFFF);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_WSASend, 0xFFFFFFFF);
-REX_EXPORT_STUB(__imp__NetDll_WSAStartupEx);
+REX_EXPORT(__imp__NetDll_WSAStartupEx, rex::kernel::xam::NetDll_WSAStartupEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCloseHandle, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpConnect, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCrackUrl, 0);
@@ -1328,7 +1338,7 @@ REX_EXPORT(__imp__NetDll_XNetRegisterKey, rex::kernel::xam::NetDll_XNetRegisterK
 REX_EXPORT_STUB(__imp__NetDll_XNetReplaceKey);
 REX_EXPORT_STUB(__imp__NetDll_XNetServerToInAddr);
 REX_EXPORT_STUB(__imp__NetDll_XNetSetOpt);
-REX_EXPORT_STUB(__imp__NetDll_XNetStartupEx);
+REX_EXPORT(__imp__NetDll_XNetStartupEx, rex::kernel::xam::NetDll_XNetStartupEx_entry)
 REX_EXPORT_STUB(__imp__NetDll_XNetTsAddrToInAddr);
 REX_EXPORT(__imp__NetDll_XNetUnregisterInAddr, rex::kernel::xam::NetDll_XNetUnregisterInAddr_entry)
 REX_EXPORT(__imp__NetDll_XNetUnregisterKey, rex::kernel::xam::NetDll_XNetUnregisterKey_entry)
