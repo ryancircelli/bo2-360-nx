@@ -1329,10 +1329,9 @@ u32 XeCryptBnQwNeModExp_entry(mapped_u64 out, mapped_u64 base, mapped_u64 exp, m
   if (!n) return 0;
   for (u32 i = 0; i < n; i++) out[i] = 0;
   if (!(uint64_t(mod[0]) & 1)) return 0;
-  // inverse = -mod^-1 mod 2^64 (Newton)
+  // ModMul wants inverse = mod^-1 mod 2^64 (Newton)
   uint64_t m0 = mod[0], inv = m0;
   for (int i = 0; i < 6; i++) inv *= 2 - m0 * inv;
-  inv = 0 - inv;
   std::vector<uint64_t> one(n), r2(n), x(n), acc(n), tmp(n);
   // r2 = 2^(128n) mod m via doubling 1 (128n times) with conditional subtract
   std::vector<uint64_t> v(n + 1, 0);
@@ -1346,7 +1345,7 @@ u32 XeCryptBnQwNeModExp_entry(mapped_u64 out, mapped_u64 base, mapped_u64 exp, m
   for (u32 k = 0; k < 128 * n; k++) {
     uint64_t c = 0;
     for (u32 i = 0; i <= n; i++) { uint64_t nc = v[i] >> 63; v[i] = (v[i] << 1) | c; c = nc; }
-    if (ge(v)) { uint64_t b = 0; for (u32 i = 0; i <= n; i++) { uint64_t d = v[i] - md[i] - b; b = (v[i] < md[i] + b) || (md[i] + b < b); v[i] = d; } }
+    if (ge(v)) { uint64_t b = 0; for (u32 i = 0; i <= n; i++) { uint64_t d = v[i] - md[i] - b; b = (v[i] < md[i]) || (v[i] - md[i] < b); v[i] = d; } }
   }
   for (u32 i = 0; i < n; i++) r2[i] = v[i];
   auto mul = [&](std::vector<uint64_t>& o, const std::vector<uint64_t>& a, const std::vector<uint64_t>& b) {
