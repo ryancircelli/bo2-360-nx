@@ -262,6 +262,57 @@ u32 RtlMultiByteToUnicodeN_entry(mapped_u16 destination_ptr, u32 destination_len
   return 0;
 }
 
+// Adapted from credited rexglue v0.11.0 (BSD-3). Match the single-byte mapping
+// of the existing RtlMultiByteToUnicodeN / RtlUnicodeToMultiByteN exports.
+u32 RtlAnsiStringToUnicodeString_entry(ppc_ptr_t<X_UNICODE_STRING> destination_ptr,
+                                       ppc_ptr_t<X_ANSI_STRING> source_ptr, u32 alloc_dest) {
+  auto* memory = REX_KERNEL_MEMORY();
+  const u32 count = source_ptr->length;
+  const u32 length = count * 2;
+  const u32 needed = length + 2;
+  if (needed > 0xFFFF) {
+    return X_STATUS_INVALID_PARAMETER_2;
+  }
+  u32 buffer_ptr = 0;
+  if (alloc_dest) {
+    buffer_ptr = memory->SystemHeapAlloc(needed);
+    if (!buffer_ptr) {
+      return X_STATUS_NO_MEMORY;
+    }
+    destination_ptr->maximum_length = static_cast<u16>(needed);
+    destination_ptr->pointer = buffer_ptr;
+  } else {
+    if (destination_ptr->maximum_length < needed) {
+      destination_ptr->length = static_cast<u16>(length);
+      return X_STATUS_BUFFER_OVERFLOW;
+    }
+    buffer_ptr = destination_ptr->pointer;
+  }
+
+  const auto* source = memory->TranslateVirtual<const u8*>(source_ptr->pointer);
+  auto* buffer = memory->TranslateVirtual<rex::be<uint16_t>*>(buffer_ptr);
+  std::copy_n(source, count, buffer);
+  buffer[count] = 0;
+  destination_ptr->length = static_cast<u16>(length);
+  return X_STATUS_SUCCESS;
+}
+
+u32 RtlMultiByteToUnicodeSize_entry(mapped_u32 size_ptr, [[maybe_unused]] mapped_void source,
+                                    u32 source_len) {
+  if (size_ptr.guest_address() != 0) {
+    *size_ptr = source_len << 1;
+  }
+  return X_STATUS_SUCCESS;
+}
+
+u32 RtlUnicodeToMultiByteSize_entry(mapped_u32 size_ptr, [[maybe_unused]] mapped_void source,
+                                    u32 source_len) {
+  if (size_ptr.guest_address() != 0) {
+    *size_ptr = source_len >> 1;
+  }
+  return X_STATUS_SUCCESS;
+}
+
 // https://msdn.microsoft.com/en-us/library/ff553261
 u32 RtlUnicodeToMultiByteN_entry(ppc_ptr_t<uint8_t> destination_ptr, u32 destination_len,
                                  mapped_u32 written_ptr, mapped_u16 source_ptr, u32 source_len) {
@@ -603,7 +654,7 @@ void __C_specific_handler_entry() {
   REXKRNL_WARN("[STUB] __C_specific_handler called - not implemented");
 }
 
-REX_EXPORT_STUB(__imp__RtlAnsiStringToUnicodeString);
+REX_EXPORT(__imp__RtlAnsiStringToUnicodeString, rex::kernel::xboxkrnl::RtlAnsiStringToUnicodeString_entry)
 REX_EXPORT_STUB(__imp__RtlAppendStringToString);
 REX_EXPORT_STUB(__imp__RtlAppendUnicodeStringToString);
 REX_EXPORT_STUB(__imp__RtlAppendUnicodeToString);
@@ -614,8 +665,8 @@ REX_EXPORT_STUB(__imp__RtlCreateUnicodeString);
 REX_EXPORT_STUB(__imp__RtlGetCallersAddress);
 REX_EXPORT_STUB(__imp__RtlGetStackLimits);
 REX_EXPORT_STUB(__imp__RtlLookupFunctionEntry);
-REX_EXPORT_STUB(__imp__RtlMultiByteToUnicodeSize);
-REX_EXPORT_STUB(__imp__RtlUnicodeToMultiByteSize);
+REX_EXPORT(__imp__RtlMultiByteToUnicodeSize, rex::kernel::xboxkrnl::RtlMultiByteToUnicodeSize_entry)
+REX_EXPORT(__imp__RtlUnicodeToMultiByteSize, rex::kernel::xboxkrnl::RtlUnicodeToMultiByteSize_entry)
 REX_EXPORT_STUB(__imp__RtlUnicodeToUtf8);
 REX_EXPORT_STUB(__imp__RtlUnicodeToUtf8Size);
 REX_EXPORT_STUB(__imp__RtlUnwind2);
