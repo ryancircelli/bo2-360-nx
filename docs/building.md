@@ -26,14 +26,13 @@ with fewer tools. This page builds from the repository, step by step. Steps 1-8 
 |---|---|---|
 | Git for Windows (Git Bash) | any recent | running every script |
 | Python 3 | 3.11 or later | code generation fix-ups, game file tools |
-| Kitware CMake | 4.x, in `C:\Program Files\CMake\bin` | every C++ build (devkitPro's own CMake is older and must not be the one found) |
+| Kitware CMake | 4.x, in `C:\Program Files\CMake\bin` | every C++ build |
 | Ninja | 1.13, installed with winget | every C++ build |
 | LLVM / clang | 20 or later, in `C:\Program Files\LLVM\bin` | the host tools, the Windows build, the shader translator |
 | Vulkan SDK | 1.4.x, in `C:\VulkanSDK\<version>` | `dxc` and `spirv-val` for the shader library |
 
 The build scripts find these tools through `tools/toolchain.sh`, in the default folders above (the newest Vulkan SDK
-in `C:\VulkanSDK`, MSYS2 in `C:\msys64`). For other places set `BO2_CMAKE_DIR`, `BO2_NINJA`, `BO2_LLVM_DIR`,
-`VULKAN_SDK` or `BO2_MSYS2_DIR`.
+in `C:\VulkanSDK`). For other places set `BO2_CMAKE_DIR`, `BO2_NINJA`, `BO2_LLVM_DIR` or `VULKAN_SDK`.
 
 **Disk and memory:** the generated C++ is about 145 MB in 140 files, and a link-time optimized build needs
 plenty of RAM. Builds limit themselves to 8 parallel jobs (`JOBS=` changes it); 32 GB of RAM is comfortable.
@@ -210,12 +209,6 @@ on ARM hardware.
 The campaign lives in `default.xex`, a separate program (`bo2cp`) built from `campaign/` with the same renderer and
 native code. `campaign/README.md` lists its steps: code generation, its own shader pack, and the Windows
 build. Both programs share the game files, the profile and the saves.
-
-## The release kits
-
-`tools/install/` holds the scripts that make the release kits and the installer a kit runs. The installer performs the
-steps on this page in order, records its progress so a second run resumes, and clears the developer variables that
-change a build, so a checkout builds what a kit builds.
 
 ## When something goes wrong
 

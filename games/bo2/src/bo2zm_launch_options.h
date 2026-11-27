@@ -49,7 +49,7 @@ bool MigrateLegacyDefault(bool boot_zombies, std::optional<Mode> test_mode,
 // Success exits the process; preparation errors log and return.
 void RestartCurrentMode();
 
-// The modes a player has installed. The build kit (tools/install/game_files.py) copies only the chosen modes'
+// The modes a player has installed. The game files step (tools/install/game_files.py) copies only the chosen modes'
 // files, and the game names its base zones after the mode that loads them: sub_822C7CA0 in default_mp builds
 // "code_post_gfx" (0x8201A804), "patch", "patch_ui" and "common" (0x8201A7C8), then appends "_zm" (0x82013164) or
 // "_mp" (0x82013160) to each, while the campaign loads them without a suffix. A mode counts as installed when its

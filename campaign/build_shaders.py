@@ -1,5 +1,5 @@
 """Builds the campaign's shader library, bo2cp_shaders.spvpack, from the game files in the data folder: the same steps
-as the installer's shader step for Zombies (tools/install/bo2zm_install.py, step_shaders), over the campaign's
+as tools/mac/build_shaders.py does for Zombies, over the campaign's
 fastfiles instead.
 
 The campaign's zones are every .ff in game/ and update/ except Zombies' (a "zm" part in the name), multiplayer's
@@ -30,7 +30,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-OTHER_LANGUAGE = re.compile(r"^(bp|fj|fr|ge|it|ja|ms|po|ru|sp)_")  # as bo2zm_install.py
+OTHER_LANGUAGE = re.compile(r"^(bp|fj|fr|ge|it|ja|ms|po|ru|sp)_")  # as tools/mac/build_shaders.py
 STRIKE_FORCE_MAPS = {"mp_dockside", "mp_drone", "mp_overflow", "mp_socotra"}
 # Zones of the other modes that hold shaders the campaign uses but does not load from its own zones (see above).
 SHADERS_FROM_OTHER_ZONES = {"patch_ui_zm"}

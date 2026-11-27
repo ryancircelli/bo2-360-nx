@@ -1,7 +1,6 @@
 """Finds the player's Black Ops II files and lays out the ones each game mode needs.
 
-The build kit (kit_build.py), its game files extractor (extract_game_files.py) and the standalone game files and shader
-extractor (gamefiles_shader_extractor.py) all use this module. It does three things:
+The Mac build (tools/build_mac.sh, tools/mac/build_app.py, tools/mac/build_shaders.py) uses this module. It does three things:
 
   scan()     looks through a folder, whatever its layout, for the game itself (an Xbox 360 disc image, .iso, or a
              folder already extracted from one), Title Update 18 and the DLC packages. Packages are recognised by

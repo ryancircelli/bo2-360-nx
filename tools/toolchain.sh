@@ -5,16 +5,10 @@
 # Each tool can be named with an environment variable; without one, the usual install location is tried, then PATH:
 #
 #   BO2_CMAKE_DIR    folder with Kitware's cmake.exe   (default C:/Program Files/CMake/bin when it exists). It goes
-#                    first on PATH, so devkitPro's older CMake is never the one found.
+#                    first on PATH.
 #   BO2_NINJA        ninja.exe                         (default: winget's install folder, else ninja on PATH)
 #   BO2_LLVM_DIR     folder with clang and clang++     (default C:/Program Files/LLVM/bin when it exists)
-#   BO2_DEVKITPRO    devkitPro's root, Windows form    (default: $DEVKITPRO when it is a Windows path, else
-#                    C:/devkitPro). Exported as DEVKITPRO, which the Switch toolchain file reads.
 #   VULKAN_SDK       the Vulkan SDK                    (default: the newest C:/VulkanSDK/<version>)
-#   MESA_SDK         the Mesa/NVK SDK for the Switch   (default: what tools/build_mesa.sh builds, in mesa/ of the
-#                    data folder)
-#   BO2_SPECS_DIR    a folder without spaces for the Switch link's specs file (default: specs/ of the data folder)
-#   BO2_MSYS2_DIR    MSYS2's root, for building Mesa   (default C:/msys64)
 #
 # Every path it sets is in the mixed form (C:/...) that Windows programs and CMake accept, except PATH entries.
 
@@ -52,18 +46,6 @@ elif [ -d "/c/Program Files/LLVM/bin" ]; then
   export PATH="/c/Program Files/LLVM/bin:$PATH"
 fi
 
-# devkitPro. The system-wide DEVKITPRO that devkitPro's installer sets is MSYS-style (/opt/devkitpro), which Git Bash
-# turns into C:/Program Files/Git/opt/devkitpro for any Windows program it starts, so $DEVKITPRO is only taken when it
-# is a Windows path that really holds devkitA64.
-if [ -n "${BO2_DEVKITPRO:-}" ]; then
-  DEVKITPRO="$(_bo2_mixed "$BO2_DEVKITPRO")"
-elif [[ "${DEVKITPRO:-}" =~ ^[A-Za-z]:[/\\] ]] && [ -d "$(_bo2_unix "$DEVKITPRO")/devkitA64" ]; then
-  DEVKITPRO="$(_bo2_mixed "$DEVKITPRO")"
-else
-  DEVKITPRO="C:/devkitPro"
-fi
-export DEVKITPRO
-
 # The Vulkan SDK: the newest one installed, unless VULKAN_SDK names one.
 if [ -z "${VULKAN_SDK:-}" ]; then
   for _bo2_v in /c/VulkanSDK/*/; do
@@ -71,10 +53,4 @@ if [ -z "${VULKAN_SDK:-}" ]; then
   done
 fi
 VULKAN_SDK="${VULKAN_SDK:+$(_bo2_unix "$VULKAN_SDK")}"
-
-# The data folder (tools/data_dir.sh) holds the Mesa build and the specs copy unless they are named.
-_bo2_data="$(bash "$(dirname "${BASH_SOURCE[0]}")/data_dir.sh")"
-MESA_SDK="${MESA_SDK:-$(_bo2_unix "$_bo2_data")/mesa/mesa-unified-install/opt/devkitpro/portlibs/switch}"
-BO2_SPECS_DIR="$(_bo2_mixed "${BO2_SPECS_DIR:-$_bo2_data/specs}")"
-BO2_MSYS2_DIR="$(_bo2_unix "${BO2_MSYS2_DIR:-C:/msys64}")"
-unset _bo2_n _bo2_v _bo2_data
+unset _bo2_n _bo2_v

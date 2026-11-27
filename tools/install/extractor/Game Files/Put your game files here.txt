@@ -1,7 +1,0 @@
-Put your own Black Ops II files in this folder, in any layout (subfolders are fine):
-
-  - the game: your Xbox 360 disc image (.iso), or the folder extracted from it (the one with default_mp.xex)
-  - Title Update 18 (required): the package tu00000002_00000000
-  - your DLC packages, if you have them (optional)
-
-Then double-click "Extract game files and shaders.bat" in the tool's folder.

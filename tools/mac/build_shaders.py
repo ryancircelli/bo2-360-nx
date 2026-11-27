@@ -1,5 +1,5 @@
 """Builds the shader library (bo2zm_shaders.spvpack and its .spvidx) on macOS or Linux, with the steps of
-docs/building.md step 5 and the zone choice of the build kit (tools/install/bo2zm_install.py, Installer.zone_files).
+docs/building.md step 5 and the zone choice the old Windows build kit made.
 
   python3 -I tools/mac/build_shaders.py --data <data folder> --image <work/dump_tu18/default_mp.image.bin>
                                         --work <scratch folder> [--modes zm|zm,mp] [--out <folder for the pack>]
@@ -10,6 +10,7 @@ spirv-val from the Vulkan SDK (VULKAN_SDK, else PATH), which tools/xenosrecomp/r
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tools", "install"))
 import game_files  # noqa: E402
-from bo2zm_install import MAX_SHADERS, OTHER_LANGUAGE  # noqa: E402
+
+OTHER_LANGUAGE = re.compile(r"^(bp|fj|fr|ge|it|ja|ms|po|ru|sp)_")
+# The most shaders one library holds: the packer and the game's loader both refuse more
+# (kMaxShaders in games/bo2/src/native/render/bo2zm_shader_library.cpp).
+MAX_SHADERS = 65536
 
 
 def zone_files(data, modes):
