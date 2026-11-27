@@ -194,7 +194,23 @@ bool Unwind(const Env& env, PPCContext& ctx, uint32_t target_frame, uint32_t tar
     if (f == target)
       break;
   }
+  // The C++ runtime's "unwind and come back here" form: target_ip is RtlUnwind's own
+  // return address. It then restores a context itself (ResumeContext).
+  if (target_ip == static_cast<uint32_t>(ctx.lr))
+    return true;
   throw GuestUnwind{target, target_ip, return_value};
+}
+
+void ResumeContext(const Env& env, PPCContext& ctx, uint32_t context_address) {
+  const auto* context = env.at<X_CONTEXT>(context_address);
+  const auto r1 = static_cast<uint32_t>(context->gpr[1]);
+  for (const HandlerFrame* f = tls_handler_frames; f; f = f->prev) {
+    if (f->establisher && f->establisher == r1)
+      throw GuestUnwind{f, context->iar, context->gpr[3]};
+  }
+  REXKRNL_ERROR("guest exception: no registered frame {:08X} to resume at {:08X} (lr {:08X})", r1,
+                static_cast<uint32_t>(context->iar), static_cast<uint32_t>(ctx.lr));
+  std::abort();
 }
 
 uint32_t CSpecificHandler(const Env& env, PPCContext& ctx, uint32_t record_address,
