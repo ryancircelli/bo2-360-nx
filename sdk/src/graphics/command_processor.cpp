@@ -9,17 +9,18 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
-#include <cstdio>
 #include <algorithm>
-#include <chrono>
-#include <string>
-#include <thread>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <string_view>
 
 #include <fmt/format.h>
+// Kept out of the block above: sdk-metal.patch's include hunk matches that block exactly.
+#include <cstdio>
+#include <chrono>
+#include <string>
+#include <thread>
 
 #include <rex/cvar.h>
 #include <rex/dbg.h>
