@@ -55,6 +55,11 @@ target_include_directories(thread_spin_tests PRIVATE ${PROJECT_SOURCE_DIR}/inclu
 target_link_libraries(thread_spin_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME thread_spin_tests COMMAND thread_spin_tests)
 
+add_executable(thread_wait_tests core/thread_wait_test.cpp)
+target_include_directories(thread_wait_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(thread_wait_tests PRIVATE rex::core Catch2::Catch2WithMain)
+add_test(NAME thread_wait_tests COMMAND thread_wait_tests)
+
 add_executable(slot_table_tests input/slot_table_test.cpp)
 target_link_libraries(slot_table_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME slot_table_tests COMMAND slot_table_tests)

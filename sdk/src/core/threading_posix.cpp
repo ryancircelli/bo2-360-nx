@@ -1313,7 +1313,12 @@ class PosixConditionBase {
       auto result = handles[0]->Wait(timeout);
       return std::make_pair(result, 0);
     }
+    if (!wait_all) {
+      return WaitAnyQueued(handles, count, DeadlineFromTimeout(timeout), nullptr);
+    }
 
+    // shortcut: wait-all polls every 1 ms and misses a Pulse or Set + Reset; queue it like WaitAny if a game
+    // ever waits for all on a pulsed event.
     auto start_time = std::chrono::steady_clock::now();
     auto end_time = (timeout == std::chrono::milliseconds::max())
                         ? std::chrono::steady_clock::time_point::max()
@@ -1438,6 +1443,106 @@ class PosixConditionBase {
     }
   }
 
+  // WaitAny on 2+ objects until `deadline`. The thread queues a node on every object, so an event's Pulse or
+  // Set + Reset releases it as it does a single-object wait (the 1 ms poll this replaces missed both). The first
+  // release or signal taken wins; the other objects skip its nodes and give their release to the next waiter.
+  // Objects that signal without releasing (semaphore, mutant, timer, thread) poke it to scan again.
+  // `alert_flag`: kUserCallback once set, checked every kAlertablePollSlice, as WaitUntil.
+  static std::pair<WaitResult, size_t> WaitAnyQueued(PosixConditionBase* const* objects, size_t count,
+                                                     std::chrono::steady_clock::time_point deadline,
+                                                     const std::atomic<bool>* alert_flag) {
+    MultiWait group;
+    constexpr size_t kInlineNodes = 64;
+    WaitNode inline_nodes[kInlineNodes];
+    std::unique_ptr<WaitNode[]> heap_nodes;
+    WaitNode* nodes = inline_nodes;
+    if (count > kInlineNodes) {
+      heap_nodes = std::make_unique<WaitNode[]>(count);
+      nodes = heap_nodes.get();
+    }
+    const bool infinite = deadline == std::chrono::steady_clock::time_point::max();
+    size_t registered = 0;  // Objects [0, registered) got a node (a release may have unlinked it since).
+    auto result = std::make_pair(WaitResult::kTimeout, size_t(0));
+    // Ends the wait with `give_up_result` unless a release already won it.
+    auto give_up = [&](WaitResult give_up_result) {
+      size_t expected = MultiWait::kNoWinner;
+      if (group.winner.compare_exchange_strong(expected, MultiWait::kGaveUp, std::memory_order_acq_rel)) {
+        result = std::make_pair(give_up_result, size_t(0));
+      } else {
+        result = std::make_pair(WaitResult::kSuccess, expected);
+      }
+    };
+    bool scan = true;
+    while (true) {
+      if (scan) {
+        // In index order, so the lowest signaled object wins, as on Windows.
+        bool failed = false;
+        for (size_t i = 0; i < count; ++i) {
+          PosixConditionBase* object = objects[i];
+          std::unique_lock<std::mutex> lock(object->mutex_, std::defer_lock);
+          if (!object->LockForWait(lock)) {
+            failed = true;
+            break;
+          }
+          if (object->signaled()) {
+            size_t expected = MultiWait::kNoWinner;
+            if (group.winner.compare_exchange_strong(expected, i, std::memory_order_acq_rel)) {
+              object->post_execution();
+            }
+            break;  // Won now, or a release won before.
+          }
+          if (i == registered) {
+            nodes[i].group = &group;
+            nodes[i].index = i;
+            object->Enqueue(&nodes[i]);
+            ++registered;
+          }
+        }
+        if (failed) {
+          give_up(WaitResult::kFailed);
+          break;
+        }
+      }
+      const size_t winner = group.winner.load(std::memory_order_acquire);
+      if (winner != MultiWait::kNoWinner) {
+        result = std::make_pair(WaitResult::kSuccess, winner);
+        break;
+      }
+      if (alert_flag && alert_flag->load(std::memory_order_acquire)) {
+        give_up(WaitResult::kUserCallback);
+        break;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (!infinite && now >= deadline) {
+        give_up(WaitResult::kTimeout);
+        break;
+      }
+      std::unique_lock<std::mutex> lock(group.mutex);
+      auto poked = [&] { return group.poked; };
+      if (alert_flag) {
+        const auto slice_end = now + kAlertablePollSlice;
+        group.cond.wait_until(lock, infinite ? slice_end : std::min(deadline, slice_end), poked);
+      } else if (infinite) {
+        group.cond.wait(lock, poked);
+      } else {
+        group.cond.wait_until(lock, deadline, poked);
+      }
+      scan = group.poked;
+      group.poked = false;
+    }
+    // Every node leaves its queue under that object's lock, so no releaser still uses `group` after this.
+    for (size_t i = 0; i < registered; ++i) {
+      std::unique_lock<std::mutex> lock(objects[i]->mutex_, std::defer_lock);
+      if (!objects[i]->LockForWait(lock)) {
+        std::terminate();  // A node on this stack would be left queued (ENOTRECOVERABLE only).
+      }
+      if (nodes[i].queued) {
+        objects[i]->Unlink(&nodes[i]);
+      }
+    }
+    return result;
+  }
+
   virtual void* native_handle() const {
     return const_cast<std::condition_variable&>(cond_).native_handle();
   }
@@ -1467,11 +1572,30 @@ class PosixConditionBase {
   inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
 
-  // A thread blocked in WaitUntil, queued in arrival order (under mutex_).
+  // One thread's WaitAny on several objects: it has a WaitNode on each object's queue, all pointing here.
+  struct MultiWait {
+    static constexpr size_t kNoWinner = SIZE_MAX;
+    static constexpr size_t kGaveUp = SIZE_MAX - 1;
+    // The object whose release or signal ended the wait (first compare-exchange wins), or kGaveUp.
+    std::atomic<size_t> winner{kNoWinner};
+    std::mutex mutex;  // Taken while an object's mutex is held, never the other way round.
+    std::condition_variable cond;
+    bool poked = false;  // Under mutex: an object was released or signaled since the last scan.
+    void Poke() {
+      std::lock_guard<std::mutex> lock(mutex);
+      poked = true;
+      cond.notify_one();
+    }
+  };
+
+  // A thread blocked in WaitUntil or WaitAnyQueued, queued in arrival order (under mutex_).
   struct WaitNode {
     WaitNode* prev = nullptr;
     WaitNode* next = nullptr;
+    bool queued = false;
     bool released = false;  // Set by ReleaseOldestWaiter: the wait has succeeded.
+    MultiWait* group = nullptr;
+    size_t index = 0;  // This object's index in the group's WaitAny.
   };
 
   // Takes mutex_ for a wait. On Linux the mutex is robust: a thread that died holding it does not block waits
@@ -1505,23 +1629,43 @@ class PosixConditionBase {
       wait_head_ = node;
     }
     wait_tail_ = node;
+    node->queued = true;
     ++waiters_;
   }
   void Unlink(WaitNode* node) {
     (node->prev ? node->prev->next : wait_head_) = node->next;
     (node->next ? node->next->prev : wait_tail_) = node->prev;
     node->prev = node->next = nullptr;
+    node->queued = false;
     --waiters_;
   }
-  // Ends the wait of the thread that has waited longest. The caller notifies cond_. False if nobody waits.
+  // Ends the wait of the thread that has waited longest. The caller calls NotifyAll. False if nobody waits.
+  // A WaitAny whose wait another object already ended (or that gave up) is dropped and the next one gets it.
   bool ReleaseOldestWaiter() {
-    WaitNode* node = wait_head_;
-    if (!node) {
-      return false;
+    while (WaitNode* node = wait_head_) {
+      Unlink(node);
+      if (node->group) {
+        size_t expected = MultiWait::kNoWinner;
+        if (!node->group->winner.compare_exchange_strong(expected, node->index, std::memory_order_acq_rel)) {
+          continue;
+        }
+        node->released = true;
+        node->group->Poke();
+        return true;
+      }
+      node->released = true;
+      return true;
     }
-    Unlink(node);
-    node->released = true;
-    return true;
+    return false;
+  }
+  // Wakes this object's waiters to look at it again (under mutex_).
+  void NotifyAll() {
+    cond_.notify_all();
+    for (WaitNode* node = wait_head_; node; node = node->next) {
+      if (node->group) {
+        node->group->Poke();
+      }
+    }
   }
   void ReleaseAllWaiters() {
     while (ReleaseOldestWaiter()) {
@@ -1564,7 +1708,7 @@ class PosixCondition<Event> : public PosixConditionBase {
     } else if (!ReleaseOldestWaiter()) {
       signal_ = true;
     }
-    cond_.notify_all();
+    NotifyAll();
     return true;
   }
 
@@ -1585,7 +1729,7 @@ class PosixCondition<Event> : public PosixConditionBase {
       ReleaseOldestWaiter();
     }
     signal_ = false;
-    cond_.notify_all();
+    NotifyAll();
   }
 
  private:
@@ -1602,7 +1746,7 @@ class PosixCondition<Event> : public PosixConditionBase {
       if (!ReleaseOldestWaiter()) {
         signal_ = true;
       }
-      cond_.notify_all();
+      NotifyAll();
     }
   }
   bool signal_;
@@ -1626,7 +1770,7 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
       *out_previous_count = count_;
     }
     count_ += release_count;
-    cond_.notify_all();
+    NotifyAll();
     return true;
   }
 
@@ -1634,7 +1778,7 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
   inline bool signaled() const override { return count_ > 0; }
   inline void post_execution() override {
     count_--;
-    cond_.notify_all();
+    NotifyAll();
   }
   uint64_t CaptureRewindValue() const override { return count_; }
   void RestoreRewindValue(uint64_t value) override { count_ = uint32_t(value); }
@@ -1660,7 +1804,7 @@ class PosixCondition<Mutant> : public PosixConditionBase {
       --count_;
       // Free to be acquired by another thread
       if (count_ == 0) {
-        cond_.notify_all();
+        NotifyAll();
       }
       return true;
     }
@@ -1704,7 +1848,7 @@ class PosixCondition<Timer> : public PosixConditionBase {
   bool Signal() override {
     std::lock_guard<std::mutex> lock(mutex_);
     signal_ = true;
-    cond_.notify_all();
+    NotifyAll();
     return true;
   }
 
@@ -2210,7 +2354,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
 
       exit_code_ = exit_code;
       signaled_ = true;
-      cond_.notify_all();
+      NotifyAll();
     }
 #endif
     if (is_current_thread) {
@@ -2638,9 +2782,18 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
 
   ScopedAlertableState alertable_state_guard(true);
   auto deadline = ComputeAlertableDeadline(timeout);
+  const std::atomic<bool>* alert_flag = CurrentThreadPendingUserCallbacksFlag();
   while (true) {
     if (DispatchCurrentThreadUserCallback()) {
       return std::make_pair(WaitResult::kUserCallback, 0);
+    }
+    if (!wait_all) {
+      // Stays queued on every object for the whole wait, as the single-object alertable Wait.
+      const auto result = PosixConditionBase::WaitAnyQueued(conditions, wait_handle_count, deadline, alert_flag);
+      if (result.first != WaitResult::kUserCallback) {
+        return result;
+      }
+      continue;
     }
     auto result = PosixConditionBase::WaitMultiple(conditions, wait_handle_count, wait_all,
                                                    ComputeAlertableWaitTimeout(deadline));
@@ -2887,7 +3040,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
     std::unique_lock<std::mutex> lock(thread->handle_.mutex_);
     thread->handle_.exit_code_ = 0;
     thread->handle_.signaled_ = true;
-    thread->handle_.cond_.notify_all();
+    thread->handle_.NotifyAll();
   }
 #endif
 
