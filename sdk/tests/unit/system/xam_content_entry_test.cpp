@@ -2,6 +2,8 @@
 // CreateDisposition flags (1 CREATE_NEW, 2 CREATE_ALWAYS, 3 OPEN_EXISTING ...), the delete-then-create
 // path NFSMW uses, a package mounted for the whole session (Forza), title id resolution, overlapped results.
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/interfaces/catch_interfaces_capture.hpp>
+#include <cstdio>
 
 #include <chrono>
 #include <cstring>
@@ -45,6 +47,7 @@ struct Fixture {
                                                                        .count()));
   std::unique_ptr<rex::Runtime> runtime;
   Fixture() {
+    std::fprintf(stderr, "FIXTURE begin %s\n", Catch::getResultCapture().getCurrentTestName().c_str());
     std::filesystem::create_directories(path);
     REQUIRE(rex::cvar::SetFlagFromCommandLine("content_backup_root", ""));
     runtime = std::make_unique<rex::Runtime>(path);
@@ -53,7 +56,9 @@ struct Fixture {
     REQUIRE(runtime->Setup(std::move(config)) == X_STATUS_SUCCESS);
   }
   ~Fixture() {
+    std::fprintf(stderr, "FIXTURE end\n");
     runtime.reset();
+    std::fprintf(stderr, "FIXTURE reset done\n");
     std::error_code ec;
     std::filesystem::remove_all(path, ec);
   }
