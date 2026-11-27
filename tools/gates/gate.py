@@ -498,6 +498,24 @@ def g_speedrun(a, G):
     return out_line('PASS' if ok else 'FAIL', 'speedrun', a.game, f'alive {alive} frames {n} csv {csv}', a.out, a.out)
 
 
+def g_bench(a, G):
+    """Deterministic bench of any game: the route sets the frame lock + REX_BENCH_* cvars; wait for '[bench] done', then copy the
+    '[bench] json' lines to OUT/run/game.log, where runq's read_bench (result.json 'bench') and abverdict --bench read them."""
+    end = time.monotonic() + a.secs
+    while time.monotonic() < end and G.alive() and '[bench] done' not in G.log_text():
+        time.sleep(3)
+    text = G.log_text()
+    done = '[bench] done' in text
+    alive = G.alive()
+    G.stop()
+    os.makedirs(os.path.join(a.out, 'run'), exist_ok=True)
+    lines = [l for l in text.splitlines() if '[bench]' in l]
+    for d in (os.path.join(a.out, 'run'), a.out):   # runq reads OUT/game.log
+        open(os.path.join(d, 'game.log'), 'w').write('\n'.join(lines) + '\n')
+    n = sum('[bench] json' in l for l in lines)
+    return out_line('PASS' if done and n else 'FAIL', 'bench', a.game, f'rounds {n} done {done} alive-at-end {alive}', a.out, a.out)
+
+
 def fail_start(a, G, why):
     died = G.exit_code()
     tail = (G.log_text()[-300:] or '').replace('\n', ' ')
@@ -505,14 +523,14 @@ def fail_start(a, G, why):
     return out_line('FAIL', a.gate, a.game, f'{why} (exit {died}) log tail: {tail}', a.out, a.out)
 
 
-INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun)
+INNER = dict(boot=g_boot, shot=g_shot, drive=g_drive, guide=g_guide, open=g_open, speedrun=g_speedrun, bench=g_bench)
 
 
 def run_inner(a):
     """Runs inside the runq job (or --now): start the game the way the gate needs, then the gate body."""
     os.makedirs(a.out, exist_ok=True)
     a.route_file = None
-    need_route = a.gate in ('shot', 'drive', 'speedrun')
+    need_route = a.gate in ('shot', 'drive', 'speedrun', 'bench')
     if need_route or a.route:
         a.route_file = resolve_route(a.game, a.route) if (a.route or GAMES[a.game]['drive']) else None
     if need_route and not a.route_file and a.gate != 'shot':
@@ -521,7 +539,7 @@ def run_inner(a):
         t = a.at or GAMES[a.game]['settle_s']
         a.route_file = os.path.join(a.out, 'guide.route')
         open(a.route_file, 'w').write(f'players = 1\npad1 = {t}-{t + 0.4}:guide, {t + 3}-{t + 3.4}:rb, {t + 6}-{t + 6.4}:lb, {t + 9}-{t + 9.4}:guide\n')
-    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun') and not a.no_seed
+    seed = a.gate in ('shot', 'drive', 'guide', 'speedrun', 'bench') and not a.no_seed
     try:
         G = Game(a.app, a.out, a.game, route=a.route_file, ff=a.ff,
                  seed=seed, via_open=(a.gate == 'open'), env=dict(kv.split('=', 1) for kv in a.env))
@@ -631,19 +649,26 @@ def g_speed_bench(a):
     """bo2 deterministic bench (class bench, solo): N runs per side interleaved, abverdict --bench on CPU work and GPU ms.
     Needs apps built with branch deterministic-bench (SDK bench cvars); older apps are refused."""
     abv = os.path.join(SPOOL, 'bin', 'abverdict.py')
-    base = a.out or default_out('bo2', 'speed-bench')
+    g = a.game
+    base = a.out or default_out(g, 'speed-bench')
     for app in (a.a, a.b):
         if sh(['grep', '-rlaqF', '[bench] done', os.path.join(app, 'Contents', 'MacOS')]).returncode:
             return out_line('FAIL', 'speed', 'bo2', f'{app} has no deterministic bench (built before origin/deterministic-bench); use the fps-pair gate', base, base)
-    route = resolve_route('bo2', a.route or 'town4_det')
+    # nfsmw/fh1: measured on 3-6 concurrent runs (solo takes >15 min boot-started, held the whole Mac); noise in reports/bench-all-games.md
+    route = resolve_route('bo2', a.route or 'town4_det') if g == 'bo2' else os.path.join(HERE, '..', 'mac', 'bench', f'{g}_rounds.route')
     outs = {'A': [], 'B': []}
     for n in range(1, a.pairs + 1):    # a.pairs = max runs per side here; the verdict needs >= 2 valid per side
         jobs = []
         for side, app in (('A', a.a), ('B', a.b)) if n % 2 else (('B', a.b), ('A', a.a)):
             out = os.path.join(base, f'{side}{n}')
             outs[side].append(out)
-            r = sh([RUNQ, 'submit', '--class', 'bench', '--solo', '--timing', '--app', app, '--route', route, '--timeout', '420',
-                    '--env', 'END_ON_LOG=[bench] done', '--name', f'gate-bench-{side}{n}', '--out', out])
+            if g == 'bo2':
+                cmd = [RUNQ, 'submit', '--class', 'bench', '--solo', '--timing', '--app', app, '--route', route, '--timeout', '420',
+                       '--env', 'END_ON_LOG=[bench] done', '--name', f'gate-bench-{side}{n}', '--out', out]
+            else:  # runq --route hardcodes the BO2 exe, so run the inner bench gate
+                cmd = [RUNQ, 'submit', '--class', 'bench', '--app', app, '--timeout', '1500', '--name', f'gate-bench-{g}-{side}{n}', '--out', out,
+                       '--', 'python3', '-I', os.path.abspath(__file__), '--inner', 'bench', g, '--out', '{OUT}', '--app', '{APP}', '--route', route, '--secs', '1400']
+            r = sh(cmd)
             m = re.search(r'job (\S+)', r.stdout)
             if not m:
                 return out_line('FAIL', 'speed', 'bo2', f'submit failed: {(r.stdout + r.stderr)[-200:]}', base)
@@ -655,7 +680,7 @@ def g_speed_bench(a):
         print(v.stdout.strip())
         if v.returncode == 0:
             words = re.findall(r'-> (FASTER|SLOWER|SAME)', v.stdout)
-            return out_line('FAIL' if 'SLOWER' in words else 'PASS', 'speed', 'bo2', f'bench {"/".join(words)} (CPU work/GPU) after {n} runs per side: ' + ' | '.join(l for l in v.stdout.splitlines() if '->' in l), base, base)
+            return out_line('FAIL' if 'SLOWER' in words else 'PASS', 'speed', g, f'bench {"/".join(words)} (CPU work/GPU) after {n} runs per side: ' + ' | '.join(l for l in v.stdout.splitlines() if '->' in l), base, base)
         # exit 2: a run was invalid -> drop nothing, abverdict skips invalid ones; exit 3: MORE -> another run per side
     return out_line('FAIL', 'speed', 'bo2', f'no bench verdict after {a.pairs} runs per side (MORE = same within noise)', base, base)
 
@@ -670,8 +695,8 @@ def g_speed(a):
     if not (a.a and a.b):
         sys.exit('speed needs --a APP --b APP (the two builds to compare)')
     if a.bench:
-        if a.game != 'bo2':
-            sys.exit('speed --bench is bo2 only (the other games have no bench)')
+        if a.game not in ('bo2', 'nfsmw', 'fh1'):
+            sys.exit('speed --bench: bo2, nfsmw, fh1 only so far')
         return g_speed_bench(a)
     outs = {'A': [], 'B': []}
     base = a.out or default_out(a.game, 'speed')
@@ -809,7 +834,7 @@ def game_word(game):
 # ----------------------------------------------------------------------------------------------- cli
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'replay'])
+    p.add_argument('gate', choices=['boot', 'shot', 'drive', 'guide', 'open', 'set', 'speed', 'install', 'speedrun', 'bench', 'replay'])
     p.add_argument('game', nargs='*')
     p.add_argument('--app', help='app to test (default: the installed one); for install: the NEW app')
     p.add_argument('--out')

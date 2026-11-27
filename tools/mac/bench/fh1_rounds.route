@@ -1,0 +1,11 @@
+# Forza Horizon 1 deterministic bench: same menu inputs as tools/gates/routes/fh1-drive.route, throttle held from 260 s.
+# Guest time steps 1/60 s per presented frame, pads follow guest time. One window of 1200 frames starting at guest frame
+# 16200 (270 s): FH1 cannot rewind in-process yet (reports/savepoint-forza.md), so no rounds.
+duration_s = 420
+players = 1
+pad1 = 60-61:start, 75-76:a, 85-86:a, 95-96:a, 105-106:a, 115-116:a, 170-176:rt, 178-181:lt, 185-186:x, 200-201:a, 215-216:a, 230-231:a, 245-246:a, 260-420:rt
+REX_CLOCK_FRAME_LOCK_HZ = 60
+REX_HID_VIRTUAL_PAD_GUEST_TIME = true
+REX_BENCH_FRAMES = 1200
+REX_BENCH_ARM_FRAME = 16200
+REX_GUEST_TIME_SCALE = 2

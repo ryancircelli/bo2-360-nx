@@ -15,6 +15,7 @@
 #include <rex/logging.h>
 #include <rex/thread.h>
 #include <rex/graphics/swap_hook.h>
+#include <rex/input/script/script_events.h>
 #include <rex/system/savepoint.h>
 
 #if defined(__APPLE__)
@@ -41,6 +42,14 @@ REXCVAR_DEFINE_INT32(bench_warmup_frames, 0, "Bench",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bench_arm_frame, -1, "Bench",
                      "Arm the window at this presented frame number; -1 = the game arms it (its own scene start).")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(bench_arm_on_log, "", "Bench",
+                      "Arm the window when a log line containing this text first appears (a game's own scene-start "
+                      "marker, e.g. a level file opening); needs no game code. Empty = off.")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(bench_inject_m_instr, 0, "Bench",
+                     "Test of the bench itself: burn this many million instructions of real work on the presenting "
+                     "thread every frame (a known cost to detect). 0 = off.")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(bench_spin_gap_bits, 0, "Bench",
                      "Instructions a thread runs between two waits or yields count as spin (a wait loop's own check) "
@@ -250,9 +259,20 @@ void AddGpuNs(uint64_t ns) {
 void OnFrame() {
   chrono::Clock::OnGuestFrame();
   if (!Enabled()) return;
+  // Only inside the window: loading screens present far more frames/s and would crawl. Measured ~15 instructions per iteration.
+  if (static const int inject = REXCVAR_GET(bench_inject_m_instr); inject > 0 && g_state.load() == 1) {
+    volatile uint64_t sink = 0;
+    for (uint64_t i = 0, n = uint64_t(inject) * 66000; i < n; ++i) sink = sink + i;
+  }
   const uint64_t frame = g_frame.fetch_add(1) + 1;
   if (static const int at = REXCVAR_GET(bench_arm_frame); at >= 0 && frame == uint64_t(at)) {
     Arm("bench_arm_frame");
+  }
+  static const std::string on_log = REXCVAR_GET(bench_arm_on_log);
+  if (!on_log.empty()) {
+    static const bool watching = (input::script::WatchLogText(on_log), true);
+    (void)watching;
+    if (input::script::ScriptEventCount(input::script::LogEventName(on_log)) > 0) Arm("bench_arm_on_log");
   }
   const int64_t start = g_arm_frame.load();
   const int state = g_state.load();
