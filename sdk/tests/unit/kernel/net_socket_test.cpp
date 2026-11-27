@@ -244,6 +244,7 @@ TEST_CASE("XNet random fills and session keys vary without writing outside their
   CHECK(std::memcmp(first.data() + 1, second.data() + 1, 8) != 0);
   CHECK(std::memcmp(first.data() + 17, second.data() + 17, 16) != 0);
   CHECK(first[0] == 0x5A);
+  CHECK(first[1] == 0);  // system-link XNKID type
   CHECK(first[9] == 0x5A);
   CHECK(first[16] == 0x5A);
   CHECK(first[33] == 0x5A);
