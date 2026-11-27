@@ -2266,6 +2266,11 @@ class PosixCondition<Thread> : public PosixConditionBase {
   void RestoreRewindValue(uint64_t value) override { signaled_ = value != 0; }
   inline bool signaled() const override { return signaled_; }
   inline void post_execution() override {
+    // Every successful wait runs this; join only once. A second pthread_join can attach to a newer thread
+    // that reuses the pthread_t and block until that thread ends.
+    if (joined_.exchange(true, std::memory_order_acq_rel)) {
+      return;
+    }
 #endif
     if (thread_) {
       pthread_join(thread_, nullptr);
@@ -2296,9 +2301,9 @@ class PosixCondition<Thread> : public PosixConditionBase {
   mutable std::condition_variable state_signal_;
   std::deque<std::function<void()>> user_callbacks_;
   std::atomic<bool> has_pending_user_callbacks_{false};
+  std::atomic<bool> joined_{false};
 #if REX_FAST_WAITS
   std::atomic<uint32_t> wake_word_{0};
-  std::atomic<bool> joined_{false};
 #endif
 #if REX_PLATFORM_ANDROID
   // Name accessible via name() on Android before API 26 which added

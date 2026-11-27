@@ -353,3 +353,33 @@ TEST_CASE("A guest object body that is initialised again gets a fresh host objec
   }
   CHECK(table->GetAllObjects().size() == before);
 }
+
+#if !defined(_WIN32)
+TEST_CASE("Waiting twice on a finished thread does not join a newer thread", "[thread][join]") {
+  using namespace std::chrono_literals;
+  auto first = rex::thread::Thread::Create({}, []() {});
+  REQUIRE(first);
+  REQUIRE(rex::thread::Wait(first.get(), false, 2000ms) == rex::thread::WaitResult::kSuccess);
+
+  std::atomic<bool> stop{false};
+  // Likely to reuse the finished thread's stack, and with it the pthread_t.
+  auto second = rex::thread::Thread::Create({}, [&]() {
+    while (!stop.load(std::memory_order_acquire)) {
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  REQUIRE(second);
+
+  std::atomic<bool> done{false};
+  std::thread waiter([&]() {
+    rex::thread::Wait(first.get(), false, 2000ms);
+    done.store(true, std::memory_order_release);
+  });
+  std::this_thread::sleep_for(300ms);
+  const bool returned = done.load(std::memory_order_acquire);
+  stop.store(true, std::memory_order_release);  // also frees a waiter stuck joining the second thread
+  waiter.join();
+  CHECK(returned);
+  REQUIRE(rex::thread::Wait(second.get(), false, 2000ms) == rex::thread::WaitResult::kSuccess);
+}
+#endif
