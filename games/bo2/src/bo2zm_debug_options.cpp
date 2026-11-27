@@ -88,10 +88,6 @@
 #include "bo2zm_switch.h"
 #include "native/render/bo2zm_native_capture.h"
 
-#if defined(__SWITCH__)
-extern "C" const char* RexSwitchLogDir(void);
-extern "C" void RexSwitchPerfSetReport(bool on);
-#endif
 
 REXCVAR_DEFINE_STRING(max_log_files, "10", "BO2",
                       "Logs kept, one per start: \"5\", \"10\", \"20\" or \"off\" (every log; test tomls). Set here, it "
@@ -145,9 +141,6 @@ void SetLevel(const std::string& level) {
 
 // The profiler's report goes with the full log.
 void ApplyReport() {
-#if defined(__SWITCH__)
-  RexSwitchPerfSetReport(g_level_given || On());
-#endif
 }
 
 // A value saved in the settings file, read straight from it ("" if none): this runs before the runtime
@@ -363,11 +356,7 @@ void ApplyHashSampling() {
 }
 
 std::filesystem::path ProfileFlag() {
-#if defined(__SWITCH__)
-  return std::filesystem::path(RexSwitchLogDir()) / "profile_stacks.flag";
-#else
   return {};
-#endif
 }
 
 // The flag file follows the pick and the switch.
@@ -516,10 +505,6 @@ void bo2zm::debug::ConfigureStartup(const std::filesystem::path& user_data_root)
   } else {
     SetLevel(debug_on ? "info" : "warn");
   }
-#if defined(__SWITCH__)
-  // log_level = "off" in the toml: no profiler report either.
-  RexSwitchPerfSetReport(!g_quiet_start && !(g_level_given && g_given_level == "off"));
-#endif
 }
 
 void bo2zm::debug::AfterLoggingStarted() {

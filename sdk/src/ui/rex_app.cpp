@@ -29,11 +29,7 @@
 #include <rex/ui/overlay/settings_overlay.h>
 #include <rex/audio/audio_system.h>
 #include <rex/audio/downmix.h>
-#if REX_PLATFORM_SWITCH
-#include <rex/audio/switch/switch_audio_system.h>
-#else
 #include <rex/audio/sdl/sdl_audio_system.h>
-#endif
 #include <rex/input/input_record.h>
 #include <rex/input/input_system.h>
 #include <rex/system/savepoint.h>
@@ -54,17 +50,6 @@
 #include <rex/ui/keybinds.h>
 #include <rex/version.h>
 
-#if REX_PLATFORM_SWITCH
-#include <cstdio>
-#include <rex/ui/switch_imgui_input.h>
-// Only the syscall header: switch.h drags typedefs that collide with rex.
-extern "C" {
-#include <switch/types.h>
-// libnx runtime internals used by the Switch exit in OnClosing.
-extern u32 __nx_applet_exit_mode;
-NX_NORETURN void __libnx_exit(int rc);
-}
-#endif
 
 #include <fmt/format.h>
 #include <imgui.h>
@@ -338,13 +323,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
         }
         if (!debug_overlay_ && !console_overlay_ && !settings_overlay_ && !achievements_overlay_)
           return true;
-#if REX_PLATFORM_SWITCH
-        // The menu and the game share the controller: while a menu window
-        // has navigation focus, the buttons belong to the menu.
-        return rex::ui::nx::GameReceivesController(imgui_drawer_->GetIO());
-#else
         return !imgui_drawer_->GetIO().WantCaptureMouse;
-#endif
       });
     }
   }
@@ -410,11 +389,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
 
 bool ReXApp::SetupPresentation() {
   config_.gpu_plugin = REXCVAR_GET(gpu_plugin);
-#if REX_PLATFORM_SWITCH
-  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::nx::SwitchAudioSystem);
-#else
   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
-#endif
   config_.input_factory = REX_INPUT_BACKEND(rex::input::CreateDefaultInputSystem);
   config_.kernel_init = rex::kernel::InitializeKernel;
 
@@ -520,10 +495,6 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
     } else {
       debug_overlay_ =
           std::make_unique<ui::DebugOverlayDialog>(imgui_drawer_.get(), frame_stats_provider_);
-#if REX_PLATFORM_SWITCH
-      // The position set with L+R and the right stick, stored next to the configuration file.
-      debug_overlay_->SetPositionFile(config_path_.parent_path() / "debug_overlay.txt");
-#endif
     }
   });
   rex::ui::RegisterBind("bind_console", "Backtick", "Toggle console overlay", [this] {
@@ -1096,19 +1067,7 @@ void ReXApp::OnClosing(ui::UIEvent& e) {
   // reclaims the rest.
   REXLOG_INFO("Title terminated; hard-exiting process.");
   rex::FlushLogging();
-#if REX_PLATFORM_SWITCH
-  // std::_Exit returns the NRO to hbloader with every guest, GPU and audio
-  // thread still alive, and hbmenu then crashes on heap pages those threads'
-  // stacks keep aliased. The process must end, and an application has to ask
-  // the system for it (svcExitProcess is reported as "closed because an error
-  // occurred"): with __nx_applet_exit_mode = 1, libnx closes the services and
-  // sends ISelfController::Exit. See windowed_app_main_switch.cpp.
-  std::fflush(nullptr);
-  __nx_applet_exit_mode = 1;
-  __libnx_exit(0);
-#else
   std::_Exit(0);
-#endif
 }
 
 bool ReXApp::OnCloseRequested(ui::UIEvent& e) {

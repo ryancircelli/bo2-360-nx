@@ -45,11 +45,7 @@ REXCVAR_DECLARE(bool, audio_diag_priority_critical);  // defined in audio_system
  * a single context, and the data is ready in 14-16 us on average (0.51 ms worst case), far below the
  * 5.3 ms of an audio block. 0 differences from the recompiled code.
  */
-#if REX_PLATFORM_SWITCH
-#define REX_XMA_ON_WORKER_DEFAULT 1
-#else
 #define REX_XMA_ON_WORKER_DEFAULT 0
-#endif
 REXCVAR_DEFINE_INT32(audio_xma_in_worker, REX_XMA_ON_WORKER_DEFAULT, "Audio",
                      "Who decodes the XMA when a kick arrives (XMAEnableContext): 0 = the thread that asks, "
                      "as before; 1 = the XMA Decoder thread, which runs at 0x2B on the Switch so the GPU ring "

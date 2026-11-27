@@ -29,17 +29,6 @@ REXCVAR_DEFINE_BOOL(bo2zm_test_waits, false, "BO2",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 
-#if defined(__SWITCH__) || defined(REX_FAST_WAITS_TEST)
-namespace rex::thread {
-// threading_posix.cpp (REX_FAST_WAITS)
-uint64_t FastWaitLostWakeups();
-uint32_t FastWaitWaiters(WaitHandle* handle);
-}  // namespace rex::thread
-#define BO2ZM_FAST_WAITS_HOOKS 1
-#else
-#define BO2ZM_FAST_WAITS_HOOKS 0
-#endif
-
 namespace bo2zm::test_waits {
 namespace {
 
@@ -51,8 +40,7 @@ using rex::thread::Semaphore;
 using rex::thread::WaitHandle;
 using rex::thread::WaitResult;
 
-// Every wait that should end has this much time to do it. A lost wake-up on the REX_FAST_WAITS path costs at most
-// ~1 s (its check interval), so it still passes the wait but is counted by the runtime and fails the summary.
+// Every wait that should end has this much time to do it.
 constexpr auto kPatience = 3000ms;
 
 std::string Format(const char* format, ...) {
@@ -86,17 +74,12 @@ bool WaitUntil(Pred pred, Clock::duration limit) {
 }
 
 // Until count threads are inside a wait on handle, so a pulse cannot miss one that is still on its way in (a
-// pulse rightly releases only the threads already waiting). The runtime tells on REX_FAST_WAITS; elsewhere a
-// pause has to do.
+// pulse rightly releases only the threads already waiting). The runtime cannot tell, so a pause has to do.
 bool UntilWaiting(WaitHandle* handle, uint32_t count) {
-#if BO2ZM_FAST_WAITS_HOOKS
-  return WaitUntil([&] { return rex::thread::FastWaitWaiters(handle) >= count; }, kPatience);
-#else
   (void)handle;
   (void)count;
   std::this_thread::sleep_for(std::chrono::milliseconds(2));
   return true;
-#endif
 }
 
 WaitResult Wait(WaitHandle* handle, std::chrono::milliseconds timeout, bool alertable = false) {
@@ -772,11 +755,7 @@ std::string Timeouts(double, std::string* detail) {
       if (r != WaitResult::kTimeout) {
         return Format("a %lld ms wait did not time out", (long long)timeout.count());
       }
-#if BO2ZM_FAST_WAITS_HOOKS
-      constexpr double kEarly = 0.05;  // ours checks the clock: never early
-#else
       constexpr double kEarly = 1.0;  // Windows ends short waits up to a timer tick early
-#endif
       if (took + kEarly < double(timeout.count())) {
         return Format("a %lld ms wait ended after %.3f ms", (long long)timeout.count(), took);
       }
@@ -1211,9 +1190,6 @@ bool Run(double scale, const std::function<void(const std::string&)>& log) {
       {"handle_table", HandleTable},
 #endif
   };
-#if BO2ZM_FAST_WAITS_HOOKS
-  const uint64_t lost_before = rex::thread::FastWaitLostWakeups();
-#endif
   int failed = 0;
   const auto start = Clock::now();
 #if defined(BO2ZM_TEST_WAITS_STANDALONE)
@@ -1243,16 +1219,6 @@ bool Run(double scale, const std::function<void(const std::string&)>& log) {
   int total = int(sizeof(tests) / sizeof(tests[0]));
 #if defined(BO2ZM_TEST_WAITS_STANDALONE)
   total -= skipped;
-#endif
-#if BO2ZM_FAST_WAITS_HOOKS
-  const uint64_t lost = rex::thread::FastWaitLostWakeups() - lost_before;
-  ++total;
-  if (lost) {
-    ++failed;
-    log(Format("[test_waits] FAIL lost_wakeups      the runtime reported %llu lost wake-ups", (unsigned long long)lost));
-  } else {
-    log("[test_waits] PASS lost_wakeups      none reported by the runtime");
-  }
 #endif
   log(Format("[test_waits] %s: %d of %d passed in %.1f s (scale %.2f)", failed ? "FAIL" : "PASS", total - failed,
              total, Ms(Clock::now() - start) / 1000.0, scale));

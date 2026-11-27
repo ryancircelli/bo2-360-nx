@@ -126,11 +126,6 @@ static const uint32_t kSpirvGlowSmooth[1] = {0};
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-#if REX_PLATFORM_SWITCH
-// Only for RexSwitchSetCurrentThreadPriorityOk (texture bind thread). That header deliberately does not
-// include switch.h (same as in bo2zm_native_render.cpp).
-#include "core/threading_switch.h"  // SDK src/ is on the include path (CMakeLists.txt)
-#endif
 
 /*
  * The final composite the renderer recognizes by hash (kHashComposite) is a single full-screen quad with
@@ -407,117 +402,6 @@ REXCVAR_DEFINE_INT32(bo2zm_native_nvk_alternate_s, 0, "BO2",
                      "Native renderer (test): with N > 0 alternates the four NVK improvements (on in odd "
                      "spans, off in even ones) every N seconds, to compare in the same run. 0 = does not alternate");
 
-#if REX_PLATFORM_SWITCH
-/*
- * The state of set 4 by differences lives in NVK (struct nvk_switch_set4 in nvk_cmd_buffer.h,
- * patches/mesa-bo2zm.patch). Same field order and types, with a version: it is a contract. Weak symbol:
- * with an unpatched Mesa the address is null and ControlSet4 reports it once.
- */
-extern "C" {
-struct NvkSwitchSet4Counts {
-  uint64_t bindings_mismatch;
-  uint64_t bindings_full;
-  uint64_t writes_root;
-  uint64_t dwords_root;
-  uint64_t cbufs_dirty;
-  uint64_t cbufs_saved;
-  uint64_t draws;
-  uint64_t checks;
-  uint64_t mismatches;
-};
-struct NvkSwitchSet4 {
-  int32_t version;
-  int32_t requested;
-  int32_t env;
-  int32_t off;
-  NvkSwitchSet4Counts total;
-};
-extern NvkSwitchSet4 nvk_switch_set4 __attribute__((weak));
-}
-static_assert(sizeof(NvkSwitchSet4) == 16 + 9 * 8, "NvkSwitchSet4 has to be the same size as in NVK");
-#endif
-#if REX_PLATFORM_SWITCH
-/*
- * The draw path in NVK (struct nvk_switch_draw in nvk_cmd_buffer.h, p01 in patches/mesa-bo2zm.patch). Same
- * field order and types, with a version: it is a contract. Weak symbols: with an unpatched Mesa the
- * addresses are null and ControlDrawNvk reports it once.
- */
-extern "C" {
-struct NvkSwPart {
-  uint64_t times;
-  uint64_t ticks;  // CNTPCT_EL0, at ticks_per_second
-};
-struct NvkSwImprovement {
-  int32_t requested;  // written by the app: 1 yes, 0 no
-  int32_t off;  // 1: its guard saw a MISMATCH
-  uint64_t uses;
-  uint64_t validated;
-  uint64_t mismatches;
-  uint64_t no_check;
-};
-struct NvkSwitchDraw {
-  int32_t version;
-  int32_t measure;
-  int32_t measure_misses;
-  int32_t env;
-  uint64_t ticks_per_second;
-  NvkSwPart parts[16];   // enum nvk_sw_part
-  uint64_t counts[13];    // enum nvk_sw_count
-  NvkSwImprovement improvements[5];  // emission, cbufs, dynamic, set4_fast (not applied), prefetch
-};
-extern NvkSwitchDraw nvk_switch_draw __attribute__((weak));
-void vk_switch_prefetch_pipeline(VkPipeline pipeline) __attribute__((weak));
-}
-static_assert(sizeof(NvkSwitchDraw) == 24 + 16 * 16 + 13 * 8 + 5 * 40, "NvkSwitchDraw: the same size as in NVK");
-#endif
-#if REX_PLATFORM_SWITCH
-/*
- * Struct vk_bo2_copy_state (vk_graphics_state.h) and struct nvk_bo2_copies (nvk_cmd_buffer.h) in
- * patches/mesa-bo2zm.patch. Same field order and types, with a version: contracts. Weak symbols: with an older
- * Mesa the addresses are null and ControlCopiesNvk says so once.
- */
-extern "C" {
-struct VkBo2StateCopy {
-  int32_t version;
-  int32_t requested;
-  int32_t off;
-  int32_t padding;
-  uint64_t copies;
-  uint64_t no_hashes;
-  uint64_t bits_copied;
-  uint64_t bits_skipped;
-  uint64_t checked;
-  uint64_t mismatches;
-  uint64_t pipelines;
-};
-struct NvkBo2Copies {
-  int32_t version;
-  int32_t engine;
-  uint64_t uploads_engine;
-  uint64_t regions_engine;
-  uint64_t uploads_meta;
-  uint64_t regions_meta;
-  uint64_t copies_engine;
-  uint64_t copies_meta;
-};
-struct NvkBo2KindViews {
-  int32_t version;
-  int32_t enabled;
-  uint64_t views_created;
-  uint64_t views_freed;
-  uint64_t view_bytes;
-  uint64_t binds_view;
-  uint64_t binds_own;
-  uint64_t failures;
-};
-extern VkBo2StateCopy vk_bo2_copy_state __attribute__((weak));
-extern NvkBo2Copies nvk_bo2_copies __attribute__((weak));
-extern NvkBo2KindViews nvk_bo2_kind_views __attribute__((weak));
-}
-static_assert(sizeof(VkBo2StateCopy) == 16 + 7 * 8, "VkBo2StateCopy: the same size as in Mesa");
-static_assert(sizeof(NvkBo2Copies) == 8 + 6 * 8, "NvkBo2Copies: the same size as in NVK");
-static_assert(sizeof(NvkBo2KindViews) == 8 + 6 * 8, "NvkBo2KindViews: the same size as in NVK");
-#endif
 /*
  * Sampler caches valid across frames.
  *
@@ -566,9 +450,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_mipmaps, true, "BO2",
  * the limit is 512 MB, sized for bo2zm_internal_resolution = "auto" (720p handheld and 1080p docked): the cache
  * and the resolved render targets grow with the resolution, so the two go up together.
  */
-#if REX_PLATFORM_SWITCH
-constexpr int32_t kDefaultTexturesMbMax = 512;
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 // Apple silicon shares tens of GB with the GPU: room for four split-screen views' textures without churn.
 constexpr int32_t kDefaultTexturesMbMax = 768;
 #else
@@ -4413,14 +4295,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (pipeline == VK_NULL_HANDLE) {
       return false;
     }
-#if REX_PLATFORM_SWITCH
-    // The pipeline about to be bound, prefetched into the cache several us before its vkCmdBindPipeline
-    // (Mesa patch p06; PRFM only: it reads and writes nothing and cannot fail).
-    if (nvk_prefetch_app_ && pipeline != pipeline_bound_ && vk_switch_prefetch_pipeline) {
-      // With deferred recording the bind is made by the recorder thread: the prefetch goes to its queue too.
-      deferred::Prefetch(vk_switch_prefetch_pipeline, pipeline);
-    }
-#endif
     CutSubstage(50, t_pipeline);
 
     Stage(5, mark);
@@ -5148,12 +5022,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
                                 .count();
       requested = (seconds / alternate) % 2 == 1;
     }
-#if REX_PLATFORM_SWITCH
-    NvkSwitchSet4* const nvk = &nvk_switch_set4;
-    const bool with_patch = nvk != nullptr && nvk->version == 1;
-#else
     const bool with_patch = false;
-#endif
     if (requested != set4_requested_ || !set4_requested_annotated_) {
       set4_requested_ = requested;
       set4_requested_annotated_ = true;
@@ -5161,18 +5030,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
                   requested ? "requested from NVK" : "NOT requested: NVK binds the whole set", frame_,
                   with_patch ? "" : "; this NVK does not have nvk_switch_set4 (older Mesa or PC): binds as always");
     }
-#if REX_PLATFORM_SWITCH
-    if (with_patch) {
-      __atomic_store_n(&nvk->requested, requested ? 1 : 0, __ATOMIC_RELAXED);
-      if (!set4_mismatch_warned_ && __atomic_load_n(&nvk->off, __ATOMIC_RELAXED) != 0) {
-        set4_mismatch_warned_ = true;
-        REXLOG_ERROR("[native] C6 set 4 by differences: MISMATCH seen by NVK's guard ({} cbufs bound wrong, each one "
-                     "fixed in its draw; details in rex_stderr.log). Off for the rest of the session: NVK binds the "
-                     "whole set, as always",
-                     __atomic_load_n(&nvk->total.mismatches, __ATOMIC_RELAXED));
-      }
-    }
-#endif
   }
 
   /*
@@ -5182,59 +5039,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * rest of the run.
    */
   void ControlDrawNvk() {
-#if REX_PLATFORM_SWITCH
-    NvkSwitchDraw* const nvk = &nvk_switch_draw;
-    if (nvk == nullptr || nvk->version != 1) {
-      nvk_prefetch_app_ = false;
-      if (!nvk_draw_annotated_) {
-        nvk_draw_annotated_ = true;
-        REXLOG_INFO("[native] C6 NVK per draw: this NVK does not have the nvk_switch_draw contract (older "
-                    "Mesa): no measurement and no improvements");
-      }
-      return;
-    }
-    int32_t measure = std::max<int32_t>(0, REXCVAR_GET(bo2zm_native_nvk_measure));
-    if (measure > 0) {
-      measure = int32_t(std::bit_floor(uint32_t(measure)));  // NVK wants a power of 2
-    }
-    bool improvements = true;
-    const int32_t alternate = REXCVAR_GET(bo2zm_native_nvk_alternate_s);
-    if (alternate > 0) {
-      const auto seconds =
-          std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - nvk_draw_start_)
-              .count();
-      improvements = (seconds / alternate) % 2 == 1;
-    }
-    const int32_t requested[5] = {improvements && REXCVAR_GET(bo2zm_native_nvk_emission) ? 1 : 0,
-                                improvements && REXCVAR_GET(bo2zm_native_nvk_cbufs) ? 1 : 0,
-                                improvements && REXCVAR_GET(bo2zm_native_nvk_dynamic) ? 1 : 0,
-                                0,  // the fast set 4 path (p05) is not applied
-                                improvements && REXCVAR_GET(bo2zm_native_nvk_prefetch) ? 1 : 0};
-    __atomic_store_n(&nvk->measure, measure, __ATOMIC_RELAXED);
-    __atomic_store_n(&nvk->measure_misses, REXCVAR_GET(bo2zm_native_nvk_measure_misses) ? 1 : 0, __ATOMIC_RELAXED);
-    for (size_t m = 0; m < 5; ++m) {
-      __atomic_store_n(&nvk->improvements[m].requested, requested[m], __ATOMIC_RELAXED);
-    }
-    nvk_prefetch_app_ = requested[4] != 0;
-    if (!nvk_draw_annotated_ || improvements != nvk_improvements_requested_) {
-      nvk_draw_annotated_ = true;
-      nvk_improvements_requested_ = improvements;
-      REXLOG_INFO("[native] C6 NVK per draw: improvements {} (emission {}, cbufs {}, dynamic {}, prefetch "
-                  "{}); measuring 1 in {} calls{}; environment NVK_SWITCH_DRAW {} (frame {})",
-                  improvements ? "requested" : "NOT requested", requested[0], requested[1], requested[2], requested[4], measure,
-                  REXCVAR_GET(bo2zm_native_nvk_measure_misses) ? " with the cache misses separately" : "",
-                  __atomic_load_n(&nvk->env, __ATOMIC_RELAXED), frame_);
-    }
-    static constexpr const char* kNames[5] = {"emission", "cbufs", "dynamic", "fast set 4", "prefetch"};
-    for (size_t m = 0; m < 5; ++m) {
-      if (!nvk_off_warned_[m] && __atomic_load_n(&nvk->improvements[m].off, __ATOMIC_RELAXED) != 0) {
-        nvk_off_warned_[m] = true;
-        REXLOG_ERROR("[native] C6 NVK per draw: MISMATCH seen by the guard of '{}' ({} checks that differed; details in "
-                     "rex_stderr.log). Off for the rest of the session: NVK does it as always",
-                     kNames[m], __atomic_load_n(&nvk->improvements[m].mismatches, __ATOMIC_RELAXED));
-      }
-    }
-#endif
   }
 
   /*
@@ -5243,82 +5047,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * improvement, uses, checks and differences. Totals are from command buffers that have already finished.
    */
   void ReportDrawNvk() {
-#if REX_PLATFORM_SWITCH
-    const auto now = std::chrono::steady_clock::now();
-    if (now - nvk_report_ < std::chrono::seconds(10)) {
-      return;
-    }
-    const bool first = nvk_report_ == std::chrono::steady_clock::time_point{};
-    nvk_report_ = now;
-    NvkSwitchDraw* const nvk = &nvk_switch_draw;
-    if (nvk == nullptr || nvk->version != 1) {
-      return;
-    }
-    uint64_t times[16], ticks[16], counts[13], improvements[5][4];
-    for (size_t i = 0; i < 16; ++i) {
-      const uint64_t v = __atomic_load_n(&nvk->parts[i].times, __ATOMIC_RELAXED);
-      const uint64_t t = __atomic_load_n(&nvk->parts[i].ticks, __ATOMIC_RELAXED);
-      times[i] = v - nvk_partes_previous_[i][0];
-      ticks[i] = t - nvk_partes_previous_[i][1];
-      nvk_partes_previous_[i][0] = v;
-      nvk_partes_previous_[i][1] = t;
-    }
-    for (size_t i = 0; i < 13; ++i) {
-      const uint64_t c = __atomic_load_n(&nvk->counts[i], __ATOMIC_RELAXED);
-      counts[i] = c - nvk_counts_previous_[i];
-      nvk_counts_previous_[i] = c;
-    }
-    for (size_t m = 0; m < 5; ++m) {
-      const uint64_t c[4] = {__atomic_load_n(&nvk->improvements[m].uses, __ATOMIC_RELAXED),
-                             __atomic_load_n(&nvk->improvements[m].validated, __ATOMIC_RELAXED),
-                             __atomic_load_n(&nvk->improvements[m].mismatches, __ATOMIC_RELAXED),
-                             __atomic_load_n(&nvk->improvements[m].no_check, __ATOMIC_RELAXED)};
-      for (size_t k = 0; k < 4; ++k) {
-        improvements[m][k] = c[k] - nvk_improvements_previous_[m][k];
-        nvk_improvements_previous_[m][k] = c[k];
-      }
-    }
-    if (first) {
-      return;
-    }
-    const uint64_t tps = __atomic_load_n(&nvk->ticks_per_second, __ATOMIC_RELAXED);
-    const double us_tick = tps ? 1e6 / double(tps) : 0.0;
-    const uint64_t draws = counts[0];  // NVK_SW_C_DRAWS_MEASURED
-    // us per measured call and, in brackets, us per measured draw.
-    const auto part = [&](size_t i) {
-      return fmt::format("{:.2f} [{:.2f}]", times[i] ? double(ticks[i]) * us_tick / double(times[i]) : 0.0,
-                         draws ? double(ticks[i]) * us_tick / double(draws) : 0.0);
-    };
-    const auto per_draw = [&](size_t i) { return draws ? double(counts[i]) / double(draws) : 0.0; };
-    if (draws) {
-      BO2ZM_REPORT_RING(
-          "[native] C6 NVK by parts (us per measured call [us per measured draw]; {} draws measured): whole "
-          "draw {} | push desc {} | dynamic {} | shader touch {} | shaders {} | cbufs {} | emit {} | BindPipeline: "
-          "shaders {} touch {} state copy {} | sets {} (root {} dirtying {}) | root table {} | new chunk {} | "
-          "BindVertexBuffers {}",
-          draws, part(0), part(1), part(2), part(3), part(4), part(5), part(6), part(7), part(8),
-          part(9), part(10), part(11), part(12), part(13), part(14), part(15));
-      BO2ZM_REPORT_RING(
-          "[native] C6 NVK per measured draw: {:.1f} dwords; {:.2f} with dirty dynamic state ({:.1f} bits); {:.2f} with "
-          "dirty shaders; {:.2f} cbufs rebound | pipelines: {} binds measured, {:.1f} % copies that changed nothing, "
-          "{:.2f} new bits per bind | {} root table uploads ({:.1f} words each), {} new chunks",
-          per_draw(1), per_draw(2), counts[2] ? double(counts[3]) / double(counts[2]) : 0.0, per_draw(4),
-          per_draw(5), counts[6], counts[6] ? 100.0 * double(counts[7]) / double(counts[6]) : 0.0,
-          counts[6] ? double(counts[8]) / double(counts[6]) : 0.0, counts[10],
-          counts[10] ? double(counts[11]) / double(counts[10]) : 0.0, counts[12]);
-    }
-    static constexpr size_t kShown[4] = {0, 1, 2, 4};  // without the fast set 4 (p05), which is not applied
-    static constexpr const char* kNames[5] = {"emission", "cbufs", "dynamic", "fast set 4", "prefetch"};
-    std::string text;
-    for (const size_t m : kShown) {
-      const char* state = __atomic_load_n(&nvk->improvements[m].off, __ATOMIC_RELAXED) != 0 ? "OFF by the guard"
-                           : __atomic_load_n(&nvk->improvements[m].requested, __ATOMIC_RELAXED) == 0 ? "not requested"
-                                                                                              : "on";
-      text += fmt::format(" | {} ({}): {} uses, {} checked equal, {} different, {} not checked", kNames[m],
-                           state, improvements[m][0], improvements[m][1], improvements[m][2], improvements[m][3]);
-    }
-    BO2ZM_REPORT_RING("[native] C6 NVK improvements (last 10 s){}", text);
-#endif
   }
 
   /*
@@ -5327,46 +5055,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * once as an error (Mesa has already switched it off for the rest of the run).
    */
   void ControlCopiesNvk() {
-#if REX_PLATFORM_SWITCH
-    VkBo2StateCopy* const state = &vk_bo2_copy_state;
-    NvkBo2Copies* const copies = &nvk_bo2_copies;
-    const bool with_state = state != nullptr && state->version == 1;
-    const bool with_copies = copies != nullptr && copies->version == 1;
-    const bool hashes = REXCVAR_GET(bo2zm_native_nvk_fingerprint_copy);
-    int32_t engine = std::clamp(REXCVAR_GET(bo2zm_native_nvk_copy_engine), 0, 3);
-    const int32_t engine_b = REXCVAR_GET(bo2zm_native_nvk_copy_engine_b);
-    if (engine_b >= 0) {
-      const int arm = bo2zm::benchmark::AbArm();  // bo2zm_benchmark_ab_s, factor 2
-      if (arm >= 0 && (arm & 2)) {
-        engine = engine_b;
-      }
-    }
-    if (with_state) {
-      __atomic_store_n(&state->requested, hashes ? 1 : 0, __ATOMIC_RELAXED);
-    }
-    if (with_copies) {
-      __atomic_store_n(&copies->engine, engine, __ATOMIC_RELAXED);
-    }
-    if (!copies_nvk_annotated_ || hashes != copies_nvk_hashes_ || engine != copies_nvk_engine_) {
-      copies_nvk_annotated_ = true;
-      copies_nvk_hashes_ = hashes;
-      copies_nvk_engine_ = engine;
-      REXLOG_INFO("[native] C6 NVK changes: state copy by fingerprints {}{}; copy engine: {}{} (frame {})",
-                  hashes ? "requested" : "NOT requested",
-                  with_state ? "" : " (this Mesa does not have it)",
-                  engine == 0   ? "nothing (all through vk_meta)"
-                  : engine == 1 ? "texture uploads"
-                  : engine == 2 ? "image-to-image copies"
-                               : "uploads and image-to-image copies",
-                  with_copies ? "" : " (this NVK does not have it)", frame_);
-    }
-    if (with_state && !copies_nvk_mismatch_warned_ && __atomic_load_n(&state->off, __ATOMIC_RELAXED) != 0) {
-      copies_nvk_mismatch_warned_ = true;
-      REXLOG_ERROR("[native] C6 NVK state copy by fingerprints: MISMATCH seen by Mesa's guard ({} binds different from "
-                   "the usual copy, which is the one kept; details in rex_stderr.log). Off for the rest of the session",
-                   __atomic_load_n(&state->mismatches, __ATOMIC_RELAXED));
-    }
-#endif
   }
 
   /*
@@ -5375,96 +5063,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
    * the benchmark A/B's factor 1. Every 10 s, what it did.
    */
   void ControlKindViewsNvk() {
-#if REX_PLATFORM_SWITCH
-    NvkBo2KindViews* const views = &nvk_bo2_kind_views;
-    const bool with_views = views != nullptr && views->version == 1;
-    bool on = REXCVAR_GET(bo2zm_native_nvk_kind_views);
-    if (REXCVAR_GET(bo2zm_native_nvk_kind_views_ab)) {
-      const int arm = bo2zm::benchmark::AbArm();
-      if (arm >= 0) {
-        on = (arm & 1) != 0;
-      }
-    }
-    if (with_views) {
-      __atomic_store_n(&views->enabled, on ? 1 : 0, __ATOMIC_RELAXED);
-    }
-    if (!kind_views_annotated_ || on != kind_views_on_) {
-      kind_views_annotated_ = true;
-      kind_views_on_ = on;
-      REXLOG_INFO("[native] C3 NVK kind views (bo2zm_native_nvk_kind_views): {}{} (frame {})",
-                  on ? "on, pool textures share one mapping per block" : "off, a mapping per texture",
-                  with_views ? "" : " (this NVK does not have them)", frame_);
-    }
-    const auto now = std::chrono::steady_clock::now();
-    if (!with_views || now - kind_views_report_ < std::chrono::seconds(10)) {
-      return;
-    }
-    const bool first = kind_views_report_ == std::chrono::steady_clock::time_point{};
-    kind_views_report_ = now;
-    uint64_t d[6] = {};
-    const uint64_t* const v = &views->views_created;
-    for (size_t i = 0; i < 6; ++i) {
-      const uint64_t x = __atomic_load_n(v + i, __ATOMIC_RELAXED);
-      d[i] = x - kind_views_previous_[i];
-      kind_views_previous_[i] = x;
-    }
-    if (first) {
-      return;
-    }
-    BO2ZM_REPORT_RING(
-        "[native] C3 NVK kind views ({}), last 10 s: {} texture planes bound through a shared mapping, {} with a "
-        "mapping of their own, {} without a view (failures); {} shared mappings made and {} freed, {} live ({:.0f} MB "
-        "of GPU addresses)",
-        on ? "on" : "off", d[3], d[4], d[5], d[0], d[1], kind_views_previous_[0] - kind_views_previous_[1],
-        double(kind_views_previous_[2]) / (1024.0 * 1024.0));
-#endif
   }
 
   // Every 10 s, what the two changes did since the previous report.
   void ReportCopiesNvk() {
-#if REX_PLATFORM_SWITCH
-    const auto now = std::chrono::steady_clock::now();
-    if (now - copies_nvk_report_ < std::chrono::seconds(10)) {
-      return;
-    }
-    const bool first = copies_nvk_report_ == std::chrono::steady_clock::time_point{};
-    copies_nvk_report_ = now;
-    VkBo2StateCopy* const state = &vk_bo2_copy_state;
-    NvkBo2Copies* const copies = &nvk_bo2_copies;
-    uint64_t e[7] = {};
-    uint64_t c[6] = {};
-    if (state != nullptr && state->version == 1) {
-      const uint64_t* const v = &state->copies;
-      for (size_t i = 0; i < 7; ++i) {
-        const uint64_t x = __atomic_load_n(v + i, __ATOMIC_RELAXED);
-        e[i] = x - copies_nvk_state_previous_[i];
-        copies_nvk_state_previous_[i] = x;
-      }
-    }
-    if (copies != nullptr && copies->version == 1) {
-      const uint64_t* const v = &copies->uploads_engine;
-      for (size_t i = 0; i < 6; ++i) {
-        const uint64_t x = __atomic_load_n(v + i, __ATOMIC_RELAXED);
-        c[i] = x - copies_nvk_copies_previous_[i];
-        copies_nvk_copies_previous_[i] = x;
-      }
-    }
-    if (first) {
-      return;
-    }
-    const uint64_t bits = e[2] + e[3];
-    BO2ZM_REPORT_RING(
-        "[native] C6 NVK changes, last 10 s | state copy by fingerprints ({}): {} binds, {} of pipelines without "
-        "fingerprints; {:.2f} bits copied and {:.2f} skipped per bind ({:.1f} % skipped); guard {} checked, {} "
-        "different; {} pipelines with fingerprints | copy engine: {} uploads ({} regions), through vk_meta {} uploads "
-        "({} regions); image copies {} on the engine, {} through vk_meta",
-        state == nullptr || state->version != 1         ? "not in this Mesa"
-        : __atomic_load_n(&state->off, __ATOMIC_RELAXED) ? "OFF by the guard"
-        : __atomic_load_n(&state->requested, __ATOMIC_RELAXED)  ? "on"
-                                                              : "not requested",
-        e[0], e[1], e[0] ? double(e[2]) / double(e[0]) : 0.0, e[0] ? double(e[3]) / double(e[0]) : 0.0,
-        bits ? 100.0 * double(e[3]) / double(bits) : 0.0, e[4], e[5], e[6], c[0], c[1], c[2], c[3], c[4], c[5]);
-#endif
   }
 
   /*
@@ -5494,35 +5096,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
           pct(set4_changes_[2]), pct(set4_changes_[4]), pct(set4_changes_[3]), pct(set4_changes_[5]),
           pct(set4_changes_[6]), pct(set4_changes_[7]), pct(set4_first_), reuploads_vs_[0], reuploads_vs_[1],
           reuploads_vs_[2], reuploads_ps_[0], reuploads_ps_[1], reuploads_ps_[2]);
-#if REX_PLATFORM_SWITCH
-      if (NvkSwitchSet4* const nvk = &nvk_switch_set4; nvk != nullptr && nvk->version == 1) {
-        const uint64_t counts[9] = {__atomic_load_n(&nvk->total.bindings_mismatch, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.bindings_full, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.writes_root, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.dwords_root, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.cbufs_dirty, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.cbufs_saved, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.draws, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.checks, __ATOMIC_RELAXED),
-                                     __atomic_load_n(&nvk->total.mismatches, __ATOMIC_RELAXED)};
-        uint64_t d[9];
-        for (size_t i = 0; i < 9; ++i) {
-          d[i] = counts[i] - set4_nvk_previous_[i];
-          set4_nvk_previous_[i] = counts[i];
-        }
-        const char* const state = __atomic_load_n(&nvk->off, __ATOMIC_RELAXED) != 0 ? "OFF by the guard"
-                                   : __atomic_load_n(&nvk->env, __ATOMIC_RELAXED) == 0
-                                       ? "off by NVK_SWITCH_DYN_UBO_DELTA"
-                                   : !set4_requested_ ? "off by the cvar"
-                                                   : "on";
-        BO2ZM_REPORT_RING(
-            "[native] C6 set 4 by differences (NVK, {}): {} binds by differences and {} whole; {:.2f} root table writes "
-            "per bind (4 before) with {:.2f} words; cbufs dirtied {} and not dirtied {} ({:.1f} % fewer); guard: {} "
-            "cbufs checked ({} draws on the new path), {} mismatches",
-            state, d[0], d[1], d[0] ? double(d[2]) / double(d[0]) : 0.0, d[0] ? double(d[3]) / double(d[0]) : 0.0,
-            d[4], d[5], d[4] + d[5] ? 100.0 * double(d[5]) / double(d[4] + d[5]) : 0.0, d[7], d[6], d[8]);
-      }
-#endif
     }
     set4_changes_.fill(0);
     set4_first_ = 0;
@@ -7390,11 +6963,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // lock; it never spins. It does not write to the log (the ring records the figures in ReportBindings).
   void LoopBindings() {
     rex::thread::set_current_thread_name("BO2 texture binds");
-#if REX_PLATFORM_SWITCH
-    const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(bindings_priority_));
-#else
     const bool priority_ok = true;
-#endif
     std::unique_lock<std::mutex> lock(bindings_mutex_);
     bindings_priority_ok_ = priority_ok;
     for (;;) {
@@ -8219,11 +7788,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // feature switches off).
   uint64_t PublishJobHash(const HashJob& job, uint8_t* target) {
     if (!hashes_thread_.joinable() && !hashes_no_thread_) {
-#if REX_PLATFORM_SWITCH
-      const int ring = RexSwitchCurrentCore();  // the ring thread asks for itself
-#else
       const int ring = -1;
-#endif
       hashes_core_ = hashes_core_requested_ != -2 ? hashes_core_requested_ : ring == 2 ? 1 : 2;
       try {
         hashes_thread_ = std::thread([this] { LoopHashes(); });
@@ -8411,15 +7976,9 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // collecting).
   void LoopHashes() {
     rex::thread::set_current_thread_name("BO2 texture hashes");
-#if REX_PLATFORM_SWITCH
-    const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(hashes_priority_));
-    const bool core_ok = RexSwitchSetCurrentThreadCore(int(hashes_core_));
-    const int core = RexSwitchCurrentCore();
-#else
     const bool priority_ok = true;
     const bool core_ok = true;
     const int core = -1;
-#endif
     std::vector<uint8_t> data;         // owned by this thread only
     std::vector<uint8_t> check_index;  // owned by this thread only
     bool fast_off = false;        // owned by this thread only: its fast-path guard saw a difference
@@ -8842,27 +8401,10 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!copies_thread_.joinable()) {
       copies_producer_ = std::this_thread::get_id();
       copies_phase_ = copies_help_requested_ ? kCopiesObserving : kCopiesNoHelp;
-#if REX_PLATFORM_SWITCH
-      const int ring_core = RexSwitchCurrentCore();  // asked by the ring, which creates the thread
-#else
       const int ring_core = -1;
-#endif
       try {
         copies_thread_ = std::thread([this, ring_core] {
           rex::thread::set_current_thread_name("BO2 vertex copies");
-#if REX_PLATFORM_SWITCH
-          // bo2zm_native_upload_thread_priority (see the cvar).
-          const int32_t priority = REXCVAR_GET(bo2zm_native_upload_thread_priority);
-          const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(priority));
-          // bo2zm_native_upload_thread_core (see the cvar).
-          const int32_t requested = REXCVAR_GET(bo2zm_native_upload_thread_core);
-          const int core = requested == -2 ? (ring_core == 2 ? 1 : 2) : int(requested);
-          const bool core_ok = core < 0 || RexSwitchSetCurrentThreadCore(core);
-          REXLOG_INFO("[native] C6: vertex copy thread at priority {:#x}{}; preferred core {}{} (the ring runs on {}), "
-                      "now on {}",
-                      priority, priority_ok ? "" : " (NOT accepted: it keeps the one it was created with)", core,
-                      core_ok ? "" : " (NOT accepted)", ring_core, RexSwitchCurrentCore());
-#endif
           LoopCopies();
         });
       } catch (const std::system_error& error) {
@@ -15929,26 +15471,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   void LoopPrewarm(bool helper) {
     rex::thread::set_current_thread_name(helper ? "BO2 pipeline prewarm 2" : "BO2 pipeline prewarm");
     int32_t priority = -1;
-#if REX_PLATFORM_SWITCH
-    // The lowest priority the system accepts, and never above the guest's (0x3B): compiling at the priority
-    // threads are born with would take the core from the game and the ring. If none is accepted, nothing is
-    // compiled.
-    for (const int32_t candidate : {0x3F, 0x3E, 0x3D, 0x3C, 0x3B}) {
-      if (RexSwitchSetCurrentThreadPriorityOk(int(candidate))) {
-        priority = candidate;
-        break;
-      }
-    }
-    if (priority < 0) {
-      REXLOG_WARN("[native] C6 prewarm: the system accepts no priority from 0x3B to 0x3F: no prewarming");
-      if (!helper) {
-        prewarm_finished_.store(true, std::memory_order_release);
-      } else {
-        prewarm_helper_done_.store(true, std::memory_order_release);
-      }
-      return;
-    }
-#endif
     if (!helper) {
       prewarm_priority_.store(priority, std::memory_order_relaxed);
     }
@@ -16045,12 +15567,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     library_prewarm_ = library;
     prewarm_eds_ = eds_mode_;
     prewarm_start_ = std::chrono::steady_clock::now();
-#if REX_PLATFORM_SWITCH
-    // Cores 0-2, one thread each (the system keeps core 3 unless a forwarder gives it).
-    const uint32_t threads = uint32_t(std::clamp(bo2zm::CoresInUse(), 1, 3));
-#else
     const uint32_t threads = std::clamp(std::thread::hardware_concurrency(), 4u, 10u) - 2;
-#endif
     bo2zm::native::precompile::Begin(uint32_t(n), threads);
     // On MoltenVK even a pipeline the caches hold costs a Metal pipeline state (about 1 to 10 ms) when the ring
     // creates it in a match. Kept, the precompile's pipelines are the ring's own and a match creates none of them.
@@ -16062,13 +15579,7 @@ class VulkanDrawsImpl final : public VulkanDraws {
     std::atomic<uint64_t> ns_compiled{0}, ns_cached{0};
     const auto work = [&](uint32_t index) {
       rex::thread::set_current_thread_name("BO2 pipeline precompile");
-#if REX_PLATFORM_SWITCH
-      // Below the UI thread (0x2C), which draws the screen, and the ring (0x2D); one core each.
-      RexSwitchSetCurrentThreadPriorityOk(0x2E);
-      RexSwitchSetCurrentThreadCore(int(index % 3));
-#else
       (void)index;
-#endif
       Warmer warmer(*this, *library);
       for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < n;) {
         uint64_t ns = 0;
@@ -16386,9 +15897,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // another one waits behind it, so the first thread always has one.
   void CompilePipelinesLoop(bool helper) {
     rex::thread::set_current_thread_name(helper ? "BO2 pipeline compiles 2" : "BO2 pipeline compiles");
-#if REX_PLATFORM_SWITCH
-    RexSwitchSetCurrentThreadPriorityOk(0x3B);  // the guest threads' priority: it shares their cores
-#endif
     std::unique_lock<std::mutex> lock(compile_mutex_);
     for (;;) {
       compile_cv_.wait(lock, [this, helper] {
@@ -16721,10 +16229,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   std::chrono::steady_clock::time_point set4_start_alternation_ = std::chrono::steady_clock::now();
   bool set4_requested_ = true;
   bool set4_requested_annotated_ = false;
-#if REX_PLATFORM_SWITCH
-  bool set4_mismatch_warned_ = false;
-  uint64_t set4_nvk_previous_[9] = {};  // NVK counts at the previous report
-#endif
   // The draw path in NVK (ControlDrawNvk and ReportDrawNvk). Ring only.
   bool nvk_prefetch_app_ = false;  // hand the pipeline to NVK after PipelineOf
   bool nvk_draw_annotated_ = false;

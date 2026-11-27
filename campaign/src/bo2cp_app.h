@@ -18,9 +18,6 @@
 #include <rex/platform.h>
 #include <rex/rex_app.h>
 
-#if REX_PLATFORM_SWITCH
-#include <switch.h>
-#endif
 
 #if BO2CP_NATIVE
 #include "native/bo2zm_native_system.h"
@@ -58,13 +55,11 @@ class Bo2cpApp : public rex::ReXApp {
   void OnPostInitLogging() override { bo2zm::debug::AfterLoggingStarted(); }
 #endif
   void OnPreSetup(rex::RuntimeConfig& config) override {
-#if !REX_PLATFORM_SWITCH
     // Preserve the test runner's volume across a handover from the launcher.
     if (const char* volume = std::getenv("BO2_PC_TEST_VOLUME");
         volume && rex::cvar::GetFlagSource("bo2cp_volume") == rex::cvar::Source::kDefault) {
       rex::cvar::SetFlagByName("bo2cp_volume", volume);
     }
-#endif
     // The emulated GPU unless the toml or the command line names another; bo2zm_renderer = "native" replaces it with
     // the Zombies program's native renderer (built in with BO2CP_NATIVE).
     if (rex::cvar::GetFlagByName("gpu_plugin").empty()) {
@@ -83,11 +78,6 @@ class Bo2cpApp : public rex::ReXApp {
     // The Switch's services and thread setup (sockets, the fourth core, the audio threads), as in bo2zm.
     bo2zm::InitSwitchServices();
     bo2zm::name::ApplySaved();  // EDIT USERNAME's name, before the game signs in
-#elif REX_PLATFORM_SWITCH
-    // The game's network code (system link) needs the socket service, as in bo2zm (bo2zm_switch.cpp).
-    if (R_FAILED(socketInitializeDefault())) {
-      REXLOG_ERROR("socketInitializeDefault failed");
-    }
 #endif
     const int volume = bo2zm::audio::OutputVolumePercent(REXCVAR_GET(bo2cp_volume));
     rex::audio::SetOutputGain(float(volume) / 100.0f);
@@ -148,10 +138,6 @@ class Bo2cpApp : public rex::ReXApp {
     if (paths.update_data_root.empty() && std::filesystem::is_directory(data / "update", ec)) {
       paths.update_data_root = data / "update";
     }
-#if REX_PLATFORM_SWITCH
-    paths.user_data_root = dir / "user";
-    paths.cache_root = dir / "user" / "cache";
-#else
     // A portable PC install keeps its saves, settings and DLC in user/ next to the program when that folder exists
     // and no --user_data_root was given, so a plain shortcut to the exe (which carries the icon) is enough.
     if (std::filesystem::is_directory(dir / "user", ec) &&
@@ -161,6 +147,5 @@ class Bo2cpApp : public rex::ReXApp {
       }
       paths.user_data_root = dir / "user";
     }
-#endif
   }
 };

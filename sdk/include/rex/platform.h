@@ -32,13 +32,6 @@
 #define REX_PLATFORM_MAC 1
 #elif defined(WIN32) || defined(_WIN32)
 #define REX_PLATFORM_WIN32 1
-#elif defined(__SWITCH__)
-#define REX_PLATFORM_SWITCH 1
-// Switch is POSIX-ish (newlib): pthreads, signals, sockets, dirent. It follows
-// the same pattern as Android, which also turns on LINUX to reuse the _posix
-// layer. The real gaps (mman, ucontext, dlfcn, syscall) are handled with
-// REX_PLATFORM_SWITCH branches inside each file.
-#define REX_PLATFORM_LINUX 1
 #elif defined(__ANDROID__)
 #define REX_PLATFORM_ANDROID 1
 #define REX_PLATFORM_LINUX 1
@@ -51,9 +44,6 @@
 
 // Ensure all platform macros are always defined (0 when inactive)
 // so they can be used in static_assert and regular expressions.
-#ifndef REX_PLATFORM_SWITCH
-#define REX_PLATFORM_SWITCH 0
-#endif
 #ifndef REX_PLATFORM_MAC
 #define REX_PLATFORM_MAC 0
 #endif

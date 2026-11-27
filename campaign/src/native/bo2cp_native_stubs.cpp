@@ -12,9 +12,6 @@
 #include <string_view>
 #include <vector>
 
-#if defined(__SWITCH__)
-#include <switch.h>
-#endif
 
 #include "bo2zm_benchmark.h"
 #include "bo2zm_cheats.h"

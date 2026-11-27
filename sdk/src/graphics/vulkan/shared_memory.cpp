@@ -34,11 +34,6 @@ REXCVAR_DEFINE_BOOL(vulkan_hoist_shared_memory_uploads, true, "GPU/Vulkan",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 #include <rex/platform.h>
-#if REX_PLATFORM_SWITCH
-// Counters for the Switch profiler (switch_perf.cpp).
-extern "C" void RexSwitchPerfCount(unsigned id);
-extern "C" void RexSwitchPerfAdd(unsigned id, uint64_t value);
-#endif
 
 namespace rex::graphics::vulkan {
 
@@ -286,15 +281,6 @@ bool VulkanSharedMemory::UploadRanges(
   if (upload_page_ranges.empty()) {
     return true;
   }
-#if REX_PLATFORM_SWITCH
-  {
-    uint64_t pages = 0;
-    for (const auto& range : upload_page_ranges) {
-      pages += range.second;
-    }
-    RexSwitchPerfAdd(15, pages << page_size_log2());
-  }
-#endif
   DeferredCommandBuffer& command_buffer = command_processor_.deferred_command_buffer();
   // upload_page_ranges are sorted, use them to determine the range for the
   // ordering barrier.

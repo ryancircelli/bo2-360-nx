@@ -1,10 +1,10 @@
 // Stress test of the host runtime's waits and signals: rex::thread events, semaphores, mutants, PulseEvent,
-// WaitMultiple (any and all), alertable waits with user callbacks, and timeouts. It was written for the
-// address-arbiter waits of the SDK's threading_posix.cpp (REX_FAST_WAITS, sdk/src/core/threading_posix.cpp).
+// WaitMultiple (any and all), alertable waits with user callbacks, and timeouts. It tests the SDK's
+// sdk/src/core/threading_posix.cpp.
 //
 // Two ways to run it:
 //   - Linux (WSL): tools/runtime_stress/build.sh builds this file with the SDK's threading code and runs it.
-//   - In the app, bo2zm_test_waits = true: runs once at start-up (console or PC) and logs one line per test
+//   - In the app, bo2zm_test_waits = true: runs once at start-up  and logs one line per test
 //     ("[test_waits] PASS ..." / "FAIL ...") and a summary. Off by default; the start-up takes a few seconds longer.
 #pragma once
 

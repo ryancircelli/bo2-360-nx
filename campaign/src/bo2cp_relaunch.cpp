@@ -48,12 +48,6 @@
 #include <unistd.h>
 #endif
 
-#if defined(__SWITCH__)
-#include <switch.h>
-extern "C" void RexSwitchSetRestartOnCrash(bool on);  // the SDK's switch_crash_hooks.c
-extern "C" int __system_argc;
-extern "C" char** __system_argv;
-#endif
 
 namespace fs = std::filesystem;
 
@@ -140,13 +134,7 @@ std::string HexPreview(const std::vector<uint8_t>& data, size_t max_bytes = 64) 
 
 bool ProgramAvailable(const char* name) {
   fs::path directory;
-#if defined(__SWITCH__)
-  if (__system_argc < 1 || !__system_argv || !__system_argv[0]) {
-    return false;
-  }
-  directory = fs::path(__system_argv[0]).parent_path();
-  const fs::path filename = name;
-#elif defined(_WIN32)
+#if defined(_WIN32)
   wchar_t exe[MAX_PATH];
   const DWORD length = GetModuleFileNameW(nullptr, exe, MAX_PATH);
   if (!length || length >= MAX_PATH) {
@@ -166,7 +154,7 @@ bool ProgramAvailable(const char* name) {
   (void)name;
   return false;
 #endif
-#if defined(__SWITCH__) || defined(_WIN32) || REX_PLATFORM_GNU_LINUX
+#if defined(_WIN32) || REX_PLATFORM_GNU_LINUX
   std::error_code ec;
   return fs::is_regular_file(directory / filename, ec);
 #endif
@@ -189,26 +177,7 @@ const bo2zm::launch::InstalledModes& Installed() {
 
 // Restarts through the system on Switch; PC programs use a companion beside this executable.
 [[noreturn]] void StartAndExit(const char* name) {
-#if defined(__SWITCH__)
-  rex::FlushLogging();
-  if (R_SUCCEEDED(appletRestartProgram(nullptr, 0))) {
-    REXLOG_INFO("[relaunch] restarting the application for {}", name);
-    rex::FlushLogging();
-    for (int i = 0; i < 120; ++i) {
-      svcSleepThread(250'000'000);
-    }
-    REXLOG_WARN("[relaunch] still running 30 s after the restart request: chain-loading instead");
-  } else {
-    REXLOG_WARN("[relaunch] the system refused the restart (started from hbmenu?): chain-loading instead");
-  }
-  if (envHasNextLoad() && __system_argc > 0 && __system_argv[0]) {
-    const std::string next = (fs::path(__system_argv[0]).parent_path() / name).string();
-    const Result rc = envSetNextLoad(next.c_str(), next.c_str());
-    REXLOG_INFO("[relaunch] envSetNextLoad('{}') -> {:#x}", next, rc);
-  } else {
-    REXLOG_ERROR("[relaunch] the loader does not support chaining NROs; exiting");
-  }
-#elif defined(_WIN32)
+#if defined(_WIN32)
   wchar_t exe[MAX_PATH];
   const DWORD length = GetModuleFileNameW(nullptr, exe, MAX_PATH);
   if (length && length < MAX_PATH) {
@@ -266,96 +235,7 @@ const bo2zm::launch::InstalledModes& Installed() {
   std::_Exit(0);
 }
 
-#if defined(__SWITCH__)
-// The first thing this process does: a pending relaunch for Zombies or Multiplayer chain-loads bo2zm.nro, while the
-// main thread is the only one (as bo2zm_relaunch.cpp's HandOverEarly does the other way).
-__attribute__((constructor(101))) void HandOverEarly() {
-  if (__system_argc < 1 || !__system_argv || !__system_argv[0] || !envHasNextLoad()) {
-    return;
-  }
-  const fs::path dir = fs::path(__system_argv[0]).parent_path();
-  uint32_t flags = 0;
-  std::string launch_path;
-  std::vector<uint8_t> data;
-  const fs::path pending = bo2zm::launch::SharedUserRoot() / kPendingFile;
-  if (!ReadBlob(pending, flags, launch_path, data) || !launch_path.ends_with("default_mp.xex")) {
-    return;
-  }
-  const std::string zombies = (dir / "bo2zm.nro").string();
-  bool main_program = false;
-  if (FILE* f = std::fopen(zombies.c_str(), "rb")) {
-    std::fclose(f);
-    main_program = true;
-  }
-  const auto installed = bo2zm::launch::DetectInstalledModes(dir / "game", true, main_program);
-  if (!installed.Has(bo2zm::launch::LaunchMode(launch_path, data))) {
-    // That mode is not installed: drop the request and start the campaign.
-    std::remove(pending.string().c_str());
-    return;
-  }
-  if (R_SUCCEEDED(envSetNextLoad(zombies.c_str(), zombies.c_str()))) {
-    std::_Exit(0);
-  }
-}
-#endif
 
-#if defined(__SWITCH__)
-// bo2cp_watchdog_s and bo2cp_test_seconds: a libnx thread at the priority of the Zombies program's benchmark
-// watchdog, above the game's threads. Nothing here logs or takes a lock while the game may be frozen
-// (holding the log's lock): the reason goes into logs/bo2cp_watchdog.txt, which the next Zombies start sends.
-struct Watchdog {
-  Thread thread{};
-  const rex::graphics::CommandProcessor* gpu = nullptr;
-  int frozen_s = 0;
-  int total_s = 0;
-  std::string marker;
-};
-Watchdog g_watchdog;
-
-// Frames swapped so far, by whichever renderer runs.
-uint64_t SwapsSoFar() {
-#if BO2CP_NATIVE
-  if (bo2zm::native::Active()) {
-    return bo2zm::benchmark::FramesSeen();  // the frames the renderer presented (bo2cp_native_stubs.cpp)
-  }
-#endif
-  return g_watchdog.gpu ? g_watchdog.gpu->swap_count() : 0;
-}
-
-void Note(const char* text) {
-  if (FILE* f = std::fopen(g_watchdog.marker.c_str(), "ab")) {
-    std::fputs(text, f);
-    std::fclose(f);
-  }
-}
-
-void WatchdogMain(void*) {
-  uint64_t frames = 0;
-  int still = 0;
-  for (int seconds = 1;; ++seconds) {
-    svcSleepThread(1'000'000'000LL);
-    const uint64_t now = SwapsSoFar();
-    char text[160];
-    if (g_watchdog.total_s > 0 && seconds >= g_watchdog.total_s) {
-      std::snprintf(text, sizeof(text), "test time of %d s over after %llu frames: restarting\n", seconds,
-                    (unsigned long long)now);
-    } else if (g_watchdog.frozen_s > 0 && now == frames && appletGetFocusState() == AppletFocusState_InFocus &&
-               ++still >= g_watchdog.frozen_s) {
-      std::snprintf(text, sizeof(text), "no frame for %d s after %llu frames (%d s in): restarting\n", still,
-                    (unsigned long long)now, seconds);
-    } else {
-      if (now != frames || appletGetFocusState() != AppletFocusState_InFocus) {
-        frames = now;
-        still = 0;
-      }
-      continue;
-    }
-    Note(text);
-    appletRestartProgram(nullptr, 0);
-    still = 0;  // refused (not a forwarder start): look again
-  }
-}
-#endif
 
 }  // namespace
 
@@ -364,39 +244,7 @@ namespace bo2cp {
 // Starts the watchdog when bo2cp_watchdog_s or bo2cp_test_seconds asks for it (Switch). Call from OnPostSetup, once
 // the graphics system exists.
 void StartWatchdog(const fs::path& logs_dir) {
-#if defined(__SWITCH__)
-  if (REXCVAR_GET(bo2cp_restart_on_crash)) {
-    RexSwitchSetRestartOnCrash(true);
-    REXLOG_INFO("[watchdog] a crash restarts the application (bo2cp_restart_on_crash)");
-  }
-  const int frozen = REXCVAR_GET(bo2cp_watchdog_s);
-  const int total = REXCVAR_GET(bo2cp_test_seconds);
-  if (frozen <= 0 && total <= 0) {
-    return;
-  }
-  bool native = false;
-#if BO2CP_NATIVE
-  native = bo2zm::native::Active();
-#endif
-  if (!native) {
-    auto* graphics = static_cast<rex::graphics::GraphicsSystem*>(rex::Runtime::instance()->graphics_system());
-    g_watchdog.gpu = graphics ? graphics->command_processor() : nullptr;
-  }
-  g_watchdog.frozen_s = frozen;
-  g_watchdog.total_s = total;
-  std::error_code ec;
-  fs::create_directories(logs_dir, ec);
-  g_watchdog.marker = (logs_dir / "bo2cp_watchdog.txt").string();
-  if (R_SUCCEEDED(threadCreate(&g_watchdog.thread, WatchdogMain, nullptr, nullptr, 0x4000, 0x2C, -2)) &&
-      R_SUCCEEDED(threadStart(&g_watchdog.thread))) {
-    REXLOG_INFO("[watchdog] on: restart after {} s without a frame{}", frozen,
-                total > 0 ? fmt::format(", or {} s after the start", total) : std::string());
-  } else {
-    REXLOG_ERROR("[watchdog] could not start its thread");
-  }
-#else
   (void)logs_dir;
-#endif
 }
 
 
@@ -440,11 +288,9 @@ void ApplyPendingRelaunch(const fs::path& user_dir) {
     return;
   }
   if (launch_path.ends_with("default_mp.xex")) {
-#if !defined(__SWITCH__)
     if (ProgramAvailable("bo2zm.nro")) {
       StartAndExit("bo2zm.nro");
     }
-#endif
     REXLOG_WARN("[relaunch] could not hand over pending launch '{}'; preserving it", launch_path);
     return;
   }

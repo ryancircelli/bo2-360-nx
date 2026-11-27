@@ -4,9 +4,6 @@
 
 #include <algorithm>
 #include <atomic>
-#if defined(__SWITCH__)
-#include <malloc.h>  // mallinfo: the heap figures of the progress lines
-#endif
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -36,9 +33,6 @@
 #include "bo2zm_preset.h"
 #include "native/render/bo2zm_native_capture.h"
 
-#if defined(__SWITCH__)
-#include "core/threading_switch.h"  // SDK src/ is on the include path (CMakeLists.txt)
-#endif
 
 REXCVAR_DEFINE_BOOL(bo2zm_benchmark, false, "BO2",
                     "Test helper: once in a match, a fixed 3-minute route with the test pad and a frame-time "
@@ -410,27 +404,6 @@ Line Describe(std::vector<float> ms) {
   return line;
 }
 
-#if defined(__SWITCH__)
-// bo2zm_benchmark_net_idle_us_b: the SDK's switch_net_idle_poll_us follows factor 1 (set when the arm changes, and
-// back to its usual value after the route).
-void ApplyAbNet(int arm) {
-  static const int32_t b = REXCVAR_GET(bo2zm_benchmark_net_idle_us_b);
-  if (b < 0) {
-    return;
-  }
-  static const int32_t usual = rex::cvar::Query<int32_t>("switch_net_idle_poll_us");
-  static int applied = -1;
-  const int on = arm >= 0 && (arm & 1) ? 1 : 0;
-  if (on == applied) {
-    return;
-  }
-  if (applied < 0) {
-    REXLOG_INFO("[benchmark] A/B factor 1 = switch_net_idle_poll_us {} instead of {}", b, usual);
-  }
-  applied = on;
-  rex::cvar::SetFlagByName("switch_net_idle_poll_us", std::to_string(on ? b : usual));
-}
-#endif
 
 // bo2zm_benchmark_xma_cache_ab: the SDK's apu_xma_cache follows factor 1 (set when the arm changes, and back to its
 // usual value after the route).
@@ -475,97 +448,6 @@ void ApplyAbIpak(int arm) {
   rex::cvar::SetFlagByName("switch_io_ipak_mb_s", std::to_string(on ? b : usual));
 }
 
-#if defined(__SWITCH__)
-// Each thread's CPU time per A/B arm, by thread name: at every change of arm, what each thread used since the last
-// change goes to the arm that just ended (the SDK profiler's thread list, switch_perf.cpp). The summary then gives
-// each factor's CPU per thread, on and off: a change's cost or saving where it happens, without the frame rate's
-// noise.
-}  // namespace
-}  // namespace bo2zm::benchmark
-extern "C" size_t RexSwitchPerfThreadTicks(uint32_t* handles, char (*names)[32], uint64_t* ticks, size_t max);
-namespace bo2zm::benchmark {
-namespace {
-struct ArmCpu {
-  std::map<std::string, uint64_t> ticks;
-  uint64_t elapsed = 0;
-};
-ArmCpu g_arm_cpu[8];
-
-// The system tick (cntpct_el0, 19.2 MHz: the unit of the threads' CPU ticks); switch.h stays out of this file.
-uint64_t SystemTick() {
-  uint64_t t;
-  asm volatile("mrs %0, cntpct_el0" : "=r"(t));
-  return t;
-}
-
-void SampleArmCpu(int arm_ended) {
-  constexpr size_t kMax = 160;
-  static uint32_t handles[kMax];
-  static char names[kMax][32];
-  static uint64_t ticks[kMax];
-  static std::map<uint32_t, uint64_t> last;
-  static uint64_t last_tick = 0;
-  const size_t n = RexSwitchPerfThreadTicks(handles, names, ticks, kMax);
-  const uint64_t now = SystemTick();
-  if (arm_ended >= 0 && arm_ended < 8 && last_tick != 0) {
-    ArmCpu& a = g_arm_cpu[arm_ended];
-    a.elapsed += now - last_tick;
-    for (size_t i = 0; i < n; ++i) {
-      const auto it = last.find(handles[i]);
-      if (it != last.end() && ticks[i] >= it->second) {
-        a.ticks[names[i][0] ? names[i] : "?"] += ticks[i] - it->second;
-      }
-    }
-  }
-  last.clear();
-  for (size_t i = 0; i < n; ++i) {
-    last[handles[i]] = ticks[i];
-  }
-  last_tick = now;
-}
-
-void SummarizeArmCpu() {
-  for (int bit = 0; bit < FactorBits(); ++bit) {
-    std::map<std::string, uint64_t> on, off;
-    uint64_t on_elapsed = 0, off_elapsed = 0;
-    for (int arm = 0; arm < (1 << FactorBits()); ++arm) {
-      const bool is_on = (arm >> bit) & 1;
-      for (const auto& [name, t] : g_arm_cpu[arm].ticks) {
-        (is_on ? on : off)[name] += t;
-      }
-      (is_on ? on_elapsed : off_elapsed) += g_arm_cpu[arm].elapsed;
-    }
-    if (on_elapsed == 0 || off_elapsed == 0) {
-      continue;
-    }
-    std::vector<std::pair<double, std::string>> rows;
-    double total_on = 0.0, total_off = 0.0;
-    std::map<std::string, bool> names;
-    for (const auto& [name, t] : on) {
-      names[name] = true;
-    }
-    for (const auto& [name, t] : off) {
-      names[name] = true;
-    }
-    std::string line;
-    for (const auto& [name, unused] : names) {
-      const double a = 100.0 * double(on[name]) / double(on_elapsed);
-      const double b = 100.0 * double(off[name]) / double(off_elapsed);
-      total_on += a;
-      total_off += b;
-      if (a >= 2.0 || b >= 2.0) {
-        rows.push_back({-b, fmt::format("{} {:.1f} / {:.1f}", name, a, b)});
-      }
-    }
-    std::sort(rows.begin(), rows.end());
-    for (const auto& row : rows) {
-      line += ", " + row.second;
-    }
-    REXLOG_INFO("[benchmark] A/B factor {} CPU, % of a core on / off: all threads {:.1f} / {:.1f}{}", bit + 1,
-                total_on, total_off, line);
-  }
-}
-#endif
 
 // bo2zm_benchmark_priority_*_ab: the Main and Backend threads' Horizon priority follows their factor (wanted when the
 // arm changes, back to 0x3B after the route), and each thread sets its own (ApplyOwnPriority). Setting it from this
@@ -618,9 +500,6 @@ void SummarizeAb() {
                 bit + 1, a.fps, a.median, a.p90, a.frames, b.fps, b.median, b.p90, b.frames,
                 b.fps > 0.0 ? 100.0 * (a.fps / b.fps - 1.0) : 0.0);
   }
-#if defined(__SWITCH__)
-  SummarizeArmCpu();
-#endif
 }
 
 // Every 30 s of the route, the FPS so far and each factor's on/off so far: a run that ends early still says
@@ -644,13 +523,6 @@ void SummarizeSoFar(double seconds) {
                   b.fps > 0.0 ? 100.0 * (a.fps / b.fps - 1.0) : 0.0);
     line += part;
   }
-#if defined(__SWITCH__)
-  // The C heap (newlib): in use, and what it has taken from the process so far (a soak test's leak check).
-  const struct mallinfo heap = mallinfo();
-  std::snprintf(part, sizeof(part), "; heap %.1f MB in use of %.1f MB taken", double(heap.uordblks) / 1048576.0,
-                double(heap.arena) / 1048576.0);
-  line += part;
-#endif
   // The server's parent script variables (a long test run once ran out of them at a round change).
   std::snprintf(part, sizeof(part), "; parent script variables %d of 24576", bo2zm::cheats::ScriptParentsInUse());
   line += part;
@@ -774,35 +646,6 @@ void AnnotatePlayer(bool present) {
 }
 
 void ApplyOwnPriority() {
-#if defined(__SWITCH__)
-  static const bool any = REXCVAR_GET(bo2zm_benchmark_priority_main_ab) != 0 ||
-                          REXCVAR_GET(bo2zm_benchmark_priority_backend_ab) != 0;
-  if (!any) [[likely]] {
-    return;
-  }
-  thread_local int role = -1;  // 0 neither, 1 Main, 2 Backend
-  thread_local int applied = kGuestPriority;
-  thread_local uint32_t changes = 0;
-  if (role < 0) {
-    role = 0;
-    if (rex::system::XThread* self = rex::system::XThread::GetCurrentThread(); self && self->thread()) {
-      const std::string_view name = self->thread()->name();
-      role = name.starts_with("Main XThread") ? 1 : name.starts_with("Backend") ? 2 : 0;
-    }
-  }
-  if (role == 0) {
-    return;
-  }
-  const int want = g_want_priority[role].load(std::memory_order_relaxed);
-  if (want != applied) {
-    const bool ok = RexSwitchSetCurrentThreadPriorityOk(want);
-    applied = want;
-    if (++changes <= 2 || !ok) {
-      REXLOG_INFO("[benchmark] the {} thread set its own priority to {:#x}{}", role == 1 ? "Main" : "Backend", want,
-                  ok ? "" : " (REFUSED by the kernel)");
-    }
-  }
-#endif
 }
 
 std::atomic<int> g_arm_cached{-1};
@@ -869,24 +712,11 @@ void AnnotateFrame() {
   if (ParsedSpot().valid) {
     StepSpot(t);
   }
-#if defined(__SWITCH__)
-  ApplyAbNet(ArmAt(t, nullptr));
-#endif
   ApplyAbXmaCache(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyAbIpak(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyAbPriorities(t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1);
   ApplyFactors(ArmAt(t, nullptr), Now());
   g_arm_cached.store(AbSeconds() > 0 && t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1, std::memory_order_relaxed);
-#if defined(__SWITCH__)
-  if (AbSeconds() > 0 && !g_summarized) {
-    static int cpu_arm = -1;
-    const int arm = t >= 0.0 && t < Duration() ? ArmAt(t, nullptr) : -1;
-    if (arm != cpu_arm) {
-      SampleArmCpu(cpu_arm);
-      cpu_arm = arm;
-    }
-  }
-#endif
   if (g_summarized || t < 0.0) {
     g_earlier = now;
     return;

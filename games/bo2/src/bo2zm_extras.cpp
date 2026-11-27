@@ -84,10 +84,6 @@ REXCVAR_DECLARE(int32_t, bo2zm_ipak_mb_s_in_match);
 #include "bo2zm_settings.h"
 #include "bo2zm_switch.h"
 
-#if REX_PLATFORM_SWITCH
-extern "C" void RexSwitchPerfSwapIntervalForce(int vblanks);
-extern "C" uint32_t RexSwitchPerfTakeDequeueWaitUs(void);
-#endif
 
 REXCVAR_DECLARE(bool, bo2zm_show_fps);
 REXCVAR_DECLARE(bool, fullscreen);
@@ -358,10 +354,6 @@ int FpsCap() {
 }
 // The presentation interval for VSYNC and the cap (see the top of the file).
 void ApplyVsync() {
-#if REX_PLATFORM_SWITCH
-  const bool on = g_vsync.load(std::memory_order_relaxed) != 0;
-  RexSwitchPerfSwapIntervalForce(on ? (kFpsCapValues[g_fps_cap.load(std::memory_order_relaxed)] <= 30 ? 2 : 1) : 0);
-#endif
 }
 void SetFpsCap(int index) {
   g_fps_cap.store(std::clamp(index, 0, int(std::size(kFpsCapValues)) - 1), std::memory_order_relaxed);
@@ -419,11 +411,7 @@ void SetKeyboardMouse(int on) {
 
 // Which rows the menu shows: the Switch-only ones (CPU CORES) or the Mac/PC-only ones (DISPLAY, KEYBOARD AND MOUSE).
 int Platform() {
-#if defined(__SWITCH__)
-  return 0;
-#else
   return 1;
-#endif
 }
 void SetPlatform(int) {}
 
@@ -785,29 +773,6 @@ static void PaceOnRefresh(int cap) {
   constexpr uint32_t kQueuedWaitUs = 2000;  // a dequeue wait longer than this: two frames were queued
   static Clock::time_point start{};  // when the last paced frame started
   auto due = start + (60 / cap) * kRefresh;
-#if REX_PLATFORM_SWITCH
-  static const bool drain = REXCVAR_GET(bo2zm_vsync_drain);
-  if (RexSwitchPerfTakeDequeueWaitUs() > kQueuedWaitUs) {
-    g_vsync_waits.store(g_vsync_waits.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
-    if (drain) {
-      due += kRefresh;
-    }
-  }
-  static Clock::time_point report{};
-  if (Clock::now() - report >= std::chrono::seconds(10)) {
-    if (report != Clock::time_point{}) {
-      REXLOG_INFO("[extras] VSYNC at {}: in the last 10 s {} frames found that the presenter had waited for a free "
-                  "buffer (two finished frames queued){}",
-                  cap, g_vsync_waits.exchange(0, std::memory_order_relaxed),
-                  drain ? "; each started a refresh later (bo2zm_vsync_drain)" : "");
-      REXLOG_INFO("[extras] VSYNC at {}: in the last 10 s {} frames came after their refresh (late start now {} ms, "
-                  "at most {})",
-                  cap, g_vsync_missed, g_vsync_late_ms, REXCVAR_GET(bo2zm_vsync_late_start_ms));
-      g_vsync_missed = 0;
-    }
-    report = Clock::now();
-  }
-#endif
   if (Clock::now() < due - std::chrono::milliseconds(1)) {
     // The refresh due is the first one at least half a refresh past the one before it (the 50 ms timeout only
     // matters if the signal stops, as in sleep).

@@ -44,10 +44,6 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-#if defined(__SWITCH__)
-#include <rex/graphics/pipeline/shader/shader.h>  // AnalyzeConstants
-#include <rex/string/buffer.h>
-#endif
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_shader_index_check, false, "BO2",
                     "Test: at start the whole shader pack is also read as before its index (bo2zm_shaders.spvidx) "
@@ -70,35 +66,6 @@ void AnalyzeConstants(bo2zm::native::ShaderInput& e) {
   if (e.microcode.empty()) {
     return;
   }
-#if defined(__SWITCH__)
-  try {
-    rex::graphics::Shader analysis(
-        e.vertices ? rex::graphics::xenos::ShaderType::kVertex : rex::graphics::xenos::ShaderType::kPixel, 0,
-        e.microcode.data(), e.microcode.size(), std::endian::native);
-    rex::string::StringBuffer disassembly;
-    analysis.AnalyzeUcode(disassembly);
-    const auto& map = analysis.constant_register_map();
-    if (map.float_dynamic_addressing) {
-      return;
-    }
-    for (uint32_t reg = 0; reg < 256;) {
-      if (!((map.float_bitmap[reg / 64] >> (reg % 64)) & 1)) {
-        ++reg;
-        continue;
-      }
-      const uint32_t first = reg;
-      while (reg < 256 && ((map.float_bitmap[reg / 64] >> (reg % 64)) & 1)) {
-        ++reg;
-      }
-      e.constants_runs.emplace_back(uint16_t(first), uint16_t(reg - first));
-      e.constants_runs_bytes += (reg - first) * 16;
-    }
-    // Many short runs cost more in calls than they save: copy the whole block instead.
-    e.constants_runs_valid = e.constants_runs.size() <= 24;
-  } catch (const std::exception&) {
-    e.constants_runs.clear();
-  }
-#endif
 }
 
 }  // namespace

@@ -100,15 +100,9 @@ REXCVAR_DEFINE_STRING(bo2zm_diag_model_detail, "", "Graphics",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // Default quality. The Switch keeps its own (very_low, split screen capped at lowest, model scale 2); every other
 // build (the Mac) uses high, no split-screen cap and model scale 1. The 4p Town matrix held 60 fps at both.
-#if defined(__SWITCH__)
-inline constexpr const char* kDefaultPreset = "very_low";
-inline constexpr const char* kDefaultSplitscreenPreset = "lowest";
-inline constexpr double kDefaultSplitscreenModelScale = 2.0;
-#else
 inline constexpr const char* kDefaultPreset = "high";
 inline constexpr const char* kDefaultSplitscreenPreset = "same";
 inline constexpr double kDefaultSplitscreenModelScale = 1.0;
-#endif
 REXCVAR_DEFINE_STRING(bo2zm_preset, kDefaultPreset, "Graphics",
                       "Graphics preset: lowest, very_low, low, medium, high or custom (high = the game's own "
                       "settings, as the Xbox 360 runs it; custom = the options picked one by one in Options > "
@@ -146,11 +140,7 @@ REXCVAR_DEFINE_STRING(bo2zm_test_console, "", "BO2",
 // there). The renderer also skips the scene's depth prepass there (bo2zm_native_front_end_no_prepass) and draws the
 // scene again only when its view changes (bo2zm_native_front_end_reuse); bo2zm_front_end_fps_cap can cap the frame
 // rate. A mission gets the player's preset back once mapname names it.
-#if defined(__SWITCH__)
-constexpr const char* kFrontEndPresetDefault = "lowest";
-#else
 constexpr const char* kFrontEndPresetDefault = "same";
-#endif
 REXCVAR_DEFINE_STRING(bo2zm_front_end_preset, kFrontEndPresetDefault, "Graphics",
                       "Campaign: the highest level the front-end menus' 3D scene gets for each option, as this "
                       "preset's (the player's applies when it is lower), with FAR OBJECTS on SIMPLE and every model "

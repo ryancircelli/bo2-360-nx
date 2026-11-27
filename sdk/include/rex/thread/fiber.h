@@ -16,10 +16,7 @@
 
 // Switch goes before Linux on purpose: platform.h turns on both, and
 // Horizon has no <ucontext.h>.
-#if REX_PLATFORM_SWITCH
-#include <cstdint>
-#include <vector>
-#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
 #if REX_PLATFORM_MAC && !defined(_XOPEN_SOURCE)
 // Darwin hides the deprecated ucontext APIs unless _XOPEN_SOURCE is defined
 // before including <ucontext.h>.
@@ -30,11 +27,6 @@
 #include <vector>
 #endif
 
-#if REX_PLATFORM_SWITCH
-/// First C++ code that runs on a new Horizon fiber. It is called by the
-/// assembly trampoline in fiber_switch.cpp, and never returns.
-extern "C" [[noreturn]] void rex_fiber_trampoline(void);
-#endif
 
 namespace rex::thread {
 
@@ -67,30 +59,6 @@ struct Fiber {
 #if REX_PLATFORM_WIN32
   void* handle_ = nullptr;
   bool is_thread_fiber_ = false;
-#elif REX_PLATFORM_SWITCH
- public:
-  /// Registers AAPCS64 requires the callee to preserve. They are all that needs saving in a
-  /// cooperative context switch: the compiler has already saved the volatile ones before calling
-  /// SwitchTo.
-  ///
-  /// The order matters: fiber_switch.cpp reads it from assembly at fixed offsets, and checks with
-  /// static_assert that it has not moved.
-  struct Context {
-    uint64_t x19, x20, x21, x22, x23, x24, x25, x26, x27, x28;
-    uint64_t fp;   // x29
-    uint64_t lr;   // x30, where ret jumps to
-    uint64_t sp;
-    uint64_t d8, d9, d10, d11, d12, d13, d14, d15;  // only the low 64 bits
-  };
-
- private:
-  Context context_{};
-  std::vector<uint8_t> stack_;
-  void (*entry_)(void*) = nullptr;
-  void* arg_ = nullptr;
-  bool is_thread_fiber_ = false;
-
-  friend void ::rex_fiber_trampoline(void);
 #elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
   ucontext_t context_{};
   void* stack_ = nullptr;  // mmap'd: guard page at the low end, pages committed on touch

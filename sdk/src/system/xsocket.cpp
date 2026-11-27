@@ -47,9 +47,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
-#if REX_PLATFORM_SWITCH
-#include <switch.h>
-#endif
 
 REXCVAR_DEFINE_INT32(net_system_port_offset, 30000, "Kernel",
                      "System link: a title's fixed port below 1024 is bound and addressed this much higher (the same "
@@ -59,95 +56,9 @@ REXCVAR_DECLARE(bool, net_online_trace);
 REXCVAR_DEFINE_BOOL(net_system_link_trace, false, "Kernel",
                     "System link: log the first packets sent and received on a title's moved ports (below 1024)");
 
-#if REX_PLATFORM_SWITCH
-REXCVAR_DEFINE_INT32(switch_net_idle_poll_us, 1000, "Kernel",
-                     "Switch: after recv/recvfrom on a socket finds nothing (EWOULDBLOCK), the same call on that "
-                     "socket within this many microseconds answers EWOULDBLOCK again without asking the socket "
-                     "service. 0 = always asks")
-    .range(0, 100000);
-#endif
 
 namespace rex::system {
 
-#if REX_PLATFORM_SWITCH
-namespace {
-// The guest's memory is mapped through code-memory aliases
-// (guest_memory_switch.cpp), and Horizon's socket service can refuse IPC
-// buffers there: a socket call failed with EFAULT on the console right before
-// the game dropped to the menu with an error. Socket data goes through a host
-// buffer instead: one per thread, kept between calls, so no call pays for a new
-// zero-filled vector (a malloc under newlib's global heap lock).
-uint8_t* HostBuffer(uint32_t len) {
-  thread_local std::vector<uint8_t> buffer;
-  if (buffer.size() < (len ? len : 1)) {
-    buffer.resize(len ? len : 1);
-  }
-  return buffer.data();
-}
-
-/*
- * The idle window (switch_net_idle_poll_us). Each recv/recvfrom is an IPC to
- * the socket service. BO2's server thread polls its two sockets (VDP and UDP)
- * in its idle loop, and in a solo match nothing ever arrives: in console run
- * 015 that thread spent ~35 % of its time inside recvfrom. After a call finds
- * nothing, the next ones on the same socket within the window answer
- * EWOULDBLOCK at once, as the service would have; a packet that arrives
- * meanwhile is read at most one window later. A blocking socket never gets
- * here (its calls do not return EWOULDBLOCK), and FIONBIO clears the window.
- */
-int64_t NowNs() {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-
-// Counters for the "[net]" line, every 10 s from the receiving calls.
-std::atomic<uint64_t> g_receives{0};     // recv/recvfrom calls from the guest
-std::atomic<uint64_t> g_asked{0};        // of them, sent to the socket service
-std::atomic<uint64_t> g_found_none{0};   // of those, EWOULDBLOCK
-std::atomic<uint64_t> g_ns_asking{0};    // time inside the service's calls
-std::atomic<uint32_t> g_len_max{0};      // the largest buffer length asked for
-std::atomic<int64_t> g_report_ns{0};
-
-bool InIdleWindow(const std::atomic<int64_t>& idle_until) {
-  g_receives.fetch_add(1, std::memory_order_relaxed);
-  const int64_t until = idle_until.load(std::memory_order_relaxed);
-  return until != 0 && NowNs() < until;
-}
-
-// After a call to the service: the counters, and the window if it found nothing.
-void AfterAsking(std::atomic<int64_t>& idle_until, int ret, int error, int64_t since, uint32_t len) {
-  const int64_t now = NowNs();
-  uint32_t len_max = g_len_max.load(std::memory_order_relaxed);
-  while (len > len_max && !g_len_max.compare_exchange_weak(len_max, len, std::memory_order_relaxed)) {
-  }
-  g_asked.fetch_add(1, std::memory_order_relaxed);
-  g_ns_asking.fetch_add(uint64_t(now - since), std::memory_order_relaxed);
-  const bool none = ret < 0 && (error == EAGAIN || error == EWOULDBLOCK);
-  if (none) {
-    g_found_none.fetch_add(1, std::memory_order_relaxed);
-  }
-  const int64_t window = int64_t(REXCVAR_GET(switch_net_idle_poll_us)) * 1000;
-  idle_until.store(none && window > 0 ? now + window : 0, std::memory_order_relaxed);
-  int64_t last = g_report_ns.load(std::memory_order_relaxed);
-  if (last == 0) {
-    g_report_ns.compare_exchange_strong(last, now, std::memory_order_relaxed);
-  } else if (now - last >= 10000000000ll &&
-             g_report_ns.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
-    const uint64_t receives = g_receives.exchange(0, std::memory_order_relaxed);
-    const uint64_t asked = g_asked.exchange(0, std::memory_order_relaxed);
-    const uint64_t found_none = g_found_none.exchange(0, std::memory_order_relaxed);
-    const uint64_t ns = g_ns_asking.exchange(0, std::memory_order_relaxed);
-    REXLOG_INFO("[net] recv/recvfrom, last {:.0f} s: {} calls, {} sent to the socket service ({} found nothing; "
-                "{:.1f} ms inside it, {:.1f} us each; buffers up to {} bytes), {} answered from the idle window "
-                "(switch_net_idle_poll_us {})",
-                double(now - last) / 1e9, receives, asked, found_none, double(ns) / 1e6,
-                asked ? double(ns) / 1e3 / double(asked) : 0.0, g_len_max.exchange(0, std::memory_order_relaxed),
-                receives > asked ? receives - asked : 0, REXCVAR_GET(switch_net_idle_poll_us));
-  }
-}
-}  // namespace
-#endif
 
 namespace system_link {
 
@@ -170,15 +81,6 @@ int64_t SteadyNs() {
 
 // Asks the platform; host byte order.
 bool QueryLan(uint32_t& ip, uint32_t& mask) {
-#if REX_PLATFORM_SWITCH
-  static const bool nifm = R_SUCCEEDED(nifmInitialize(NifmServiceType_User));
-  if (!nifm) return false;
-  u32 address = 0, subnet = 0, gateway = 0, dns1 = 0, dns2 = 0;
-  if (R_FAILED(nifmGetCurrentIpConfigInfo(&address, &subnet, &gateway, &dns1, &dns2)) || !address) return false;
-  ip = ntohl(address);
-  mask = ntohl(subnet);
-  return true;
-#else
   // The address of the interface the system would route a LAN packet through; connecting a datagram socket sends
   // nothing.
   const auto handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -217,7 +119,6 @@ bool QueryLan(uint32_t& ip, uint32_t& mask) {
   }
 #endif
   return true;
-#endif
 }
 }  // namespace
 
@@ -874,9 +775,6 @@ int SendFromPort(uint16_t host_port, uint32_t ip, uint16_t port, const void* dat
   to.sin_family = AF_INET;
   to.sin_port = htons(port);
   to.sin_addr.s_addr = htonl(ip);
-#if REX_PLATFORM_SWITCH
-  to.sin_len = sizeof(to);
-#endif
   std::lock_guard lock(g_port_mutex);  // a socket the title closes leaves the table first (XSocket::Close)
   for (const auto& entry : g_port_sockets) {
     if (entry.host_port != host_port) continue;
@@ -928,9 +826,6 @@ int64_t OpenSideSocket(uint16_t port, bool* bound) {
   any.sin_family = AF_INET;
   any.sin_port = htons(port);
   any.sin_addr.s_addr = htonl(INADDR_ANY);
-#if REX_PLATFORM_SWITCH
-  any.sin_len = sizeof(any);
-#endif
   const bool took_port = bind(handle, reinterpret_cast<sockaddr*>(&any), sizeof(any)) == 0;
   if (took_port) {
     if (bound) *bound = true;
@@ -971,9 +866,6 @@ int SideSend(int64_t socket, uint32_t ip, uint16_t port, const void* data, uint3
   to.sin_family = AF_INET;
   to.sin_port = htons(port);
   to.sin_addr.s_addr = htonl(ip);
-#if REX_PLATFORM_SWITCH
-  to.sin_len = sizeof(to);
-#endif
   return int(sendto(NativeSocket(socket), reinterpret_cast<const char*>(data), int(size), 0,
                     reinterpret_cast<sockaddr*>(&to), sizeof(to)));
 }
@@ -1193,9 +1085,6 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr, 
 }
 
 X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
-#if REX_PLATFORM_SWITCH
-  idle_until_ns_.store(0, std::memory_order_relaxed);  // FIONBIO may make it blocking (the idle window)
-#endif
   int ret = rex::net::socket_ioctl(native_handle_, cmd, arg_ptr);
   if (ret < 0) {
     // TODO: Get last error
@@ -1237,23 +1126,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* guest_name, int name_len) {
                 errno, std::strerror(errno), uint32_t(name->sin_family), addr >> 24,
                 (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF, uint16_t(name->sin_port),
                 name_len, uint32_t(proto_));
-#if REX_PLATFORM_SWITCH
-    // Offline play never sends through these sockets (BO2's local
-    // client and server talk through in-memory queues), but the game treats a
-    // failed bind as fatal at startup. Retry on any address/port, and if
-    // Horizon still refuses, report success so the game carries on offline.
-    N_XSOCKADDR_IN any = *name;
-    any.sin_addr = 0;
-    any.sin_port = 0;
-    if (bind(native_handle_, (sockaddr*)&any, sizeof(any)) == 0) {
-      REXSYS_WARN("XSocket::Bind: bound to 0.0.0.0:any instead");
-    } else {
-      REXSYS_WARN("XSocket::Bind: errno {} again on 0.0.0.0:any; reporting success (offline)",
-                  errno);
-    }
-#else
     return X_STATUS_UNSUCCESSFUL;
-#endif
   }
 
   bound_ = true;
@@ -1304,24 +1177,7 @@ int XSocket::Shutdown(int how) {
 }
 
 int XSocket::Recv(uint8_t* buf, uint32_t buf_len, uint32_t flags) {
-#if REX_PLATFORM_SWITCH
-  if (InIdleWindow(idle_until_ns_)) {
-    errno = EWOULDBLOCK;
-    return -1;
-  }
-  uint8_t* host = HostBuffer(buf_len);
-  const int64_t since = NowNs();
-  int ret = recv(native_handle_, reinterpret_cast<char*>(host), buf_len, flags);
-  const int error = errno;
-  AfterAsking(idle_until_ns_, ret, error, since, buf_len);
-  if (ret > 0) {
-    std::memcpy(buf, host, ret);
-  }
-  errno = error;
-  return ret;
-#else
   return recv(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags);
-#endif
 }
 
 int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_IN* from,
@@ -1363,23 +1219,8 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
     internet = false;
     std::memset(&nfrom, 0, sizeof(nfrom));
     nfromlen = sizeof(sockaddr_in);
-#if REX_PLATFORM_SWITCH
-    ret = -1;
-    int error = EWOULDBLOCK;
-    uint8_t* host = nullptr;
-    // In the idle window: what the service answers when nothing came (nfrom stays zeroed, nfromlen as set above).
-    if (!InIdleWindow(idle_until_ns_)) {
-      host = HostBuffer(buf_len);
-      const int64_t since = NowNs();
-      ret = recvfrom(native_handle_, reinterpret_cast<char*>(host), buf_len, flags, (sockaddr*)&nfrom, &nfromlen);
-      error = errno;
-      AfterAsking(idle_until_ns_, ret, error, since, buf_len);
-    }
-    const uint8_t* received = host;
-#else
     ret = recvfrom(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags, (sockaddr*)&nfrom, &nfromlen);
     const uint8_t* received = buf;
-#endif
     online::Datagram kind = online::Datagram::kTitle;
     if (ret > 0 && bound_port_ && bound_port_ < 1024) {
       kind = online::Classify(system_link::HostPort(bound_port_), ntohl(nfrom.sin_addr.s_addr), ntohs(nfrom.sin_port),
@@ -1395,12 +1236,6 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
       }
     }
     if (kind == online::Datagram::kTitle) {
-#if REX_PLATFORM_SWITCH
-      if (ret > 0) {
-        std::memcpy(buf, host, ret);
-      }
-      errno = error;
-#endif
       break;
     }
     if (kind == online::Datagram::kPunch) {
@@ -1465,13 +1300,7 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
 }
 
 int XSocket::Send(const uint8_t* buf, uint32_t buf_len, uint32_t flags) {
-#if REX_PLATFORM_SWITCH
-  uint8_t* host = HostBuffer(buf_len);
-  std::memcpy(host, buf, buf_len);
-  return send(native_handle_, reinterpret_cast<const char*>(host), buf_len, flags);
-#else
   return send(native_handle_, reinterpret_cast<const char*>(buf), buf_len, flags);
-#endif
 }
 
 namespace {
@@ -1512,13 +1341,6 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
   std::memset(&nto, 0, sizeof(nto));
   if (to) {
     uint32_t address = to->sin_addr;
-#if REX_PLATFORM_SWITCH
-    // A limited broadcast (255.255.255.255) is sent to the LAN's own broadcast address, which Horizon routes.
-    uint32_t lan_ip = 0, lan_mask = 0;
-    if (address == 0xFFFFFFFFu && system_link::LanAddress(&lan_ip, &lan_mask) && lan_mask) {
-      address = lan_ip | ~lan_mask;
-    }
-#endif
     // A title may broadcast through a socket it never gave SO_BROADCAST (BO2 answers a System Link search that way);
     // the Xbox let it, Windows and BSD sockets refuse the send.
     if (IsBroadcast(address) && !broadcast_native_) {
@@ -1552,18 +1374,9 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
       nto.sin_addr.s_addr = htonl(route_ip);
       nto.sin_port = htons(route_port);
     }
-#if REX_PLATFORM_SWITCH
-    nto.sin_len = sizeof(nto);
-#endif
   }
 
-#if REX_PLATFORM_SWITCH
-  uint8_t* host = HostBuffer(buf_len);
-  std::memcpy(host, buf, buf_len);
-  char* data = reinterpret_cast<char*>(host);
-#else
   char* data = reinterpret_cast<char*>(buf);
-#endif
   const int ret = sendto(native_handle_, data, buf_len, flags, to ? (sockaddr*)&nto : nullptr, to_len);
 #if REX_PLATFORM_WIN32
   const int error = ret < 0 ? WSAGetLastError() : 0;
@@ -1625,13 +1438,8 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
       }
     }
     if (broadcast_helper_) {
-#if REX_PLATFORM_SWITCH
-      const int again = sendto(broadcast_helper_, reinterpret_cast<char*>(host), buf_len, flags, (sockaddr*)&nto,
-                               sizeof(nto));
-#else
       const int again = sendto(broadcast_helper_, reinterpret_cast<char*>(buf), buf_len, flags, (sockaddr*)&nto,
                                sizeof(nto));
-#endif
       system_link::TraceSend(ntohl(nto.sin_addr.s_addr), to->sin_port, again, 0);
       if (again >= 0) return again;
     }

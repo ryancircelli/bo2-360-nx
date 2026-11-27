@@ -27,16 +27,6 @@
 
 REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, true, "UI/Vulkan", "Log Vulkan debug messages");
 
-#if REX_PLATFORM_SWITCH
-// NVK for Horizon is linked statically (Mesa's libvulkan.a) and exports the
-// entry points directly. api.h defines VK_NO_PROTOTYPES, so they have to be
-// declared by hand.
-extern "C" {
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char* pName);
-VKAPI_ATTR void VKAPI_CALL vkDestroyInstance(VkInstance instance,
-                                             const VkAllocationCallbacks* pAllocator);
-}
-#endif  // REX_PLATFORM_SWITCH
 
 namespace rex {
 namespace ui {
@@ -85,13 +75,6 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
     }
     return nullptr;
   }
-#elif REX_PLATFORM_SWITCH
-  // There is no loader to open: NVK is inside the executable, and there is no
-  // dlopen in an NRO either. The entry functions are taken directly. Verified on
-  // the console: vkCreateInstance called this way returns VK_SUCCESS on the GM20B.
-  ifn.vkGetInstanceProcAddr = &::vkGetInstanceProcAddr;
-  ifn.vkDestroyInstance = &::vkDestroyInstance;
-  loader_loaded = true;
 #else
   loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
   if (!loader_loaded) {
@@ -100,13 +83,11 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
   }
 #endif
 
-#if !REX_PLATFORM_SWITCH
 #define XE_VULKAN_LOAD_LOADER_FUNCTION(name) \
   functions_loaded &= (ifn.name = vulkan_instance->loader_.GetSymbol<PFN_##name>(#name)) != nullptr;
   XE_VULKAN_LOAD_LOADER_FUNCTION(vkGetInstanceProcAddr);
   XE_VULKAN_LOAD_LOADER_FUNCTION(vkDestroyInstance);
 #undef XE_VULKAN_LOAD_LOADER_FUNCTION
-#endif  // !REX_PLATFORM_SWITCH
   if (!functions_loaded) {
     REXLOG_ERROR("Failed to get Vulkan loader function pointers");
     return nullptr;

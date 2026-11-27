@@ -425,19 +425,10 @@ Timing g_timing[3][2];  // [kernel][0 general, 1 fast]
 
 // The thread's own CPU time in ns (on the Switch the kernel's count, svcGetInfo InfoType_ThreadTickCount = 25 at
 // 19.2 MHz: time the thread spends preempted is not counted, unlike wall-clock time, which swung timings by 25 %).
-#if defined(__SWITCH__)
-extern "C" uint32_t svcGetInfo(uint64_t* out, uint32_t id0, uint32_t handle, uint64_t id1);
-#endif
 uint64_t CpuNs() {
-#if defined(__SWITCH__)
-  uint64_t ticks = 0;
-  svcGetInfo(&ticks, 25, 0xFFFF8000u, UINT64_MAX);
-  return ticks * 625 / 12;
-#else
   return uint64_t(
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
           .count());
-#endif
 }
 
 // Runs body(fast) and times 1 call in 8.

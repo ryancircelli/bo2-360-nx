@@ -22,9 +22,6 @@
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/ui_event.h>
 #include <rex/ui/window.h>
-#if REX_PLATFORM_SWITCH
-#include <rex/ui/switch_imgui_input.h>
-#endif
 
 #include <imgui.h>
 
@@ -47,12 +44,6 @@ namespace {
 // the same part of the screen in both modes. The window DPI is left alone because the application uses it too
 // (rex_app.cpp: OnWindowResized and OnDpiScaleChanged).
 float PhysicalToLogical(const Window* window) {
-#if REX_PLATFORM_SWITCH
-  const uint32_t height_px = window->GetActualPhysicalHeight();
-  if (height_px) {
-    return 720.0f / float(height_px);
-  }
-#endif
   return float(window->GetMediumDpi()) / float(window->GetDpi());
 }
 
@@ -188,11 +179,6 @@ void ImGuiDrawer::Initialize() {
   // Windows.
   io.IniFilename = nullptr;
 
-#if REX_PLATFORM_SWITCH
-  // No mouse or keyboard: the menus are driven with the controller and the touch
-  // screen (switch_imgui_input.h).
-  nx::ConfigureNavigation(io);
-#endif
 
   // Setup the font glyphs.
   ImFontConfig font_config;
@@ -438,20 +424,6 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   io.DisplaySize.x = window_->GetActualPhysicalWidth() * physical_to_logical;
   io.DisplaySize.y = window_->GetActualPhysicalHeight() * physical_to_logical;
 
-#if REX_PLATFORM_SWITCH
-  {
-    // On Switch there is no mouse or keyboard and the window generates no input
-    // events: HID is read here, on the UI thread and before NewFrame. While a menu
-    // is open, Draw repeats continuously (see the end). There is a single
-    // ImGuiDrawer per process. The touch panel always measures 1280x720.
-    static nx::UiInputState input_state;
-    nx::UiInput entry;
-    nx::ReadUiInput(entry,
-                      float(window_->GetActualPhysicalWidth()) / 1280.0f * physical_to_logical,
-                      float(window_->GetActualPhysicalHeight()) / 720.0f * physical_to_logical);
-    nx::ApplyInput(io, entry, input_state);
-  }
-#endif
 
   ImGui::NewFrame();
 

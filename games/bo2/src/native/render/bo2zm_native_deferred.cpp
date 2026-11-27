@@ -45,9 +45,6 @@
 #include <rex/platform.h>
 #include <rex/thread.h>
 
-#if REX_PLATFORM_SWITCH
-#include "core/threading_switch.h"  // the SDK's src/ is on the include path (CMakeLists.txt)
-#endif
 #if defined(_M_X64) || defined(__x86_64__)
 #include <immintrin.h>
 #endif
@@ -1131,81 +1128,10 @@ void Execute(const Header* h) {
   }
 }
 
-#if REX_PLATFORM_SWITCH
-// The recorder's preferred core: the usual one, or bo2zm_native_recorder_core_b in the benchmark A/B's arms with
-// factor 1 on. Checked before each sleep (a time read; the core is set only when it changes).
-int g_core_usual = -1;
-int g_core_applied = -1;
-// The same for its priority (bo2zm_native_recorder_priority_b).
-int g_priority_usual = -1;
-int g_priority_applied = -1;
-void ApplyAbPriority() {
-  const int32_t b = REXCVAR_GET(bo2zm_native_recorder_priority_b);
-  if (b < 0) {
-    return;
-  }
-  const int arm = bo2zm::benchmark::AbArm();
-  const int wanted = arm >= 0 && (arm & 1) ? int(b) : g_priority_usual;
-  if (wanted == g_priority_applied) {
-    return;
-  }
-  g_priority_applied = wanted;
-  RexSwitchSetCurrentThreadPriorityOk(wanted);
-}
-
-void ApplyAbCore() {
-  const int32_t b = REXCVAR_GET(bo2zm_native_recorder_core_b);
-  if (b < -1) {
-    return;
-  }
-  const int arm = bo2zm::benchmark::AbArm();
-  const int wanted = arm >= 0 && (arm & 1) ? int(b) : g_core_usual;
-  if (wanted == g_core_applied) {
-    return;
-  }
-  g_core_applied = wanted;
-  if (wanted >= 0) {
-    RexSwitchSetCurrentThreadCore(wanted);
-  }
-}
-#endif
 
 void Loop(int ring_core) {
   rex::thread::set_current_thread_name("GPU native recorder");
-#if REX_PLATFORM_SWITCH
-  {
-    const int32_t priority = REXCVAR_GET(bo2zm_native_recorder_priority);
-    const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(int(priority));
-    g_priority_usual = int(priority);
-    g_priority_applied = int(priority);
-    const int32_t priority_b = REXCVAR_GET(bo2zm_native_recorder_priority_b);
-    if (priority_b >= 0) {
-      REXLOG_INFO("[native] deferred recording: A/B factor 1 = recorder at priority {:#x} instead of {:#x} "
-                  "(bo2zm_native_recorder_priority_b)", uint32_t(priority_b), uint32_t(priority));
-    }
-    // The vertex copy thread prefers 2, or 1 when the ring is on 2 (bo2zm_native_upload_thread_core = -2): by
-    // default the recorder prefers the third core.
-    const int32_t requested = REXCVAR_GET(bo2zm_native_recorder_core);
-    int core = int(requested);
-    if (requested == -2) {
-      core = ring_core >= 0 && ring_core <= 2 ? 3 - ring_core - (ring_core == 2 ? 1 : 2) : -1;
-    }
-    const bool core_ok = core < 0 || RexSwitchSetCurrentThreadCore(core);
-    g_core_usual = core;
-    g_core_applied = core;
-    const int32_t core_b = REXCVAR_GET(bo2zm_native_recorder_core_b);
-    if (core_b >= -1) {
-      REXLOG_INFO("[native] deferred recording: A/B factor 1 = recorder on core {} instead of {} "
-                  "(bo2zm_native_recorder_core_b)", core_b, core);
-    }
-    REXLOG_INFO("[native] deferred recording: recorder thread at priority {:#x}{}; preferred core {}{} (the ring runs "
-                "on {}), now on {}",
-                uint32_t(priority), priority_ok ? "" : " (NOT accepted)", core, core_ok ? "" : " (NOT accepted)",
-                ring_core, RexSwitchCurrentCore());
-  }
-#else
   (void)ring_core;
-#endif
   uint64_t read = 0;
   for (;;) {
     uint64_t written = g_written.load(std::memory_order_acquire);
@@ -1216,10 +1142,6 @@ void Loop(int ring_core) {
         written = g_written.load(std::memory_order_acquire);
       }
       if (read == written) {
-#if REX_PLATFORM_SWITCH
-        ApplyAbCore();
-        ApplyAbPriority();
-#endif
         std::unique_lock lock(g_mutex);
         g_recorder_sleeping.store(true, std::memory_order_seq_cst);
         g_cv_recorder.wait(lock, [&] {
@@ -1308,11 +1230,7 @@ void Build(const rex::ui::vulkan::VulkanDevice& device) {
 
 // The recorder is created by the ring thread at its first Begin, so on the Switch it knows the ring's core.
 bool StartRecorder() {
-#if REX_PLATFORM_SWITCH
-  const int ring_core = RexSwitchCurrentCore();
-#else
   const int ring_core = -1;
-#endif
   try {
     g_thread = new std::thread(Loop, ring_core);
   } catch (const std::system_error& error) {

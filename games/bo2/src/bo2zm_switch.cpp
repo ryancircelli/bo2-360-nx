@@ -23,13 +23,6 @@
 #include <rex/thread_audio.h>
 #include <rex/logging.h>
 
-#if defined(__SWITCH__)
-#include <switch.h>
-extern "C" char** __system_argv;
-#include "core/threading_switch.h"  // SDK src/ is on the include path (CMakeLists.txt)
-extern "C" void RexSwitchPerfSetStackSampling(int forced);
-#include "bo2zm_switch_mutex.h"
-#endif
 
 #ifndef BO2ZM_BUILD_ID
 #define BO2ZM_BUILD_ID "dev"
@@ -128,14 +121,6 @@ REXCVAR_DEFINE_BOOL(bo2zm_mesa_shader_cache, true, "BO2",
                     "made; the few made without it are compiled at each start. For an A/B")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-#if defined(__SWITCH__)
-extern "C" void RexSwitchCore3SetLog(void (*log)(const char*));
-extern "C" bool RexSwitchCore3Configure(const char* rules, bool clamp, bool meter, bool active);
-extern "C" bool RexSwitchCore3SetActive(bool on);
-extern "C" bool RexSwitchCore3Active(void);
-extern "C" bool RexSwitchCore3Tripped(void);
-extern "C" void RexSwitchCore3SetHogLimit(int percent, int seconds);
-#endif
 
 namespace bo2zm {
 
@@ -143,11 +128,7 @@ namespace bo2zm {
 // log always says which build produced it (the SD card may hold an old NRO).
 static void LogBuildIdentity() {
   std::error_code ec;
-#if defined(__SWITCH__)
-  const std::filesystem::path exe = (__system_argv && __system_argv[0]) ? __system_argv[0] : "";
-#else
   const std::filesystem::path exe = rex::filesystem::GetExecutablePath();
-#endif
   const auto size = std::filesystem::file_size(exe, ec);
   const auto mtime = std::filesystem::last_write_time(exe, ec);
   const auto secs = std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
@@ -163,173 +144,37 @@ int CpuCoresSetting() {
 
 void SetCpuCoresSetting(int cores) {
   rex::cvar::SetFlagByName("cpu_cores", cores == 4 ? "4" : "3");
-#if defined(__SWITCH__)
-  RexSwitchCore3SetActive(cores == 4);
-#endif
 }
 
 bool CoresSwitchedOff() {
-#if defined(__SWITCH__)
-  return RexSwitchCore3Tripped();
-#else
   return false;
-#endif
 }
 
 int CoresInUse() {
-#if defined(__SWITCH__)
-  return RexSwitchCore3Active() ? 4 : 3;
-#else
   return 0;
-#endif
 }
 
-#if defined(__SWITCH__)
-// The "Default" display as libnx's default window opened it (viOpenDisplay is wrapped: games/bo2/CMakeLists.txt). A second
-// open of the same display fails with vi 0x1272 (with VSYNC on, that used to keep the refresh pacing from ever
-// running), but the vsync event only needs the display's id.
-static std::atomic<uint64_t> g_default_display_id{~uint64_t(0)};
-extern "C" Result __real_viOpenDisplay(const char* display_name, ViDisplay* display);
-extern "C" Result __wrap_viOpenDisplay(const char* display_name, ViDisplay* display) {
-  const Result rc = __real_viOpenDisplay(display_name, display);
-  if (R_SUCCEEDED(rc) && display && display_name && std::strcmp(display_name, "Default") == 0) {
-    g_default_display_id.store(display->display_id, std::memory_order_relaxed);
-  }
-  return rc;
-}
-
-// The default display's vsync event. libnx's default window opens the display but never asks for this event, so it is
-// ours to take; the display stays open with it.
-static Event* RefreshEvent() {
-  static Event event{};
-  static const bool taken = [] {
-    Result rc = MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
-    const uint64_t id = g_default_display_id.load(std::memory_order_relaxed);
-    if (id != ~uint64_t(0)) {
-      ViDisplay display{};
-      display.display_id = id;
-      display.initialized = true;
-      rc = viGetDisplayVsyncEvent(&display, &event);
-    }
-    if (R_FAILED(rc)) {
-      static ViDisplay display{};
-      rc = viOpenDefaultDisplay(&display);
-      if (R_SUCCEEDED(rc)) {
-        rc = viGetDisplayVsyncEvent(&display, &event);
-      }
-    }
-    if (R_FAILED(rc)) {
-      REXLOG_WARN("[switch] no screen refresh signal (vi 0x{:X}, default display id {}): VSYNC leaves the pacing to "
-                  "the screen",
-                  rc, id == ~uint64_t(0) ? std::string("not seen") : std::to_string(id));
-      return false;
-    }
-    REXLOG_INFO("[switch] screen refresh signal taken (default display id {}): with VSYNC each frame in a match starts "
-                "on a refresh",
-                id);
-    return true;
-  }();
-  return taken ? &event : nullptr;
-}
-#endif
 
 bool HasRefreshSignal() {
-#if defined(__SWITCH__)
-  return RefreshEvent() != nullptr;
-#else
   return false;
-#endif
 }
 
 bool WaitForNextRefresh(int timeout_ms) {
-#if defined(__SWITCH__)
-  Event* event = RefreshEvent();
-  if (!event) {
-    return false;
-  }
-  eventClear(event);  // a refresh signalled before now does not count
-  return R_SUCCEEDED(eventWait(event, uint64_t(timeout_ms) * 1000000));
-#else
   (void)timeout_ms;
   return false;
-#endif
 }
 
 int ProcessCores() {
-#if defined(__SWITCH__)
-  static const int cores = [] {
-    u64 mask = 0;
-    return R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) ? __builtin_popcountll(mask) : 3;
-  }();
-  return cores;
-#else
   return 0;
-#endif
 }
 
 void InitSwitchServices() {
   LogBuildIdentity();
-#if !defined(__SWITCH__)
   // The guest thread BO2 mixes its sound on ("Sound Mix", see the Switch block below) runs in the audio scheduling
   // class (the SDK's audio_thread_policy) with the Audio Worker it answers. A value from the toml wins.
   if (rex::cvar::GetFlagByName("audio_guest_threads").empty()) {
     rex::cvar::SetFlagByName("audio_guest_threads", "Sound Mix");
   }
-#endif
-#if defined(__SWITCH__)
-  if (REXCVAR_GET(bo2zm_malloc_spin)) {
-    SetMallocSpin(true);
-    REXLOG_INFO("[switch] the C heap's lock spins before it sleeps (bo2zm_malloc_spin)");
-  }
-  if (const int32_t factor = REXCVAR_GET(bo2zm_malloc_spin_ab)) {
-    SetMallocSpinFactor(factor);
-    REXLOG_INFO("[switch] the C heap's lock spins in the A/B arms of factor {} (bo2zm_malloc_spin_ab)", factor);
-  }
-  if (const int32_t stacks = REXCVAR_GET(bo2zm_profile_stacks); stacks == 0 || stacks == 1) {
-    RexSwitchPerfSetStackSampling(stacks);
-    REXLOG_INFO("[switch] stack sampling {} (bo2zm_profile_stacks)", stacks ? "on" : "off");
-  }
-  // Before the game's threads start, so each one named in a rule is moved as it names itself.
-  RexSwitchCore3SetLog([](const char* text) { REXLOG_INFO("{}", text); });
-  RexSwitchCore3SetHogLimit(REXCVAR_GET(bo2zm_core3_failsafe_percent), REXCVAR_GET(bo2zm_core3_failsafe_s));
-  RexSwitchCore3Configure(REXCVAR_GET(bo2zm_core3_threads).c_str(), REXCVAR_GET(bo2zm_core3_clamp),
-                          REXCVAR_GET(bo2zm_core3_meter), REXCVAR_GET(cpu_cores) == 4);
-  // A first visit measured on a console that has made the visit: Mesa keeps every shader it compiles on the SD
-  // (sdmc:/.mesa, its disk cache, read when NVK sets up the GPU), so the app's own empty pipeline cache is not enough.
-  // Set before the GPU is: nvk_physical_device_init_pipeline_cache reads it.
-  // bo2zm_native_test_cold_pipelines too: a new driver would not find its shaders there either.
-  if (rex::cvar::Query<bool>("bo2zm_native_test_fresh_pipelines") ||
-      rex::cvar::Query<bool>("bo2zm_native_test_cold_pipelines")) {
-    setenv("MESA_SHADER_CACHE_DISABLE", "true", 1);
-    REXLOG_INFO("[switch] Mesa's shader cache off (bo2zm_native_test_fresh_pipelines or _cold_pipelines): every "
-                "shader is compiled");
-  } else if (!REXCVAR_GET(bo2zm_mesa_shader_cache)) {
-    setenv("MESA_SHADER_CACHE_DISABLE", "true", 1);
-    REXLOG_INFO("[switch] Mesa's shader cache off (bo2zm_mesa_shader_cache = false)");
-  }
-  // BO2 mixes its sound on the guest thread it names "Sound Mix": the audio callback BO2 registers runs on the SDK's
-  // Audio Worker, sets an event, waits for the mix and submits it (no game addresses here, or tools/direct_calls.py
-  // would take them for hooks). At the guest priority the mixer waited for its 10 ms turn behind the busy game
-  // threads, and in a match the sound dropped out: only 680 blocks mixed, and 1352 requests without data, in 10 s. A
-  // value from the toml wins.
-  if (rex::cvar::GetFlagByName("switch_audio_guest_threads").empty()) {
-    rex::cvar::SetFlagByName("switch_audio_guest_threads", "Sound Mix");
-  }
-  if (REXCVAR_GET(bo2zm_audio_off_ring_core) && rex::cvar::Query<int32_t>("switch_audio_core_mask") == 0) {
-    const int32_t core = rex::cvar::Query<int32_t>("bo2zm_native_ring_core");
-    if (core >= 0 && core <= 2) {
-      const int mask = 0x7 & ~(1 << core);
-      rex::cvar::SetFlagByName("switch_audio_core_mask", std::to_string(mask));
-      REXLOG_INFO("[switch] audio threads on cores mask {:#x} (the ring thread prefers core {})", mask, core);
-    }
-  }
-  const Result rc = socketInitializeDefault();
-  if (R_SUCCEEDED(rc)) {
-    REXLOG_INFO("[switch] sockets ready (bsd service)");
-  } else {
-    REXLOG_ERROR("[switch] socketInitializeDefault failed: {:#x}", rc);
-  }
-#endif
 }
 
 }  // namespace bo2zm
@@ -346,24 +191,6 @@ REX_EXTERN(__imp__sub_8281A2A8);
 
 namespace {
 void AudioThread([[maybe_unused]] const char* which) {
-#if defined(__SWITCH__)
-  if (!REXCVAR_GET(bo2zm_xaudio_threads_priority)) {
-    return;
-  }
-  const Result rc = svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2B);
-  if (R_SUCCEEDED(rc)) {
-    REXLOG_INFO("[switch] audio engine {} thread: priority 0x2b", which);
-  } else {
-    REXLOG_WARN("[switch] audio engine {} thread: svcSetThreadPriority failed: {:#x}", which, rc);
-  }
-  // Like the SDK's audio threads (switch_audio_core_mask, set in InitSwitchServices).
-  const int32_t value = rex::cvar::Query<int32_t>("switch_audio_core_mask");
-  if (value > 0) {
-    const bool accepted = RexSwitchSetCurrentThreadCoreMask(uint64_t(value));
-    REXLOG_INFO("[switch] audio engine {} thread: core mask {:#x}{}", which, value,
-                accepted ? "" : " REFUSED by the kernel");
-  }
-#else
   // Elsewhere the same two hand-offs per block waited behind the game threads on a busy machine: the SDK's audio
   // scheduling class (audio_thread_policy), as for the Audio Worker and "Sound Mix".
   if (!REXCVAR_GET(bo2zm_xaudio_threads_priority)) {
@@ -371,7 +198,6 @@ void AudioThread([[maybe_unused]] const char* which) {
     return;
   }
   REXLOG_INFO("[audio] audio engine {} thread: {}", which, rex::thread::SetThreadAudioPriority());
-#endif
 }
 }  // namespace
 

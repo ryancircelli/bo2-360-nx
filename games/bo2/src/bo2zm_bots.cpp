@@ -104,19 +104,6 @@ bool CommitMigration(const std::vector<std::pair<std::string, std::string>>& upd
       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
 #else
   replaced = std::rename(temporary.string().c_str(), destination.string().c_str()) == 0;
-#if defined(__SWITCH__)
-  if (!replaced && exists) {
-    auto backup = destination;
-    backup += ".bots.bak";
-    // Never discard an existing recovery file.
-    if (!std::filesystem::exists(backup, ec) && !ec &&
-        std::rename(destination.string().c_str(), backup.string().c_str()) == 0) {
-      replaced = std::rename(temporary.string().c_str(), destination.string().c_str()) == 0;
-      if (replaced) std::filesystem::remove(backup, ec);
-      else std::rename(backup.string().c_str(), destination.string().c_str());
-    }
-  }
-#endif
 #endif
   if (!replaced) std::filesystem::remove(temporary, ec);
   return replaced;

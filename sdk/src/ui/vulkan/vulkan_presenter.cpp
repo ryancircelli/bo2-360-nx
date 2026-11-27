@@ -46,17 +46,6 @@
 #if REX_PLATFORM_MAC
 #include <rex/ui/surface_mac.h>
 #endif
-#if REX_PLATFORM_SWITCH
-#include <rex/ui/surface_switch.h>
-// Only the NWindow header: switch.h drags typedefs (Thread, Mutex, Event) that
-// collide with rex::thread. The individual libnx headers carry no extern "C"
-// of their own; switch.h normally provides it.
-extern "C" {
-#include <switch/types.h>
-#include <switch/result.h>
-#include <switch/display/native_window.h>
-}
-#endif
 
 REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
                     "Clear render pass during presentation");
@@ -70,15 +59,8 @@ REXCVAR_DEFINE_BOOL(present_wait_acquire_on_cpu, false, "UI/Presenter",
                     "paint, so the GPU channel does not stall (FPS test on the Switch)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
-#if REX_PLATFORM_SWITCH
-// MAILBOX does not exist on the NVK VI surface: wsi_common_switch.c only exposes FIFO and IMMEDIATE.
-#define REX_VULKAN_ALLOW_UNSYNCED_PRESENT_DEFAULT false
-// On the Switch IMMEDIATE is on even though MAILBOX is not (see the comment below).
-#define REX_VULKAN_ALLOW_PRESENT_MODE_IMMEDIATE_DEFAULT true
-#else
 #define REX_VULKAN_ALLOW_UNSYNCED_PRESENT_DEFAULT true
 #define REX_VULKAN_ALLOW_PRESENT_MODE_IMMEDIATE_DEFAULT REX_VULKAN_ALLOW_UNSYNCED_PRESENT_DEFAULT
-#endif
 
 /*
  * IMMEDIATE is on for the console, and it does not mean "no vsync".
@@ -115,11 +97,7 @@ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_mailbox, REX_VULKAN_ALLOW_UNSYNCED
 REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_fifo_relaxed, true, "UI/Vulkan",
                     "Allow FIFO relaxed present mode");
 
-#if REX_PLATFORM_SWITCH
-#define REX_PRESENT_PAINT_PROFILE_DEFAULT true
-#else
 #define REX_PRESENT_PAINT_PROFILE_DEFAULT false
-#endif
 
 /*
  * Fine-grained breakdown of PaintAndPresent, piece by piece.
@@ -751,11 +729,6 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
     type_flags |= Surface::kTypeFlag_CAMetalLayer;
   }
 #endif
-#if REX_PLATFORM_SWITCH
-  if (instance_extensions.ext_NN_vi_surface) {
-    type_flags |= Surface::kTypeFlag_ViNWindow;
-  }
-#endif
   return type_flags;
 }
 
@@ -1168,27 +1141,6 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
             instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
       } break;
 #endif
-#if REX_PLATFORM_SWITCH
-      case Surface::kTypeIndex_ViNWindow: {
-        auto& vi_surface = static_cast<const ViNWindowSurface&>(new_surface);
-        // Nothing is registered with the NWindow before its first swapchain,
-        // the only point where libnx accepts new dimensions. Later resizes go
-        // through oldSwapchain, and the WSI resizes the NWindow itself.
-        Result dimensions_result =
-            nwindowSetDimensions(vi_surface.window(), new_surface_width, new_surface_height);
-        if (R_FAILED(dimensions_result)) {
-          REXLOG_WARN("VulkanPresenter: nwindowSetDimensions({}x{}) failed: 0x{:08X}",
-                      new_surface_width, new_surface_height, dimensions_result);
-        }
-        VkViSurfaceCreateInfoNN surface_create_info;
-        surface_create_info.sType = VK_STRUCTURE_TYPE_VI_SURFACE_CREATE_INFO_NN;
-        surface_create_info.pNext = nullptr;
-        surface_create_info.flags = 0;
-        surface_create_info.window = vi_surface.window();
-        vulkan_surface_create_result = ifn.vkCreateViSurfaceNN(
-            instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
-      } break;
-#endif
       default:
         assert_unhandled_case(surface_type);
         REXLOG_ERROR(
@@ -1551,21 +1503,12 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
   // create until the surface becomes smaller).
   VkExtent2D max_framebuffer_extent = util::GetMax2DFramebufferExtent(vulkan_device->properties());
   VkExtent2D image_extent;
-#if REX_PLATFORM_SWITCH
-  // The VI surface reports the NWindow's current dimensions as both the
-  // minimum and the maximum, so clamping would pin a resize to the old size.
-  // Measured on console (vimodo): creating the new swapchain at the requested
-  // size with oldSwapchain succeeds and the WSI resizes the NWindow itself.
-  image_extent.width = std::min(width, max_framebuffer_extent.width);
-  image_extent.height = std::min(height, max_framebuffer_extent.height);
-#else
   image_extent.width = std::min(std::max(std::min(width, max_framebuffer_extent.width),
                                          surface_capabilities.minImageExtent.width),
                                 surface_capabilities.maxImageExtent.width);
   image_extent.height = std::min(std::max(std::min(height, max_framebuffer_extent.height),
                                           surface_capabilities.minImageExtent.height),
                                  surface_capabilities.maxImageExtent.height);
-#endif
   if (!image_extent.width || !image_extent.height ||
       image_extent.width > max_framebuffer_extent.width ||
       image_extent.height > max_framebuffer_extent.height) {
@@ -1641,7 +1584,7 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
     // specification violation).
     surface_formats.clear();
   }
-#if REX_PLATFORM_ANDROID || REX_PLATFORM_SWITCH
+#if REX_PLATFORM_ANDROID
   // Android and the Switch NWindow use R8G8B8A8 (NVK lists it first there).
   static const VkFormat kFormat8888Primary = VK_FORMAT_R8G8B8A8_UNORM;
   static const VkFormat kFormat8888Secondary = VK_FORMAT_B8G8R8A8_UNORM;
@@ -2037,11 +1980,7 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(bool execute_ui_draw
   profile = PaintSpan(kChunkResetPool, profile);
 
   VkSemaphore acquire_semaphore = paint_submission.acquire_semaphore();
-#if REX_PLATFORM_SWITCH
-  const bool acquire_on_cpu = REXCVAR_GET(present_wait_acquire_on_cpu);
-#else
   const bool acquire_on_cpu = false;
-#endif
   const VkFence acquire_fence = paint_submission.acquire_fence();
   {
     static std::atomic<bool> annotated{false};

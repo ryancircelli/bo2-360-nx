@@ -22,10 +22,6 @@
 #include <rex/system/xcontent.h>
 #include <rex/types.h>
 
-#if REX_PLATFORM_SWITCH
-// newlib has no timegm; switch_libc_supplement.c provides it.
-extern "C" time_t timegm(struct tm* tm);
-#endif
 
 namespace rex::filesystem {
 

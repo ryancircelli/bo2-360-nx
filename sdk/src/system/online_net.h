@@ -26,9 +26,6 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#if REX_PLATFORM_SWITCH
-#include <sys/filio.h>
-#endif
 #endif
 
 namespace rex::system::online::net {
@@ -101,9 +98,6 @@ inline sockaddr_in Address(uint32_t ip, uint16_t port) {
   to.sin_family = AF_INET;
   to.sin_port = htons(port);
   to.sin_addr.s_addr = htonl(ip);
-#if REX_PLATFORM_SWITCH
-  to.sin_len = sizeof(to);
-#endif
   return to;
 }
 

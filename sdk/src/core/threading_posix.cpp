@@ -20,16 +20,6 @@
 
 static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only");
 
-// On Horizon the kernel objects (events, semaphores, mutants, timers, thread exit) wait and signal
-// through the address arbiter instead of a mutex and a condition variable per object; see the comment above the
-// REX_FAST_WAITS PosixConditionBase. REX_FAST_WAITS_TEST builds the same code on Linux (futex) for the stress test
-// in this port's tools/runtime_stress. Every other POSIX build keeps the original implementation.
-#if defined(__SWITCH__) || defined(REX_FAST_WAITS_TEST)
-#define REX_FAST_WAITS 1
-#else
-#define REX_FAST_WAITS 0
-#endif
-
 #include <signal.h>
 #include <sys/mman.h>
 
@@ -55,16 +45,7 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 
 #include <fcntl.h>
 #endif
-#if defined(__SWITCH__)
-// Horizon has no sys/syscall.h. The shim provides affinity, priority, cpu_set_t
-// and the thread id. See core/threading_switch.h.
-#include "threading_switch.h"
-#else
 #include <sys/syscall.h>
-#endif
-#if REX_FAST_WAITS && !defined(__SWITCH__)
-#include <linux/futex.h>
-#endif
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -196,7 +177,7 @@ enum class SignalType {
 };
 
 int GetSystemSignal(SignalType num) {
-#if defined(__APPLE__) || defined(__SWITCH__)
+#if defined(__APPLE__)
   // macOS has no realtime signals (SIGRTMIN..SIGRTMAX); map the runtime's
   // signals onto the two user-defined signals.
   switch (num) {
@@ -216,7 +197,7 @@ int GetSystemSignal(SignalType num) {
 }
 
 SignalType GetSystemSignalType(int num) {
-#if defined(__APPLE__) || defined(__SWITCH__)
+#if defined(__APPLE__)
   switch (num) {
     case SIGUSR1:
       return SignalType::kThreadSuspend;
@@ -243,25 +224,14 @@ static void signal_handler(int signal, siginfo_t* info, void* context);
 // os_unfair_lock". Seen at quit, when TerminateTitle wakes every guest thread while some are exiting.
 // A blocked signal still pending when the thread dies is discarded.
 static void block_thread_signals_for_exit() {
-#if !defined(__SWITCH__)
   sigset_t set;
   sigemptyset(&set);
   sigaddset(&set, GetSystemSignal(SignalType::kThreadSuspend));
   sigaddset(&set, GetSystemSignal(SignalType::kThreadUserCallback));
   pthread_sigmask(SIG_BLOCK, &set, nullptr);
-#endif
 }
 
 void install_signal_handler(SignalType type) {
-#if defined(__SWITCH__)
-  // Horizon does not deliver signals to user processes. Installing the handler
-  // would not fail, it would simply never be called, and that is worse than not
-  // doing it: it would suggest that signal-based suspension works.
-  //
-  // Real suspension goes through svcSetThreadActivity, in Suspend()/Resume().
-  // See core/threading_switch.h.
-  (void)type;
-#else
   bool expected = false;
   if (!signal_handler_installed[static_cast<size_t>(type)].compare_exchange_strong(expected,
                                                                                    true)) {
@@ -274,7 +244,6 @@ void install_signal_handler(SignalType type) {
   if (sigaction(GetSystemSignal(type), &action, nullptr) != 0) {
     signal_handler_installed[static_cast<size_t>(type)] = false;
   }
-#endif
 }
 
 // TODO(dougvj)
@@ -285,8 +254,6 @@ void EnableAffinityConfiguration() {}
 uint32_t current_thread_system_id() {
 #if defined(__APPLE__)
   return static_cast<uint32_t>(pthread_mach_thread_np(pthread_self()));
-#elif defined(__SWITCH__)
-  return RexSwitchCurrentThreadId();
 #else
   return static_cast<uint32_t>(syscall(SYS_gettid));
 #endif
@@ -385,7 +352,6 @@ void Sleep(std::chrono::microseconds duration) {
 // TODO(bwrsandman) Implement by allowing alert interrupts from IO operations
 thread_local bool alertable_state_ = false;
 bool DispatchCurrentThreadUserCallback();
-#if !REX_FAST_WAITS  // the REX_FAST_WAITS version sleeps on the thread's wake word; it is further down
 SleepResult AlertableSleep(std::chrono::microseconds duration) {
   alertable_state_ = true;
   auto deadline = std::chrono::steady_clock::now() + duration;
@@ -403,7 +369,6 @@ SleepResult AlertableSleep(std::chrono::microseconds duration) {
     Sleep(std::min(remaining, std::chrono::microseconds(1000)));
   }
 }
-#endif  // !REX_FAST_WAITS
 
 TlsHandle AllocateTlsHandle() {
   auto key = static_cast<pthread_key_t>(-1);
@@ -445,748 +410,6 @@ static sem_t* RexCreateAnonymousSemaphore() {
 }
 #endif  // __APPLE__
 
-#if REX_FAST_WAITS
-// ===================================================================================================================
-// Waits and signals on the address arbiter.
-//
-// Why: in a console profile the main thread spent 12-27 % of its samples blocked on one event's mutex inside
-// PulseEvent (NtPulseEvent from BO2's job system, sub_8284A910 via sub_82492D48), and the job workers sat on that
-// same mutex and condition variable in Wait. With about ten busy threads at the
-// time-sliced priority 0x3B on three cores, the thread holding the mutex was often not running, and every pulse and
-// every wake-up queued behind it.
-//
-// How: each object keeps its whole state in one 64-bit atomic word.
-//   bits  0..31  the value the kernel compares. Event: bit 0 = signaled, bits 1..31 = a generation that Set and
-//                Pulse advance on manual-reset events, so a thread released by them is released even if the event
-//                is reset again before it runs. Semaphore: the count. Mutant: the recursion count. Thread: exited.
-//   bits 32..47  threads sleeping on this object in a single-object, non-alertable wait.
-//   bit  48      threads waiting on it in WaitMultiple or in an alertable wait (they sleep on their own word).
-// Set, Pulse, Release and Reset are one compare-and-swap, and call the kernel (svcSignalToAddress) only when the
-// old word shows a waiter. A single-object waiter registers in the same compare-and-swap that finds the object not
-// signaled, then sleeps with svcWaitForAddress(WaitIfEqual) on the low 32 bits; if the word changed in between, the
-// kernel returns at once. So the decision to sleep and the decision to wake are each one atomic operation on the
-// same word, with no lock (platform-notes.md, Threads).
-// Multi-object and alertable waits sleep on a word of their own thread (PosixCondition<Thread>::wake_word_). They
-// put a WaitBlock on each object's list (a small mutex that signalers take only when bit 48 is set); a signaler
-// bumps the waiter's word and wakes it. QueueUserCallback bumps it too, so an APC ends an alertable wait at once.
-// No wait sleeps longer than kWakeCheckInterval at a time. A waiter that then finds its object signaled without
-// having been woken reports a lost wake-up in the log (and takes the object); waits longer than kLongWait are
-// logged once. A lost wake-up therefore costs at most a second and shows in the log, instead of hanging.
-// ===================================================================================================================
-
-#if defined(__SWITCH__)
-// Not from switch.h: libnx's global Thread/Event/Timer names clash with rex::thread's (threading_switch.h).
-// The same prototypes as libnx's svc.h.
-extern "C" uint32_t svcWaitForAddress(void* address, uint32_t arb_type, int64_t value, int64_t timeout);
-extern "C" uint32_t svcSignalToAddress(void* address, uint32_t signal_type, int32_t value, int32_t count);
-#endif
-
-#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-#error "the kernel compares the low half of the state word, at its own address: little-endian only"
-#endif
-static_assert(std::atomic<uint64_t>::is_always_lock_free);
-static_assert(sizeof(std::atomic<uint64_t>) == sizeof(uint64_t));
-
-namespace {
-
-enum class AddressWait { kChanged, kTimeout };
-
-// Sleeps while the 32-bit word at address equals expected, for at most timeout_ns (> 0). kChanged covers being
-// woken, a value that already differed and spurious returns: callers always re-read their state.
-AddressWait WaitOnAddress(void* address, uint32_t expected, int64_t timeout_ns) {
-#if defined(__SWITCH__)
-  constexpr uint32_t kArbitrationTypeWaitIfEqual = 2;
-  constexpr uint32_t kKernelErrorTimedOut = 117;
-  constexpr uint32_t kKernelErrorInvalidState = 125;  // the value already differed
-  const uint32_t rc = svcWaitForAddress(address, kArbitrationTypeWaitIfEqual,
-                                        int64_t(int32_t(expected)), timeout_ns);
-  const uint32_t description = (rc >> 9) & 0x1FFF;
-  if (description == kKernelErrorTimedOut) {
-    return AddressWait::kTimeout;
-  }
-  if (rc != 0 && description != kKernelErrorInvalidState) {
-    // Anything else would make the callers spin; say so once.
-    static std::atomic<bool> reported{false};
-    if (!reported.exchange(true)) {
-      REXSYS_WARN("waits: svcWaitForAddress failed with {:#x}", rc);
-    }
-  }
-  return AddressWait::kChanged;
-#else
-  timespec ts{static_cast<time_t>(timeout_ns / 1000000000), static_cast<long>(timeout_ns % 1000000000)};
-  const long rc = syscall(SYS_futex, address, FUTEX_WAIT_PRIVATE, expected, &ts, nullptr, 0);
-  return (rc == -1 && errno == ETIMEDOUT) ? AddressWait::kTimeout : AddressWait::kChanged;
-#endif
-}
-
-// Wakes up to count threads sleeping on address (count <= 0: all of them).
-void WakeAddress(void* address, int32_t count) {
-#if defined(__SWITCH__)
-  constexpr uint32_t kSignalTypeSignal = 0;
-  svcSignalToAddress(address, kSignalTypeSignal, 0, count);
-#else
-  syscall(SYS_futex, address, FUTEX_WAKE_PRIVATE, count <= 0 ? INT_MAX : count, nullptr, nullptr, 0);
-#endif
-}
-
-constexpr uint64_t kValueMask = 0xFFFFFFFFull;
-constexpr uint64_t kWaiterOne = 1ull << 32;
-constexpr uint64_t kWaiterMask = 0xFFFFull << 32;
-constexpr uint64_t kMultiFlag = 1ull << 48;
-constexpr uint64_t kAnyWaiter = kWaiterMask | kMultiFlag;
-
-inline uint32_t ValueOf(uint64_t state) {
-  return static_cast<uint32_t>(state);
-}
-inline uint64_t WithValue(uint64_t state, uint32_t value) {
-  return (state & ~kValueMask) | value;
-}
-
-constexpr auto kWakeCheckInterval = std::chrono::seconds(1);
-constexpr auto kLongWait = std::chrono::seconds(10);
-constexpr uint32_t kWaitLogLimit = 32;  // log lines of each kind per run
-std::atomic<uint32_t> lost_wakeup_lines_{0};
-std::atomic<uint32_t> long_wait_lines_{0};
-std::atomic<uint64_t> lost_wakeups_{0};
-
-// The calling thread's identity, for mutant ownership.
-uintptr_t CurrentThreadToken() {
-  static thread_local char token;
-  return reinterpret_cast<uintptr_t>(&token);
-}
-
-// How long to sleep next: up to the deadline, at most kWakeCheckInterval. 0 once the deadline has passed.
-int64_t NextSleepNs(std::chrono::steady_clock::time_point deadline) {
-  const auto now = std::chrono::steady_clock::now();
-  if (now >= deadline) {
-    return 0;
-  }
-  const auto left = deadline - now;
-  const auto slice = left < kWakeCheckInterval
-                         ? left
-                         : std::chrono::duration_cast<std::chrono::steady_clock::duration>(kWakeCheckInterval);
-  return std::max<int64_t>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(slice).count());
-}
-
-std::chrono::steady_clock::time_point DeadlineAfter(std::chrono::steady_clock::time_point start,
-                                                    std::chrono::milliseconds timeout) {
-  if (timeout == std::chrono::milliseconds::max() ||
-      timeout > std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::time_point::max() - start)) {
-    return std::chrono::steady_clock::time_point::max();
-  }
-  return start + timeout;
-}
-
-int64_t MillisecondsSince(std::chrono::steady_clock::time_point start) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-      .count();
-}
-
-const std::string& CurrentThreadName() {
-  return Thread::GetCurrentThread()->name();
-}
-
-void NoteLostWakeup(const char* what, std::chrono::steady_clock::time_point start) {
-  const uint64_t count = lost_wakeups_.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (lost_wakeup_lines_.fetch_add(1, std::memory_order_relaxed) < kWaitLogLimit) {
-    // A real lost wake-up, unless the thread woken instead of this one has not run for a whole check interval.
-    REXSYS_WARN(
-        "waits: possible lost wake-up #{}: thread '{}' found its {} signaled after {} ms without "
-        "being woken (it took it and went on)",
-        count, CurrentThreadName(), what, MillisecondsSince(start));
-  }
-}
-
-void NoteLongWait(const char* what, std::chrono::steady_clock::time_point start, bool* reported) {
-  if (*reported || std::chrono::steady_clock::now() - start < kLongWait) {
-    return;
-  }
-  *reported = true;
-  if (long_wait_lines_.fetch_add(1, std::memory_order_relaxed) < kWaitLogLimit) {
-    REXSYS_INFO("waits: thread '{}' has waited {} ms for {} (still waiting; logged once per wait)",
-                CurrentThreadName(), MillisecondsSince(start), what);
-  }
-}
-
-// A thread waiting in WaitMultiple or alertably, on one object's list.
-struct WaitBlock {
-  WaitBlock* prev = nullptr;
-  WaitBlock* next = nullptr;
-  std::atomic<uint32_t>* word = nullptr;  // the waiting thread's wake word
-  uint32_t entry = 0;                     // the object's value when the block went in (its generation)
-};
-
-std::atomic<uint32_t>* CurrentThreadWakeWord();  // after PosixCondition<Thread>
-
-// WaitAll checks and takes its objects under this lock, so two WaitAll calls cannot each hold part of a set.
-std::mutex& WaitAllMutex() {
-  static std::mutex mutex;
-  return mutex;
-}
-
-}  // namespace
-
-// Lost wake-ups found so far (the stress test in games/bo2/src/bo2zm_test_waits.cpp reads it).
-uint64_t FastWaitLostWakeups() {
-  return lost_wakeups_.load(std::memory_order_relaxed);
-}
-
-class PosixConditionBase {
- public:
-  enum class Kind : uint8_t { kManualEvent, kAutoEvent, kSemaphore, kMutant, kThread };
-
-  explicit PosixConditionBase(Kind kind = Kind::kThread, uint32_t value = 0) : word_(value), kind_(kind) {
-    if (kind == Kind::kMutant && value != 0) {
-      owner_.store(CurrentThreadToken(), std::memory_order_relaxed);
-    }
-  }
-  virtual ~PosixConditionBase() = default;
-  virtual bool Signal() = 0;
-
-  // A non-alertable wait on this object alone.
-  WaitResult Wait(std::chrono::milliseconds timeout);
-
-  // Any (index of the object taken) or all of objects[0..count). Alertable waits also end with kUserCallback
-  // when a user callback is queued to the thread.
-  static std::pair<WaitResult, size_t> WaitMultiple(PosixConditionBase* const* objects, size_t count,
-                                                    bool wait_all, bool alertable,
-                                                    std::chrono::milliseconds timeout);
-
-  virtual void* native_handle() const { return const_cast<PosixConditionBase*>(this); }
-
-  bool CaptureRewindState(WaitHandleRewindState* state) {
-    state->word = word_.load(std::memory_order_acquire);
-    state->owner = owner_.load(std::memory_order_acquire);
-    state->blocks = blocks_;
-    return true;
-  }
-
-  void Rewind(const WaitHandleRewindState& state) {
-    word_.store(state.word, std::memory_order_release);
-    owner_.store(state.owner, std::memory_order_release);
-    blocks_ = static_cast<WaitBlock*>(state.blocks);
-  }
-
-  // Threads registered as waiting (single-object waits, plus one if any multi-object or alertable wait).
-  uint32_t waiters() const {
-    const uint64_t state = word_.load(std::memory_order_acquire);
-    return uint32_t((state & kWaiterMask) >> 32) + ((state & kMultiFlag) ? 1 : 0);
-  }
-
- protected:
-  // After a successful wait by the calling thread (threads: joined once).
-  virtual void OnAcquired() {}
-
-  // Events, timers and thread exit.
-  void SetSignaled();
-  void ResetSignaled() { word_.fetch_and(~uint64_t(1), std::memory_order_acq_rel); }
-  void PulseSignaled();
-  // Semaphores: adds count unless it would pass maximum.
-  bool AddCount(uint32_t count, uint32_t maximum, uint32_t* previous);
-  // Mutants: false when the calling thread does not own it.
-  bool ReleaseOwnership();
-
- private:
-  bool Satisfiable(uint64_t state, uint32_t entry) const;
-  uint32_t Consumed(uint32_t value) const;
-  bool TryConsume(uint32_t entry);
-  void Acquired();
-  void Unconsume();
-  void WakeAfter(uint64_t old_state, int32_t single_count);
-  void AddBlock(WaitBlock* block);
-  void RemoveBlock(WaitBlock* block);
-  void* address() { return &word_; }  // the kernel reads the low 32 bits there
-  const char* what() const;
-  static bool TryAny(PosixConditionBase* const* objects, const WaitBlock* blocks, size_t count,
-                     size_t* index);
-  static bool TryAll(PosixConditionBase* const* objects, const WaitBlock* blocks, size_t count);
-
-  std::atomic<uint64_t> word_;
-  std::atomic<uintptr_t> owner_{0};  // mutants: CurrentThreadToken() of the owner, 0 while free
-  std::mutex blocks_mutex_;          // blocks_, and bit 48 changes
-  WaitBlock* blocks_ = nullptr;
-  const Kind kind_;
-};
-
-bool PosixConditionBase::Satisfiable(uint64_t state, uint32_t entry) const {
-  const uint32_t value = ValueOf(state);
-  switch (kind_) {
-    case Kind::kManualEvent:
-      return (value & 1) || (value >> 1) != (entry >> 1);
-    case Kind::kAutoEvent:
-    case Kind::kThread:
-      return (value & 1) != 0;
-    case Kind::kSemaphore:
-      return value != 0;
-    case Kind::kMutant:
-      return value == 0 || owner_.load(std::memory_order_relaxed) == CurrentThreadToken();
-  }
-  return false;
-}
-
-uint32_t PosixConditionBase::Consumed(uint32_t value) const {
-  switch (kind_) {
-    case Kind::kAutoEvent:
-      return value & ~1u;
-    case Kind::kSemaphore:
-      return value - 1;
-    case Kind::kMutant:
-      return value + 1;
-    default:
-      return value;
-  }
-}
-
-bool PosixConditionBase::TryConsume(uint32_t entry) {
-  uint64_t state = word_.load(std::memory_order_acquire);
-  while (Satisfiable(state, entry)) {
-    if (kind_ == Kind::kManualEvent || kind_ == Kind::kThread) {
-      return true;  // nothing to take
-    }
-    if (word_.compare_exchange_weak(state, WithValue(state, Consumed(ValueOf(state))),
-                                     std::memory_order_acq_rel, std::memory_order_acquire)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void PosixConditionBase::Acquired() {
-  if (kind_ == Kind::kMutant) {
-    owner_.store(CurrentThreadToken(), std::memory_order_release);
-  }
-  OnAcquired();
-}
-
-// Gives back what TryConsume took (WaitAll found another object taken in the meantime).
-void PosixConditionBase::Unconsume() {
-  switch (kind_) {
-    case Kind::kAutoEvent:
-      SetSignaled();
-      break;
-    case Kind::kSemaphore:
-      AddCount(1, UINT32_MAX, nullptr);
-      break;
-    case Kind::kMutant: {
-      const uint64_t old_state = word_.fetch_sub(1, std::memory_order_acq_rel);
-      if (ValueOf(old_state) == 1) {
-        WakeAfter(old_state, 1);
-      }
-    } break;
-    default:
-      break;
-  }
-}
-
-void PosixConditionBase::WakeAfter(uint64_t old_state, int32_t single_count) {
-  if ((old_state & kWaiterMask) != 0) {
-    WakeAddress(address(), single_count);
-  }
-  if ((old_state & kMultiFlag) != 0) {
-    std::lock_guard<std::mutex> lock(blocks_mutex_);
-    for (WaitBlock* block = blocks_; block; block = block->next) {
-      block->word->fetch_add(1, std::memory_order_acq_rel);
-      WakeAddress(block->word, 1);
-    }
-  }
-}
-
-void PosixConditionBase::SetSignaled() {
-  uint64_t state = word_.load(std::memory_order_relaxed);
-  uint64_t next;
-  do {
-    const uint32_t value = ValueOf(state);
-    if (value & 1) {
-      return;  // already signaled: setting it again releases nobody new
-    }
-    next = WithValue(state, kind_ == Kind::kManualEvent ? (value + 2) | 1 : value | 1);
-  } while (!word_.compare_exchange_weak(state, next, std::memory_order_acq_rel, std::memory_order_relaxed));
-  WakeAfter(state, kind_ == Kind::kAutoEvent ? 1 : -1);
-}
-
-// PulseEvent: releases the threads waiting now and leaves the event non-signaled. Manual-reset: all of them (a
-// new generation). Auto-reset: one, which takes the signal (as with SetEvent). With nobody waiting the pulse only
-// resets the event, as on Windows.
-void PosixConditionBase::PulseSignaled() {
-  uint64_t state = word_.load(std::memory_order_relaxed);
-  uint64_t next;
-  do {
-    const uint32_t value = ValueOf(state);
-    uint32_t next_value;
-    if ((state & kAnyWaiter) == 0) {
-      next_value = value & ~1u;
-    } else if (kind_ == Kind::kManualEvent) {
-      next_value = (value & ~1u) + 2;
-    } else {
-      next_value = value | 1;
-    }
-    next = WithValue(state, next_value);
-  } while (!word_.compare_exchange_weak(state, next, std::memory_order_acq_rel, std::memory_order_relaxed));
-  if ((state & kAnyWaiter) != 0) {
-    WakeAfter(state, kind_ == Kind::kManualEvent ? -1 : 1);
-  }
-}
-
-bool PosixConditionBase::AddCount(uint32_t count, uint32_t maximum, uint32_t* previous) {
-  uint64_t state = word_.load(std::memory_order_relaxed);
-  do {
-    if (count > maximum - ValueOf(state)) {
-      return false;
-    }
-  } while (!word_.compare_exchange_weak(state, WithValue(state, ValueOf(state) + count),
-                                         std::memory_order_acq_rel, std::memory_order_relaxed));
-  if (previous) {
-    *previous = ValueOf(state);
-  }
-  WakeAfter(state, int32_t(std::min<uint32_t>(count, INT32_MAX)));
-  return true;
-}
-
-bool PosixConditionBase::ReleaseOwnership() {
-  if (owner_.load(std::memory_order_relaxed) != CurrentThreadToken()) {
-    return false;
-  }
-  // While the count is not zero only the owner changes it, so plain decrements are enough.
-  const uint32_t count = ValueOf(word_.load(std::memory_order_acquire));
-  if (count == 0) {
-    return false;
-  }
-  if (count > 1) {
-    word_.fetch_sub(1, std::memory_order_acq_rel);
-    return true;
-  }
-  owner_.store(0, std::memory_order_release);
-  WakeAfter(word_.fetch_sub(1, std::memory_order_acq_rel), 1);
-  return true;
-}
-
-void PosixConditionBase::AddBlock(WaitBlock* block) {
-  std::lock_guard<std::mutex> lock(blocks_mutex_);
-  block->prev = nullptr;
-  block->next = blocks_;
-  if (blocks_) {
-    blocks_->prev = block;
-  }
-  blocks_ = block;
-  block->entry = ValueOf(word_.fetch_or(kMultiFlag, std::memory_order_acq_rel));
-}
-
-void PosixConditionBase::RemoveBlock(WaitBlock* block) {
-  std::lock_guard<std::mutex> lock(blocks_mutex_);
-  if (block->prev) {
-    block->prev->next = block->next;
-  } else {
-    blocks_ = block->next;
-  }
-  if (block->next) {
-    block->next->prev = block->prev;
-  }
-  if (!blocks_) {
-    word_.fetch_and(~kMultiFlag, std::memory_order_acq_rel);
-  }
-}
-
-const char* PosixConditionBase::what() const {
-  switch (kind_) {
-    case Kind::kManualEvent:
-      return "manual-reset event";
-    case Kind::kAutoEvent:
-      return "auto-reset event";
-    case Kind::kSemaphore:
-      return "semaphore";
-    case Kind::kMutant:
-      return "mutant";
-    case Kind::kThread:
-      return "thread exit";
-  }
-  return "object";
-}
-
-WaitResult PosixConditionBase::Wait(std::chrono::milliseconds timeout) {
-  // Take the object, or register as a waiter: one compare-and-swap decides.
-  uint64_t state = word_.load(std::memory_order_acquire);
-  for (;;) {
-    if (Satisfiable(state, ValueOf(state))) {
-      if (word_.compare_exchange_weak(state, WithValue(state, Consumed(ValueOf(state))),
-                                       std::memory_order_acq_rel, std::memory_order_acquire)) {
-        Acquired();
-        return WaitResult::kSuccess;
-      }
-    } else if (timeout.count() <= 0) {
-      return WaitResult::kTimeout;
-    } else if ((state & kWaiterMask) == kWaiterMask) {
-      // 65,535 threads already sleep here (never in practice): wait on the thread's own word instead.
-      PosixConditionBase* self = this;
-      return WaitMultiple(&self, 1, false, false, timeout).first;
-    } else if (word_.compare_exchange_weak(state, state + kWaiterOne, std::memory_order_acq_rel,
-                                            std::memory_order_acquire)) {
-      state += kWaiterOne;
-      break;
-    }
-  }
-
-  const uint32_t entry = ValueOf(state);
-  const auto start = std::chrono::steady_clock::now();
-  const auto deadline = DeadlineAfter(start, timeout);
-  bool reported = false;
-  for (;;) {
-    const int64_t sleep_ns = NextSleepNs(deadline);
-    const AddressWait woke =
-        sleep_ns > 0 ? WaitOnAddress(address(), ValueOf(state), sleep_ns) : AddressWait::kTimeout;
-    const bool expired = std::chrono::steady_clock::now() >= deadline;
-    // Leave with the object or on timeout, unregistering in the same compare-and-swap.
-    state = word_.load(std::memory_order_acquire);
-    for (;;) {
-      if (Satisfiable(state, entry)) {
-        if (word_.compare_exchange_weak(state, WithValue(state, Consumed(ValueOf(state))) - kWaiterOne,
-                                         std::memory_order_acq_rel, std::memory_order_acquire)) {
-          if (woke == AddressWait::kTimeout && !expired) {
-            NoteLostWakeup(what(), start);
-          }
-          Acquired();
-          return WaitResult::kSuccess;
-        }
-      } else if (expired) {
-        if (word_.compare_exchange_weak(state, state - kWaiterOne, std::memory_order_acq_rel,
-                                         std::memory_order_acquire)) {
-          return WaitResult::kTimeout;
-        }
-      } else {
-        break;
-      }
-    }
-    if (woke == AddressWait::kTimeout) {
-      NoteLongWait(what(), start, &reported);
-    }
-  }
-}
-
-bool PosixConditionBase::TryAny(PosixConditionBase* const* objects, const WaitBlock* blocks, size_t count,
-                                size_t* index) {
-  for (size_t i = 0; i < count; ++i) {
-    PosixConditionBase* object = objects[i];
-    const uint32_t entry = blocks ? blocks[i].entry : ValueOf(object->word_.load(std::memory_order_acquire));
-    if (object->TryConsume(entry)) {
-      object->Acquired();
-      *index = i;
-      return true;
-    }
-  }
-  return false;
-}
-
-bool PosixConditionBase::TryAll(PosixConditionBase* const* objects, const WaitBlock* blocks, size_t count) {
-  std::lock_guard<std::mutex> lock(WaitAllMutex());
-  auto entry = [&](size_t i) {
-    return blocks ? blocks[i].entry : ValueOf(objects[i]->word_.load(std::memory_order_acquire));
-  };
-  for (size_t i = 0; i < count; ++i) {
-    if (!objects[i]->Satisfiable(objects[i]->word_.load(std::memory_order_acquire), entry(i))) {
-      return false;
-    }
-  }
-  // All of them at once: take each, and give back what was taken if one went in the meantime.
-  size_t taken = 0;
-  while (taken < count && objects[taken]->TryConsume(entry(taken))) {
-    ++taken;
-  }
-  if (taken < count) {
-    for (size_t i = 0; i < taken; ++i) {
-      objects[i]->Unconsume();
-    }
-    return false;
-  }
-  for (size_t i = 0; i < count; ++i) {
-    objects[i]->Acquired();
-  }
-  return true;
-}
-
-std::pair<WaitResult, size_t> PosixConditionBase::WaitMultiple(PosixConditionBase* const* objects,
-                                                               size_t count, bool wait_all,
-                                                               bool alertable,
-                                                               std::chrono::milliseconds timeout) {
-  size_t index = 0;
-  if (wait_all ? TryAll(objects, nullptr, count) : TryAny(objects, nullptr, count, &index)) {
-    return {WaitResult::kSuccess, index};
-  }
-  if (alertable && DispatchCurrentThreadUserCallback()) {
-    return {WaitResult::kUserCallback, 0};
-  }
-  if (timeout.count() <= 0) {
-    return {WaitResult::kTimeout, 0};
-  }
-
-  std::atomic<uint32_t>* word = CurrentThreadWakeWord();
-  constexpr size_t kInlineBlocks = 64;  // the Xbox's MAXIMUM_WAIT_OBJECTS
-  WaitBlock inline_blocks[kInlineBlocks];
-  std::unique_ptr<WaitBlock[]> heap_blocks;
-  WaitBlock* blocks = inline_blocks;
-  if (count > kInlineBlocks) {
-    heap_blocks.reset(new WaitBlock[count]);
-    blocks = heap_blocks.get();
-  }
-  for (size_t i = 0; i < count; ++i) {
-    blocks[i].word = word;
-    objects[i]->AddBlock(&blocks[i]);
-  }
-
-  const auto start = std::chrono::steady_clock::now();
-  const auto deadline = DeadlineAfter(start, timeout);
-  std::pair<WaitResult, size_t> result{WaitResult::kTimeout, 0};
-  bool reported = false;
-  bool woke_by_check = false;
-  for (;;) {
-    // Read the word before looking at the objects: a signal after this read changes it, so the sleep below
-    // returns at once.
-    const uint32_t seen = word->load(std::memory_order_acquire);
-    if (wait_all ? TryAll(objects, blocks, count) : TryAny(objects, blocks, count, &index)) {
-      if (woke_by_check) {
-        NoteLostWakeup(objects[index]->what(), start);
-      }
-      result = {WaitResult::kSuccess, index};
-      break;
-    }
-    if (alertable && DispatchCurrentThreadUserCallback()) {
-      result = {WaitResult::kUserCallback, 0};
-      break;
-    }
-    const int64_t sleep_ns = NextSleepNs(deadline);
-    if (sleep_ns == 0) {
-      break;
-    }
-    woke_by_check = WaitOnAddress(word, seen, sleep_ns) == AddressWait::kTimeout &&
-                    std::chrono::steady_clock::now() < deadline;
-    if (woke_by_check) {
-      NoteLongWait(objects[0]->what(), start, &reported);
-    }
-  }
-  for (size_t i = 0; i < count; ++i) {
-    objects[i]->RemoveBlock(&blocks[i]);
-  }
-  return result;
-}
-
-// There really is no native POSIX handle for a single wait/signal construct
-// pthreads is at a lower level with more handles for such a mechanism.
-template <typename T>
-class PosixCondition {};
-
-template <>
-class PosixCondition<Event> : public PosixConditionBase {
- public:
-  PosixCondition(bool manual_reset, bool initial_state)
-      : PosixConditionBase(manual_reset ? Kind::kManualEvent : Kind::kAutoEvent, initial_state ? 1 : 0) {}
-  virtual ~PosixCondition() = default;
-
-  bool Signal() override {
-    SetSignaled();
-    return true;
-  }
-  void Reset() { ResetSignaled(); }
-  void Pulse() { PulseSignaled(); }
-};
-
-template <>
-class PosixCondition<Semaphore> : public PosixConditionBase {
- public:
-  PosixCondition(uint32_t initial_count, uint32_t maximum_count)
-      : PosixConditionBase(Kind::kSemaphore, initial_count), maximum_count_(maximum_count) {}
-
-  bool Signal() override { return Release(1, nullptr); }
-
-  bool Release(uint32_t release_count, int* out_previous_count) {
-    uint32_t previous = 0;
-    if (!AddCount(release_count, maximum_count_, &previous)) {
-      return false;
-    }
-    if (out_previous_count) {
-      *out_previous_count = static_cast<int>(previous);
-    }
-    return true;
-  }
-
- private:
-  const uint32_t maximum_count_;
-};
-
-template <>
-class PosixCondition<Mutant> : public PosixConditionBase {
- public:
-  explicit PosixCondition(bool initial_owner) : PosixConditionBase(Kind::kMutant, initial_owner ? 1 : 0) {}
-
-  bool Signal() override { return Release(); }
-  bool Release() { return ReleaseOwnership(); }
-};
-
-template <>
-class PosixCondition<Timer> : public PosixConditionBase {
- public:
-  explicit PosixCondition(bool manual_reset)
-      : PosixConditionBase(manual_reset ? Kind::kManualEvent : Kind::kAutoEvent, 0), callback_(nullptr) {}
-
-  virtual ~PosixCondition() { Cancel(); }
-
-  bool Signal() override {
-    SetSignaled();
-    return true;
-  }
-
-  void SetOnce(std::chrono::steady_clock::time_point due_time, std::function<void()> opt_callback) {
-    Cancel();
-
-    std::lock_guard<std::mutex> lock(timer_mutex_);
-
-    callback_ = std::move(opt_callback);
-    ResetSignaled();
-    wait_item_ = QueueTimerOnce(&CompletionRoutine, this, due_time);
-  }
-
-  void SetRepeating(std::chrono::steady_clock::time_point due_time,
-                    std::chrono::milliseconds period, std::function<void()> opt_callback) {
-    Cancel();
-
-    std::lock_guard<std::mutex> lock(timer_mutex_);
-
-    callback_ = std::move(opt_callback);
-    ResetSignaled();
-    wait_item_ = QueueTimerRecurring(&CompletionRoutine, this, due_time, period);
-  }
-
-  void Cancel() {
-    if (auto wait_item = wait_item_.lock()) {
-      wait_item->Disarm();
-    }
-  }
-
-  void* native_handle() const override {
-    assert_always();
-    return nullptr;
-  }
-
- private:
-  static void CompletionRoutine(void* userdata) {
-    assert_not_null(userdata);
-    auto timer = reinterpret_cast<PosixCondition<Timer>*>(userdata);
-    timer->Signal();
-    // As the callback may reset the timer, store local.
-    std::function<void()> callback;
-    {
-      std::lock_guard<std::mutex> lock(timer->timer_mutex_);
-      callback = timer->callback_;
-    }
-    if (callback) {
-      callback();
-    }
-  }
-
-  std::weak_ptr<TimerQueueWaitItem> wait_item_;
-  std::function<void()> callback_;  // Protected by timer_mutex_
-  std::mutex timer_mutex_;
-};
-
-#else  // !REX_FAST_WAITS
 
 // How often an alertable wait checks for queued user callbacks.
 constexpr auto kAlertablePollSlice = std::chrono::milliseconds(1);
@@ -1368,19 +591,7 @@ class PosixConditionBase {
         if (now >= end_time) {
           return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
         }
-#if defined(__SWITCH__)
-        // On Horizon yielding is useless against a lower-priority thread:
-        // svcSleepThread(0) only yields to threads of the same priority. If the
-        // lock holder has lower priority and is on this core, it would never get
-        // to release the lock. A real sleep is needed.
-        const auto pause = timeout == std::chrono::milliseconds::max()
-                               ? std::chrono::microseconds(100)
-                               : std::min(std::chrono::ceil<std::chrono::microseconds>(end_time - now),
-                                          std::chrono::microseconds(100));
-        std::this_thread::sleep_for(pause);
-#else
         MaybeYield();
-#endif
         continue;
       }
 
@@ -1477,7 +688,7 @@ class PosixConditionBase {
   // Takes mutex_ for a wait. On Linux the mutex is robust: a thread that died holding it does not block waits
   // forever.
   bool LockForWait(std::unique_lock<std::mutex>& lock) {
-#if REX_PLATFORM_LINUX && !defined(__SWITCH__)
+#if REX_PLATFORM_LINUX
     auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
     int lock_result = pthread_mutex_lock(native_mutex);
     if (lock_result == EOWNERDEAD) {
@@ -1771,7 +982,6 @@ class PosixCondition<Timer> : public PosixConditionBase {
   const bool manual_reset_;
 };
 
-#endif  // REX_FAST_WAITS
 
 struct ThreadStartData {
   std::function<void()> start_routine;
@@ -1916,11 +1126,6 @@ class PosixCondition<Thread> : public PosixConditionBase {
 
 #if defined(__APPLE__)
   uint32_t system_id() const { return static_cast<uint32_t>(pthread_mach_thread_np(thread_)); }
-#elif defined(__SWITCH__)
-  // pthread_t is a pointer in newlib, not an integer: it has to be reinterpreted.
-  uint32_t system_id() const {
-    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(thread_));
-  }
 #else
   uint32_t system_id() const { return static_cast<uint32_t>(thread_); }
 #endif
@@ -2048,17 +1253,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
       }
     }
 
-#if defined(__SWITCH__)
-    // Horizon does not deliver signals, so there is no way to interrupt another
-    // thread to make it run the call. The callback is queued and runs when the
-    // target thread passes an alertable point (DispatchCurrentThreadUserCallback),
-    // which is where the SDK already drains them.
-    //
-    // A real difference in behavior: on the PC the callback arrives right away;
-    // here it arrives when the thread gets to it. That is enough for guest APCs,
-    // which is what the SDK uses this for.
-    int result = 0;
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     // macOS has no sigqueue/pthread_sigqueue; pthread_kill delivers the signal
     // without the sigval payload.
     int result = pthread_kill(thread_, GetSystemSignal(SignalType::kThreadUserCallback));
@@ -2075,12 +1270,6 @@ class PosixCondition<Thread> : public PosixConditionBase {
     if (result != 0) {
       REXSYS_WARN("QueueUserCallback: signal delivery failed ({})", result);
     }
-#if REX_FAST_WAITS
-    // An alertable wait sleeps on this word (bumped after the callback is queued above), so the
-    // callback ends it now instead of at the next 1 ms poll.
-    wake_word_.fetch_add(1, std::memory_order_acq_rel);
-    WakeAddress(&wake_word_, 1);
-#endif
   }
 
   // Set while user callbacks are queued; an alertable wait ends when it is set.
@@ -2123,15 +1312,6 @@ class PosixCondition<Thread> : public PosixConditionBase {
     --suspend_count_;
     if (suspend_count_ == 0 && state_ == State::kSuspended) {
       state_ = State::kRunning;
-#if defined(__SWITCH__)
-      // Counterpart of RexSwitchPauseThread in Suspend(). The semaphore below
-      // wakes a thread that suspended itself from WaitSuspended(); this call
-      // resumes a thread that was paused from outside. Both are needed,
-      // because they are two different suspension paths.
-      if (!pthread_equal(thread_, pthread_self())) {
-        RexSwitchResumeThread(thread_);
-      }
-#endif
       // Async-signal-safe wakeup for WaitSuspended() from signal handler path.
       sem_post(suspend_sem_ptr());
     }
@@ -2166,21 +1346,8 @@ class PosixCondition<Thread> : public PosixConditionBase {
       return true;
     }
 
-#if defined(__SWITCH__)
-    // Careful: pthread_kill does not work here.
-    //
-    // On Horizon newlib accepts the call and returns 0, but the signal is never
-    // delivered. The result would be the worst possible: the state would say
-    // kSuspended, the function would return true, and the thread would keep
-    // running happily. A bug that compiles, gives no warning and shows up later
-    // as random corruption.
-    //
-    // svcSetThreadActivity is the system's real mechanism.
-    return RexSwitchPauseThread(thread_) == 0;
-#else
     int result = pthread_kill(thread_, GetSystemSignal(SignalType::kThreadSuspend));
     return result == 0;
-#endif
   }
 
   void Terminate(int exit_code) {
@@ -2201,10 +1368,6 @@ class PosixCondition<Thread> : public PosixConditionBase {
       state_ = State::kFinished;
     }
 
-#if REX_FAST_WAITS
-    exit_code_ = exit_code;
-    SetSignaled();
-#else
     {
       std::lock_guard<std::mutex> lock(mutex_);
 
@@ -2212,7 +1375,6 @@ class PosixCondition<Thread> : public PosixConditionBase {
       signaled_ = true;
       cond_.notify_all();
     }
-#endif
     if (is_current_thread) {
       block_thread_signals_for_exit();
       pthread_exit(reinterpret_cast<void*>(exit_code));
@@ -2248,25 +1410,13 @@ class PosixCondition<Thread> : public PosixConditionBase {
 
   void* native_handle() const override { return reinterpret_cast<void*>(thread_); }
 
-#if REX_FAST_WAITS
-  // Multi-object and alertable waits of this thread sleep on this word; signalers and QueueUserCallback bump it.
-  std::atomic<uint32_t>* wake_word() { return &wake_word_; }
-#endif
 
  private:
   static void* ThreadStartRoutine(void* parameter);
-#if REX_FAST_WAITS
-  // Every successful wait used to run this; join only once (a second pthread_join is undefined).
-  void OnAcquired() override {
-    if (joined_.exchange(true, std::memory_order_acq_rel)) {
-      return;
-    }
-#else
   uint64_t CaptureRewindValue() const override { return signaled_; }
   void RestoreRewindValue(uint64_t value) override { signaled_ = value != 0; }
   inline bool signaled() const override { return signaled_; }
   inline void post_execution() override {
-#endif
     if (thread_) {
       pthread_join(thread_, nullptr);
     }
@@ -2296,10 +1446,6 @@ class PosixCondition<Thread> : public PosixConditionBase {
   mutable std::condition_variable state_signal_;
   std::deque<std::function<void()>> user_callbacks_;
   std::atomic<bool> has_pending_user_callbacks_{false};
-#if REX_FAST_WAITS
-  std::atomic<uint32_t> wake_word_{0};
-  std::atomic<bool> joined_{false};
-#endif
 #if REX_PLATFORM_ANDROID
   // Name accessible via name() on Android before API 26 which added
   // pthread_getname_np.
@@ -2325,55 +1471,13 @@ bool DispatchCurrentThreadUserCallback() {
   return current_thread_condition_ && current_thread_condition_->DispatchQueuedUserCallbacks();
 }
 
-#if !REX_FAST_WAITS
 const std::atomic<bool>* CurrentThreadPendingUserCallbacksFlag() {
   if (!current_thread_condition_) {
     Thread::GetCurrentThread();
   }
   return current_thread_condition_ ? current_thread_condition_->pending_user_callbacks_flag() : nullptr;
 }
-#endif
 
-#if REX_FAST_WAITS
-// For the stress test (games/bo2/src/bo2zm_test_waits.cpp): how many threads wait on handle right now, so it can pulse
-// only once they are all inside the wait.
-uint32_t FastWaitWaiters(WaitHandle* handle) {
-  auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(handle);
-  return posix_wait_handle ? posix_wait_handle->condition().waiters() : 0;
-}
-
-namespace {
-
-std::atomic<uint32_t>* CurrentThreadWakeWord() {
-  if (!current_thread_condition_) {
-    Thread::GetCurrentThread();
-  }
-  return current_thread_condition_->wake_word();
-}
-
-}  // namespace
-
-// Sleeps on the thread's wake word, so a queued user callback (APC) ends the sleep at once. The
-// original polled the callback queue every millisecond.
-SleepResult AlertableSleep(std::chrono::microseconds duration) {
-  alertable_state_ = true;
-  std::atomic<uint32_t>* word = CurrentThreadWakeWord();
-  const auto deadline = std::chrono::steady_clock::now() + duration;
-  for (;;) {
-    const uint32_t seen = word->load(std::memory_order_acquire);
-    if (DispatchCurrentThreadUserCallback()) {
-      alertable_state_ = false;
-      return SleepResult::kAlerted;
-    }
-    const int64_t sleep_ns = NextSleepNs(deadline);
-    if (sleep_ns == 0) {
-      alertable_state_ = false;
-      return SleepResult::kSuccess;
-    }
-    WaitOnAddress(word, seen, sleep_ns);
-  }
-}
-#endif  // REX_FAST_WAITS
 
 namespace {
 
@@ -2394,7 +1498,6 @@ class ScopedAlertableState {
   bool alertable_;
 };
 
-#if !REX_FAST_WAITS
 std::chrono::steady_clock::time_point ComputeAlertableDeadline(std::chrono::milliseconds timeout) {
   if (timeout == std::chrono::milliseconds::max()) {
     return std::chrono::steady_clock::time_point::max();
@@ -2421,7 +1524,6 @@ std::chrono::milliseconds ComputeAlertableWaitTimeout(
   }
   return std::min(remaining, kAlertablePollSlice);
 }
-#endif  // !REX_FAST_WAITS
 
 }  // namespace
 
@@ -2474,69 +1576,6 @@ void RewindWaitHandle(WaitHandle* handle, const WaitHandleRewindState& state) {
   }
 }
 
-#if REX_FAST_WAITS
-WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
-  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
-  auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
-  if (posix_wait_handle == nullptr) {
-    return WaitResult::kFailed;
-  }
-  PosixConditionBase* condition = &posix_wait_handle->condition();
-  if (!is_alertable) {
-    return condition->Wait(timeout);
-  }
-  ScopedAlertableState alertable_state_guard(true);
-  return PosixConditionBase::WaitMultiple(&condition, 1, false, true, timeout).first;
-}
-
-WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_handle_to_wait_on,
-                         bool is_alertable, std::chrono::milliseconds timeout) {
-  auto posix_wait_handle_to_signal = dynamic_cast<PosixWaitHandle*>(wait_handle_to_signal);
-  auto posix_wait_handle_to_wait_on = dynamic_cast<PosixWaitHandle*>(wait_handle_to_wait_on);
-  if (posix_wait_handle_to_signal == nullptr || posix_wait_handle_to_wait_on == nullptr) {
-    return WaitResult::kFailed;
-  }
-  if (!posix_wait_handle_to_signal->condition().Signal()) {
-    return WaitResult::kFailed;
-  }
-  PosixConditionBase* condition = &posix_wait_handle_to_wait_on->condition();
-  if (!is_alertable) {
-    return condition->Wait(timeout);
-  }
-  ScopedAlertableState alertable_state_guard(true);
-  return PosixConditionBase::WaitMultiple(&condition, 1, false, true, timeout).first;
-}
-
-std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wait_handle_count,
-                                           bool wait_all, bool is_alertable,
-                                           std::chrono::milliseconds timeout) {
-  SpinScope spin;  // wait mechanics count as spin in the deterministic bench
-  if (wait_handle_count == 0) {
-    return std::make_pair(WaitResult::kFailed, 0);
-  }
-  // No allocation for the usual counts (each malloc takes newlib's global heap lock).
-  constexpr size_t kInlineConditions = 64;
-  PosixConditionBase* inline_conditions[kInlineConditions];
-  std::unique_ptr<PosixConditionBase*[]> heap_conditions;
-  PosixConditionBase** conditions = inline_conditions;
-  if (wait_handle_count > kInlineConditions) {
-    heap_conditions.reset(new PosixConditionBase*[wait_handle_count]);
-    conditions = heap_conditions.get();
-  }
-  for (size_t i = 0u; i < wait_handle_count; ++i) {
-    auto handle = dynamic_cast<PosixWaitHandle*>(wait_handles[i]);
-    if (handle == nullptr) {
-      return std::make_pair(WaitResult::kFailed, 0);
-    }
-    conditions[i] = &handle->condition();
-  }
-  if (wait_handle_count == 1 && !is_alertable) {
-    return std::make_pair(conditions[0]->Wait(timeout), size_t(0));
-  }
-  ScopedAlertableState alertable_state_guard(is_alertable);
-  return PosixConditionBase::WaitMultiple(conditions, wait_handle_count, wait_all, is_alertable, timeout);
-}
-#else  // !REX_FAST_WAITS
 WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {
   SpinScope spin;  // wait mechanics count as spin in the deterministic bench
   auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);
@@ -2652,7 +1691,6 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
     }
   }
 }
-#endif  // REX_FAST_WAITS
 
 class PosixEvent : public PosixConditionHandle<Event> {
  public:
@@ -2836,12 +1874,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
 
   current_thread_ = thread;
   current_thread_condition_ = &thread->handle_;
-#if defined(__SWITCH__)
-  // The pthread_t -> Horizon handle registry (threading_switch.h), before the started state is published: every
-  // priority or affinity change made from another thread looks the handle up there. Without this registration every
-  // such change fails with ESRCH ("set_priority: pthread_setschedparam failed (3)").
-  RexSwitchRegisterCurrentThread();
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
   // Guest threads (game, render, audio) at the user-interactive QoS class, as the main thread already is: the
   // default class lets macOS move them to efficiency cores and delay their wake-ups. Only a thread itself can set
   // its class once it runs.
@@ -2871,25 +1904,17 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
 
   start_routine();
 
-#if defined(__SWITCH__)
-  RexSwitchUnregisterCurrentThread();
-#endif
   {
     std::unique_lock<std::mutex> lock(thread->handle_.state_mutex_);
     thread->handle_.state_ = State::kFinished;
   }
 
-#if REX_FAST_WAITS
-  thread->handle_.exit_code_ = 0;
-  thread->handle_.SetSignaled();
-#else
   {
     std::unique_lock<std::mutex> lock(thread->handle_.mutex_);
     thread->handle_.exit_code_ = 0;
     thread->handle_.signaled_ = true;
     thread->handle_.cond_.notify_all();
   }
-#endif
 
   block_thread_signals_for_exit();
   current_thread_ = nullptr;

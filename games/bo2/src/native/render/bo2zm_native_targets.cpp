@@ -53,20 +53,11 @@
 
 #include "bo2zm_native_draws.h"  // g_probe_vertex_address
 #include "bo2zm_native_depth_resolve.h"
-#if defined(__SWITCH__)
-extern "C" void armDCacheFlush(void* address, size_t size);  // libnx
-#endif
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 
-#if REX_PLATFORM_SWITCH
-// Counter 0 of the console profiler (game FPS), the same one IssueSwap of the emulated path uses.
-extern "C" void RexSwitchPerfCount(unsigned id);
-// Interval of a long frame for stack sampling (the SDK profiler's section on stutters).
-extern "C" void RexSwitchPerfHitch(uint64_t start, uint64_t end);
-#endif
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -2405,24 +2396,11 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     // draws. Inside the paint call it would be another thread and the window would catch an arbitrary piece
     // of the frame (a fraction of the shadow draws).
     OpenWindowDiagnostic();
-#if REX_PLATFORM_SWITCH
-    RexSwitchPerfCount(0);  // the profiler's "game N fps", which read 0.0 with the native renderer
-#endif
     // Histogram of intervals between Swaps (C2 report): whether they come in vsync steps or spread out.
     {
       const auto now = std::chrono::steady_clock::now();
       if (last_swap_ != std::chrono::steady_clock::time_point{}) {
         const double ms = std::chrono::duration<double, std::milli>(now - last_swap_).count();
-#if REX_PLATFORM_SWITCH
-        // Frames over 45 ms go to stack sampling. The window starts one normal frame (33 ms) earlier, because
-        // the game thread prepares the frame ahead of the ring. Ticks at 19.2 MHz.
-        if (ms > 45.0) {
-          uint64_t end;
-          asm volatile("mrs %0, cntpct_el0" : "=r"(end));  // libnx's armGetSystemTick
-          const uint64_t run_length = uint64_t((ms + 33.3) * 19200.0);
-          RexSwitchPerfHitch(end > run_length ? end - run_length : 0, end);
-        }
-#endif
         const uint32_t bucket = ms < 15.0    ? 0
                                 : ms < 18.0  ? 1
                                 : ms < 25.0  ? 2
@@ -2752,9 +2730,6 @@ class VulkanTargets final : public NativeTargets, public TargetContext {
     bool match = false;
     size_t first_difference = 0;
     if (!failed) {
-#if defined(__SWITCH__)
-      armDCacheFlush(host, size_t(bytes));  // the CPU's writes, out to memory for the GPU
-#endif
       VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       dfn_.vkBeginCommandBuffer(commands, &begin);

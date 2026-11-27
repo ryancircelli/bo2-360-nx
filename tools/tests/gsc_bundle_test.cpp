@@ -194,9 +194,6 @@ int main(int argc, char** argv) {
     Reject([&] { ReadBotBundle(root / "linked-folder" / file.filename()); }, "linked");
     fs::remove(root / "linked-folder");
   }
-#if defined(__SWITCH__)
-  assert(LocalPath("sdmc:/switch/bo2zm/bo2zm_bots.gscpack") == fs::path("sdmc:/switch/bo2zm/bo2zm_bots.gscpack"));
-#endif
   assert(fs::equivalent(root.parent_path(), fs::temp_directory_path()) &&
          root.filename().string().starts_with("bo2-gsc-bundle-test-"));
   fs::remove_all(root);

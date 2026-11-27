@@ -15,23 +15,12 @@
 #include "bo2zm_relaunch.h"
 #include "bo2zm_updates.h"
 
-#if defined(__SWITCH__)
-#include <switch.h>
-
-#include "bo2zm_benchmark.h"
-#endif
 
 namespace bo2zm::lifecycle {
 
 bool Prepare() { return true; }
 
 void OnBoot() {
-#if defined(__SWITCH__)
-  // Nobody touches the controller during the benchmark route: without this the console would fall asleep in it.
-  if (bo2zm::benchmark::IsActive()) {
-    appletSetAutoSleepDisabled(true);
-  }
-#endif
 }
 
 void OnBenchmarkDone() {}
@@ -46,8 +35,3 @@ void EveryFrame(PPCContext&, uint8_t*) {}
 void Stop() {}
 }  // namespace bo2zm::updates
 
-#if defined(__SWITCH__)
-namespace {
-__attribute__((constructor(101))) void HandOverEarlyAtStart() { bo2zm::HandOverEarly(); }
-}  // namespace
-#endif

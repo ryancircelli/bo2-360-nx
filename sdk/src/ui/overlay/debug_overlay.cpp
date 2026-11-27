@@ -132,9 +132,6 @@ void DebugOverlayDialog::PositionAfterBegin(ImGuiIO& io) {
 
 void DebugOverlayDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-#if REX_PLATFORM_SWITCH
-  PositionBeforeBegin(io);
-#endif
 #ifdef REXGLUE_ENABLE_PERF_COUNTERS
   ImGui::SetNextWindowSize(ImVec2(280, 280), ImGuiCond_FirstUseEver);
 #else
@@ -147,9 +144,6 @@ void DebugOverlayDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Begin("Debug##overlay", nullptr,
                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoNavInputs |
                        ImGuiWindowFlags_NoFocusOnAppearing)) {
-#if REX_PLATFORM_SWITCH
-    PositionAfterBegin(io);
-#endif
     if (stats_provider_) {
       auto stats = stats_provider_();
       if (stats.frame_count > 0) {

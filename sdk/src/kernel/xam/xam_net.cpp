@@ -285,37 +285,9 @@ static void SetLastSocketError(const char* call, bool receiving = false) {
     case EHOSTUNREACH: wsa = 10065; break;
     case EACCES: wsa = 10013; break;
     default: {
-#if REX_PLATFORM_SWITCH
-      if (receiving) {
-        wsa = 10035;  // WSAEWOULDBLOCK
-      }
-#endif
       break;
     }
   }
-#if REX_PLATFORM_SWITCH
-  // The network going away is "no data yet" for recv/recvfrom too. BO2's receive loop (sub_824E1A40)
-  // accepts only WSAEWOULDBLOCK and drops the match on anything else ("Failed to recvfrom() socket"), then relaunches
-  // the title. After the Switch wakes from sleep the interface is down and every poll of the bound socket fails with
-  // ENETDOWN; offline nothing arrives on it anyway. Sends keep their code: the game only counts them as
-  // failed.
-  if (receiving) {
-    switch (wsa) {
-      case 10050:  // WSAENETDOWN
-      case 10051:  // WSAENETUNREACH
-      case 10053:  // WSAECONNABORTED
-      case 10054:  // WSAECONNRESET
-      case 10057:  // WSAENOTCONN
-      case 10060:  // WSAETIMEDOUT
-      case 10061:  // WSAECONNREFUSED
-      case 10065:  // WSAEHOSTUNREACH
-        wsa = 10035;  // WSAEWOULDBLOCK
-        break;
-      default:
-        break;
-    }
-  }
-#endif
   // Log real failures (not "no data yet") with the call name. The
   // first 32, then one in 1000: BO2 polls its sockets every frame.
   if (wsa != 10035 || errno != EAGAIN) {

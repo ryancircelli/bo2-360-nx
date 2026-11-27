@@ -21,11 +21,7 @@
 
 // On by default on the Switch: together with plain guest memory, the native sound limiter and the entity loops it
 // raised the frame rate at round 15 from 40.9 to 43.3 FPS (+5.8 %) on an OLED. Not tried on the PC yet, so off there.
-#if defined(__SWITCH__)
-constexpr bool kGpuSkinDefault = true;
-#else
 constexpr bool kGpuSkinDefault = false;
-#endif
 REXCVAR_DEFINE_BOOL(bo2zm_gpu_skin, kGpuSkinDefault, "BO2",
                     "Native renderer: the three CPU skinning kernels become GPU work. Their hooks record "
                     "each call and the renderer skins the vertices with a compute pass where it would copy them "

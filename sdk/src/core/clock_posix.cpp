@@ -20,12 +20,6 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #include <mach/mach_time.h>
 #endif
 
-#if REX_PLATFORM_SWITCH
-// Only the counter header: switch.h drags typedefs (Thread, Mutex, Event) that
-// collide with rex::thread.
-#include <switch/types.h>
-#include <switch/arm/counter.h>
-#endif
 
 namespace rex::chrono {
 
@@ -34,14 +28,6 @@ uint64_t Clock::host_tick_frequency_platform() {
   mach_timebase_info_data_t info;
   mach_timebase_info(&info);
   return (uint64_t)((1000000000ull * (uint64_t)info.denom) / (uint64_t)info.numer);
-#elif REX_PLATFORM_SWITCH
-  // libnx only accepts CLOCK_REALTIME and CLOCK_MONOTONIC: CLOCK_MONOTONIC_RAW
-  // fails with EINVAL and the assert below aborted the process during static
-  // initialization. CLOCK_MONOTONIC is not a drop-in either: clock_getres
-  // reports 52 ns while clock_gettime returns nanoseconds, so the formula below
-  // would make guest time run 52 times slower. The system counter is exact and
-  // a single register read.
-  return armGetSystemTickFreq();
 #else
   timespec res;
   int error = clock_getres(CLOCK_MONOTONIC_RAW, &res);
@@ -60,9 +46,6 @@ uint64_t Clock::host_tick_count_platform() {
   // clock_gettime(CLOCK_MONOTONIC_RAW) returns nanoseconds, which would be
   // inconsistent with the 24 MHz mach frequency and cause ~41x time acceleration.
   return mach_absolute_time();
-#elif REX_PLATFORM_SWITCH
-  // Same ticks that host_tick_frequency_platform() measures.
-  return armGetSystemTick();
 #else
   timespec tp;
   int error = clock_gettime(CLOCK_MONOTONIC_RAW, &tp);

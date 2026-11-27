@@ -63,19 +63,6 @@
 #endif
 #endif
 
-#if REX_PLATFORM_SWITCH
-// Horizon surface (nn::vi). Measured on the console: NVK really implements it
-// and presents without errors.
-#ifndef VK_USE_PLATFORM_VI_NN
-#define VK_USE_PLATFORM_VI_NN
-#endif
-// vulkan.hpp brings a dynamic loader that only recognizes __unix__, __APPLE__, QNX
-// and Fuchsia, and on any other platform aborts with "unsupported platform". On
-// Switch there is nothing to load: NVK is linked into the executable.
-#ifndef VULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL
-#define VULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL 0
-#endif
-#endif
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_hpp_macros.hpp>

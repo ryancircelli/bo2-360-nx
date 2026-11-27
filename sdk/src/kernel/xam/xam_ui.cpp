@@ -40,9 +40,6 @@ REXCVAR_DEFINE_BOOL(headless, false, "Kernel",
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
 
-#if REX_PLATFORM_SWITCH
-#include <switch.h>
-#endif
 
 namespace rex {
 namespace kernel {
@@ -607,25 +604,6 @@ int64_t SteadyMs() {
 // The platform's keyboard, on the worker thread; nothing when cancelled or unavailable.
 std::optional<std::string> RunTextInput(const std::string& title, const std::string& default_text,
                                         size_t max_length) {
-#if REX_PLATFORM_SWITCH
-  SwkbdConfig config;
-  if (R_FAILED(swkbdCreate(&config, 0))) {
-    REXKRNL_WARN("ShowTextInput: the software keyboard could not be created");
-    return std::nullopt;
-  }
-  swkbdConfigMakePresetDefault(&config);
-  swkbdConfigSetHeaderText(&config, title.c_str());
-  swkbdConfigSetGuideText(&config, title.c_str());
-  swkbdConfigSetInitialText(&config, default_text.c_str());
-  swkbdConfigSetStringLenMax(&config, static_cast<uint32_t>(max_length));
-  std::vector<char> out(max_length * 4 + 1, '\0');  // UTF-8: up to 4 bytes a character
-  const Result result = swkbdShow(&config, out.data(), out.size());
-  swkbdClose(&config);
-  if (R_FAILED(result)) {
-    return std::nullopt;  // cancelled, or the applet did not run
-  }
-  return std::string(out.data());
-#else
   const Runtime* emulator = REX_KERNEL_STATE()->emulator();
   ui::ImGuiDrawer* imgui_drawer = emulator ? emulator->imgui_drawer() : nullptr;
   rex::ui::WindowedAppContext* app_context = emulator ? emulator->app_context() : nullptr;
@@ -649,7 +627,6 @@ std::optional<std::string> RunTextInput(const std::string& title, const std::str
     delete dialog;
   }
   return text;
-#endif
 }
 
 }  // namespace

@@ -139,9 +139,7 @@ std::string LiveControlCommand(const std::string& command, const std::string& ar
   if (command == "timescale") return Timescale(args);
   if (command == "savepoint") return Savepoint(args);
   if (command == "record") return Record(args);
-#if !REX_PLATFORM_SWITCH
   if (std::string pad = input::script::LivePadCommand(command, args); !pad.empty()) return pad;
-#endif
   return {};
 }
 

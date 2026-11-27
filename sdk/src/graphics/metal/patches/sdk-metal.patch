@@ -5951,10 +5951,9 @@ index 9ae30ab..7d209af 100644
        SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
        // We've run out of commands to execute.
        // We spin here waiting for new ones, as the overhead of waiting on our
-@@ -240,9 +271,7 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -240,8 +271,6 @@ void CommandProcessor::WorkerThreadMain() {
          rex::thread::MaybeYield();
          loop_count++;
- #endif
 -        write_ptr_index = write_ptr_index_.load();
 -      } while (worker_running_ && pending_fns_.empty() &&
 -               (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));

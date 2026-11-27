@@ -9,10 +9,6 @@
 #if defined(_WIN32)
 #include <windows.h>
 #endif
-#if defined(__SWITCH__)
-extern "C" int __system_argc;
-extern "C" char** __system_argv;
-#endif
 
 namespace bo2zm::launch {
 namespace {
@@ -78,13 +74,6 @@ int CachedDefault(const std::filesystem::path& root) {
 }  // namespace
 
 std::filesystem::path SharedUserRoot(const std::filesystem::path& runtime_user_dir) {
-#if defined(__SWITCH__)
-  if (__system_argc > 0 && __system_argv && __system_argv[0] && *__system_argv[0]) {
-    return (std::filesystem::path(__system_argv[0]).parent_path() / "user").lexically_normal();
-  }
-  // Do not touch runtime-only static state when early startup has no argv.
-  return runtime_user_dir.lexically_normal();
-#else
   if (!runtime_user_dir.empty()) {
     const auto root = runtime_user_dir.lexically_normal();
     if (root.filename() == "bo2cp") {
@@ -93,7 +82,6 @@ std::filesystem::path SharedUserRoot(const std::filesystem::path& runtime_user_d
     return root;
   }
   return ConfiguredRoot();
-#endif
 }
 
 int ReadDefaultModeIndexEarly(const std::filesystem::path& user_root) {
@@ -189,25 +177,6 @@ bool SetDefaultModeIndex(int index, const std::filesystem::path& user_root) {
 #if defined(_WIN32)
     replaced = MoveFileExW(temporary.c_str(), destination.c_str(),
                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#elif defined(__SWITCH__)
-    const std::string source = temporary.string();
-    const std::string target = destination.string();
-    const auto backup = user_root / "launch_options.txt.bak";
-    replaced = std::rename(source.c_str(), target.c_str()) == 0;
-    if (!replaced && std::filesystem::is_regular_file(destination, ec) && !ec) {
-      // Horizon rename does not replace an existing destination. Keep the old
-      // record recoverable until the closed temporary file has taken its place.
-      std::filesystem::remove(backup, ec);
-      if (!ec && std::rename(target.c_str(), backup.string().c_str()) == 0) {
-        replaced = std::rename(source.c_str(), target.c_str()) == 0;
-        if (!replaced) {
-          std::rename(backup.string().c_str(), target.c_str());
-        }
-      }
-    }
-    if (replaced) {
-      std::filesystem::remove(backup, ec);
-    }
 #else
     // Same-directory rename replaces the old record without first deleting it.
     replaced = std::rename(temporary.string().c_str(), destination.string().c_str()) == 0;

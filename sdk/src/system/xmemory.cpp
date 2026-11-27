@@ -167,17 +167,6 @@ bool Memory::Initialize() {
     return false;
   }
   mapping_base_ = views_.all_views[0];
-#elif REX_PLATFORM_SWITCH
-  // Horizon does not allow fixed addresses: the kernel chooses the guest window,
-  // which CreateFileMappingHandle reserved. We ask where it ended up and carve the
-  // views inside it, like macOS but without mmap. Trying 1<<32, 1<<33... as Linux
-  // does would always fail.
-  mapping_base_ = static_cast<uint8_t*>(rex::memory::GetFileMappingBase(mapping_));
-  if (!mapping_base_ || MapViews(mapping_base_)) {
-    REXSYS_ERROR("Unable to map the guest views into the Switch guest window.");
-    assert_always();
-    return false;
-  }
 #else
   // Attempt to create our views. This may fail at the first address
   // we pick, so try a few times.
@@ -239,22 +228,9 @@ bool Memory::Initialize() {
 
   // Pre-commit the physical memory range so the GPU can access it
   // without page faults. Reference: xenia-canary 5f5be0668.
-#if REX_PLATFORM_SWITCH
-  // Not on Switch. It is 512 MB, and on Horizon each chunk is also mapped into the
-  // five views the 360 has over physical memory (0x7F..., 0xA0..., 0xC0...,
-  // 0xE0... and raw physical), so the process ends up accounting for more than
-  // 2 GB and the kernel refuses the next allocation. Measured: the game stayed
-  // black after the publisher logo with "could not commit 0x6A0000 bytes; fallback
-  // 578 MB, mapped 2139 MB counting mirrors" (2001-0103).
-  //
-  // Instead, physical memory is committed as it is touched: the first access to an
-  // uncommitted page lands in the exception handler, which commits 1 MB and
-  // retries the instruction (exception_handler_switch.cpp, step 0).
-#else
   rex::memory::AllocFixed(heaps_.physical.TranslateRelative(0), heaps_.physical.heap_size(),
                           rex::memory::AllocationType::kCommit,
                           rex::memory::PageAccess::kReadWrite);
-#endif
 
   // Install MMIO handler for physical address translation and MMIO ranges
   mmio_handler_ = runtime::MMIOHandler::Install(
@@ -957,14 +933,7 @@ static rex::memory::PageAccess ToHostPageAccess(uint32_t protect, memory::HeapTy
                                                  bool raw_physical_view) {
   if (raw_physical_view) return rex::memory::PageAccess::kReadWrite;
   const rex::memory::PageAccess access = ToPageAccess(protect);
-#if REX_PLATFORM_SWITCH
-  if (access == rex::memory::PageAccess::kReadOnly &&
-      heap_type != memory::HeapType::kGuestPhysical) {
-    return rex::memory::PageAccess::kReadWrite;
-  }
-#else
   (void)heap_type;
-#endif
   return access;
 }
 
@@ -1857,12 +1826,7 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect, uint32
     }
 
     if (old_protect) {
-#if REX_PLATFORM_SWITCH
-      // The host permission is no longer the guest's (ToHostPageAccess).
-      *old_protect = page_table_[start_page_number].current_protect;
-#else
       *old_protect = FromPageAccess(old_protect_access);
-#endif
     }
   } else {
     if (old_protect) {

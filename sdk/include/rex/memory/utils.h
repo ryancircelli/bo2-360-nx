@@ -151,11 +151,6 @@ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::pat
 void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, PageAccess access,
                   size_t file_offset);
 bool UnmapFileView(FileMappingHandle handle, void* base_address, size_t length);
-#if REX_PLATFORM_SWITCH
-// Base where a mapping ended up. Switch only: Horizon picks the address of the guest window and
-// xmemory.cpp has to query it instead of fixing it.
-void* GetFileMappingBase(FileMappingHandle handle);
-#endif  // REX_PLATFORM_SWITCH
 
 inline size_t hash_combine(size_t seed) {
   return seed;

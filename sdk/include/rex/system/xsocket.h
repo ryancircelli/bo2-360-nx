@@ -30,23 +30,12 @@ struct N_XSOCKADDR {
   N_XSOCKADDR() {}
   N_XSOCKADDR(const XSOCKADDR* other) { *this = *other; }
   N_XSOCKADDR& operator=(const XSOCKADDR& other) {
-#if REX_PLATFORM_SWITCH
-    sa_len = sizeof(N_XSOCKADDR);
-#endif
     address_family = other.address_family;
     std::memcpy(sa_data, other.sa_data, rex::countof(sa_data));
     return *this;
   }
 
-#if REX_PLATFORM_SWITCH
-  // Horizon's sockets use the BSD layout (8-bit length, then
-  // 8-bit family). With a 16-bit family the kernel read family 0 and every
-  // bind failed (BO2: "Failed to bind socket, error 31").
-  uint8_t sa_len;
-  uint8_t address_family;
-#else
   uint16_t address_family;
-#endif
   char sa_data[14];
 };
 
@@ -65,9 +54,6 @@ struct N_XSOCKADDR_IN {
   N_XSOCKADDR_IN() {}
   N_XSOCKADDR_IN(const XSOCKADDR_IN* other) { *this = *other; }
   N_XSOCKADDR_IN& operator=(const XSOCKADDR_IN& other) {
-#if REX_PLATFORM_SWITCH
-    sin_len = sizeof(N_XSOCKADDR_IN);
-#endif
     sin_family = other.sin_family;
     sin_port = other.sin_port;
     sin_addr = other.sin_addr;
@@ -76,13 +62,7 @@ struct N_XSOCKADDR_IN {
     return *this;
   }
 
-#if REX_PLATFORM_SWITCH
-  // BSD layout on Horizon (see N_XSOCKADDR).
-  uint8_t sin_len = sizeof(N_XSOCKADDR_IN);
-  uint8_t sin_family;
-#else
   uint16_t sin_family;
-#endif
   rex::be<uint16_t> sin_port;
   rex::be<uint32_t> sin_addr;
   // sin_zero is defined as __pad on Android, so prefixed here.

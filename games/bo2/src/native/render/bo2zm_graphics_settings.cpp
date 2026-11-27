@@ -236,17 +236,6 @@ void Put(const char* label, const std::string& value) {
 
 }  // namespace
 
-#if REX_PLATFORM_SWITCH
-// Provided by the SaltyNX module so that the console overlays can show the resolution.
-extern "C" void RexSwitchPerfResolution(unsigned width, unsigned height);
-extern "C" void RexSwitchPerfSwapInterval(unsigned vblanks);
-extern "C" void RexSwitchSaltyNxEnable(int enabled);
-extern "C" void RexSwitchClocksReverseEnable(int enabled);
-extern "C" void RexSwitchApmRequestGpuMhz(int mhz);
-extern "C" void RexSwitchApmAllowRam1600(int allow);
-extern "C" void RexSwitchApmApply(void);
-extern "C" void RexSwitchApmWatchMemory(int watch);
-#endif
 
 // The clock and overlay part of ApplySettingsGraphics, run at start-up. In handheld mode it requests the GPU clock
 // bo2zm_switch_gpu_mhz names (none by default; 460 is the official 460.8 MHz profile, configuration 0x92220008, a
@@ -254,16 +243,6 @@ extern "C" void RexSwitchApmWatchMemory(int watch);
 // is overclocked, and the memory watchdog stays off so that clocks raised with sys-clk are not undone. It also lets
 // Status Monitor show the game's FPS (the SaltyNX block).
 void RequestBootClocks() {
-#if REX_PLATFORM_SWITCH
-  RexSwitchSaltyNxEnable(REXCVAR_GET(switch_saltynx) ? 1 : 0);
-  RexSwitchClocksReverseEnable(REXCVAR_GET(switch_clocks_reverse) ? 1 : 0);
-  RexSwitchApmRequestGpuMhz(REXCVAR_GET(switch_gpu_mhz));
-  RexSwitchApmAllowRam1600(REXCVAR_GET(switch_ram_1600) ? 1 : 0);
-  RexSwitchApmWatchMemory(0);
-  RexSwitchApmApply();
-  REXLOG_INFO("[settings] clocks: GPU requested {} MHz in handheld mode (0 = the system's), memory not watched",
-              REXCVAR_GET(switch_gpu_mhz));
-#endif
 }
 
 void ApplySettingsGraphics() {
@@ -278,39 +257,12 @@ void ApplySettingsGraphics() {
     Put("video_mode_width", mode_video.substr(0, x));
     Put("video_mode_height", mode_video.substr(x + 1));
   }
-#if REX_PLATFORM_SWITCH
-  // FPS and resolution for the console overlays, and honoring Reverse-NX. Can be turned off if it gets in the way.
-  RexSwitchSaltyNxEnable(REXCVAR_GET(switch_saltynx) ? 1 : 0);
-  RexSwitchClocksReverseEnable(REXCVAR_GET(switch_clocks_reverse) ? 1 : 0);
-  // GPU profile in handheld mode. See bo2zm_switch_gpu_mhz.
-  RexSwitchApmRequestGpuMhz(REXCVAR_GET(switch_gpu_mhz));
-  RexSwitchApmAllowRam1600(REXCVAR_GET(switch_ram_1600) ? 1 : 0);
-  RexSwitchApmApply();
-  RexSwitchPerfSwapInterval(unsigned(REXCVAR_GET(swap_interval)));
-#endif
   Put("resolution", "");  // empty preset: the width and height above apply
   const std::string limit = REXCVAR_GET(fps_limit);
   Put("video_mode_refresh_rate", limit == "30" ? "30" : "60");
   REXLOG_INFO("[settings] internal resolution {} and FPS limit {}: video mode {}x{} at {} Hz", resolution, limit,
               rex::cvar::GetFlagByName("video_mode_width"), rex::cvar::GetFlagByName("video_mode_height"),
               rex::cvar::GetFlagByName("video_mode_refresh_rate"));
-#if REX_PLATFORM_SWITCH
-  {
-    // The overlay shows the resolution the game draws at, so with the 1080p internal mode it is told
-    // 1920x1080, not the video mode.
-    unsigned width = unsigned(std::strtoul(rex::cvar::GetFlagByName("video_mode_width").c_str(), nullptr, 10));
-    unsigned height = unsigned(std::strtoul(rex::cvar::GetFlagByName("video_mode_height").c_str(), nullptr, 10));
-    // Only the start-up value is set here: with "auto" the size changes on the fly, and whoever draws at it
-    // publishes the real size every time it changes.
-    if (resolution == "1920x1080") {
-      width = 1920;
-      height = 1080;
-    }
-    if (width && height) {
-      RexSwitchPerfResolution(width, height);  // for the console overlay
-    }
-  }
-#endif
 }
 
 void HideSettingsNoEffect() {

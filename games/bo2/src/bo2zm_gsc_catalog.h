@@ -28,11 +28,7 @@ inline bool LinkedPath(const std::filesystem::path& path) {
 #endif
 }
 inline std::filesystem::path LocalPath(const std::filesystem::path& path) {
-#if defined(__SWITCH__)
-  return path.lexically_normal();
-#else
   return std::filesystem::canonical(path);
-#endif
 }
 
 inline bool ModName(std::string_view name) {

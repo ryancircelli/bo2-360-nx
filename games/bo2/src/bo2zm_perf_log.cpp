@@ -278,8 +278,6 @@ class Log {
     return "macOS";
 #elif defined(_WIN32)
     return "Windows";
-#elif defined(__SWITCH__)
-    return "Horizon";
 #else
     return "Linux";
 #endif

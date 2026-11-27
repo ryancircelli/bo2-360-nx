@@ -28,10 +28,6 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#elif defined(__SWITCH__)
-#include <switch.h>
-extern "C" int __system_argc;
-extern "C" char** __system_argv;
 #elif REX_PLATFORM_GNU_LINUX
 #include <unistd.h>
 namespace bo2zm::platform {
@@ -182,14 +178,7 @@ void SetModeLaunchData(rex::kernel::xam::XamModule::LoaderData& ld, launch::Mode
 
 // The campaign program next to this one (Switch: sdmc:/switch/bo2zm/bo2cp.nro), or empty when there is none.
 fs::path CampaignProgram() {
-#if defined(__SWITCH__)
-  if (!REXCVAR_GET(bo2zm_campaign) || __system_argc < 1 || !__system_argv || !__system_argv[0]) {
-    return {};
-  }
-  std::error_code ec;
-  const fs::path program = fs::path(__system_argv[0]).parent_path() / "bo2cp.nro";
-  return fs::is_regular_file(program, ec) ? program : fs::path();
-#elif defined(_WIN32)
+#if defined(_WIN32)
   wchar_t exe[MAX_PATH];
   const DWORD length = GetModuleFileNameW(nullptr, exe, MAX_PATH);
   if (!length || length >= MAX_PATH || !REXCVAR_GET(bo2zm_campaign)) {
@@ -242,20 +231,6 @@ launch::Mode MainProgramMode(const launch::InstalledModes& installed) {
 // Starts `program` (empty: this one again) once this process is gone.
 [[noreturn]] void RestartProcess(const fs::path& program = {}) {
   rex::FlushLogging();
-#if defined(__SWITCH__)
-  // The system ends this process and starts the application again; HandOverEarly below takes it from there.
-  if (R_SUCCEEDED(appletRestartProgram(nullptr, 0))) {
-    REXLOG_INFO("[relaunch] restarting the application");
-    rex::FlushLogging();
-    for (int i = 0; i < 120; ++i) {
-      svcSleepThread(250'000'000);
-    }
-    REXLOG_WARN("[relaunch] still running 30 s after the restart request: chain-loading instead");
-  } else {
-    REXLOG_WARN("[relaunch] the system refused the restart (started from hbmenu?): chain-loading instead");
-  }
-  rex::FlushLogging();
-#endif
 #if defined(_WIN32)
   wchar_t exe[MAX_PATH];
   GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -271,17 +246,6 @@ launch::Mode MainProgramMode(const launch::InstalledModes& installed) {
     REXLOG_ERROR("[relaunch] CreateProcessW failed: {}", GetLastError());
     rex::FlushLogging();
   }
-#elif defined(__SWITCH__)
-  // hbloader runs the NRO named by envSetNextLoad once this one exits. Our
-  // own path is argv[0] (e.g. sdmc:/switch/bo2zm/bo2zm.nro).
-  if (envHasNextLoad() && __system_argc > 0 && __system_argv[0]) {
-    const std::string next = program.empty() ? std::string(__system_argv[0]) : program.string();
-    const Result rc = envSetNextLoad(next.c_str(), next.c_str());
-    REXLOG_INFO("[relaunch] envSetNextLoad('{}') -> {:#x}", next, rc);
-  } else {
-    REXLOG_ERROR("[relaunch] the loader does not support chaining NROs; exiting");
-  }
-  rex::FlushLogging();
 #elif REX_PLATFORM_GNU_LINUX
   if (!program.empty()) {
     std::vector<std::string> arguments;
@@ -328,53 +292,9 @@ launch::Mode MainProgramMode(const launch::InstalledModes& installed) {
 
 }  // namespace
 
-#if defined(__SWITCH__)
-namespace bo2zm {
-
-// Called from the first constructor, before runtime threads exist. Leave the pending
-// file for the receiving program to consume, so a handover cannot apply defaults twice.
-void HandOverEarly() {
-  if (__system_argc < 1 || !__system_argv || !__system_argv[0] || !envHasNextLoad()) {
-    return;
-  }
-  const fs::path dir = fs::path(__system_argv[0]).parent_path();
-  const fs::path root = launch::SharedUserRoot();
-  const std::string campaign = (dir / "bo2cp.nro").string();
-  const auto installed = launch::DetectInstalledModes(dir / "game", FileExists(campaign));
-  uint32_t flags = 0;
-  std::string launch_path;
-  std::vector<uint8_t> data;
-  std::optional<launch::Mode> pending;
-  if (ReadBlob(root / kPendingFile, flags, launch_path, data)) {
-    pending = launch::LaunchMode(launch_path, data);
-    if (!installed.Has(*pending)) {
-      // A request for a mode that is not installed: drop it and start the default, so neither program hands the
-      // request back to the other.
-      std::remove((root / kPendingFile).string().c_str());
-      pending.reset();
-    }
-  }
-  const auto tests = launch::ReadStartupTestsEarly(dir / "bo2zm.toml");
-  const auto selected = launch::FirstInstalled(
-      launch::StartupMode(launch::Program::Main, pending,
-                          static_cast<launch::Mode>(launch::ReadDefaultModeIndexEarly(root)), tests.campaign,
-                          tests.mode),
-      installed);
-  if (selected != launch::Mode::Campaign || !installed.campaign) {
-    return;
-  }
-  if (R_SUCCEEDED(envSetNextLoad(campaign.c_str(), campaign.c_str()))) {
-    // The SDK's atexit hook treats exit() as a crash.
-    std::_Exit(0);
-  }
-}
-
-}  // namespace bo2zm
-#else
 namespace bo2zm {
 void HandOverEarly() {}
 }  // namespace bo2zm
-#endif
 
 namespace bo2zm {
 

@@ -188,10 +188,6 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
     fn();
   } else {
     pending_fns_.push(std::move(fn));
-#if REX_PLATFORM_SWITCH
-    // Also wake up for internal work, even if the ring does not change.
-    write_ptr_index_event_->Set();
-#endif
   }
 }
 
@@ -248,9 +244,7 @@ void CommandProcessor::WorkerThreadMain() {
       // We spin here waiting for new ones, as the overhead of waiting on our
       // event is too high.
       PrepareForWait();
-#if !REX_PLATFORM_SWITCH
       uint32_t loop_count = 0;
-#endif
       do {
         static const bool savepoint_diag = std::getenv("REX_SAVEPOINT_DIAG") != nullptr;
         if (savepoint_diag) {
@@ -266,11 +260,6 @@ void CommandProcessor::WorkerThreadMain() {
         }
         // Let a time-based savepoint rewind fire while the guest submits nothing (guest threads held).
         system::ServiceSavepointRequest();
-#if REX_PLATFORM_SWITCH
-        // UpdateWritePointer and CallInThread signal the event. Leave the CPU free
-        // for the guest from the first attempt, without 501 polls beforehand.
-        rex::thread::Wait(write_ptr_index_event_.get(), true, std::chrono::milliseconds(5));
-#else
         // If we spin around too much, revert to a "low-power" state.
         if (loop_count > 500) {
           const int wait_time_ms = 5;
@@ -280,7 +269,6 @@ void CommandProcessor::WorkerThreadMain() {
 
         rex::thread::MaybeYield();
         loop_count++;
-#endif
         write_ptr_index = write_ptr_index_.load();
       } while (worker_running_ && pending_fns_.empty() &&
                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));

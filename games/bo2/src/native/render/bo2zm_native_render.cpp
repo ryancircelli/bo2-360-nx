@@ -116,10 +116,6 @@ namespace bo2zm::scenery_lod {
 std::string Summary();
 }  // namespace bo2zm::scenery_lod
 
-#if REX_PLATFORM_SWITCH
-// Only for RexSwitchSetCurrentThreadPriority. That header deliberately does not include switch.h.
-#include "core/threading_switch.h"  // the SDK's src/ is on the include path (CMakeLists.txt)
-#endif
 
 // Diagnostics: "ADDRESS:BYTES@SECONDS" (hex, hex, decimal) writes that much guest physical memory to
 // dump_mem_<address>_<seconds>s.bin next to the executable at the first Swap after that many seconds. Useful for
@@ -526,11 +522,7 @@ class ReportQueue {
 
   void Loop() {
     rex::thread::set_current_thread_name("BO2 reports");
-#if REX_PLATFORM_SWITCH
-    const bool priority = RexSwitchSetCurrentThreadPriorityOk(REX_SWITCH_PRIO_GUEST);
-#else
     const bool priority = true;
-#endif
     REXLOG_INFO("[native] deferred reports: thread running{}",
                 priority ? "" : " (the kernel did NOT accept priority 0x3B)");
     std::deque<std::string> batch;
@@ -648,11 +640,7 @@ REXCVAR_DEFINE_INT32(bo2zm_native_ring_spin_ns_ab, 0, "BO2",
 // the EDRAM surface the chain drew into to the textures it used, and only in frames that follow a frame with a chain.
 // Never in a match (cl_ingame). Checked on the PC with the image kept for a whole minute: the popup's background
 // stays the blurred menu.
-#if defined(__SWITCH__)
-constexpr int32_t kMenuBlurEveryDefault = 0;
-#else
 constexpr int32_t kMenuBlurEveryDefault = 1;
-#endif
 constexpr uint32_t kMenuBlurSecond = 15;  // the popup's frame that runs the chain again, after the fade-in
 REXCVAR_DEFINE_INT32(bo2zm_native_menu_blur_every, kMenuBlurEveryDefault, "BO2",
                      "Native renderer: after a popup's first frames, the blur behind it runs on one frame in N and the "
@@ -671,11 +659,7 @@ REXCVAR_DEFINE_INT32(bo2zm_native_menu_blur_every_alternate_s, 0, "BO2",
 // itself. About 1,250 of its 2,700 draws a frame are the prepass. There, the prepass's draws are not recorded: the
 // colour pass still ends with the same depth, and the ring thread and the GPU save the draws. Draws that write the
 // stencil are kept.
-#if defined(__SWITCH__)
-constexpr bool kFrontEndNoPrepassDefault = true;
-#else
 constexpr bool kFrontEndNoPrepassDefault = false;
-#endif
 REXCVAR_DEFINE_BOOL(bo2zm_native_front_end_no_prepass, kFrontEndNoPrepassDefault, "BO2",
                     "Native renderer: in the campaign's front-end menus the 3D scene's depth prepass is skipped (on "
                     "by default on the Switch)");
@@ -695,11 +679,7 @@ REXCVAR_DEFINE_BOOL(bo2zm_native_front_end_no_prepass, kFrontEndNoPrepassDefault
 // threshold by default, so the sway is ignored and the scene stays as a still backdrop. Constants that change every frame
 // for a long while (kSceneNoisy frames in a row: timers) are left out. Moving models do not count (a character's
 // idle animation stays as it was). bo2zm_native_front_end_reuse_refresh_ms redraws anyway after that long.
-#if defined(__SWITCH__)
-constexpr bool kFrontEndReuseDefault = true;
-#else
 constexpr bool kFrontEndReuseDefault = false;
-#endif
 constexpr uint32_t kSceneNoisy = 64;
 REXCVAR_DEFINE_BOOL(bo2zm_native_front_end_reuse, kFrontEndReuseDefault, "BO2",
                     "Native renderer: in the campaign's front-end menus the 3D scene is drawn again only when its "
@@ -2033,35 +2013,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
      * per second (5 % of a core) and sleeps on a condition variable as soon as it is done, so what
      * it takes from this thread is negligible.
      */
-#if REX_PLATFORM_SWITCH
-    {
-      const int32_t priority = REXCVAR_GET(bo2zm_native_ring_priority);
-      if (priority >= 0x1C && priority <= 0x3B) {
-        RexSwitchSetCurrentThreadPriority(int(priority));
-        REXLOG_INFO("[native] ring thread at priority {:#x} (the presenter runs at 0x2C and has to be able to preempt "
-                    "it)", uint32_t(priority));
-      }
-      /*
-       * And which core it starts on. See bo2zm_native_ring_core.
-       *
-       * The core is logged before and after. Without the "before" the line cannot be interpreted: if
-       * the process's default core were already 1, asking for core 1 would separate nothing at all and
-       * the log would look like a success.
-       */
-      const int core_before = RexSwitchCurrentCore();
-      const int32_t core = REXCVAR_GET(bo2zm_native_ring_core);
-      const bool exclusive = core >= 0 && REXCVAR_GET(bo2zm_native_ring_core_exclusive);
-      if (core >= -1 && core <= 2) {
-        const bool set = exclusive ? RexSwitchPinCurrentThreadToCore(int(core))
-                                      : RexSwitchSetCurrentThreadCore(int(core));
-        REXLOG_INFO("[native] ring thread: core {} {} ({}); it was on {} and now runs on {}",
-                    core, exclusive ? "EXCLUSIVE (reduced mask)" : "preferred",
-                    set ? "accepted" : "REJECTED by the kernel", core_before,
-                    RexSwitchCurrentCore());
-      }
-      core_ring_ = RexSwitchCurrentCore();
-    }
-#endif
     // The pipeline precompile at start-up (bo2zm_native_precompile.h). Decided here, as the graphics system starts and
     // before the game is launched. When it runs, the renderer is prepared now instead of at the game's first
     // copy, and the game waits for the pass (Bo2zmApp::OnHoldModuleLaunch).
@@ -2089,21 +2040,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
         if (!with_signal) {
           ++waits_ring_exhausted_;
         }
-#if REX_PLATFORM_SWITCH
-        /*
-         * Counts how many times the kernel has moved this thread to another core. It is one
-         * register read per loop iteration (not a real syscall), and it is the only way to know
-         * whether the preferred core does anything: if -1 and 1 give the same count, it has no
-         * effect here.
-         */
-        {
-          const int now = RexSwitchCurrentCore();
-          if (now != core_ring_) {
-            core_ring_ = now;
-            ++migrations_ring_;
-          }
-        }
-#endif
       }
       if (!active_.load(std::memory_order_acquire)) {
         break;

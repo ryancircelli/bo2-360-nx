@@ -50,9 +50,6 @@
 #include <rex/types.h>
 #include <rex/ui/vulkan/util.h>
 
-#if REX_PLATFORM_SWITCH
-#include "../../core/threading_switch.h"
-#endif
 
 REXCVAR_DEFINE_INT32(
     vulkan_pipeline_creation_threads, -1, "GPU/Vulkan",
@@ -65,11 +62,6 @@ REXCVAR_DEFINE_BOOL(vulkan_tessellation_wireframe, false, "GPU/Vulkan",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 #include <rex/platform.h>
-#if REX_PLATFORM_SWITCH
-// Counters for the Switch profiler (switch_perf.cpp).
-extern "C" void RexSwitchPerfCount(unsigned id);
-extern "C" void RexSwitchPerfAdd(unsigned id, uint64_t value);
-#endif
 
 namespace rex::graphics::vulkan {
 
@@ -703,16 +695,7 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
       creation_threads.reserve(creation_thread_count);
       for (size_t i = 0; i < creation_thread_count; ++i) {
         std::unique_ptr<rex::thread::Thread> creation_thread =
-#if REX_PLATFORM_SWITCH
-            // The priority goes on the spawned threads only: with a single
-            // thread, creation_worker runs on the caller, which keeps its own.
-            rex::thread::Thread::Create({}, [&creation_worker]() {
-              RexSwitchSetCurrentThreadPriority(REX_SWITCH_PRIO_GUEST);
-              creation_worker();
-            });
-#else
             rex::thread::Thread::Create({}, creation_worker);
-#endif
         assert_not_null(creation_thread);
         creation_thread->set_name("Vulkan Pipelines");
         creation_threads.push_back(std::move(creation_thread));
@@ -3561,9 +3544,6 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
   VkPipeline pipeline;
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(16);
-#endif
   VkResult create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,
                                                          &pipeline_create_info, nullptr, &pipeline);
   if (create_result != VK_SUCCESS) {
@@ -3602,12 +3582,6 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
 }
 
 void VulkanPipelineCache::CreationThread(size_t thread_index) {
-#if REX_PLATFORM_SWITCH
-  // Bulk work: with the guest in the time-sliced band (see xthread.cpp), not at
-  // the presenter's cooperative priority, where a long compile would hold the
-  // core from the presenter.
-  RexSwitchSetCurrentThreadPriority(REX_SWITCH_PRIO_GUEST);
-#endif
   while (true) {
     PipelineCreationArguments creation_arguments;
     {
@@ -3727,9 +3701,6 @@ void VulkanPipelineCache::ProcessDeferredPipelineDestructions(bool force_all) {
 }
 
 void VulkanPipelineCache::StorageWriteThread() {
-#if REX_PLATFORM_SWITCH
-  RexSwitchSetCurrentThreadPriority(REX_SWITCH_PRIO_GUEST);  // bulk I/O, see CreationThread
-#endif
   ShaderStoredHeader shader_header;
   // Don't leak anything in unused bits.
   std::memset(&shader_header, 0, sizeof(shader_header));

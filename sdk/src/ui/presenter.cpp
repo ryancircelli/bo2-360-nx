@@ -27,11 +27,6 @@
 #include <ffx_api/ffx_upscale.h>
 #endif
 
-#if REX_PLATFORM_SWITCH
-// Only for RexSwitchSetCurrentThreadPriority and the REX_SWITCH_PRIO_* scheme. This header deliberately
-// does not include switch.h (it explains why itself), so it does not pollute the namespace.
-#include "../core/threading_switch.h"
-#endif
 
 REXCVAR_DEFINE_BOOL(host_present_from_non_ui_thread, true, "UI/Presenter",
                     "Allow presentation from non-UI thread");
@@ -58,12 +53,7 @@ REXCVAR_DEFINE_BOOL(host_present_ignore_implicit_vsync, true, "UI/Presenter",
                     "(FIFO). Without this, with FIFO painting happens on the UI thread and the mailbox drops "
                     "half of the frames");
 
-#if REX_PLATFORM_SWITCH
-// Off by default: it lowers the mean frame time but widens its spread (see below).
 #define REX_PRESENT_OWN_THREAD_DEFAULT false
-#else
-#define REX_PRESENT_OWN_THREAD_DEFAULT false
-#endif
 
 /*
  * The dedicated presentation thread. Off by default.
@@ -1853,23 +1843,6 @@ void Presenter::PaintFromPaintThread() {
 }
 
 void Presenter::PaintThreadMain() {
-#if REX_PLATFORM_SWITCH
-  const int32_t priority = REXCVAR_GET(present_thread_priority);
-  if (priority >= 0x1C && priority <= 0x3B) {
-    /*
-     * Checked, not assumed. The log used to print the cvar value and take for granted that the kernel
-     * had accepted it; if threadGetSelf() returned null (our threads come from pthread_create), the call
-     * was a silent no-op and the presenter was left competing head-to-head with the ring. That would
-     * explain the 18-22 ms it took to record a quad.
-     */
-    const bool ok = RexSwitchSetCurrentThreadPriorityOk(priority);
-    REXLOG_INFO("[presenter] Horizon priority {:#x}: {}", uint32_t(priority),
-                ok ? "accepted by the kernel" : "*** REJECTED: the thread keeps the default one ***");
-  } else {
-    REXLOG_WARN("Presenter: present_thread_priority = {} outside 0x1C-0x3B: keeping the default",
-                priority);
-  }
-#endif
   for (;;) {
     {
       std::unique_lock<std::mutex> lock(paint_thread_mutex_);

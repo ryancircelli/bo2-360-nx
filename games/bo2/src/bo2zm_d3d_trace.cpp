@@ -181,12 +181,6 @@ uint64_t g_runs_before_begin = 0;
 
 std::string ReportPath(const char* name = "rex_d3d.log") {
   const auto folder = rex::filesystem::GetExecutableFolder();
-#if defined(__SWITCH__)
-  // Beside rex_profile.log, with the other logs.
-  if (!folder.empty()) {
-    return (folder / "logs" / "rex" / name).string();
-  }
-#endif
   return folder.empty() ? std::string(name) : (folder / name).string();
 }
 

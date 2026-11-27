@@ -128,26 +128,12 @@ void rex::RegisterGame(rex::GameApi& api) {
       ConfigureInstancePaths(paths);
       return;
     }
-#if REX_PLATFORM_SWITCH
-    // Emulators (Ryujinx) may run the NRO from a temporary copy, away from
-    // its folder: fall back to the standard install folder.
-    if (!std::filesystem::is_directory(dir / rex::Game().data_root, ec) &&
-        std::filesystem::is_directory("sdmc:/switch/bo2zm/game", ec)) {
-      dir = "sdmc:/switch/bo2zm";
-      paths.config_path = dir / "bo2zm.toml";
-    }
-#endif
     if (paths.game_data_root.empty() && std::filesystem::is_directory(dir / rex::Game().data_root, ec)) {
       paths.game_data_root = dir / rex::Game().data_root;
     }
     if (paths.update_data_root.empty() && std::filesystem::is_directory(dir / "update", ec)) {
       paths.update_data_root = dir / "update";
     }
-#if REX_PLATFORM_SWITCH
-    (void)app;
-    paths.user_data_root = dir / "user";
-    paths.cache_root = dir / "user" / "cache";
-#else
     // A portable PC install keeps its saves, settings and DLC in user/ next to the program when that folder exists
     // and no --user_data_root was given, so a plain shortcut to the exe (which carries the icon) is enough.
     if (std::filesystem::is_directory(dir / "user", ec) &&
@@ -157,7 +143,6 @@ void rex::RegisterGame(rex::GameApi& api) {
       }
       paths.user_data_root = dir / "user";
     }
-#endif
     ConfigureInstancePaths(paths);
   });
 

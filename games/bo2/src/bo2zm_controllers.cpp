@@ -44,9 +44,6 @@
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
 
-#if defined(__SWITCH__)
-#include <switch.h>
-#endif
 
 #include "bo2zm_cheats.h"
 
@@ -97,13 +94,7 @@ std::array<std::atomic<bool>, kPlayers> joined{};          // in the lobby (play
 std::array<std::atomic<int64_t>, kPlayers> press_until{};  // a join press is held until then
 
 bool ScreenEnabled() {
-#if defined(__SWITCH__) && !defined(BO2_GAME_CAMPAIGN)
-  // An automated test reaches its match by itself: the screen would wait for someone to close it.
-  return REXCVAR_GET(bo2zm_controller_screen) && rex::cvar::GetFlagByName("bo2zm_test_start").empty() &&
-         !screen_failed.load(std::memory_order_relaxed);
-#else
   return false;
-#endif
 }
 
 bool Connected(int user, int64_t now) {
@@ -140,121 +131,12 @@ int UserForSource(int source, bool handheld) {
   return source + 1 < kPlayers ? source + 1 : -1;
 }
 
-#if defined(__SWITCH__)
-// Attached Joy-Cons connected and counting as player 1.
-bool HandheldPlays() {
-  return handheld_player.load(std::memory_order_relaxed) && hidGetNpadStyleSet(HidNpadIdType_Handheld) != 0;
-}
-
-bool NumberedConnected() {
-  for (int source = 0; source < kPlayers; ++source) {
-    if (hidGetNpadStyleSet(HidNpadIdType(HidNpadIdType_No1 + source))) return true;
-  }
-  return false;
-}
-
-HidNpadIdType SourceId(int source) {
-  return source == kHandheld ? HidNpadIdType_Handheld : HidNpadIdType(HidNpadIdType_No1 + source);
-}
-
-// Disconnects the controllers outside the lobby, so that a new player joins on the screen.
-void DisconnectOutsiders() {
-  const bool handheld = HandheldPlays();
-  for (int source = 0; source < kPlayers; ++source) {
-    const int user = UserForSource(source, handheld);
-    if (user < 0 || InLobby(user) || !hidGetNpadStyleSet(SourceId(source))) {
-      continue;
-    }
-    const Result rc = hidDisconnectNpad(SourceId(source));
-    REXLOG_INFO("[controllers] controller {} (system player {}) disconnected before the screen ({:#x})", user,
-                source + 1, rc);
-  }
-}
-
-// hidLaShowControllerSupport by hand. The controller applet of system 22 cancels at once (its reply's result 2) when
-// the private argument's second flag is clear, as libnx leaves it; with the flag set it shows. The rest is as in libnx
-// for every system version: the common arguments' version, and the older argument layout (four players) before 8.0.0.
-// Returns the applet's own result (0 = done, 2 = canceled) or the launch's error.
-Result LaunchControllerSupport(const HidLaControllerSupportArg& arg, HidLaControllerSupportResultInfo* info) {
-  static_assert(sizeof(HidLaControllerSupportArg) == 0x430 && sizeof(HidLaControllerSupportArgV3) == 0x21c);
-  const bool eight_players = hosversionAtLeast(8, 0, 0);
-  HidLaControllerSupportArgV3 arg_v3{};
-  if (!eight_players) {
-    arg_v3.hdr = arg.hdr;
-    arg_v3.hdr.player_count_min = std::min<s8>(arg.hdr.player_count_min, 4);
-    arg_v3.hdr.player_count_max = std::min<s8>(arg.hdr.player_count_max, 4);
-    std::memcpy(arg_v3.identification_color, arg.identification_color, sizeof(arg_v3.identification_color));
-    arg_v3.enable_explain_text = arg.enable_explain_text;
-    std::memcpy(arg_v3.explain_text, arg.explain_text, sizeof(arg_v3.explain_text));
-  }
-  const void* arg_data = eight_players ? static_cast<const void*>(&arg) : &arg_v3;
-  const size_t arg_size = eight_players ? sizeof(arg) : sizeof(arg_v3);
-  u32 version = 0x3;
-  if (hosversionAtLeast(11, 0, 0)) version = 0x8;
-  else if (hosversionAtLeast(8, 0, 0)) version = 0x7;
-  else if (hosversionAtLeast(6, 0, 0)) version = 0x5;
-  else if (hosversionAtLeast(3, 0, 0)) version = 0x4;
-  HidLaControllerSupportArgPrivate private_arg{};
-  private_arg.private_size = sizeof(private_arg);
-  private_arg.arg_size = arg_size;
-  private_arg.flag1 = 1;
-  private_arg.mode = HidLaControllerSupportMode_ShowControllerSupport;
-  Result rc = hidGetSupportedNpadStyleSet(&private_arg.npad_style_set);
-  HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
-  if (R_SUCCEEDED(rc)) rc = hidGetNpadJoyHoldType(&hold);
-  if (R_FAILED(rc)) return rc;
-  private_arg.npad_joy_hold_type = hold;
-  AppletHolder holder;
-  rc = appletCreateLibraryApplet(&holder, AppletId_LibraryAppletController, LibAppletMode_AllForeground);
-  if (R_FAILED(rc)) return rc;
-  LibAppletArgs common;
-  libappletArgsCreate(&common, version);
-  rc = libappletArgsPush(&common, &holder);
-  if (R_SUCCEEDED(rc)) rc = libappletPushInData(&holder, &private_arg, sizeof(private_arg));
-  if (R_SUCCEEDED(rc)) rc = libappletPushInData(&holder, arg_data, arg_size);
-  if (R_SUCCEEDED(rc)) rc = libappletStart(&holder);
-  if (R_SUCCEEDED(rc)) {
-    HidLaControllerSupportResultInfoInternal reply{};
-    size_t size = 0;
-    libappletPopOutData(&holder, &reply, sizeof(reply), &size);
-    if (info) *info = reply.info;
-    rc = reply.res;
-  }
-  appletHolderClose(&holder);
-  return rc;
-}
-#endif
 
 enum class ScreenEnd { kPlayers, kCanceled, kFailed };
 
 // The system's controller screen, on the screen thread; blocks until it closes. The controllers still connected stay
 // as they are (take over), and gaps in the numbers close (left justify).
 ScreenEnd ShowScreen() {
-#if defined(__SWITCH__)
-  HidLaControllerSupportArg arg;
-  hidLaCreateControllerSupportArg(&arg);
-  arg.hdr.player_count_min = 1;
-  arg.hdr.player_count_max = kPlayers;
-  arg.hdr.enable_take_over_connection = 1;
-  arg.hdr.enable_left_justify = 1;
-  arg.hdr.enable_permit_joy_dual = 1;
-  arg.hdr.enable_single_mode = 0;
-  HidLaControllerSupportResultInfo info{};
-  REXLOG_INFO("[controllers] controller screen");
-  const Result rc = LaunchControllerSupport(arg, &info);
-  if (rc == 0) {
-    REXLOG_INFO("[controllers] controller screen closed: {} player(s)", int(info.player_count));
-    if (NumberedConnected() && handheld_player.exchange(false, std::memory_order_relaxed)) {
-      REXLOG_INFO("[controllers] the screen's player 1 leads the lobby: the attached Joy-Cons no longer play");
-    }
-    return ScreenEnd::kPlayers;
-  }
-  if (rc == 2) {
-    REXLOG_INFO("[controllers] controller screen closed with B: nobody joins");
-    return ScreenEnd::kCanceled;
-  }
-  REXLOG_WARN("[controllers] controller screen could not open ({:#x}): the game's own join until the next lobby", rc);
-#endif
   return ScreenEnd::kFailed;
 }
 
@@ -294,9 +176,6 @@ void RunScreen() {
     return;
   }
   screen_wanted.store(false, std::memory_order_relaxed);
-#if defined(__SWITCH__)
-  DisconnectOutsiders();
-#endif
   // One thread object, joined before the next screen and never detached (newlib has no pthread_detach).
   static std::thread* thread = nullptr;
   if (thread && thread->joinable()) {
@@ -367,22 +246,7 @@ class NpadAssignment final : public rex::input::DeviceAssignment {
 }  // namespace
 
 void WrapInput(rex::RuntimeConfig& config) {
-#if defined(__SWITCH__) && !defined(BO2_GAME_CAMPAIGN)
-  if (!config.input_factory) {
-    return;
-  }
-  auto base = config.input_factory;
-  config.input_factory = [base](bool tool_mode) -> std::unique_ptr<rex::system::IInputSystem> {
-    auto system = base(tool_mode);
-    if (system && !tool_mode) {
-      // The default factory returns a rex::input::InputSystem (ui/rex_app.cpp).
-      static_cast<rex::input::InputSystem*>(system.get())->SetDeviceAssignment(std::make_unique<NpadAssignment>());
-    }
-    return system;
-  };
-#else
   (void)config;
-#endif
 }
 
 PadEdit OnPad(const bo2zm::pad::Pad& pad) {

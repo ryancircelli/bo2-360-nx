@@ -25,11 +25,7 @@
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/nop/nop_input_driver.h>
 #include <rex/input/script/script_input_driver.h>
-#if REX_PLATFORM_SWITCH
-#include <rex/input/switch/switch_input_driver.h>
-#else
 #include <rex/input/sdl/sdl_input_driver.h>
-#endif
 #include <rex/input/state_log.h>
 #include <rex/input/state_merge.h>
 #include <rex/input/steam_detect.h>
@@ -37,13 +33,8 @@
 #include <rex/chrono/clock.h>
 #include <rex/logging.h>
 
-#if REX_PLATFORM_SWITCH
-REXCVAR_DEFINE_STRING(input_backend, "switch", "Input", "Input backend: switch")
-    .allowed({"switch"});
-#else
 REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput")
     .allowed({"sdl", "xinput"});
-#endif
 
 REXCVAR_DEFINE_STRING(guide_button, "on", "Input",
                       "The controller's Guide (Xbox) button: on = opens the Guide overlay (the game never sees "
@@ -349,7 +340,6 @@ void InputSystem::RefreshDevices() {
                   "used until one leaves and it is reconnected.",
                   DescribeDevice(seen[i]), kMaxGuestUsers);
     }
-#if !REX_PLATFORM_SWITCH
     if (IsSteamVirtualPad(seen[i].vendor_id, seen[i].product_id, seen[i].name) &&
         !steam_virtual_warned_) {
       steam_virtual_warned_ = true;
@@ -358,7 +348,6 @@ void InputSystem::RefreshDevices() {
           "Disable Steam Input for this game or quit Steam to use the controller directly.",
           DescribeDevice(seen[i]));
     }
-#endif
   }
 
   std::vector<size_t> order(seen.size());
@@ -680,10 +669,6 @@ static std::atomic<uint64_t> g_pad_script_start{0};
 void RebaseVirtualPadScripts() { g_pad_script_start.store(chrono::Clock::QueryGuestTickCount()); }
 
 std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
-#if REX_PLATFORM_SWITCH
-  // Switch layer: scripted pads and Steam detection are desktop tools; the Switch build leaves them out.
-  return nullptr;
-#else
   script::ScriptFile file;
   const std::string& path = REXCVAR_GET(hid_virtual_pad_script);
   if (!path.empty()) {
@@ -727,7 +712,6 @@ std::unique_ptr<InputDriver> CreateScriptPadDriverFromConfig() {
     };
   }
   return std::make_unique<script::ScriptInputDriver>(std::move(scripts), look, std::move(clock));
-#endif
 }
 
 std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
@@ -762,12 +746,10 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
       }
     }
 
-#if !REX_PLATFORM_SWITCH
     const std::string steam_warning = SteamInputWarning(DetectSteamInput());
     if (!steam_warning.empty()) {
       REXLOG_WARN("Input: {}", steam_warning);
     }
-#endif
 #if REX_PLATFORM_WIN32
     if (REXCVAR_GET(input_backend) == "xinput") {
       auto xinput_driver = std::make_unique<xinput::XinputInputDriver>(nullptr, 0);
@@ -777,21 +759,12 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
     }
 #endif
 
-#if REX_PLATFORM_SWITCH
-    if (REXCVAR_GET(input_backend) == "switch") {
-      auto switch_driver = std::make_unique<nx::SwitchInputDriver>(nullptr, 0);
-      if (switch_driver->Setup() == X_STATUS_SUCCESS) {
-        input->AddDriver(std::move(switch_driver));
-      }
-    }
-#else
     if (REXCVAR_GET(input_backend) == "sdl") {
       auto sdl_driver = std::make_unique<sdl::SDLInputDriver>(nullptr, 0);
       if (sdl_driver->Setup() == X_STATUS_SUCCESS) {
         input->AddDriver(std::move(sdl_driver));
       }
     }
-#endif
 
     // MnK driver (keyboard/mouse -> controller emulation)
     auto mnk_driver = std::make_unique<mnk::MnkInputDriver>(nullptr, 0);

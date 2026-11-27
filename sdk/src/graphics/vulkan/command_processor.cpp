@@ -47,13 +47,6 @@
 #include <rex/ui/vulkan/presenter.h>
 #include <rex/ui/vulkan/util.h>
 
-#if REX_PLATFORM_SWITCH
-// Optional application extension (native video). Without it the Xenos path is kept.
-extern "C" bool RexNativeVideoBeginSwap() __attribute__((weak));
-extern "C" bool RexNativeVideoPresent(const rex::ui::vulkan::VulkanDevice*,
-                                      rex::ui::Presenter*,uint32_t,uint32_t) __attribute__((weak));
-extern "C" void RexNativeVideoShutdown() __attribute__((weak));
-#endif
 
 // Legacy backend compatibility aliases for shared readback controls.
 REXCVAR_DEFINE_BOOL(vulkan_readback_resolve, false, "GPU/Vulkan",
@@ -1907,9 +1900,6 @@ bool VulkanCommandProcessor::SetupContext() {
 
 void VulkanCommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
-#if REX_PLATFORM_SWITCH
-  if (RexNativeVideoShutdown) RexNativeVideoShutdown();
-#endif
   InvalidateAllVertexBufferResidency();
   ShutdownOcclusionQueryResources();
 
@@ -2281,21 +2271,11 @@ void VulkanCommandProcessor::OnGammaRampPWLValueWritten() {
   gamma_ramp_pwl_current_frame_ = UINT32_MAX;
 }
 
-#if REX_PLATFORM_SWITCH
-// Guest presents, for the profiler (switch_perf.cpp).
-extern "C" void RexSwitchPerfCount(unsigned id);
-extern "C" void RexSwitchPerfAdd(unsigned id, uint64_t value);
-extern "C" bool RexSwitchPerfSkip(unsigned bit);
-#endif
 
 void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                                        uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
   rex::graphics::NotifySwap(frontbuffer_width, frontbuffer_height);
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(0);
-  const bool has_video_native = RexNativeVideoBeginSwap && RexNativeVideoBeginSwap();
-#endif
   vertex_buffers_in_sync_[0] = 0;
   vertex_buffers_in_sync_[1] = 0;
 
@@ -2307,14 +2287,6 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
     return;
   }
 
-#if REX_PLATFORM_SWITCH
-  // Consume one marker per Swap, also when it carries no video. The guest work
-  // is submitted first so that XDK events and callbacks are preserved.
-  if (has_video_native && RexNativeVideoPresent) {
-    if (EndSubmission(true) &&
-        RexNativeVideoPresent(GetVulkanDevice(),presenter,frontbuffer_width,frontbuffer_height)) return;
-  }
-#endif
 
   // In case the swap command is the only one in the frame.
   if (!BeginSubmission(true)) {
@@ -2711,9 +2683,6 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
           BindExternalComputePipeline(swap_apply_gamma_compute_pipeline);
           uint32_t group_count_x = (guest_output_width + 15) / 16;
           uint32_t group_count_y = (guest_output_height + 7) / 8;
-#if REX_PLATFORM_SWITCH
-          if (!RexSwitchPerfSkip(16))
-#endif
           deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y, 1);
 
           if (use_fxaa) {
@@ -2785,9 +2754,6 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
             BindExternalComputePipeline(swap_post_effect == SwapPostEffect::kFxaaExtreme
                                             ? swap_fxaa_extreme_pipeline_
                                             : swap_fxaa_pipeline_);
-#if REX_PLATFORM_SWITCH
-            if (!RexSwitchPerfSkip(16))
-#endif
             deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y, 1);
           }
 
@@ -2943,9 +2909,6 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
               VK_PIPELINE_BIND_POINT_GRAPHICS, swap_apply_gamma_pipeline_layout_, 0,
               uint32_t(swap_descriptor_sets.size()), swap_descriptor_sets.data(), 0, nullptr);
 
-#if REX_PLATFORM_SWITCH
-          if (!RexSwitchPerfSkip(16))
-#endif
           deferred_command_buffer_.CmdVkDraw(3, 1, 0, 0);
           deferred_command_buffer_.CmdVkEndRenderPass();
 
@@ -3868,9 +3831,6 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     uint64_t sampler_overflow_await_submission =
         texture_cache_->GetSubmissionToAwaitOnSamplerOverflow(samplers_overflowed_count);
     assert_true(sampler_overflow_await_submission <= GetCurrentSubmission());
-#if REX_PLATFORM_SWITCH
-    RexSwitchPerfCount(19);  // hard stop: no free sampler slot without waiting for the GPU
-#endif
     CheckSubmissionFenceAndDeviceLoss(sampler_overflow_await_submission);
   }
 
@@ -4165,28 +4125,9 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
       render_target_cache_->last_update_framebuffer());
 
   // Draw.
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(5);
-  RexSwitchPerfAdd(6, uint64_t(dynamic_scissor_.extent.width) * dynamic_scissor_.extent.height);
-  {
-    // Draws per surface width (RB_SURFACE_INFO::surface_pitch): splits the work
-    // among the game's passes by the size of their render target (shadow maps, the
-    // scene and post-processing, reflections, cubemaps). Counters
-    // 28..32 of switch_perf.cpp.
-    const uint32_t width_surface = regs.Get<reg::RB_SURFACE_INFO>().surface_pitch;
-    RexSwitchPerfCount(width_surface >= 1600   ? 28u
-                       : width_surface >= 1280 ? 29u
-                       : width_surface >= 640  ? 30u
-                       : width_surface >= 256  ? 31u
-                                                  : 32u);
-  }
-#endif
   if (primitive_processing_result.index_buffer_type ==
           PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
       shader_32bit_index_dma) {
-#if REX_PLATFORM_SWITCH
-    if (!RexSwitchPerfSkip(1))
-#endif
     deferred_command_buffer_.CmdVkDraw(primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
   } else {
     std::pair<VkBuffer, VkDeviceSize> index_buffer;
@@ -4218,9 +4159,6 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
         primitive_processing_result.host_index_format == xenos::IndexFormat::kInt16
             ? VK_INDEX_TYPE_UINT16
             : VK_INDEX_TYPE_UINT32);
-#if REX_PLATFORM_SWITCH
-    if (!RexSwitchPerfSkip(1))
-#endif
     deferred_command_buffer_.CmdVkDrawIndexed(primitive_processing_result.host_draw_vertex_count, 1,
                                               0, 0, 0);
   }
@@ -4684,9 +4622,6 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
     deferred_command_buffer_.CmdVkBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
                                                      resolve_downscale_pipeline_layout_, 0, 1,
                                                      &descriptor_set, 0, nullptr);
-#if REX_PLATFORM_SWITCH
-    if (!RexSwitchPerfSkip(32))
-#endif
     deferred_command_buffer_.CmdVkDispatch(tile_count, 1, 1);
 
     VkBufferMemoryBarrier downscale_barrier = {};
@@ -5500,9 +5435,6 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     {
       ui::vulkan::VulkanDevice::Queue::Acquisition queue_acquisition =
           vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
-#if REX_PLATFORM_SWITCH
-      RexSwitchPerfCount(7);
-#endif
       submit_result = dfn.vkQueueSubmit(queue_acquisition.queue(), 1, &submit_info, fence);
     }
     if (submit_result != VK_SUCCESS) {

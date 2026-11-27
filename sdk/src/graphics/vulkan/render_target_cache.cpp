@@ -63,12 +63,6 @@ REXCVAR_DEFINE_STRING(render_target_path_vulkan, "", "GPU/Vulkan",
 //     "GPU");
 
 #include <rex/platform.h>
-#if REX_PLATFORM_SWITCH
-// Counters for the Switch profiler (switch_perf.cpp).
-extern "C" void RexSwitchPerfCount(unsigned id);
-extern "C" void RexSwitchPerfAdd(unsigned id, uint64_t value);
-extern "C" bool RexSwitchPerfSkip(unsigned bit);
-#endif
 
 namespace rex::graphics::vulkan {
 
@@ -1152,11 +1146,6 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
   if (!resolve_info.coordinate_info.width_div_8 || !resolve_info.height_div_8) {
     return true;
   }
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(9);
-  RexSwitchPerfAdd(10, uint64_t(resolve_info.coordinate_info.width_div_8) * 8 *
-                           uint64_t(resolve_info.height_div_8) * 8);
-#endif
 
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
@@ -1296,9 +1285,6 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
                 sizeof(copy_shader_constants), &copy_shader_constants);
           }
           command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-          if (!RexSwitchPerfSkip(4))
-#endif
           command_buffer.CmdVkDispatch(copy_group_count_x, copy_group_count_y, 1);
 
           // Invalidate textures and mark the range as scaled if needed.
@@ -1358,9 +1344,6 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
                                             VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                             sizeof(depth_clear_constants), &depth_clear_constants);
           command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-          if (!RexSwitchPerfSkip(4))
-#endif
           command_buffer.CmdVkDispatch(clear_group_count.first, clear_group_count.second, 1);
         }
         if (clear_color) {
@@ -1381,9 +1364,6 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
                 sizeof(color_clear_constants), &color_clear_constants);
           }
           command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-          if (!RexSwitchPerfSkip(4))
-#endif
           command_buffer.CmdVkDispatch(clear_group_count.first, clear_group_count.second, 1);
         }
         MarkEdramBufferModified();
@@ -4574,16 +4554,6 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
     const uint64_t* render_target_resolve_clear_values,
     const Transfer::Rectangle* resolve_clear_rectangle) {
   assert_true(GetPath() == Path::kHostRenderTargets);
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(11);
-  if (render_target_transfers) {
-    uint64_t transfers = 0;
-    for (uint32_t i = 0; i < render_target_count; ++i) {
-      transfers += render_target_transfers[i].size();
-    }
-    RexSwitchPerfAdd(12, transfers);
-  }
-#endif
 
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
   uint64_t current_submission = command_processor_.GetCurrentSubmission();
@@ -4681,9 +4651,6 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
             uint32_t(offsetof(HostDepthStoreConstants, rectangle)),
             sizeof(host_depth_store_rectangle_constant), &host_depth_store_rectangle_constant);
         command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-        if (!RexSwitchPerfSkip(2))
-#endif
         command_buffer.CmdVkDispatch(group_count_x, group_count_y, 1);
         MarkEdramBufferModified();
       }
@@ -5304,12 +5271,6 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
               command_buffer.CmdVkSetStencilWriteMask(VK_STENCIL_FACE_FRONT_AND_BACK,
                                                       transfer_stencil_bit);
             }
-#if REX_PLATFORM_SWITCH
-            RexSwitchPerfCount(13);
-#endif
-#if REX_PLATFORM_SWITCH
-            if (!RexSwitchPerfSkip(2))
-#endif
             command_buffer.CmdVkDraw(transfer_vertex_count, 1, 0, 0);
           }
         }
@@ -6177,9 +6138,6 @@ bool VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dum
                                           sizeof(last_offsets), &last_offsets);
       }
       command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-      if (!RexSwitchPerfSkip(4))
-#endif
       command_buffer.CmdVkDispatch(
           (draw_resolution_scale_x() *
                (xenos::kEdramTileWidthSamples >> uint32_t(rt_key.Is64bpp())) *

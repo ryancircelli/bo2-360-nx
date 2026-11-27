@@ -319,13 +319,8 @@ int main(int argc, char** argv) {
   if (!link_error) assert(std::any_of(issues.begin(), issues.end(), [](const auto& issue) {
     return issue.starts_with("Linked: linked mod folders are unsupported");
   }));
-#if defined(__SWITCH__)
-  assert(LocalPath("sdmc:/switch/bo2zm/scripts") == fs::path("sdmc:/switch/bo2zm/scripts"));
-  assert(LocalPath(root / "missing/../child") == root / "child");
-#else
   assert(LocalPath(root / "Example/..") == fs::canonical(root));
   Reject([&] { LocalPath(root / "missing"); });
-#endif
   assert(fs::equivalent(root.parent_path(), tmp) && root.filename().string().starts_with("bo2-gsc-catalog-test-"));
   fs::remove_all(root);
   std::cout << "Script catalog fixtures passed\n";

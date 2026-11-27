@@ -36,15 +36,6 @@
 REXCVAR_DEFINE_BOOL(non_seamless_cube_map, false, "GPU", "Use non-seamless cube map sampling");
 
 #include <rex/platform.h>
-#if REX_PLATFORM_SWITCH
-// Counters for the Switch profiler (switch_perf.cpp).
-// 19 = stalls from sampler cache overflow, 20 = samplers created.
-// If 20 shoots up, the game keeps asking for new combinations and the cache cannot
-// keep up; then 19 rises and every stall waits for the GPU to finish.
-extern "C" void RexSwitchPerfCount(unsigned id);
-extern "C" void RexSwitchPerfAdd(unsigned id, uint64_t value);
-extern "C" bool RexSwitchPerfSkip(unsigned bit);
-#endif
 
 namespace rex::graphics::vulkan {
 
@@ -968,9 +959,6 @@ VkSampler VulkanTextureCache::UseSampler(SamplerParameters parameters, bool& has
     sampler_used_first_ = &new_sampler;
   }
   sampler_used_last_ = &new_sampler;
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(20);  // a really new sampler, not a reused one
-#endif
   return vulkan_sampler;
 }
 
@@ -1231,9 +1219,6 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
                                                                bool load_mips) {
   VulkanTexture& vulkan_texture = static_cast<VulkanTexture&>(texture);
   TextureKey texture_key = vulkan_texture.key();
-#if REX_PLATFORM_SWITCH
-  RexSwitchPerfCount(14);
-#endif
 
   // Get the pipeline.
   const HostFormatPair& host_format_pair = GetHostFormatPair(texture_key);
@@ -1626,9 +1611,6 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
                                           &load_constants.host_offset);
       }
       command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-      if (!RexSwitchPerfSkip(8))
-#endif
       command_buffer.CmdVkDispatch(group_count_x, group_count_y, load_constants.size_blocks[2]);
       load_constants.guest_offset += level_array_slice_stride_bytes_scaled;
       load_constants.host_offset += uint32_t(level_host_layout.slice_size_bytes);
@@ -1729,9 +1711,6 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
                                             &load_constants_float_convert.host_offset);
         }
         command_processor_.SubmitBarriers(true);
-#if REX_PLATFORM_SWITCH
-        if (!RexSwitchPerfSkip(8))
-#endif
         command_buffer.CmdVkDispatch(group_count_x, group_count_y,
                                      load_constants_float_convert.size_blocks[2]);
         load_constants_float_convert.guest_offset += level_array_slice_stride_bytes;

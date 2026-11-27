@@ -17,11 +17,7 @@ inline Bundle ReadBotBundle(const std::filesystem::path& path) {
   namespace fs = std::filesystem;
   // Check ancestors before canonicalization could hide a link. Switch device
   // paths must reach the filesystem unchanged, rather than gaining a host root.
-#if defined(__SWITCH__)
-  const auto file = path;
-#else
   const auto file = fs::absolute(path);
-#endif
   for (auto part = file; !part.empty();) {
     if (LinkedPath(part)) throw std::runtime_error("linked bot bundles are unsupported");
     const auto parent = part.parent_path();

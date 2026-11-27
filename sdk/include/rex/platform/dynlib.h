@@ -53,13 +53,6 @@ inline constexpr const char* kVulkanLoader = "vulkan-1.dll";
 inline constexpr const char* kRenderDoc = "renderdoc.dll";
 inline constexpr const char* kSpirvToolsSdkPath = "Bin/SPIRV-Tools-shared.dll";
 
-#elif REX_PLATFORM_SWITCH
-
-// There is no dynamic loading on Switch: everything is linked statically.
-inline constexpr const char* kVulkanLoader = "";
-inline constexpr const char* kRenderDoc = "";
-inline constexpr const char* kSpirvToolsSdkPath = "";
-
 #elif REX_PLATFORM_ANDROID
 
 inline constexpr const char* kVulkanLoader = "libvulkan.so";

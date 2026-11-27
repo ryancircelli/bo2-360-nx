@@ -79,11 +79,7 @@ REXCVAR_DEFINE_BOOL(bo2cp_sv_cheats, false, "BO2",
 
 // The front end starts on the campaign's page, without the press-start screen and the glasses intro (menus.lua,
 // state.wrapLockOut, reads bo2zm_cp_direct_ui).
-#if defined(__SWITCH__)
-constexpr bool kDirectCampaignDefault = true;
-#else
 constexpr bool kDirectCampaignDefault = false;
-#endif
 REXCVAR_DEFINE_BOOL(bo2cp_direct_campaign, kDirectCampaignDefault, "BO2",
                     "The front end starts on the campaign's page: START on the press-start screen is pressed for the "
                     "primary controller, the glasses intro is skipped (the way the game returns from a mission), and "
