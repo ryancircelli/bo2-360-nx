@@ -1,7 +1,7 @@
 # Building from source
 
-This page walks through a build from start to finish: your own game files in, a Switch NRO (or a Windows executable)
-out. Nothing in this repository contains the game. Every step that reads game data runs on your machine, writes into
+This page walks through a build from start to finish: your own game files in, a Windows executable
+out (the Mac build: `docs/mac/`). Nothing in this repository contains the game. Every step that reads game data runs on your machine, writes into
 folders that git ignores, and refuses to write inside the repository where that could happen by mistake.
 
 The build host is **Windows with Git Bash**. Every script is a Bash script and is run from Git Bash. Linux ARM64 has
@@ -29,15 +29,13 @@ with fewer tools. This page builds from the repository, step by step. Steps 1-8 
 | Kitware CMake | 4.x, in `C:\Program Files\CMake\bin` | every C++ build (devkitPro's own CMake is older and must not be the one found) |
 | Ninja | 1.13, installed with winget | every C++ build |
 | LLVM / clang | 20 or later, in `C:\Program Files\LLVM\bin` | the host tools, the Windows build, the shader translator |
-| devkitPro: devkitA64 and libnx | GCC 16.1, in `C:\devkitPro` | the Switch build |
 | Vulkan SDK | 1.4.x, in `C:\VulkanSDK\<version>` | `dxc` and `spirv-val` for the shader library |
-| MSYS2 with the clang64 packages, and Rust | see `tools/build_mesa.sh` | the Mesa/NVK driver for the Switch |
 
 The build scripts find these tools through `tools/toolchain.sh`, in the default folders above (the newest Vulkan SDK
 in `C:\VulkanSDK`, MSYS2 in `C:\msys64`). For other places set `BO2_CMAKE_DIR`, `BO2_NINJA`, `BO2_LLVM_DIR`,
-`BO2_DEVKITPRO`, `VULKAN_SDK` or `BO2_MSYS2_DIR` (`MESA_SDK` and `BO2_SPECS_DIR`: steps 6 and 7).
+`VULKAN_SDK` or `BO2_MSYS2_DIR`.
 
-**Disk and memory:** the generated C++ is about 145 MB in 140 files, and a link-time optimized Switch build needs
+**Disk and memory:** the generated C++ is about 145 MB in 140 files, and a link-time optimized build needs
 plenty of RAM. Builds limit themselves to 8 parallel jobs (`JOBS=` changes it); 32 GB of RAM is comfortable.
 
 ## Folders outside the repository
@@ -190,94 +188,6 @@ your files, and is game-derived: it stays in `$BO2_DATA/shaders/` and is never c
    from `game/`, `update/` and `content/`, translates only the shaders the Zombies library lacks, and writes a pack
    that extends it (`--base-pack`). Its `--help` lists the options.
 
-## Step 6: build the Vulkan driver (Switch)
-
-```bash
-tools/build_mesa.sh
-tools/build_zstd_switch.sh
-```
-
-`build_mesa.sh` clones danfromtico's mesa-switch at `1a8c1a66d6f`, applies `patches/mesa-bo2zm.patch` and builds NVK
-and its compiler as a static Vulkan SDK in `mesa/` of the data folder (`MESA_DIR` changes it; the path must not
-contain spaces). Its header lists the MSYS2 packages and the Rust target it needs. `build_zstd_switch.sh` adds the
-static zstd library the SDK's Switch link expects to the same folder.
-
-## Step 7: build the Switch NRO
-
-```bash
-games/bo2/build_switch.sh
-```
-
-The result is `games/bo2/out/switch/bo2zm.nro`. The build checks the generated code's fix-ups first and stops if any is
-missing. Options, as environment variables:
-
-| Variable | Default | Effect |
-|---|---|---|
-| `BO2_LTO` | `1` | link-time optimization (`-flto=8`, fat objects). `0` builds without it. |
-| `BO2_PGO` | empty | `generate`: a training build in its own folder. `use`: build with a profile (below). |
-| `BO2_PGO_DIR` | `$BO2_DATA/pgo` | the profile a `use` build reads |
-| `BO2_GUEST_MEMORY_PLAIN` | `1` | plain guest loads and stores with compiler barriers. `0` builds the volatile form. |
-| `BO2_DEBUG_LINES` | `0` | `1`: line tables for the renderer and the audio code, for profiling by source line. The code is byte for byte the normal build's. |
-| `BO2_HEAP_TRACK`, `BO2_MEMCPY_CALLERS` | `0` | test builds that log heap growth by caller, or the renderer's copy calls by call site |
-| `BO2ZM_NRO_ICON` | `$BO2_DATA/art/icon_switch.jpg` | a 256x256 JPEG for hbmenu. Without one the NRO gets libnx's default icon. |
-| `BO2_BUILD_TAG` | empty | a separate build folder (`games/bo2/out/switch-<tag>`), for building several checkouts side by side |
-| `MESA_SDK` | the Mesa build of step 6 | where the Vulkan driver SDK is |
-| `BO2_SPECS_DIR` | `specs/` in the data folder | a folder without spaces for a copy of the toolchain's specs file (below) |
-| `BO2ZM_BUILD_ID` | `switch-<date>-<time>` | the build's name in its logs. A fixed one makes two builds comparable byte for byte. |
-| `JOBS` | `8` | parallel compile jobs |
-
-GCC is passed the toolchain's specs file unquoted, so `build_switch.sh` links with a copy in `$BO2_SPECS_DIR`, a
-folder without spaces (created if missing).
-
-### Profile-guided optimization
-
-A profile is worth about 9 % on a console, and it has to match the code: a profile trained before the generated code
-or the compiler flags changed stops applying without a word. The cycle:
-
-1. `BO2_PGO=generate games/bo2/build_switch.sh` builds an instrumented NRO in `games/bo2/out/switch-pgo/`.
-2. Run it on a console with the benchmark (see [testing](technical.md#testing-and-measuring)). When the route ends, the game
-   writes its counters to `sdmc:/switch/bo2zm/pgo/`.
-3. Copy that folder to `$BO2_DATA/pgo` (or anywhere, with `BO2_PGO_DIR`).
-4. `BO2_PGO=use games/bo2/build_switch.sh` builds with it. The build runs `tools/pgo_check.py` first and warns if the
-   profile no longer fits.
-
-Train and build in the same checkout: the profile of a function that is private to its file is keyed by the source
-file's path, so a build from another folder loses those counts.
-
-## Step 8: put it on the SD card
-
-```bash
-tools/stage_sd.sh
-```
-
-This assembles `$BO2_DATA/sd/switch/bo2zm/`:
-
-```
-switch/bo2zm/
-  bo2zm.nro                 the game
-  bo2zm.toml                settings (games/bo2/switch/bo2zm.toml)
-  bo2zm_shaders.spvpack     the shader library from step 5
-  bo2zm_shaders.spvidx      its index (bo2zm_pack --index), if made
-  game/                     disc files and the TU18 patches
-  update/                   the title update
-  user/0000000000000000/    the DLC packs, if installed
-```
-
-Game files are hard-linked when `$BO2_DATA` and the output are on the same drive, so nothing is copied twice. Copy
-the `switch` folder to the root of the SD card, then start bo2zm from the Homebrew Menu. The game creates `logs/`,
-`cache/` and its saves next to the NRO on the first start; the first start also compiles the pipelines it needs (and
-makes the shader index, behind a progress screen, if `bo2zm_shaders.spvidx` was not copied with the pack), so it is
-slower than the ones after.
-
-The console needs custom firmware that runs homebrew. Start bo2zm as an application, from the Homebrew Menu opened by
-holding R while starting a game or from a forwarder: the album applet leaves it about 400 MB, far too little.
-
-### Four CPU cores
-
-With a forwarder that grants four cores, the game can use core 3 too. Make one with sphaira: highlight bo2zm in the
-homebrew list, **Install Forwarder**, set **CPU Cores: 4**, leave the rest as it is. Start the game from the new HOME
-menu icon and pick Extras > EXPERIMENTAL > CPU CORES: 4.
-
 ## The Windows build
 
 ```bash
@@ -298,9 +208,8 @@ on ARM hardware.
 ## Campaign
 
 The campaign lives in `default.xex`, a separate program (`bo2cp`) built from `campaign/` with the same renderer and
-native code. `campaign/README.md` lists its steps: code generation, its own shader pack, and the Windows and Switch
-builds. On the Switch, `bo2cp.nro`, `bo2cp.toml` and `bo2cp_shaders.spvpack` go next to `bo2zm.nro`; both programs
-share the game files, the profile and the saves.
+native code. `campaign/README.md` lists its steps: code generation, its own shader pack, and the Windows
+build. Both programs share the game files, the profile and the saves.
 
 ## The release kits
 

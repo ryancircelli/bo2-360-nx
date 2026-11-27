@@ -10,8 +10,6 @@ from the game is ever written inside the repository.
 | `fetch_thirdparty.py` | Fetches the SDK's third-party sources from the ReXGlue v0.10.0 release, keeping this project's changes | `python tools/fetch_thirdparty.py` |
 | `apply_thirdparty_patches.sh` | Applies `patches/<library>-*.patch` under `$THIRDPARTY_ROOT` (default `sdk/thirdparty`), skipping patches already applied. The SDK configure runs it on its own per-build copy of SDL | `tools/apply_thirdparty_patches.sh` |
 | `build_host.sh` | Builds `rexglue.exe` (code generator) and `xexdump` | `tools/build_host.sh` |
-| `build_zstd_switch.sh` | A static zstd for the Switch, into the Mesa SDK | `tools/build_zstd_switch.sh` |
-| `switch/cmake/`, `mesa/` | The devkitA64 toolchain file; Meson's MSYS2 native file | used by the builds |
 | `linux/` | The ARM64 sysroot, toolchain, Dockerfile, package and QEMU smoke test | see [building-linux-arm64](../docs/building-linux-arm64.md) |
 | `bootstrap_worktree.sh` | Prepares a git worktree to build beside the main checkout | `tools/bootstrap_worktree.sh <tag> [--own-generated]` |
 

@@ -17,7 +17,6 @@ copyright and license notices, exactly as they are, and every one of those licen
 | [peggle1-nx](https://github.com/ChanseyIsTheBest/peggle1-nx) by ChanseyIsTheBest (commit `4454890`) | `tools/mac/boot_test.sh`, `tools/mac/make_video.sh`, `tools/mac/compare_video.py` and the `REX_PEGGLE1_VIDEO_*` raw-video format: the boot test and video-compare scripts started from its versions | GPL-3.0 |
 | [nxnative](https://github.com/seedds/nxnative) by seedds (PR 2673 `885768440`, `5572329f3`, `f91979ba4`), idea only | `tools/mac/pack_app.py`: signed data bundles under `Contents/PlugIns` reused across re-packs, purgeable-aware free-space check; our own implementation | MIT |
 | [XeniOS](https://github.com/xenios-jp/XeniOS) (commit `ad74231f4`), idea only | `sdk/src/audio/xma_decoder.cpp`: `Pause()` skips the fence wait when the worker loop is not running; our own code | BSD-3-Clause |
-| [mesa-switch](https://github.com/danfromtico/mesa-switch) by danfromtico (commit `1a8c1a66d6f`), on top of [Mesa](https://mesa3d.org) | The Vulkan driver (NVK) and shader compiler (NAK) for Horizon, linked into the NRO. The official base is fetched by `tools/build_mesa.sh`; this project's changes are `patches/mesa-bo2zm.patch` | MIT (Mesa's licenses per file) |
 
 Parts of `games/bo2/` and `tools/` are derived from GPL-3.0 code, so GPL-3.0 would apply to them in any case; each such file
 says so in its header. The upstream code in this repository keeps its own license: the ReXGlue SDK with its Xenia
@@ -70,8 +69,6 @@ Libraries used by the SDK, the NRO and the code generator, fetched from the subm
 | [utfcpp](https://github.com/nemtrif/utfcpp) | BSL-1.0 |
 | [CLI11](https://github.com/CLIUtils/CLI11) | BSD-3-Clause |
 | AES-128 by LuoPeng (`thirdparty/aes_128`) | MIT |
-| [zstd](https://github.com/facebook/zstd) (`tools/build_zstd_switch.sh`) | BSD-3-Clause |
-| [libnx](https://github.com/switchbrew/libnx) and the devkitA64 runtime (newlib, libstdc++) | ISC; newlib and GCC runtime licenses |
 
 ### FFmpeg and libmspack (LGPL)
 
