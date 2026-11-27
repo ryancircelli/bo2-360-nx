@@ -588,6 +588,30 @@ u32 XamShowOfflinePanelUI_entry(u32 user_index) {
   return X_ERROR_SUCCESS;
 }
 
+u32 XamShowNuiTroubleshooterUI_entry(u32, u32, u32);
+
+// xenia-canary 2da2519 xam_ui.cc (BSD-3-Clause): fail an unavailable
+// subscription flow. GoldUpgrade has three arguments, no overlapped pointer.
+u32 XamShowGoldUpgradeUI_entry(u32, u32, u32) { return X_ERROR_FUNCTION_FAILED; }
+u32 XamShowMultiplayerUpgradeUI_entry(u32 user) {
+  return XamShowGoldUpgradeUI_entry(user, 6, 0);
+}
+u32 XamShowNuiGuideUI_entry(u32, u32) { return X_ERROR_ACCESS_DENIED; }
+u32 XamShowNuiHardwareRequiredUI_entry(u32 flags) {
+  if (flags) return X_ERROR_INVALID_PARAMETER;
+  return XamShowNuiTroubleshooterUI_entry(0xFF, 0, 0x400000);
+}
+// Preserve Canary's argument and profile checks; there is no marketplace
+// backend. A valid request follows our existing offline guide close path.
+u32 XamShowMarketplaceUIEx_entry(u32 user, u32 type, u64, u32, u32, u32, u32, u32) {
+  if (user >= 4 || type >= 25) return X_ERROR_INVALID_PARAMETER;
+  return XamShowOfflinePanelUI_entry(user);
+}
+u32 XamShowMarketplaceUI_entry(u32 user, u32 type, u64 offer, u32 offer_type,
+                               u32 category, u32 title) {
+  return XamShowMarketplaceUIEx_entry(user, type, offer, offer_type, category, 0, 0, title);
+}
+
 // The app's text input (rex/kernel/xam/text_input.h).
 namespace {
 
@@ -756,7 +780,7 @@ REX_EXPORT(__imp__XamShowGamerCardUIForXUID, rex::kernel::xam::XamShowOfflinePan
 REX_EXPORT_STUB(__imp__XamShowGamerCardUIForXUIDp);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGamesUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowGenericOnlineAppUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowGoldUpgradeUI, 0x32);  // offline: not supported
+REX_EXPORT(__imp__XamShowGoldUpgradeUI, rex::kernel::xam::XamShowGoldUpgradeUI_entry)
 REX_EXPORT_STUB(__imp__XamShowGraduateUserUI);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGuideUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowJoinPartyUI, 0x32);  // offline: not supported
@@ -771,14 +795,14 @@ REX_EXPORT(__imp__XamShowMarketplaceDownloadItemsUI,
 REX_EXPORT_STUB(__imp__XamShowMarketplaceGetOrderReceipts);
 REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUI);
 REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUIEx);
-REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceUI, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceUIEx, 0x32);  // offline: not supported
+REX_EXPORT(__imp__XamShowMarketplaceUI, rex::kernel::xam::XamShowMarketplaceUI_entry)
+REX_EXPORT(__imp__XamShowMarketplaceUIEx, rex::kernel::xam::XamShowMarketplaceUIEx_entry)
 REX_EXPORT_STUB(__imp__XamShowMessageBox);
 REX_EXPORT(__imp__XamShowMessageComposeUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowMessagesUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessengerUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB(__imp__XamShowMultiplayerUpgradeUI);
+REX_EXPORT(__imp__XamShowMultiplayerUpgradeUI, rex::kernel::xam::XamShowMultiplayerUpgradeUI_entry)
 REX_EXPORT_STUB(__imp__XamShowNetworkStorageSyncUI);
 REX_EXPORT_STUB(__imp__XamShowNuiAchievementsUI);
 REX_EXPORT_STUB(__imp__XamShowNuiCommunitySessionsUI);
@@ -790,8 +814,8 @@ REX_EXPORT_STUB(__imp__XamShowNuiFriendsUI);
 REX_EXPORT_STUB(__imp__XamShowNuiGameInviteUI);
 REX_EXPORT_STUB(__imp__XamShowNuiGamerCardUIForXUID);
 REX_EXPORT_STUB(__imp__XamShowNuiGamesUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowNuiGuideUI, 0x32);
-REX_EXPORT_STUB(__imp__XamShowNuiHardwareRequiredUI);
+REX_EXPORT(__imp__XamShowNuiGuideUI, rex::kernel::xam::XamShowNuiGuideUI_entry)
+REX_EXPORT(__imp__XamShowNuiHardwareRequiredUI, rex::kernel::xam::XamShowNuiHardwareRequiredUI_entry)
 REX_EXPORT_STUB(__imp__XamShowNuiJoinSessionInProgressUI);
 REX_EXPORT_STUB(__imp__XamShowNuiMarketplaceDownloadItemsUI);
 REX_EXPORT_STUB(__imp__XamShowNuiMarketplaceUI);

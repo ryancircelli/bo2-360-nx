@@ -90,6 +90,21 @@ void XamNuiPlayerEngagementUpdate_entry(u32, u32,
   if (data) data.Zero();
 }
 
+// Canary's tilt callback is retained, but no sensor exists to dispatch it.
+static std::atomic<u32> tilt_callback{0};
+u32 XamNuiCameraTiltSetCallback_entry(u32 callback) {
+  tilt_callback.store(callback, std::memory_order_relaxed);
+  return X_ERROR_SUCCESS;
+}
+u32 XamNuiCameraTiltGetStatus_entry(mapped_void) {
+  // Canary returns E_FAIL for both invalid records and an unavailable sensor.
+  return X_E_FAIL;
+}
+u32 XamNuiIdentityAbort_entry(u32) { return X_E_FAIL; }
+u32 XamNuiIdentityEnrollForSignIn_entry(u32, u64, u64, u32) { return X_E_FAIL; }
+u32 XamIsNuiAutomationEnabled_entry(u32, u32) { return X_ERROR_SUCCESS; }
+u32 XamIsNatalPlaybackEnabled_entry(u32, u32) { return X_ERROR_SUCCESS; }
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -111,9 +126,9 @@ REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x80004005);  /
 REX_EXPORT(__imp__XamNuiCameraGetTiltControllerType, rex::kernel::xam::XamNuiCameraGetTiltControllerType_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT(__imp__XamNuiCameraSetFlags, rex::kernel::xam::XamNuiCameraSetFlags_entry)
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltGetStatus, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT(__imp__XamNuiCameraTiltGetStatus, rex::kernel::xam::XamNuiCameraTiltGetStatus_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltReportStatus, 0x80004005);  // X_E_FAIL: no Kinect
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltSetCallback, 0);  // canary stores cb, returns 0; no tilt events ever fire
+REX_EXPORT(__imp__XamNuiCameraTiltSetCallback, rex::kernel::xam::XamNuiCameraTiltSetCallback_entry)
 REX_EXPORT_STUB(__imp__XamNuiEnableChatMic);
 REX_EXPORT_STUB(__imp__XamNuiGetCameraIntrinsics);
 REX_EXPORT(__imp__XamNuiGetDepthCalibration, rex::kernel::xam::XamNuiGetDepthCalibration_entry)
@@ -132,8 +147,8 @@ REX_EXPORT_STUB(__imp__XamNuiHudInterpretFrame);
 REX_EXPORT(__imp__XamNuiHudIsEnabled, rex::kernel::xam::XamNuiHudIsEnabled_entry)
 REX_EXPORT(__imp__XamNuiHudSetEngagedTrackingID, rex::kernel::xam::XamNuiHudSetEngagedTrackingID_entry)
 REX_EXPORT(__imp__XamNuiIdentityGetSessionId, rex::kernel::xam::XamNuiIdentityGetSessionId_entry)
-REX_EXPORT_STUB(__imp__XamNuiIdentityAbort);
-REX_EXPORT_STUB(__imp__XamNuiIdentityEnrollForSignIn);
+REX_EXPORT(__imp__XamNuiIdentityAbort, rex::kernel::xam::XamNuiIdentityAbort_entry)
+REX_EXPORT(__imp__XamNuiIdentityEnrollForSignIn, rex::kernel::xam::XamNuiIdentityEnrollForSignIn_entry)
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetColorTexture);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetEnrollmentInfo);
 REX_EXPORT_STUB(__imp__XamNuiIdentityGetQualityFlags);
@@ -149,3 +164,7 @@ REX_EXPORT_STUB(__imp__XamNuiSetForceDeviceOff);
 REX_EXPORT(__imp__XamNuiSkeletonGetBestSkeletonIndex, rex::kernel::xam::XamNuiSkeletonGetBestSkeletonIndex_entry)
 REX_EXPORT_STUB(__imp__XamNuiSkeletonScoreUpdate);
 REX_EXPORT_STUB(__imp__XamNuiStoreDepthCalibration);
+
+REX_EXPORT(__imp__XamIsNuiAutomationEnabled, rex::kernel::xam::XamIsNuiAutomationEnabled_entry)
+
+REX_EXPORT(__imp__XamIsNatalPlaybackEnabled, rex::kernel::xam::XamIsNatalPlaybackEnabled_entry)

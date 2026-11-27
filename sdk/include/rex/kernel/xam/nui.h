@@ -1,3 +1,9 @@
+/**
+ * Xenia : Xbox 360 Emulator Research Project
+ * Copyright 2025 Ben Vanik. All rights reserved.
+ * Released under the BSD license - see LICENSE in the root for more details.
+ * Adapted for ReXGlue runtime.
+ */
 // Kinect guest ABI. Adapted from xenia-canary 2da2519 (BSD-3-Clause).
 #pragma once
 #include <rex/types.h>

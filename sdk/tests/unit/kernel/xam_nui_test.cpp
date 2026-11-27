@@ -2,6 +2,7 @@
 #include <rex/kernel/xam/nui.h>
 #include <rex/system/xtypes.h>
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 
 using namespace rex;
@@ -40,4 +41,30 @@ TEST_CASE("Absent Kinect clears output records without claiming a device", "[ker
 TEST_CASE("Kinect identity and skeleton sentinels retain all 64 bits", "[kernel][nui]") {
   CHECK(XamNuiIdentityGetSessionId_entry() == 0xDEADF00DDEADF00Dull);
   CHECK(XamNuiSkeletonGetBestSkeletonIndex_entry(0) == 0xFFFFFFFFFFFFFFFFull);
+}
+
+namespace rex::kernel::xam {
+u32 XamNuiCameraTiltSetCallback_entry(u32);
+u32 XamNuiCameraTiltGetStatus_entry(mapped_void);
+u32 XamNuiIdentityAbort_entry(u32);
+u32 XamNuiIdentityEnrollForSignIn_entry(u32, u64, u64, u32);
+u32 XamShowGoldUpgradeUI_entry(u32, u32, u32);
+u32 XamShowMultiplayerUpgradeUI_entry(u32);
+u32 XamShowNuiGuideUI_entry(u32, u32);
+u32 XamShowNuiHardwareRequiredUI_entry(u32);
+u32 XamShowMarketplaceUI_entry(u32, u32, u64, u32, u32, u32);
+}
+TEST_CASE("Unavailable Kinect and subscription dialogs fail deliberately", "[kernel][nui][ui]") {
+  CHECK(XamNuiCameraTiltSetCallback_entry(0x82001000) == X_ERROR_SUCCESS);
+  CHECK(XamNuiCameraTiltSetCallback_entry(0) == X_ERROR_SUCCESS);
+  CHECK(XamNuiCameraTiltGetStatus_entry(nullptr) == X_E_FAIL);
+  CHECK(XamNuiIdentityAbort_entry(0) == X_E_FAIL);
+  CHECK(XamNuiIdentityEnrollForSignIn_entry(0, 0, 0, 0) == X_E_FAIL);
+  CHECK(XamShowGoldUpgradeUI_entry(0, 0, 0) == X_ERROR_FUNCTION_FAILED);
+  CHECK(XamShowMultiplayerUpgradeUI_entry(0) == X_ERROR_FUNCTION_FAILED);
+  CHECK(XamShowNuiGuideUI_entry(0, 0) == X_ERROR_ACCESS_DENIED);
+  CHECK(XamShowNuiHardwareRequiredUI_entry(1) == X_ERROR_INVALID_PARAMETER);
+  // Invalid requests must fail before accessing a kernel instance.
+  CHECK(XamShowMarketplaceUI_entry(4, 0, 0, 0, 0, 0) == X_ERROR_INVALID_PARAMETER);
+  CHECK(XamShowMarketplaceUI_entry(0, 25, 0, 0, 0, 0) == X_ERROR_INVALID_PARAMETER);
 }
