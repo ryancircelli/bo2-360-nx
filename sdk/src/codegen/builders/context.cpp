@@ -17,6 +17,7 @@
 #include <unordered_map>
 
 #include <rex/codegen/binary_view.h>
+#include <rex/memory/utils.h>
 #include <rex/logging.h>
 
 #include "../codegen_logging.h"
@@ -348,8 +349,30 @@ void BuilderContext::emit_call_to_function(const FunctionNode* targetFn, bool is
   return;
 }
 
+// A linker thunk whose only instruction is `b setjmp` / `b longjmp` is that
+// function (after rexglue cc04cca27, BSD-3-Clause).
+uint32_t BuilderContext::resolveJumpThunk(uint32_t address) const {
+  const auto& cfg = config();
+  if (address == cfg.longJmpAddress || address == cfg.setJmpAddress)
+    return address;
+  const auto* thunk = emitCtx.graph.getFunction(address);
+  if (!thunk || thunk->isImport() || thunk->size() != 4)
+    return address;
+  const auto* data = emitCtx.binary.translate(address);
+  if (!data)
+    return address;
+  const uint32_t word = rex::memory::load_and_swap<uint32_t>(data);
+  if ((word >> 26) != 18 || (word & 3) != 0)  // b, not ba / bl
+    return address;
+  const uint32_t target = address + (static_cast<int32_t>(word << 6) >> 6 & ~3);
+  if (target != 0 && (target == cfg.longJmpAddress || target == cfg.setJmpAddress))
+    return target;
+  return address;
+}
+
 void BuilderContext::emit_function_call(uint32_t address) {
   const auto& cfg = config();
+  address = resolveJumpThunk(address);
 
   if (address == cfg.longJmpAddress) {
     // Use custom ppc_longjmp that uses guest address as key (not for storage)

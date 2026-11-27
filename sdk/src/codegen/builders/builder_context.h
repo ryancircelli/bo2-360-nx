@@ -247,6 +247,9 @@ struct BuilderContext {
    * Falls back to symbol lookup for backward compatibility.
    * Handles special cases like setjmp/longjmp and __restgprlr_N functions.
    */
+  /// The setjmp/longjmp address when `address` is a one-instruction thunk that
+  /// only branches to one, else `address`.
+  uint32_t resolveJumpThunk(uint32_t address) const;
   void emit_function_call(uint32_t address);
   void emit_call_to_function(const FunctionNode* targetFn, bool isTail);
 

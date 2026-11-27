@@ -28,6 +28,10 @@
 
 #include <ppc.h>
 
+#include <algorithm>
+#include <cstring>
+#include <vector>
+
 using rex::codegen::ppc::decode_instruction;
 using rex::codegen::ppc::Opcode;
 using rex::memory::load_and_swap;
@@ -432,6 +436,26 @@ void detectSaveRestoreHelpers(const BinaryView& binary, AnalysisState& state) {
   }
 }
 
+/// The run at `first` plus every other 4-aligned place in an executable section
+/// holding the same `bytes` bytes, in address order (`first` included).
+std::vector<uint32_t> findRunCopies(const BinaryView& binary, uint32_t first, uint32_t bytes) {
+  std::vector<uint32_t> heads{first};
+  const uint8_t* run = binary.translate(first);
+  if (!run)
+    return heads;
+  for (const auto& section : binary.sections()) {
+    if (!section.executable || section.size < bytes)
+      continue;
+    for (size_t offset = 0; offset + bytes <= section.size; offset += 4) {
+      const auto addr = static_cast<uint32_t>(section.baseAddress + offset);
+      if (addr != first && std::memcmp(section.data + offset, run, bytes) == 0)
+        heads.push_back(addr);
+    }
+  }
+  std::sort(heads.begin(), heads.end());
+  return heads;
+}
+
 //=============================================================================
 // Register Phase: imports, helpers, PDATA, config functions
 //=============================================================================
@@ -541,17 +565,27 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
   if (config.longJmpAddress != 0)
     graph.declareNoReturn(config.longJmpAddress);
 
-  // Register save/restore helpers
+  // Register save/restore helpers: the first copy found by its pattern, then every
+  // byte-identical copy of its whole run (each statically linked library brings its
+  // own), named with an address suffix (after rexglue 32195385a, BSD-3-Clause).
+  auto registerRun = [&](uint32_t base, const char* prefix, size_t firstReg, size_t endReg,
+                         size_t stride, size_t extraSize) {
+    if (base == 0)
+      return;
+    const uint32_t runBytes = static_cast<uint32_t>((endReg + 1 - firstReg) * stride + extraSize);
+    for (uint32_t head : findRunCopies(binary, base, runBytes)) {
+      for (size_t i = firstReg; i <= endReg; i++) {
+        uint32_t addr = head + static_cast<uint32_t>((i - firstReg) * stride);
+        uint32_t size = static_cast<uint32_t>((endReg + 1 - i) * stride + extraSize);
+        graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
+        graph.setFunctionName(addr, head == base ? fmt::format("{}{}", prefix, i)
+                                                 : fmt::format("{}{}_{:08X}", prefix, i, addr));
+      }
+    }
+  };
   auto registerHelpers = [&](uint32_t base14, const char* prefix, size_t stride, size_t endReg,
                              size_t extraSize) {
-    if (base14 == 0)
-      return;
-    for (size_t i = 14; i <= endReg; i++) {
-      uint32_t addr = base14 + static_cast<uint32_t>((i - 14) * stride);
-      uint32_t size = static_cast<uint32_t>((endReg + 1 - i) * stride + extraSize);
-      graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
-      graph.setFunctionName(addr, fmt::format("{}{}", prefix, i));
-    }
+    registerRun(base14, prefix, 14, endReg, stride, extraSize);
   };
 
   registerHelpers(state.restGpr14Address, "__restgprlr_", 4, 31, 12);
@@ -562,22 +596,8 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
   registerHelpers(state.saveVmx14Address, "__savevmx_", 8, 31, 4);
 
   // VMX 64-127
-  if (state.restVmx64Address != 0) {
-    for (size_t i = 64; i < 128; i++) {
-      uint32_t addr = state.restVmx64Address + static_cast<uint32_t>((i - 64) * 8);
-      uint32_t size = static_cast<uint32_t>((128 - i) * 8 + 4);
-      graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
-      graph.setFunctionName(addr, fmt::format("__restvmx_{}", i));
-    }
-  }
-  if (state.saveVmx64Address != 0) {
-    for (size_t i = 64; i < 128; i++) {
-      uint32_t addr = state.saveVmx64Address + static_cast<uint32_t>((i - 64) * 8);
-      uint32_t size = static_cast<uint32_t>((128 - i) * 8 + 4);
-      graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
-      graph.setFunctionName(addr, fmt::format("__savevmx_{}", i));
-    }
-  }
+  registerRun(state.restVmx64Address, "__restvmx_", 64, 127, 8, 4);
+  registerRun(state.saveVmx64Address, "__savevmx_", 64, 127, 8, 4);
 
   // Register CONFIG functions
   size_t configFuncs = 0, configChunks = 0;

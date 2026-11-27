@@ -5,6 +5,7 @@ add_executable(codegen_branch_tests
     codegen/jump_table_bounds_test.cpp
     codegen/stack_access_test.cpp
     codegen/function_boundary_test.cpp
+    codegen/jump_thunk_millicode_test.cpp
 )
 
 target_include_directories(codegen_branch_tests PRIVATE
