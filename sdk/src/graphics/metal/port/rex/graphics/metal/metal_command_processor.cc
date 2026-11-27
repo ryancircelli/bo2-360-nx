@@ -4186,14 +4186,14 @@ void MetalCommandProcessor::OnType3PacketForCensus(uint32_t packet,
 namespace {
 // Always-on: every draw that did not reach the GPU, by reason (rex::graphics::CountDrop). A draw that was
 // submitted is not counted; one that failed (logged per draw by the base class) counts as ds_failed, a failed
-// resolve as ds_copy_failed; a true return that named no reason as ds_other_true.
+// resolve as ds_copy_failed (a resolve that ran is not a drop); a true return that named no reason as ds_other_true.
 void CountDrawOutcome(const char* reason, bool result) {
   const bool copy = reason && std::strcmp(reason, "ds_copy") == 0;
   if (!result) {
     rex::graphics::CountDrop(copy ? "ds_copy_failed" : "ds_failed");
   } else if (!reason) {
     rex::graphics::CountDrop("ds_other_true");
-  } else if (std::strcmp(reason, "ds_submitted") != 0) {
+  } else if (!copy && std::strcmp(reason, "ds_submitted") != 0) {
     rex::graphics::CountDrop(reason);
   }
 }
@@ -10667,8 +10667,10 @@ bool MetalCommandProcessor::IssueCopy() {
       shared_memory_->NoteMemexportReadback(written_address, written_length,
                                             submission_current_);
     }
-  } else if (written_length) {
+  } else if (written_length &&
+             REXCVAR_GET(metal_resolve_readback_max_bytes) > 0) {
     // Above metal_resolve_readback_max_bytes: the CPU keeps the old bytes.
+    // (A cap of 0 turns read-back off, so nothing is skipped by the cap.)
     rex::graphics::CountDrop("readback_over_cap");
     rex::graphics::CountDrop("readback_over_cap_bytes", written_length);
   }
