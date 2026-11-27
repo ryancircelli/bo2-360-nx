@@ -1518,7 +1518,9 @@ def pause_end(c):
 def paused(c, now=None):
     """config.json "paused_until" holds the queue, e.g. for a quiet window already promised (see pause_end)."""
     end = pause_end(c)
-    return end is not None and (now or time.time()) < end
+    if end is None:
+        return bool(str(c.get('paused_until') or '').strip())   # unreadable ("24:00", "8am"): hold, never run over the owner
+    return (now or time.time()) < end
 
 
 def pin_pause(c):
@@ -1800,7 +1802,7 @@ class Daemon:
                 os.unlink(src)
             return   # (or the laptop worker claimed it between pick and launch)
         used = {j['slot'] for j in self.jobs.values()}
-        slot = min(set(range(self.c['slots'])) - used)
+        slot = min(set(range(len(used) + 1)) - used)   # stopped lane jobs keep theirs, so the next free may be >= slots
         out = job['out']
         os.makedirs(out, exist_ok=True)
         app = job.get('app') or ''
@@ -1850,15 +1852,19 @@ class Daemon:
         cmd = [re.sub(r'\{(APP|OUT|PORT|SLOT|IN)\}', lambda m: subst['{' + m.group(1) + '}'], a) for a in cmd]
         quiet_pids = []
         agent_pids, agent_deadline = [], 0.0
-        exec_lock_fd = None
         if job.get('quiet_machine') or is_solo(job) or job_class(job) == CLASSES['perf']:
             # Class-perf always means a measured quiet-machine run, even if an older
             # queued manifest omitted --quiet-machine.
             if job.get('quiet_machine') or job_class(job) == CLASSES['perf']:
                 job['quiet_machine'] = True
+            fd = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+            try:   # never block the daemon loop: a stopped buildq holding it shared would hang reaping and cancels
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                return   # still queued; the next tick retries
+            self.launch_lock = fd
             self.quiet_starting = True
-            exec_lock_fd = os.open(BUILD_EXEC_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
-            fcntl.flock(exec_lock_fd, fcntl.LOCK_EX)
             self.throttle()
             def stop_build_pid(pid):
                 if pid in quiet_pids or pid in self.protected_pids or not alive(pid):
@@ -1973,9 +1979,7 @@ class Daemon:
             finally:
                 self.resume_builds(quiet_pids)
                 self.quiet_starting = False
-                if exec_lock_fd is not None:
-                    fcntl.flock(exec_lock_fd, fcntl.LOCK_UN)
-                    os.close(exec_lock_fd)
+                self.release_launch_lock()
             if isinstance(e, OSError):
                 return
             raise
@@ -2013,9 +2017,34 @@ class Daemon:
                     pass
                 self.resume_builds(quiet_pids)
                 self.quiet_starting = False
-            if exec_lock_fd is not None:
-                fcntl.flock(exec_lock_fd, fcntl.LOCK_UN)
-                os.close(exec_lock_fd)
+            self.release_launch_lock()
+
+    def release_launch_lock(self):
+        fd, self.launch_lock = getattr(self, 'launch_lock', None), None
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def launch_failed(self, qfile, e):
+        """launch() raised: the job fails, whatever it froze resumes, and the daemon keeps going (an exception here
+        used to end the daemon; the same queued job then crashed every restart)."""
+        self.log(f'launch {qfile} failed: {traceback.format_exc()}')
+        self.release_launch_lock()
+        self.quiet_starting = False
+        src = os.path.join(D['queue'], qfile)
+        job = rjson(src)
+        if job:
+            self.resume_builds(job.get('quiet_build_pids', []))
+            try:
+                os.unlink(src)
+            except OSError:
+                pass
+            job.setdefault('id', qfile[:-5])
+            job.setdefault('out', os.path.join(D['jobs'], job['id']))
+            try:
+                self.finish_record(job, -1, 2, 'error', time.time(), [], f'cannot start: {e!r}')
+            except Exception:
+                self.log(f'finish_record for {qfile} failed: {traceback.format_exc()}')
 
     def sample(self, j, t):
         la = loadavg()
@@ -2663,6 +2692,9 @@ class Daemon:
         if pinned:
             self.log(f'paused_until pinned to {pinned}')
             self.c = cfg()
+        if paused(self.c) and pause_end(self.c) is None and getattr(self, 'bad_pause', None) != self.c['paused_until']:
+            self.bad_pause = self.c['paused_until']
+            self.log(f'paused_until {self.bad_pause!r} is not HH:MM or YYYY-MM-DD HH:MM: queue held until it is fixed')
         OWNER_PRIORITY[:] = list(self.c.get('owner_priority') or [])
         self.reap()
         want_mode = wanted_power_mode([v['job'] for v in self.jobs.values()])
@@ -2671,8 +2703,11 @@ class Daemon:
             self.log(f'power mode -> {"low" if want_mode == 1 else "high"}'
                      f'{"" if ok else " FAILED (sudoers entry missing?)"}')
             self.power_mode = want_mode
-        q = self.queued()
-        qjobs = [(qf, rjson(os.path.join(D['queue'], qf)) or {}) for qf in q]
+        # jobs the Mac may not start (where=laptop, or where=any with the laptop idle) must not open a solo window or
+        # keep a perf batch (build cap 0) for work that never starts here (sim: test_laptop_jobs_do_not_hold_mac)
+        hb = laptop_state()
+        qjobs = [(qf, j) for qf in self.queued() for j in [rjson(os.path.join(D['queue'], qf)) or {}] if mac_may_run(j, hb)]
+        q = [qf for qf, _ in qjobs]
         needs_power = any(j.get('quiet_machine') or job_class(j) == CLASSES['perf'] for _, j in qjobs)
         if needs_power and time.time() - self.power_checked_at >= 15:
             try:
@@ -2764,7 +2799,10 @@ class Daemon:
         if starved and not getattr(self, 'starve_logged', False):
             self.log(f'speed runs starved {PERF_STARVE_S}s: proof and sweep jobs wait for a speed run')
         self.starve_logged = starved
-        while q and not self.stop_requested and not paused(self.c) and not solo_running and len(self.jobs) < free:
+        # a lane job stopped for the solo window holds no slot: with 3 of them (live sessions, long builds) the window
+        # never got a slot and the queue idled until lane_pause_max_s (sim: test_live_session_does_not_idle_queue)
+        holding = lambda: sum(not v.get('lane_pids') for v in self.jobs.values())
+        while q and not self.stop_requested and not paused(self.c) and not solo_running and holding() < free:
             if self.phase['phase'] == 'solo':
                 self.build_interleave_until = 0.0   # builds wait for the ordinary window; the batch is short
             interleave_active = self.build_interleave_active()
@@ -2784,8 +2822,6 @@ class Daemon:
                                     solo_waiting, interleave_active, self.c, lane_ok and lane_safe(job)):
                     continue
                 if adapter_hold_reason(job, self.power_status):
-                    continue
-                if not mac_may_run(job):
                     continue
                 if self.perf_hold and (job.get('quiet_machine') or job_class(job) == CLASSES['perf']):
                     continue
@@ -2809,7 +2845,10 @@ class Daemon:
                 solo_running = True   # (a solo job is only admitted on an empty machine)
                 self.phase = dict(self.phase, solo_started=self.phase.get('solo_started', 0) + 1)
             q.remove(qf)
-            self.launch(qf)
+            try:
+                self.launch(qf)
+            except Exception as e:
+                self.launch_failed(qf, e)
         if time.time() - getattr(self, 'remote_checked', 0) >= 5:
             self.remote_checked = time.time()
             try:
@@ -4324,7 +4363,7 @@ def main():
         assert paused(c, t23 + 60) and not paused(c, t23 + 3600)
         c = {'paused_until': '2026-11-26 07:00', '_mtime': 0}
         assert paused(c, t23) and not paused(c, t23 + 9 * 3600) and not paused({}, t23)
-        assert pause_end({'paused_until': 'junk'}) is None
+        assert pause_end({'paused_until': 'junk'}) is None and paused({'paused_until': 'junk'}, t23)
         # lane only for game-less jobs
         assert lane_safe({'cmd': ['ninja', '-C', 'x']})
         assert not lane_safe({'app': '/a.app', 'cmd': ['x']}) and not lane_safe({'cmd': ['drv', 'fh1-drive.route']})
