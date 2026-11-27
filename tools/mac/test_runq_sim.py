@@ -465,5 +465,50 @@ class Sim(unittest.TestCase):
         self.write_config({})
         self.run_until(d, lambda: self.state_of(jid) == 'done', 300, what='runs after quiet off')
 
+    def test_result_record_failure_frees_slot(self):
+        d = self.daemon()
+        jid = self.submit(secs=20)
+        with patch.object(q.Daemon, 'finish_record', side_effect=OSError(28, 'No space left on device')):
+            self.run_until(d, lambda: self.state_of(jid) == 'done', 120, what='bare done record written')
+        self.assertEqual(d.jobs, {})
+        nxt = self.submit(secs=20)
+        self.run_until(d, lambda: self.state_of(nxt) == 'done', 120, what='queue keeps going')
+
+    def test_dead_lane_job_at_restart_resumes_its_processes(self):
+        d = self.daemon()
+        live = self.submit(secs=20000, cmd=['python3', '-I', '/x/live_session.py', 'sim', '20000', '0'])
+        self.run_for(d, 5)
+        perf = self.submit(secs=600, klass=q.CLASSES['perf'], solo=True, quiet_machine=True, measured=True)
+        self.run_until(d, lambda: self.state_of(perf) == 'running', 1800, what='perf job starts')
+        pid = d.jobs[live]['proc'].pid
+        self.assertIn(pid, self.stopped_pids())
+        straggler = self.world.spawn(['sim', '999999'], None)   # a child of the lane job, stopped with it
+        Path(q.D['running'], live + '.lanestop').write_text(json.dumps([pid, straggler]))
+        self.world.kill(straggler, signal.SIGSTOP)
+        self.crash(d)
+        self.world.kill(pid, signal.SIGKILL)                    # the lane job's root dies while the daemon is down
+        d = self.daemon()
+        self.assertNotIn(straggler, self.stopped_pids())
+        self.assertFalse(Path(q.D['running'], live + '.lanestop').exists())
+
+    def test_tick_exception_does_not_end_daemon(self):
+        d = q.Daemon()
+        d.log = lambda msg: self.log.append((self.clock.t, msg))
+        calls = []
+
+        def tick():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('fifo gone')
+            return True   # second tick: a handoff
+        old = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGUSR1)
+        self.addCleanup(signal.signal, signal.SIGTERM, old[0])
+        self.addCleanup(signal.signal, signal.SIGUSR1, old[1])
+        with patch.object(d, 'tick', tick):
+            d.run()
+        os.close(d.fifo)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any('tick failed' in m for _, m in self.log))
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -2313,6 +2313,7 @@ class Daemon:
     def finish_record(self, job, slot, code, status, start, samples, note='', load_start=None, games_start=None,
                       process_cpu_totals=None, compiler_activity=None, meter=None, work=None):
         out = job['out']
+        os.makedirs(out, exist_ok=True)   # a job (or its agent) may delete its own out dir
         res = {'id': job['id'], 'name': job.get('name'), 'status': status, 'exit': code, 'measured': is_measured(job),
                'submitted': job.get('submitted'), 'started': time.strftime('%Y-%m-%d %H:%M:%S',
                                                                            time.localtime(start)),
@@ -2532,6 +2533,10 @@ class Daemon:
                 self.finish_record(j['job'], j['slot'], code, status, j['start'], j['samples'], j.get('why', ''),
                                    j['load_start'], j.get('games_start'), j.get('process_cpu_totals'),
                                    j.get('compiler_activity'), j.get('meter'), j.get('work'))
+            except Exception:   # (a job deleting its own out dir crash-looped the daemon) a bare record still frees `runq wait`
+                self.log(f'finish_record {jid} failed: {traceback.format_exc()}')
+                wjson(os.path.join(D['done'], jid + '.json'), {'id': jid, 'name': j['job'].get('name'), 'status': status,
+                                                               'exit': code, 'why': 'result record failed (daemon.log)'})
             finally:
                 freeze_stall_log(jid, j.get('agent_frozen', []))
                 self.resume_builds(j.get('quiet_pids', []))
@@ -2672,9 +2677,9 @@ class Daemon:
                     self.log(f'adopted {job["id"]} slot {rec["slot"]} pid {rec["pid"]}')
                     continue
                 if job:
-                    self.resume_builds(job.get('quiet_build_pids', []))
+                    self.resume_builds(job.get('quiet_build_pids', []) + (rjson(os.path.join(D['running'], f[:-5] + '.lanestop')) or []))
                     self.finish_record(job, -1, 2, 'lost', time.time(), [], 'the daemon restarted during the job')
-                for suf in ('.json', '.run.json', '.cancel'):
+                for suf in ('.json', '.run.json', '.cancel', '.lanestop'):
                     try:
                         os.unlink(os.path.join(D['running'], f[:-5] + suf))
                     except OSError:
@@ -2886,7 +2891,15 @@ class Daemon:
         self.log(f'daemon up pid {os.getpid()}, slots {self.c["slots"]}, build cap {self.c["idle_cap"]} idle / '
                  f'{self.c.get("run_cap", 12)} unmeasured games / {self.c["game_cap"]} measured')
         try:
-            while not self.tick():
+            while True:
+                try:
+                    if self.tick():
+                        break
+                except Exception:   # nothing restarts a dead daemon until the next runq command: log and keep going
+                    tb = traceback.format_exc()
+                    if tb != getattr(self, 'last_tb', None):
+                        self.log(f'tick failed, daemon keeps running: {tb}')
+                    self.last_tb = tb
                 time.sleep(1)
         finally:
             for j in self.jobs.values():
