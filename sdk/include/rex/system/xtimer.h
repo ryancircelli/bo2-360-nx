@@ -45,6 +45,8 @@ class XTimer : public XObject {
                     bool resume, uint32_t dpc = 0);
   X_STATUS Cancel();
   // True while set and not yet expired (periodic timers stay set until cancelled).
+  // 100ns until the next expiry in guest time; 0 when not set or already due.
+  int64_t remaining_time() const;
   bool inserted() const { return inserted_; }
 
  protected:
@@ -58,6 +60,8 @@ class XTimer : public XObject {
   uint32_t callback_routine_arg_ = 0;
   uint32_t callback_dpc_ = 0;
   std::atomic<bool> inserted_{false};
+  std::atomic<uint64_t> due_file_time_{0};  // guest file time of the next expiry
+  uint64_t period_100ns_ = 0;
 };
 
 }  // namespace rex::system

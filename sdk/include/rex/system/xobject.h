@@ -188,6 +188,12 @@ class XObject {
     bool has_wait = false;
     int32_t pointer_refs = 0;
   };
+  // Live signal state / count of the host wait object (low word of its state); 0 when there is none.
+  uint32_t wait_value() {
+    rex::thread::WaitHandleRewindState s;
+    auto* wait = GetWaitHandle();
+    return wait && rex::thread::CaptureWaitHandleRewindState(wait, &s) ? uint32_t(s.word) : 0;
+  }
   void CaptureRewindState(RewindState* state) {
     state->handles = handles_;
     state->pointer_refs = pointer_ref_count_.load(std::memory_order_acquire);

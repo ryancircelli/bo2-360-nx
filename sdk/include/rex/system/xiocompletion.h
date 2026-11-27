@@ -43,6 +43,10 @@ class XIOCompletion : public XObject {
     rex::thread::WaitHandleRewindState semaphore;
     bool has_semaphore = false;
   };
+  size_t queue_depth() {
+    std::lock_guard<std::mutex> lock(notification_lock_);
+    return notifications_.size();
+  }
   void CaptureQueueRewindState(QueueRewindState* state) {
     std::lock_guard<std::mutex> lock(notification_lock_);
     state->notifications = notifications_;

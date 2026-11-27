@@ -47,16 +47,19 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
     return X_STATUS_TIMER_RESUME_IGNORED;
   }
 
+  period_100ns_ = uint64_t(period_ms) * 10000;
   period_ms = chrono::Clock::ScaleGuestDurationMillis(period_ms);
-  WinSystemClock::time_point due_tp;
+  XSystemClock::time_point due_xtp;
   if (due_time < 0) {
     // Any timer implementation uses absolute times eventually, convert as early
     // as possible for increased accuracy
     auto after = rex::chrono::hundrednanoseconds(-due_time);
-    due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::now() + after);
+    due_xtp = XSystemClock::now() + after;
   } else {
-    due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::from_file_time(due_time));
+    due_xtp = XSystemClock::from_file_time(due_time);
   }
+  due_file_time_ = XSystemClock::to_file_time(due_xtp);
+  WinSystemClock::time_point due_tp = std::chrono::clock_cast<WinSystemClock>(due_xtp);
 
   // Stash routine for callback.
   callback_thread_ = XThread::GetCurrentThread();
@@ -68,6 +71,8 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
   std::function<void()> callback = [this, periodic = period_ms != 0]() {
     if (!periodic) {
       inserted_ = false;
+    } else {
+      due_file_time_ += period_100ns_;
     }
     if (!callback_routine_ && !callback_dpc_) {
       return;
@@ -98,6 +103,15 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
   }
 
   return result ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
+}
+
+int64_t XTimer::remaining_time() const {
+  if (!inserted_) {
+    return 0;
+  }
+  int64_t left = int64_t(due_file_time_.load()) -
+                 int64_t(rex::chrono::XSystemClock::to_file_time(rex::chrono::XSystemClock::now()));
+  return left > 0 ? left : 0;
 }
 
 X_STATUS XTimer::Cancel() {
