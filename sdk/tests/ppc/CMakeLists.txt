@@ -46,3 +46,8 @@ target_link_libraries(ppc_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 
 include(Catch)
 catch_discover_tests(ppc_tests TEST_PREFIX "ppc." PROPERTIES LABELS "ppc" TIMEOUT 60)
+
+# vmaddfp/vnmsubfp are fused: an x86 host needs FMA for simde to fuse them (arm64 always does)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(ppc_tests PRIVATE -mfma)
+endif()
