@@ -16,6 +16,13 @@
 EXPORT(RtlAnsiStringToUnicodeString);
 EXPORT(RtlMultiByteToUnicodeSize);
 EXPORT(RtlUnicodeToMultiByteSize);
+EXPORT(RtlAppendUnicodeToString);
+EXPORT(RtlAppendUnicodeStringToString);
+EXPORT(RtlCompareUnicodeString);
+EXPORT(RtlCompareUnicodeStringN);
+EXPORT(RtlCreateUnicodeString);
+EXPORT(RtlUnicodeToUtf8);
+EXPORT(RtlUnicodeToUtf8Size);
 EXPORT(NtWriteFileGather);
 EXPORT(NtCancelIoFile);
 EXPORT(XAudioEnableDucker);
@@ -137,3 +144,56 @@ TEST_CASE("RTL conversion sizes match the existing single-byte converters", "[ke
   CHECK(g.call(__imp__RtlUnicodeToMultiByteSize, ctx) == X_STATUS_SUCCESS);
 }
 
+
+namespace {
+void PutW(uint8_t* p, const char16_t* s) {  // big-endian UTF-16 with terminator
+  do { p[0] = uint8_t(*s >> 8); p[1] = uint8_t(*s & 0xFF); p += 2; } while (*s++);
+}
+}
+
+TEST_CASE("RTL unicode string append, compare, create and UTF-8 conversion", "[kernel][rtl]") {
+  Guest g;
+  auto* a = g.at<X_UNICODE_STRING>(0);
+  auto* b = g.at<X_UNICODE_STRING>(8);
+  PutW(g.at<uint8_t>(0x100), u"abc");
+  PutW(g.at<uint8_t>(0x200), u"ABD");
+  a->pointer = g.address + 0x100; a->length = 6; a->maximum_length = 8;
+  b->pointer = g.address + 0x200; b->length = 6; b->maximum_length = 8;
+  PPCContext ctx{};
+  // compare: case-sensitive 'a'(0x61) - 'A'(0x41) > 0; case-insensitive c < D
+  ctx.r3.u64 = g.address; ctx.r4.u64 = g.address + 8; ctx.r5.u64 = 0;
+  CHECK(int32_t(g.call(__imp__RtlCompareUnicodeString, ctx)) > 0);
+  ctx.r3.u64 = g.address; ctx.r4.u64 = g.address + 8; ctx.r5.u64 = 1;
+  CHECK(int32_t(g.call(__imp__RtlCompareUnicodeString, ctx)) < 0);
+  // N variant with 0xFFFF = NUL-terminated
+  ctx.r3.u64 = g.address + 0x100; ctx.r4.u64 = 0xFFFF; ctx.r5.u64 = g.address + 0x200;
+  ctx.r6.u64 = 2; ctx.r7.u64 = 1;
+  CHECK(int32_t(g.call(__imp__RtlCompareUnicodeStringN, ctx)) > 0);  // "abc" vs "AB": length diff
+  // append wide C string: fits only when length+src <= max
+  auto* dst = g.at<X_UNICODE_STRING>(16);
+  dst->pointer = g.address + 0x300; dst->length = 0; dst->maximum_length = 8;
+  PutW(g.at<uint8_t>(0x400), u"xyz");
+  ctx.r3.u64 = g.address + 16; ctx.r4.u64 = g.address + 0x400;
+  CHECK(g.call(__imp__RtlAppendUnicodeToString, ctx) == X_STATUS_SUCCESS);
+  CHECK(uint16_t(dst->length) == 6);
+  ctx.r3.u64 = g.address + 16; ctx.r4.u64 = g.address + 0x400;
+  CHECK(g.call(__imp__RtlAppendUnicodeToString, ctx) == X_STATUS_BUFFER_TOO_SMALL);
+  CHECK(uint16_t(dst->length) == 6);
+  // create: heap copy with terminator room
+  auto* c = g.at<X_UNICODE_STRING>(24);
+  ctx.r3.u64 = g.address + 24; ctx.r4.u64 = g.address + 0x400;
+  CHECK(g.call(__imp__RtlCreateUnicodeString, ctx) == 1);
+  CHECK(uint16_t(c->length) == 6);
+  CHECK(uint16_t(c->maximum_length) == 8);
+  // UTF-8: U+00E9 -> C3 A9, U+20AC -> E2 82 AC
+  PutW(g.at<uint8_t>(0x500), u"é€");
+  ctx.r3.u64 = g.address + 0x600; ctx.r4.u64 = 16; ctx.r5.u64 = g.address + 0x700;
+  ctx.r6.u64 = g.address + 0x500; ctx.r7.u64 = 4;
+  CHECK(g.call(__imp__RtlUnicodeToUtf8, ctx) == X_STATUS_SUCCESS);
+  CHECK(*g.at<rex::be<uint32_t>>(0x700) == 5);
+  const uint8_t exp[] = {0xC3, 0xA9, 0xE2, 0x82, 0xAC};
+  CHECK(std::memcmp(g.at<uint8_t>(0x600), exp, 5) == 0);
+  ctx.r3.u64 = g.address + 0x700; ctx.r4.u64 = g.address + 0x500; ctx.r5.u64 = 4;
+  CHECK(g.call(__imp__RtlUnicodeToUtf8Size, ctx) == X_STATUS_SUCCESS);
+  CHECK(*g.at<rex::be<uint32_t>>(0x700) == 5);
+}

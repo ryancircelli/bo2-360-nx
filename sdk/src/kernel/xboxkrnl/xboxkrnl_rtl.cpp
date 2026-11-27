@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <cwctype>
 #include <string>
 
@@ -23,6 +24,7 @@
 #include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
+#include "../quiet_return.h"
 #include <rex/types.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
@@ -655,26 +657,151 @@ void __C_specific_handler_entry() {
 }
 
 REX_EXPORT(__imp__RtlAnsiStringToUnicodeString, rex::kernel::xboxkrnl::RtlAnsiStringToUnicodeString_entry)
-REX_EXPORT_STUB(__imp__RtlAppendStringToString);
-REX_EXPORT_STUB(__imp__RtlAppendUnicodeStringToString);
-REX_EXPORT_STUB(__imp__RtlAppendUnicodeToString);
-REX_EXPORT_STUB(__imp__RtlCompareUnicodeString);
-REX_EXPORT_STUB(__imp__RtlCompareUnicodeStringN);
+REX_EXPORT(__imp__RtlAppendStringToString, rex::kernel::xboxkrnl::RtlAppendStringToString_entry)
+REX_EXPORT(__imp__RtlAppendUnicodeStringToString, rex::kernel::xboxkrnl::RtlAppendUnicodeStringToString_entry)
+REX_EXPORT(__imp__RtlAppendUnicodeToString, rex::kernel::xboxkrnl::RtlAppendUnicodeToString_entry)
+REX_EXPORT(__imp__RtlCompareUnicodeString, rex::kernel::xboxkrnl::RtlCompareUnicodeString_entry)
+REX_EXPORT(__imp__RtlCompareUnicodeStringN, rex::kernel::xboxkrnl::RtlCompareUnicodeStringN_entry)
 REX_EXPORT_STUB(__imp__RtlCompareUtf8ToUnicode);
-REX_EXPORT_STUB(__imp__RtlCreateUnicodeString);
-REX_EXPORT_STUB(__imp__RtlGetCallersAddress);
+REX_EXPORT(__imp__RtlCreateUnicodeString, rex::kernel::xboxkrnl::RtlCreateUnicodeString_entry)
+REX_EXPORT(__imp__RtlGetCallersAddress, rex::kernel::xboxkrnl::RtlGetCallersAddress_entry)
 REX_EXPORT_STUB(__imp__RtlGetStackLimits);
-REX_EXPORT_STUB(__imp__RtlLookupFunctionEntry);
+REX_EXPORT_QUIET_RETURN(__imp__RtlLookupFunctionEntry, 0);  // no unwind tables: 0 = no entry
 REX_EXPORT(__imp__RtlMultiByteToUnicodeSize, rex::kernel::xboxkrnl::RtlMultiByteToUnicodeSize_entry)
 REX_EXPORT(__imp__RtlUnicodeToMultiByteSize, rex::kernel::xboxkrnl::RtlUnicodeToMultiByteSize_entry)
-REX_EXPORT_STUB(__imp__RtlUnicodeToUtf8);
-REX_EXPORT_STUB(__imp__RtlUnicodeToUtf8Size);
+REX_EXPORT(__imp__RtlUnicodeToUtf8, rex::kernel::xboxkrnl::RtlUnicodeToUtf8_entry)
+REX_EXPORT(__imp__RtlUnicodeToUtf8Size, rex::kernel::xboxkrnl::RtlUnicodeToUtf8Size_entry)
 REX_EXPORT_STUB(__imp__RtlUnwind2);
-REX_EXPORT_STUB(__imp__RtlVirtualUnwind);
+REX_EXPORT_QUIET_RETURN(__imp__RtlVirtualUnwind, 0);  // no unwind tables: 0 = no handler
 REX_EXPORT_STUB(__imp__RtlImageDirectoryEntryToData);
-REX_EXPORT_STUB(__imp__RtlCaptureStackBackTrace);
+REX_EXPORT(__imp__RtlCaptureStackBackTrace, rex::kernel::xboxkrnl::RtlCaptureStackBackTrace_entry)
 REX_EXPORT_STUB(__imp__RtlSetVectoredExceptionHandler);
 REX_EXPORT_STUB(__imp__RtlClearVectoredExceptionHandler);
+
+
+// ---- round-2 Rtl string family (spec: stub-noref-research; behaviour per public NT docs) ----
+namespace {
+template <typename S>
+u32 AppendBytes(S* dst, const uint8_t* src, u32 src_bytes, u32 unit) {
+  if (dst->length + src_bytes > dst->maximum_length) return X_STATUS_BUFFER_TOO_SMALL;
+  if (src_bytes) {
+    auto* d = REX_KERNEL_MEMORY()->template TranslateVirtual<uint8_t*>(dst->pointer);
+    std::memcpy(d + dst->length, src, src_bytes);
+  }
+  dst->length = static_cast<u16>(dst->length + src_bytes);
+  if (unit == 2 && dst->length + 2 <= dst->maximum_length) {
+    auto* d = REX_KERNEL_MEMORY()->template TranslateVirtual<uint8_t*>(dst->pointer);
+    d[dst->length] = 0;
+    d[dst->length + 1] = 0;
+  }
+  return X_STATUS_SUCCESS;
+}
+int CompareWide(const rex::be<uint16_t>* a, u32 na, const rex::be<uint16_t>* b, u32 nb, bool ci) {
+  u32 n = std::min(na, nb);
+  for (u32 i = 0; i < n; ++i) {
+    int x = a[i], y = b[i];
+    if (ci) {
+      x = static_cast<uint16_t>(std::towupper(static_cast<wint_t>(x)));
+      y = static_cast<uint16_t>(std::towupper(static_cast<wint_t>(y)));
+    }
+    if (x != y) return x - y;
+  }
+  return static_cast<int>(na) - static_cast<int>(nb);
+}
+std::string Utf16ToUtf8(const rex::be<uint16_t>* src, u32 n) {
+  std::string out;
+  for (u32 i = 0; i < n; ++i) {
+    uint32_t c = src[i];
+    if (c >= 0xD800 && c < 0xDC00 && i + 1 < n && src[i + 1] >= 0xDC00 && src[i + 1] < 0xE000) {
+      c = 0x10000 + ((c - 0xD800) << 10) + (src[++i] - 0xDC00);
+    }
+    if (c < 0x80) out += char(c);
+    else if (c < 0x800) { out += char(0xC0 | c >> 6); out += char(0x80 | (c & 0x3F)); }
+    else if (c < 0x10000) { out += char(0xE0 | c >> 12); out += char(0x80 | ((c >> 6) & 0x3F)); out += char(0x80 | (c & 0x3F)); }
+    else { out += char(0xF0 | c >> 18); out += char(0x80 | ((c >> 12) & 0x3F)); out += char(0x80 | ((c >> 6) & 0x3F)); out += char(0x80 | (c & 0x3F)); }
+  }
+  return out;
+}
+}  // namespace
+
+u32 RtlAppendStringToString_entry(ppc_ptr_t<X_ANSI_STRING> dst, ppc_ptr_t<X_ANSI_STRING> src) {
+  if (!src || src->length == 0) return X_STATUS_SUCCESS;
+  return AppendBytes(dst.host_address(), REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(src->pointer), src->length, 1);
+}
+
+u32 RtlAppendUnicodeStringToString_entry(ppc_ptr_t<X_UNICODE_STRING> dst,
+                                         ppc_ptr_t<X_UNICODE_STRING> src) {
+  if (!src || src->length == 0) return X_STATUS_SUCCESS;
+  return AppendBytes(dst.host_address(), REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(src->pointer), src->length, 2);
+}
+
+u32 RtlAppendUnicodeToString_entry(ppc_ptr_t<X_UNICODE_STRING> dst, mapped_u16 src) {
+  if (!src.guest_address()) return X_STATUS_SUCCESS;
+  auto* w = REX_KERNEL_MEMORY()->TranslateVirtual<rex::be<uint16_t>*>(src.guest_address());
+  u32 n = 0;
+  while (w[n]) ++n;
+  return AppendBytes(dst.host_address(), reinterpret_cast<const uint8_t*>(w), n * 2, 2);
+}
+
+u32 RtlCompareUnicodeString_entry(ppc_ptr_t<X_UNICODE_STRING> a, ppc_ptr_t<X_UNICODE_STRING> b,
+                                  u32 ci) {
+  auto* m = REX_KERNEL_MEMORY();
+  return static_cast<u32>(CompareWide(m->TranslateVirtual<rex::be<uint16_t>*>(a->pointer), a->length / 2,
+                                      m->TranslateVirtual<rex::be<uint16_t>*>(b->pointer), b->length / 2,
+                                      ci & 0xFF));
+}
+
+u32 RtlCompareUnicodeStringN_entry(u32 a_ptr, u32 a_chars, u32 b_ptr, u32 b_chars, u32 ci) {
+  auto* m = REX_KERNEL_MEMORY();
+  auto* a = m->TranslateVirtual<rex::be<uint16_t>*>(a_ptr);
+  auto* b = m->TranslateVirtual<rex::be<uint16_t>*>(b_ptr);
+  if (a_chars == 0xFFFF) { a_chars = 0; while (a[a_chars]) ++a_chars; }
+  if (b_chars == 0xFFFF) { b_chars = 0; while (b[b_chars]) ++b_chars; }
+  return static_cast<u32>(CompareWide(a, a_chars, b, b_chars, ci & 0xFF));
+}
+
+u32 RtlCreateUnicodeString_entry(ppc_ptr_t<X_UNICODE_STRING> dst, u32 src_ptr) {
+  if (!src_ptr) return 0;
+  auto* m = REX_KERNEL_MEMORY();
+  auto* w = m->TranslateVirtual<rex::be<uint16_t>*>(src_ptr);
+  u32 n = 0;
+  while (w[n]) ++n;
+  if (n * 2 + 2 > 0xFFFF) return 0;
+  u32 buf = m->SystemHeapAlloc(n * 2 + 2);
+  if (!buf) return 0;
+  std::memcpy(m->TranslateVirtual<uint8_t*>(buf), w, n * 2 + 2);
+  dst->length = static_cast<u16>(n * 2);
+  dst->maximum_length = static_cast<u16>(n * 2 + 2);
+  dst->pointer = buf;
+  return 1;
+}
+
+u32 RtlUnicodeToUtf8_entry(u32 dst_ptr, u32 dst_bytes, mapped_u32 written, u32 src_ptr, u32 src_bytes) {
+  auto* m = REX_KERNEL_MEMORY();
+  auto utf8 = Utf16ToUtf8(m->TranslateVirtual<rex::be<uint16_t>*>(src_ptr), src_bytes / 2);
+  u32 n = static_cast<u32>(std::min<size_t>(utf8.size(), dst_bytes));
+  if (n) std::memcpy(m->TranslateVirtual<uint8_t*>(dst_ptr), utf8.data(), n);
+  if (written.guest_address()) *written = n;
+  return n < utf8.size() ? X_STATUS_BUFFER_OVERFLOW : X_STATUS_SUCCESS;
+}
+
+u32 RtlUnicodeToUtf8Size_entry(mapped_u32 bytes, u32 src_ptr, u32 src_bytes) {
+  auto utf8 = Utf16ToUtf8(REX_KERNEL_MEMORY()->TranslateVirtual<rex::be<uint16_t>*>(src_ptr), src_bytes / 2);
+  if (bytes.guest_address()) *bytes = static_cast<u32>(utf8.size());
+  return X_STATUS_SUCCESS;
+}
+
+u32 RtlCaptureStackBackTrace_entry(u32 /*skip*/, u32 /*count*/, u32 /*frames*/, mapped_u32 hash) {
+  // No guest unwinder: report zero frames and a zero hash.
+  if (hash.guest_address()) *hash = 0;
+  return 0;
+}
+
+void RtlGetCallersAddress_entry(mapped_u32 caller, mapped_u32 caller_caller) {
+  // No guest unwinder: unknown callers are 0.
+  if (caller.guest_address()) *caller = 0;
+  if (caller_caller.guest_address()) *caller_caller = 0;
+}
 
 // Single UTF-16 code unit case mapping, as the NT routines do.
 u32 RtlUpcaseUnicodeChar_entry(u32 ch) {
