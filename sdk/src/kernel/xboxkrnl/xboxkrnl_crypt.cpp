@@ -1085,19 +1085,19 @@ void XeCryptDesCbc_entry(ppc_ptr_t<XECRYPT_DES_STATE> state_ptr, mapped_u64 inp,
 }
 
 
-REX_EXPORT_STUB(__imp__XeKeysGetConsoleCertificate);
-REX_EXPORT_STUB(__imp__XeCryptBnDwLeDhEqualBase);
-REX_EXPORT_STUB(__imp__XeCryptBnDwLeDhInvalBase);
-REX_EXPORT_STUB(__imp__XeCryptBnDwLeDhModExp);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetConsoleCertificate, 0xC0000001);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnDwLeDhEqualBase, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnDwLeDhInvalBase, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnDwLeDhModExp, 0);
 REX_EXPORT(__imp__XeCryptBnDw_Copy, rex::kernel::xboxkrnl::XeCryptBnDw_Copy_entry)
 REX_EXPORT(__imp__XeCryptBnDw_SwapLeBe, rex::kernel::xboxkrnl::XeCryptBnDw_SwapLeBe_entry)
 REX_EXPORT(__imp__XeCryptBnDw_Zero, rex::kernel::xboxkrnl::XeCryptBnDw_Zero_entry)
 REX_EXPORT(__imp__XeCryptBnDwLePkcs1Format, rex::kernel::xboxkrnl::XeCryptBnDwLePkcs1Format_entry)
-REX_EXPORT_STUB(__imp__XeCryptBnQwBeSigCreate);
-REX_EXPORT_STUB(__imp__XeCryptBnQwBeSigFormat);
-REX_EXPORT_STUB(__imp__XeCryptBnQwBeSigVerify);
-REX_EXPORT_STUB(__imp__XeCryptBnQwNeModExp);
-REX_EXPORT_STUB(__imp__XeCryptBnQwNeModExpRoot);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwBeSigCreate, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwBeSigFormat, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwBeSigVerify, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwNeModExp, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwNeModExpRoot, 0);
 REX_EXPORT(__imp__XeCryptBnQwNeModInv, rex::kernel::xboxkrnl::XeCryptBnQwNeModInv_entry)
 REX_EXPORT(__imp__XeCryptBnQwNeModMul, rex::kernel::xboxkrnl::XeCryptBnQwNeModMul_entry)
 REX_EXPORT_STUB_RETURN(__imp__XeCryptBnQwNeRsaKeyGen, 0);
@@ -1106,7 +1106,7 @@ REX_EXPORT(__imp__XeCryptBnQw_Copy, rex::kernel::xboxkrnl::XeCryptBnQw_Copy_entr
 REX_EXPORT(__imp__XeCryptBnQw_SwapDwQw, rex::kernel::xboxkrnl::XeCryptBnQw_SwapDwQw_entry)
 REX_EXPORT(__imp__XeCryptBnQw_SwapLeBe, rex::kernel::xboxkrnl::XeCryptBnQw_SwapLeBe_entry)
 REX_EXPORT(__imp__XeCryptBnQw_Zero, rex::kernel::xboxkrnl::XeCryptBnQw_Zero_entry)
-REX_EXPORT_STUB(__imp__XeCryptChainAndSumMac);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptChainAndSumMac, 0);
 REX_EXPORT(__imp__XeCryptDesKey, rex::kernel::xboxkrnl::XeCryptDesKey_entry)
 REX_EXPORT(__imp__XeCryptDesEcb, rex::kernel::xboxkrnl::XeCryptDesEcb_entry)
 REX_EXPORT(__imp__XeCryptDesCbc, rex::kernel::xboxkrnl::XeCryptDesCbc_entry)
@@ -1122,90 +1122,90 @@ REX_EXPORT(__imp__XeCryptMd5Init, rex::kernel::xboxkrnl::XeCryptMd5Init_entry)
 REX_EXPORT(__imp__XeCryptMd5Update, rex::kernel::xboxkrnl::XeCryptMd5Update_entry)
 REX_EXPORT(__imp__XeCryptMd5Final, rex::kernel::xboxkrnl::XeCryptMd5Final_entry)
 REX_EXPORT(__imp__XeCryptMd5, rex::kernel::xboxkrnl::XeCryptMd5_entry)
-REX_EXPORT_STUB(__imp__XeCryptParveEcb);
-REX_EXPORT_STUB(__imp__XeCryptParveCbcMac);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptParveEcb, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptParveCbcMac, 0);
 REX_EXPORT(__imp__XeCryptRotSumSha, rex::kernel::xboxkrnl::XeCryptRotSumSha_entry)
 REX_EXPORT(__imp__XeCryptSha256, rex::kernel::xboxkrnl::XeCryptSha256_entry)
 REX_EXPORT(__imp__XeCryptSha384, rex::kernel::xboxkrnl::XeCryptSha384_entry)
 REX_EXPORT(__imp__XeCryptSha512, rex::kernel::xboxkrnl::XeCryptSha512_entry)
 REX_EXPORT(__imp__XeCryptBnQwNeCompare, rex::kernel::xboxkrnl::XeCryptBnQwNeCompare_entry)
-REX_EXPORT_STUB(__imp__XeKeysGetFactoryChallenge);
-REX_EXPORT_STUB(__imp__XeKeysSetFactoryResponse);
-REX_EXPORT_STUB(__imp__XeKeysInitializeFuses);
-REX_EXPORT_STUB(__imp__XeKeysSaveBootLoader);
-REX_EXPORT_STUB(__imp__XeKeysSaveKeyVault);
-REX_EXPORT_STUB(__imp__XeKeysGetStatus);
-REX_EXPORT_STUB(__imp__XeKeysGeneratePrivateKey);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetFactoryChallenge, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSetFactoryResponse, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysInitializeFuses, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSaveBootLoader, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSaveKeyVault, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetStatus, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGeneratePrivateKey, 0xC0000022);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysGetKeyProperties, 0xC0000001);
-REX_EXPORT_STUB(__imp__XeKeysSetKey);
-REX_EXPORT_STUB(__imp__XeKeysGenerateRandomKey);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSetKey, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGenerateRandomKey, 0xC0000022);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysGetKey, 0xC0000001);
-REX_EXPORT_STUB(__imp__XeKeysGetDigest);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetDigest, 0xC0000001);
 REX_EXPORT(__imp__XeKeysGetConsoleID, rex::kernel::xboxkrnl::XeKeysGetConsoleID_entry)
-REX_EXPORT_STUB(__imp__XeKeysGetConsoleType);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetConsoleType, 0);
 REX_EXPORT_STUB_RETURN(__imp__XeKeysQwNeRsaPrvCrypt, 0);
-REX_EXPORT_STUB(__imp__XeKeysAesCbc);
-REX_EXPORT_STUB(__imp__XeKeysDes2Cbc);
-REX_EXPORT_STUB(__imp__XeKeysDesCbc);
-REX_EXPORT_STUB(__imp__XeKeysSaveBootLoaderEx);
-REX_EXPORT_STUB(__imp__XeKeysDes2CbcUsingKey);
-REX_EXPORT_STUB(__imp__XeKeysDesCbcUsingKey);
-REX_EXPORT_STUB(__imp__XeKeysObfuscate);
-REX_EXPORT_STUB(__imp__XeKeysUnObfuscate);
-REX_EXPORT_STUB(__imp__XeKeysVerifyRSASignature);
-REX_EXPORT_STUB(__imp__XeKeysSaveSystemUpdate);
-REX_EXPORT_STUB(__imp__XeKeysLockSystemUpdate);
-REX_EXPORT_STUB(__imp__XeKeysExecute);
-REX_EXPORT_STUB(__imp__XeKeysGetVersions);
-REX_EXPORT_STUB(__imp__XeKeysSetRevocationList);
-REX_EXPORT_STUB(__imp__XeKeysExSaveKeyVault);
-REX_EXPORT_STUB(__imp__XeKeysExSetKey);
-REX_EXPORT_STUB(__imp__XeKeysExGetKey);
-REX_EXPORT_STUB(__imp__XeKeysSecurityInitialize);
-REX_EXPORT_STUB(__imp__XeKeysSecurityLoadSettings);
-REX_EXPORT_STUB(__imp__XeKeysSecuritySaveSettings);
-REX_EXPORT_STUB(__imp__XeKeysSecuritySetDetected);
-REX_EXPORT_STUB(__imp__XeKeysSecurityGetDetected);
-REX_EXPORT_STUB(__imp__XeKeysSecuritySetActivated);
-REX_EXPORT_STUB(__imp__XeKeysSecurityGetActivated);
-REX_EXPORT_STUB(__imp__XeKeysDvdAuthAP25InstallTable);
-REX_EXPORT_STUB(__imp__XeKeysDvdAuthAP25GetTableVersion);
-REX_EXPORT_STUB(__imp__XeKeysGetProtectedFlag);
-REX_EXPORT_STUB(__imp__XeKeysSetProtectedFlag);
-REX_EXPORT_STUB(__imp__XeKeysGetUpdateSequence);
-REX_EXPORT_STUB(__imp__XeKeysDvdAuthExActivate);
-REX_EXPORT_STUB(__imp__XeKeysRevokeSaveSettings);
-REX_EXPORT_STUB(__imp__XeKeysGetMediaID);
-REX_EXPORT_STUB(__imp__XeKeysLoadKeyVault);
-REX_EXPORT_STUB(__imp__XeKeysRevokeUpdateDynamic);
-REX_EXPORT_STUB(__imp__XeKeysSecuritySetStat);
-REX_EXPORT_STUB(__imp__XeKeysFcrtLoad);
-REX_EXPORT_STUB(__imp__XeKeysFcrtSave);
-REX_EXPORT_STUB(__imp__XeKeysFcrtSet);
-REX_EXPORT_STUB(__imp__XeKeysRevokeIsDeviceRevoked);
-REX_EXPORT_STUB(__imp__XeKeysDvdAuthExSave);
-REX_EXPORT_STUB(__imp__XeKeysDvdAuthExInstall);
-REX_EXPORT_STUB(__imp__XeKeysObfuscateEx);
-REX_EXPORT_STUB(__imp__XeKeysUnObfuscateEx);
-REX_EXPORT_STUB(__imp__XeKeysVerifyPIRSSignature);
-REX_EXPORT_STUB(__imp__XeCryptAesCtr);
-REX_EXPORT_STUB(__imp__XeCryptAesCbcMac);
-REX_EXPORT_STUB(__imp__XeCryptAesDmMac);
-REX_EXPORT_STUB(__imp__XeKeysGetTruncatedSecondaryConsoleId);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysAesCbc, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDes2Cbc, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDesCbc, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSaveBootLoaderEx, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDes2CbcUsingKey, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDesCbcUsingKey, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysObfuscate, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysUnObfuscate, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysVerifyRSASignature, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSaveSystemUpdate, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysLockSystemUpdate, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysExecute, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetVersions, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSetRevocationList, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysExSaveKeyVault, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysExSetKey, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysExGetKey, 0xC0000225);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecurityInitialize, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecurityLoadSettings, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecuritySaveSettings, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecuritySetDetected, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecurityGetDetected, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecuritySetActivated, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecurityGetActivated, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDvdAuthAP25InstallTable, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDvdAuthAP25GetTableVersion, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetProtectedFlag, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSetProtectedFlag, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetUpdateSequence, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDvdAuthExActivate, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysRevokeSaveSettings, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetMediaID, 0xC0052000);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysLoadKeyVault, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysRevokeUpdateDynamic, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysSecuritySetStat, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysFcrtLoad, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysFcrtSave, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysFcrtSet, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysRevokeIsDeviceRevoked, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDvdAuthExSave, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysDvdAuthExInstall, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysObfuscateEx, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysUnObfuscateEx, 0xC0000022);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysVerifyPIRSSignature, 1);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesCtr, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesCbcMac, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesDmMac, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeKeysGetTruncatedSecondaryConsoleId, 0);
 REX_EXPORT(__imp__XeCryptSha224Init, rex::kernel::xboxkrnl::XeCryptSha224Init_entry)
-REX_EXPORT_STUB(__imp__XeCryptAesCreateKeySchedule);
-REX_EXPORT_STUB(__imp__XeCryptAesEncryptOne);
-REX_EXPORT_STUB(__imp__XeCryptAesDecryptOne);
-REX_EXPORT_STUB(__imp__XeCryptAesCbcEncrypt);
-REX_EXPORT_STUB(__imp__XeCryptAesCbcDecrypt);
-REX_EXPORT_STUB(__imp__XeCryptAesGcmInitialize);
-REX_EXPORT_STUB(__imp__XeCryptAesGcmUpdate);
-REX_EXPORT_STUB(__imp__XeCryptAesGcmFinalize);
-REX_EXPORT_STUB(__imp__XeCryptEccGetCurveParameters);
-REX_EXPORT_STUB(__imp__XeCryptEccEcdhGenerateKeypair);
-REX_EXPORT_STUB(__imp__XeCryptEccEcdhExponentiate);
-REX_EXPORT_STUB(__imp__XeCryptEccEcdsaGenerateSignature);
-REX_EXPORT_STUB(__imp__XeCryptEccEcdsaVerifySignature);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesCreateKeySchedule, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesEncryptOne, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesDecryptOne, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesCbcEncrypt, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesCbcDecrypt, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesGcmInitialize, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesGcmUpdate, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptAesGcmFinalize, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptEccGetCurveParameters, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptEccEcdhGenerateKeypair, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptEccEcdhExponentiate, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptEccEcdsaGenerateSignature, 0);
+REX_EXPORT_STUB_RETURN(__imp__XeCryptEccEcdsaVerifySignature, 0);
 
 }  // namespace rex::kernel::xboxkrnl
 
@@ -1246,5 +1246,5 @@ REX_EXPORT(__imp__XeKeysConsolePrivateKeySign,
 REX_EXPORT(__imp__XeKeysConsoleSignatureVerification,
            rex::kernel::xboxkrnl::XeKeysConsoleSignatureVerification_entry)
 
-REX_EXPORT_STUB(__imp__DevAuthGetStatistics);
-REX_EXPORT_STUB(__imp__DevAuthShouldAlwaysEnforce);
+REX_EXPORT_STUB_RETURN(__imp__DevAuthGetStatistics, 0);
+REX_EXPORT_STUB_RETURN(__imp__DevAuthShouldAlwaysEnforce, 0);

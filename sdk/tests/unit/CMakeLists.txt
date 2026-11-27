@@ -117,3 +117,8 @@ add_test(NAME kernel_crypt_tests COMMAND kernel_crypt_tests)
 add_executable(rsa_public_selfcheck crypto/rsa_public_test.cpp)
 target_include_directories(rsa_public_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME rsa_public_selfcheck COMMAND rsa_public_selfcheck)
+
+add_executable(kernel_stub_returns_tests kernel/stub_returns_test.cpp)
+target_include_directories(kernel_stub_returns_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(kernel_stub_returns_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME kernel_stub_returns_tests COMMAND kernel_stub_returns_tests)
