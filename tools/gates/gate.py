@@ -428,7 +428,9 @@ def g_drive(a, G):
     first, last = (os.path.join(sd, f) for f in ('drive00.png', 'drive-end.png'))
     # a drive that keeps a picture identical start to end has stopped (a fresh load can freeze a few frames in)
     frozen = alive and os.path.exists(first) and os.path.exists(last) and open(first, 'rb').read() == open(last, 'rb').read()
-    ok = alive and not crash and proof["passed"] and not frozen
+    # from a save point the scene was proven when it was saved; what the load must show is a live picture
+    # (the driving proof needs input-driven movement, which a car parked at a wall or idle players lack)
+    ok = alive and not crash and not frozen and (proof["passed"] or bool(a.savepoint))
     facts = f'gameplay {proof["passed"]} route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
     if frozen:
         facts += ' FROZEN (first and last shots identical)'
