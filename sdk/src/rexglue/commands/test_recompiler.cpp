@@ -209,7 +209,16 @@ std::vector<TestSpec> ParseTestSpecs(const std::string& asmPath,
     return false;
   };
 
-  while (getline()) {
+  // A test_ label (a function) with no directives of its own, a callee, ends at the next one, so it
+  // does not take the following test's directives; reuse keeps that label line for the outer loop.
+  auto isLabel = [&] {
+    auto colon = line.find(':');
+    return colon != std::string::npos && line.starts_with("test_") &&
+           symbols.contains(line.substr(0, colon));
+  };
+  bool reuse = false;
+  while (reuse || getline()) {
+    reuse = false;
     if (line.empty() || line[0] == '#')
       continue;
     auto colonIndex = line.find(':');
@@ -224,16 +233,19 @@ std::vector<TestSpec> ParseTestSpecs(const std::string& asmPath,
     spec.name = name;
     spec.symbol = symbolIt->second;
 
-    while (getline() && !line.empty() && line[0] == '#') {
+    bool more = true;
+    while ((more = getline()) && !line.empty() && line[0] == '#') {
       ApplyDirective(line, "REGISTER_IN", "MEMORY_IN", spec.inputs, spec.mem_inputs);
     }
-    while (line.empty() || line[0] != '#') {
-      if (!getline())
-        break;
+    while (more && (line.empty() || line[0] != '#') && !(reuse = isLabel())) {
+      more = getline();
     }
-    do {
-      ApplyDirective(line, "REGISTER_OUT", "MEMORY_OUT", spec.outputs, spec.mem_outputs);
-    } while (getline() && !line.empty() && line[0] == '#');
+    if (more && !reuse) {
+      do {
+        ApplyDirective(line, "REGISTER_OUT", "MEMORY_OUT", spec.outputs, spec.mem_outputs);
+      } while ((more = getline()) && !line.empty() && line[0] == '#');
+      reuse = more && isLabel();
+    }
 
     if (!spec.inputs.empty() || !spec.outputs.empty() || !spec.mem_inputs.empty() ||
         !spec.mem_outputs.empty()) {

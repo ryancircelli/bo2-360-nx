@@ -102,13 +102,15 @@ void AnalyzeTestBinary(CodegenContext& ctx, std::string_view testName,
       uint32_t raw = load_and_swap<uint32_t>(data + (fnAddr - baseAddress) + offset);
       auto decoded = decode_instruction(pc, raw);
 
-      // Check for bl (branch with link = function call)
-      if (decoded.is_call() && decoded.branch_target.has_value()) {
-        uint32_t target = decoded.branch_target.value();
-        auto* targetNode = ctx.graph.getFunction(target);
-        if (targetNode) {
+      // bl is a call; a b leaving this function is a tail call
+      const bool tail = decoded.opcode == ppc::Opcode::b && decoded.branch_target.has_value() &&
+                        (*decoded.branch_target < fnAddr || *decoded.branch_target >= nextAddr);
+      if ((decoded.is_call() || tail) && decoded.branch_target.has_value()) {
+        auto* targetNode = ctx.graph.getFunction(decoded.branch_target.value());
+        if (targetNode && tail)
+          ctx.graph.addTailCallToFunction(fnAddr, pc, CallTarget::function(targetNode));
+        else if (targetNode)
           ctx.graph.addCallToFunction(fnAddr, pc, CallTarget::function(targetNode));
-        }
       }
     }
   }
