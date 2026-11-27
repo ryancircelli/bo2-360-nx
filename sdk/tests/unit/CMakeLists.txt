@@ -172,6 +172,15 @@ set_target_properties(keyboard_answer_tests PROPERTIES
 )
 add_test(NAME keyboard_answer_tests COMMAND keyboard_answer_tests)
 
+
+add_executable(md5_selfcheck crypto/md5_selfcheck.cpp)
+target_include_directories(md5_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src/kernel/xboxkrnl)
+add_test(NAME md5_selfcheck COMMAND md5_selfcheck)
+
+add_executable(kernel_crypt_tests kernel/crypt_test.cpp)
+target_include_directories(kernel_crypt_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(kernel_crypt_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME kernel_crypt_tests COMMAND kernel_crypt_tests)
 add_executable(rsa_public_selfcheck crypto/rsa_public_test.cpp)
 target_include_directories(rsa_public_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME rsa_public_selfcheck COMMAND rsa_public_selfcheck)
@@ -207,3 +216,8 @@ target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(kernel_backfill_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
+
+add_executable(kernel_stub_returns_tests kernel/stub_returns_test.cpp)
+target_include_directories(kernel_stub_returns_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(kernel_stub_returns_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME kernel_stub_returns_tests COMMAND kernel_stub_returns_tests)

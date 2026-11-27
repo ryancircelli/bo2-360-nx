@@ -1,0 +1,457 @@
+priority	name	module	ordinal	kind	class	detail	file	bodylines	wt_class	xenia_canary	rexglue_v0.11	named_only_in_ref	area	imported_by	stub_hits
+1	HalReturnToFirmware	xboxkrnl	0x00000028	kFunction	dummy-manual	HalReturnToFirmware_entry	src/kernel/xboxkrnl/xboxkrnl_hal.cpp	3	dummy-manual	stub	impl		device I/O	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdCallGraphicsNotificationRoutines	xboxkrnl	0x000001B1	kFunction	impl	VdCallGraphicsNotificationRoutines_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	2	impl	dummy	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdEnableRingBufferRPtrWriteBack	xboxkrnl	0x000001B6	kFunction	impl	VdEnableRingBufferRPtrWriteBack_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	7	impl	impl	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdGetCurrentDisplayGamma	xboxkrnl	0x000001B9	kFunction	impl	VdGetCurrentDisplayGamma_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	2	impl	stub	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdGetCurrentDisplayInformation	xboxkrnl	0x000001BA	kFunction	impl	VdGetCurrentDisplayInformation_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	21	impl	stub	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdGetSystemCommandBuffer	xboxkrnl	0x000001BD	kFunction	dummy-manual	VdGetSystemCommandBuffer_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	3	dummy-manual	stub	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdInitializeRingBuffer	xboxkrnl	0x000001C3	kFunction	impl	VdInitializeRingBuffer_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	7	impl	impl	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdInitializeScalerCommandBuffer	xboxkrnl	0x000001C5	kFunction	impl	VdInitializeScalerCommandBuffer_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	5	impl	impl	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdPersistDisplay	xboxkrnl	0x000001C7	kFunction	impl	VdPersistDisplay_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	8	impl	impl	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdQueryVideoFlags	xboxkrnl	0x000001C9	kFunction	impl	VdQueryVideoFlags_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	7	impl	stub	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdQueryVideoMode	xboxkrnl	0x000001CA	kFunction	impl	VdQueryVideoMode_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	impl	stub	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdSetGraphicsInterruptCallback	xboxkrnl	0x000001D5	kFunction	impl	VdSetGraphicsInterruptCallback_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	7	impl	impl	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdSwap	xboxkrnl	0x0000025B	kFunction	impl	VdSwap_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	47	impl	impl	impl		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	XeCryptAesCbc	xboxkrnl	0x0000015B	kFunction	impl	XeCryptAesCbc_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	27	impl	impl	impl		crypto	halo3	
+1	XeCryptAesEcb	xboxkrnl	0x0000015A	kFunction	impl	XeCryptAesEcb_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	6	impl	impl	impl		crypto	nfsmw	
+1	XeCryptAesKey	xboxkrnl	0x00000159	kFunction	impl	XeCryptAesKey_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	56	impl	impl	impl		crypto	halo3,nfsmw	
+1	XeCryptBnDwLePkcs1Format	xboxkrnl	0x00000162	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto	halo3	
+1	XeCryptBnDwLePkcs1Verify	xboxkrnl	0x00000163	kFunction	dummy	XeCryptBnDwLePkcs1Verify_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	1	dummy	impl	impl		crypto	halo3	
+1	XeCryptBnQwNeRsaPrvCrypt	xboxkrnl	0x0000016C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-fixed	absent	impl		crypto	nfsmw	
+1	XeCryptBnQwNeRsaPubCrypt	xboxkrnl	0x0000016D	kFunction	impl	XeCryptBnQwNeRsaPubCrypt_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	66	impl	impl	impl		crypto	halo3,nfsmw	
+1	XeCryptBnQw_SwapDwQwLeBe	xboxkrnl	0x00000170	kFunction	impl	XeCryptBnQw_SwapDwQwLeBe_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	1	impl	impl	impl		crypto	halo3,nfsmw	
+1	XeCryptRandom	xboxkrnl	0x0000018A	kFunction	dummy-manual	XeCryptRandom_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	1	dummy-manual	impl	impl		crypto	fh1,halo3,nfsmw,nfsmw2012	
+1	XeCryptRc4Ecb	xboxkrnl	0x0000018C	kFunction	impl	XeCryptRc4Ecb_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	10	impl	impl	impl		crypto	nfsmw	
+1	XeCryptRc4Key	xboxkrnl	0x0000018B	kFunction	impl	XeCryptRc4Key_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	11	impl	impl	impl		crypto	nfsmw	
+1	XeCryptSha	xboxkrnl	0x00000192	kFunction	impl	XeCryptSha_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	13	impl	impl	impl		crypto	ac1,bo1,bo2,fallout3,fh1,halo3,me2,nfshp,nfsmw2012	
+1	XeCryptSha256Final	xboxkrnl	0x00000312	kFunction	impl	XeCryptSha256Final_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	8	impl	impl	impl		crypto	bo2,fh1	
+1	XeCryptSha256Init	xboxkrnl	0x00000310	kFunction	impl	XeCryptSha256Init_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	9	impl	impl	impl		crypto	bo2,fh1	
+1	XeCryptSha256Update	xboxkrnl	0x00000311	kFunction	impl	XeCryptSha256Update_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	8	impl	impl	impl		crypto	bo2,fh1	
+1	XeCryptSha384Final	xboxkrnl	0x00000318	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto	bo2,fh1	
+1	XeCryptSha384Init	xboxkrnl	0x00000314	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto	bo2,fh1	
+1	XeCryptSha384Update	xboxkrnl	0x00000315	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto	bo2,fh1	
+1	XeCryptSha512Final	xboxkrnl	0x00000324	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto	bo2,fh1	
+1	XeCryptSha512Init	xboxkrnl	0x0000031F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto	bo2,fh1	
+1	XeCryptSha512Update	xboxkrnl	0x00000323	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto	bo2,fh1	
+1	XeCryptShaFinal	xboxkrnl	0x00000191	kFunction	impl	XeCryptShaFinal_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	6	impl	impl	impl		crypto	bo2,fh1,halo3,nfsmw	
+1	XeCryptShaInit	xboxkrnl	0x0000018F	kFunction	impl	XeCryptShaInit_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	6	impl	impl	impl		crypto	bo2,fh1,halo3,nfsmw	
+1	XeCryptShaUpdate	xboxkrnl	0x00000190	kFunction	impl	XeCryptShaUpdate_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	4	impl	impl	impl		crypto	bo2,fh1,halo3,nfsmw	
+1	XeKeysAesCbcUsingKey	xboxkrnl	0x00000251	kFunction	impl	XeKeysAesCbcUsingKey_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	10	impl	impl	impl		crypto	fh1	
+1	XeKeysConsolePrivateKeySign	xboxkrnl	0x00000256	kFunction	dummy	XeKeysConsolePrivateKeySign_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	2	dummy	impl-sketchy	impl		crypto	ac1,bo1,bo2,fallout3,fh1,halo3,me2,nfshp,nfsmw2012	
+1	XeKeysConsoleSignatureVerification	xboxkrnl	0x00000257	kFunction	dummy	XeKeysConsoleSignatureVerification_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	2	dummy	absent	impl		crypto	ac1,bo1,bo2,fallout3,fh1,halo3,me2,nfshp,nfsmw2012	
+1	XeKeysGetConsoleID	xboxkrnl	0x00000246	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-fixed	impl	stub		crypto	bo2,fh1	
+1	XeKeysGetKey	xboxkrnl	0x00000244	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-fixed	impl-sketchy	stub		crypto	bo2,nfsmw	
+1	XeKeysGetKeyProperties	xboxkrnl	0x00000241	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-fixed	impl	stub		crypto	bo2,nfsmw	
+1	XeKeysObscureKey	xboxkrnl	0x0000024E	kFunction	impl	XeKeysObscureKey_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	5	impl	impl	impl		crypto	fh1	
+1	EtxProducerLog	xboxkrnl	0x00000332	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-fixed	absent	stub		kernel core/other	bo2,fh1,nfsmw2012	
+1	EtxProducerRegister	xboxkrnl	0x00000334	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-fixed	absent	stub		kernel core/other	bo2,fh1,nfsmw2012	fh1:8;nfsmw2012:7
+1	EtxProducerUnregister	xboxkrnl	0x00000335	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-fixed	absent	stub		kernel core/other	bo2,fh1,nfsmw2012	fh1:4
+1	KeEnableFpuExceptions	xboxkrnl	0x0000005D	kFunction	dummy	KeEnableFpuExceptions_entry	src/kernel/xboxkrnl/xboxkrnl_misc.cpp	0	dummy	stub	dummy		kernel core/other	fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	PsCamDeviceRequest	xboxkrnl	0x0000030D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-fixed	absent	stub		camera/Kinect	bo2,fh1	
+1	VdEnableDisableClockGating	xboxkrnl	0x000001B4	kFunction	dummy	VdEnableDisableClockGating_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdGetGraphicsAsicID	xboxkrnl	0x000001BC	kFunction	dummy	VdGetGraphicsAsicID_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	nfsmw	
+1	VdInitializeEDRAM	xboxkrnl	0x00000268	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other	nfsmw	
+1	VdInitializeEngines	xboxkrnl	0x000001C2	kFunction	dummy	VdInitializeEngines_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdIsHSIOTrainingSucceeded	xboxkrnl	0x000001C6	kFunction	dummy	VdIsHSIOTrainingSucceeded_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdQuerySystemCommandBuffer	xboxkrnl	0x000001C8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other	nfshp,nfsmw	
+1	VdRetrainEDRAM	xboxkrnl	0x00000269	kFunction	dummy	VdRetrainEDRAM_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdRetrainEDRAMWorker	xboxkrnl	0x0000026A	kFunction	dummy	VdRetrainEDRAMWorker_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdSetDisplayMode	xboxkrnl	0x000001D3	kFunction	dummy	VdSetDisplayMode_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdSetDisplayModeOverride	xboxkrnl	0x000001D4	kFunction	dummy	VdSetDisplayModeOverride_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	1	dummy	stub	dummy		kernel core/other	bo2,fh1,nfsmw2012	
+1	VdSetSystemCommandBuffer	xboxkrnl	0x000001D8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other	nfshp,nfsmw	
+1	VdSetSystemCommandBufferGpuIdentifierAddress	xboxkrnl	0x000001D9	kFunction	dummy	VdSetSystemCommandBufferGpuIdentifierAddress_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	0	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	VdShutdownEngines	xboxkrnl	0x000001DC	kFunction	dummy	VdShutdownEngines_entry	src/kernel/xboxkrnl/xboxkrnl_video.cpp	0	dummy	stub	dummy		kernel core/other	ac1,bo1,bo2,fallout3,fh1,gears,halo3,me2,nfshp,nfsmw,nfsmw2012	
+1	XUsbcamCreate	xboxkrnl	0x00000222	kFunction	dummy	XUsbcamCreate_entry	src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp	1	dummy	stub	dummy		camera/Kinect	bo2,nfshp	
+1	XUsbcamDestroy	xboxkrnl	0x00000223	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-fixed	absent	stub		camera/Kinect	bo2,nfshp	
+1	XUsbcamGetConfig	xboxkrnl	0x0000021B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-junk	absent	stub		camera/Kinect	nfshp	
+1	XUsbcamGetState	xboxkrnl	0x0000021D	kFunction	dummy	XUsbcamGetState_entry	src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp	1	dummy	stub	dummy		camera/Kinect	bo2,nfshp	
+1	XUsbcamGetView	xboxkrnl	0x00000221	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-junk	absent	stub		camera/Kinect	nfshp	
+1	XUsbcamReadFrame	xboxkrnl	0x0000021E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-fixed	absent	stub		camera/Kinect	bo2,nfshp	
+1	XUsbcamReset	xboxkrnl	0x00000264	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-junk	absent	stub		camera/Kinect	nfshp	
+1	XUsbcamSetCaptureMode	xboxkrnl	0x0000021A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-fixed	absent	stub		camera/Kinect	bo2,nfshp	
+1	XUsbcamSetConfig	xboxkrnl	0x0000021C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-fixed	absent	stub		camera/Kinect	bo2,nfshp	
+1	XUsbcamSetView	xboxkrnl	0x00000220	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-junk	absent	stub		camera/Kinect	nfshp	
+1	XUsbcamSnapshot	xboxkrnl	0x0000021F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_usbcam.cpp		stub-junk	absent	stub		camera/Kinect	nfshp	
+1	XeCryptBnQwNeRsaKeyGen	xboxkrnl	0x0000016B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-fixed	absent	stub		crypto	nfsmw	
+1	XeKeysQwNeRsaPrvCrypt	xboxkrnl	0x00000248	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-fixed	absent	stub		crypto	nfsmw	
+2	HalGetCurrentAVPack	xboxkrnl	0x00000022	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	impl	stub		device I/O		
+2	HidGetLastInputTime	xboxkrnl	0x000001F1	kFunction	dummy-manual	HidGetLastInputTime_entry	src/kernel/xboxkrnl/xboxkrnl_hid.cpp	4	dummy-manual	absent	impl		device I/O		
+2	XeCryptAesCbcDecrypt	xboxkrnl	0x0000039B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptAesCbcEncrypt	xboxkrnl	0x0000039A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptAesCreateKeySchedule	xboxkrnl	0x00000397	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptAesDecryptOne	xboxkrnl	0x00000399	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptAesEncryptOne	xboxkrnl	0x00000398	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnDw_Copy	xboxkrnl	0x0000015F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnDw_SwapLeBe	xboxkrnl	0x00000160	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnDw_Zero	xboxkrnl	0x00000161	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnQwBeSigCreate	xboxkrnl	0x00000164	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnQwBeSigFormat	xboxkrnl	0x00000165	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptBnQwBeSigVerify	xboxkrnl	0x00000166	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	stub	impl		crypto		
+2	XeCryptBnQwNeCompare	xboxkrnl	0x00000326	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnQwNeModInv	xboxkrnl	0x00000169	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptBnQwNeModMul	xboxkrnl	0x0000016A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptBnQw_Copy	xboxkrnl	0x0000016E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptBnQw_SwapDwQw	xboxkrnl	0x0000016F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnQw_SwapLeBe	xboxkrnl	0x00000171	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptBnQw_Zero	xboxkrnl	0x00000172	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptChainAndSumMac	xboxkrnl	0x00000173	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptDes3Cbc	xboxkrnl	0x0000017A	kFunction	impl	XeCryptDes3Cbc_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	15	impl	impl	impl		crypto		
+2	XeCryptDes3Ecb	xboxkrnl	0x00000179	kFunction	impl	XeCryptDes3Ecb_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	7	impl	impl	impl		crypto		
+2	XeCryptDes3Key	xboxkrnl	0x00000178	kFunction	impl	XeCryptDes3Key_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	5	impl	impl	impl		crypto		
+2	XeCryptDesCbc	xboxkrnl	0x00000177	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptDesEcb	xboxkrnl	0x00000176	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptDesKey	xboxkrnl	0x00000175	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptDesParity	xboxkrnl	0x00000174	kFunction	impl	XeCryptDesParity_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	1	impl	impl	impl		crypto		
+2	XeCryptEccGetCurveParameters	xboxkrnl	0x0000039F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptHmacMd5	xboxkrnl	0x0000017E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptHmacMd5Final	xboxkrnl	0x0000017D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptHmacMd5Init	xboxkrnl	0x0000017B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptHmacMd5Update	xboxkrnl	0x0000017C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptHmacSha	xboxkrnl	0x00000182	kFunction	impl	XeCryptHmacSha_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	36	impl	impl	impl		crypto		
+2	XeCryptHmacShaFinal	xboxkrnl	0x00000181	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptHmacShaInit	xboxkrnl	0x0000017F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptHmacShaUpdate	xboxkrnl	0x00000180	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptHmacShaVerify	xboxkrnl	0x00000183	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptMd5	xboxkrnl	0x00000187	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptMd5Final	xboxkrnl	0x00000186	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptMd5Init	xboxkrnl	0x00000184	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptMd5Update	xboxkrnl	0x00000185	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptParveCbcMac	xboxkrnl	0x00000189	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptParveEcb	xboxkrnl	0x00000188	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptRc4	xboxkrnl	0x0000018D	kFunction	impl	XeCryptRc4_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	3	impl	impl	impl		crypto		
+2	XeCryptRotSumSha	xboxkrnl	0x0000018E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptSha256	xboxkrnl	0x00000313	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	impl		crypto		
+2	XeCryptSha384	xboxkrnl	0x0000031E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeCryptSha512	xboxkrnl	0x00000325	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	impl		crypto		
+2	XeKeysGetConsoleType	xboxkrnl	0x00000247	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	impl	stub		crypto		
+2	XeKeysHmacSha	xboxkrnl	0x00000249	kFunction	impl	XeKeysHmacSha_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	10	impl	impl	impl		crypto		
+2	XeKeysHmacShaUsingKey	xboxkrnl	0x0000024F	kFunction	impl	XeKeysHmacShaUsingKey_entry	src/kernel/xboxkrnl/xboxkrnl_crypt.cpp	12	impl	impl	impl		crypto		
+3	AniBlockOnAnimation	xboxkrnl	0x00000262	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	AniSetLogo	xboxkrnl	0x00000265	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	AniStartBootAnimation	xboxkrnl	0x000002A6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	AniTerminateAnimation	xboxkrnl	0x00000263	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	DetroitDeviceRequest	xboxkrnl	0x0000030F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	DevAuthGetStatistics	xboxkrnl	0x00000329	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		kernel core/other		
+3	DevAuthShouldAlwaysEnforce	xboxkrnl	0x00000359	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvBindToUser	xboxkrnl	0x00000279	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvDeviceConfigChange	xboxkrnl	0x00000290	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvGetContentStorageNotification	xboxkrnl	0x00000210	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetAudioLatencyCallback	xboxkrnl	0x0000035B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetAutobind	xboxkrnl	0x0000020F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetContentStorageCallback	xboxkrnl	0x0000020E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetDeviceConfigChangeCallback	xboxkrnl	0x0000028F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetMicArrayStartCallback	xboxkrnl	0x00000328	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetSysReqCallback	xboxkrnl	0x0000020C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvSetUserBindingCallback	xboxkrnl	0x0000020D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	DrvXenonButtonPressed	xboxkrnl	0x00000278	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	EmaExecute	xboxkrnl	0x00000362	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxBufferRegister	xboxkrnl	0x0000033A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxBufferUnregister	xboxkrnl	0x0000033B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxConsumerDisableEventType	xboxkrnl	0x0000032D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxConsumerEnableEventType	xboxkrnl	0x0000032E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxConsumerFlushBuffers	xboxkrnl	0x00000336	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxConsumerProcessLogs	xboxkrnl	0x0000032F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxConsumerRegister	xboxkrnl	0x00000330	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxConsumerUnregister	xboxkrnl	0x00000331	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxProducerLogV	xboxkrnl	0x00000333	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxProducerLogXwpp	xboxkrnl	0x00000337	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	EtxProducerLogXwppV	xboxkrnl	0x00000338	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExCancelAlarm	xboxkrnl	0x000002BE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExFreeDebugPool	xboxkrnl	0x00000364	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExInitializeAlarm	xboxkrnl	0x000002BF	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExIsBetaFeatureEnabled	xboxkrnl	0x00000239	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExReadModifyWriteXConfigSettingUlong	xboxkrnl	0x000002BC	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	stub	stub		kernel core/other		
+3	ExRegisterThreadNotification	xboxkrnl	0x00000014	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExRegisterXConfigNotification	xboxkrnl	0x000002D0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExSetAlarm	xboxkrnl	0x000002C0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExSetBetaFeaturesEnabled	xboxkrnl	0x00000042	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	ExTerminateTitleProcess	xboxkrnl	0x0000001A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	HalCallBackgroundModeNotificationRoutines	xboxkrnl	0x000002AA	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalClampUnclampOutputDACs	xboxkrnl	0x000002A7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalConfigureVeDevice	xboxkrnl	0x00000395	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalFinalizePowerLossRecovery	xboxkrnl	0x000002BA	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalGetMemoryInformation	xboxkrnl	0x000002AC	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalGetNotedArgonErrors	xboxkrnl	0x00000317	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalGetPowerUpCause	xboxkrnl	0x0000026C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalGpioControl	xboxkrnl	0x00000023	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalIsExecutingPowerDownDpc	xboxkrnl	0x00000267	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalNotifyAddRemoveBackgroundTask	xboxkrnl	0x000002A9	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalNotifyBackgroundModeTransitionComplete	xboxkrnl	0x000002B5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalOpenCloseODDTray	xboxkrnl	0x00000024	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	stub	stub		device I/O		
+3	HalPowerDownToBackgroundMode	xboxkrnl	0x000002A8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalReadArgonEeprom	xboxkrnl	0x00000319	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalReadWritePCISpace	xboxkrnl	0x00000025	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalRegisterBackgroundModeTransitionCallback	xboxkrnl	0x000002A5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalRegisterHdDvdRomNotification	xboxkrnl	0x00000291	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalRegisterPowerDownCallback	xboxkrnl	0x0000027D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalRegisterPowerDownNotification	xboxkrnl	0x00000026	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalRegisterSMCNotification	xboxkrnl	0x00000027	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalRegisterXamPowerDownCallback	xboxkrnl	0x000002BD	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalSendSMCMessage	xboxkrnl	0x00000029	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	stub	stub		device I/O		
+3	HalSetAudioEnable	xboxkrnl	0x0000002A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalSetPowerLossRecovery	xboxkrnl	0x000002BB	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HalWriteArgonEeprom	xboxkrnl	0x0000031A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hal.cpp		stub-junk	absent	stub		device I/O		
+3	HidGetCapabilities	xboxkrnl	0x000001EA	kFunction	dummy	HidGetCapabilities_entry	src/kernel/xboxkrnl/xboxkrnl_hid.cpp	1	dummy	absent	dummy		device I/O		
+3	HidReadKeys	xboxkrnl	0x000001EB	kFunction	dummy	HidReadKeys_entry	src/kernel/xboxkrnl/xboxkrnl_hid.cpp	1	dummy	stub	dummy		device I/O		
+3	HidReadMouseChanges	xboxkrnl	0x00000273	kFunction	dummy	HidReadMouseChanges_entry	src/kernel/xboxkrnl/xboxkrnl_hid.cpp	1	dummy	absent	dummy		device I/O		
+3	IptvGetAesCtrTransform	xboxkrnl	0x000002C6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	IptvGetSessionKeyHash	xboxkrnl	0x000002D5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	IptvSetBoundaryKey	xboxkrnl	0x000002C3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	IptvSetSessionKey	xboxkrnl	0x000002C4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	IptvVerifyOmac1Signature	xboxkrnl	0x000002C5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeBlowFuses	xboxkrnl	0x00000050	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeCallAndBlockOnDpcRoutine	xboxkrnl	0x00000375	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeCallAndWaitForDpcRoutine	xboxkrnl	0x00000376	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeCreateUserMode	xboxkrnl	0x00000058	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeDeleteUserMode	xboxkrnl	0x0000005B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeDisablePFMInterrupt	xboxkrnl	0x0000029E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeEnablePFMInterrupt	xboxkrnl	0x0000029D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeEnablePPUPerformanceMonitor	xboxkrnl	0x0000005E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeEnterUserMode	xboxkrnl	0x00000060	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeExecuteOnProtectedStack	xboxkrnl	0x0000035D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeGetPMWRegister	xboxkrnl	0x00000067	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeGetPRVRegister	xboxkrnl	0x00000068	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeGetSocRegister	xboxkrnl	0x00000069	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeGetSpecialPurposeRegister	xboxkrnl	0x0000006A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeGetVidInfo	xboxkrnl	0x000002B4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeLeaveUserMode	xboxkrnl	0x0000007E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeRegisterSwapNotification	xboxkrnl	0x00000384	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetPMWRegister	xboxkrnl	0x0000009F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetPRVRegister	xboxkrnl	0x000000A1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetPageRelocationCallback	xboxkrnl	0x00000380	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetPowerMode	xboxkrnl	0x000000A0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetProfilerISR	xboxkrnl	0x0000029F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetSocRegister	xboxkrnl	0x000000A4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	KeSetSpecialPurposeRegister	xboxkrnl	0x000000A5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	McaDeviceRequest	xboxkrnl	0x0000030E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MicDeviceRequest	xboxkrnl	0x000002B1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	stub	stub		kernel core/other		
+3	MtpdBeginTransaction	xboxkrnl	0x00000211	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdCancelTransaction	xboxkrnl	0x00000212	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdEndTransaction	xboxkrnl	0x00000213	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdGetCurrentDevices	xboxkrnl	0x00000214	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdReadData	xboxkrnl	0x00000215	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdReadEvent	xboxkrnl	0x00000216	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdResetDevice	xboxkrnl	0x00000217	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdSendData	xboxkrnl	0x00000218	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	MtpdVerifyProximity	xboxkrnl	0x00000219	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicAttach	xboxkrnl	0x00000202	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicDetach	xboxkrnl	0x00000203	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicFlushXmitQueue	xboxkrnl	0x00000206	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicGetLinkState	xboxkrnl	0x00000208	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicGetOpt	xboxkrnl	0x0000020A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicGetStats	xboxkrnl	0x00000209	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicRegisterDevice	xboxkrnl	0x000002E3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicSetOpt	xboxkrnl	0x0000020B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicSetUnicastAddress	xboxkrnl	0x00000201	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicShutdown	xboxkrnl	0x00000207	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicUnregisterDevice	xboxkrnl	0x00000303	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicUpdateMcastMembership	xboxkrnl	0x00000205	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NicXmit	xboxkrnl	0x00000204	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NomnilGetExtension	xboxkrnl	0x000002F8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NomnilSetLed	xboxkrnl	0x00000306	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NomnilStartCloseDevice	xboxkrnl	0x000002F9	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	NullCableRequest	xboxkrnl	0x0000032A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	RmcDeviceRequest	xboxkrnl	0x000002E1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	TidDeviceRequest	xboxkrnl	0x00000377	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	TitleDeviceAuthRequest	xboxkrnl	0x00000383	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	UsbdAddDeviceComplete	xboxkrnl	0x000002E4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdCallAndBlockOnDpcRoutine	xboxkrnl	0x000002F5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdCancelAsyncTransfer	xboxkrnl	0x000002E5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdCancelTimer	xboxkrnl	0x0000037E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdEnableDisableRootHubPort	xboxkrnl	0x00000339	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetDeviceDescriptor	xboxkrnl	0x000002F7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetDeviceRootPortType	xboxkrnl	0x00000366	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetDeviceSpeed	xboxkrnl	0x000002E6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetDeviceTopology	xboxkrnl	0x000002E7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetEndpointDescriptor	xboxkrnl	0x000002E8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetNatalHardwareVersion	xboxkrnl	0x00000373	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetNatalHub	xboxkrnl	0x00000372	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetPortDeviceNode	xboxkrnl	0x00000371	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetRequiredDrivers	xboxkrnl	0x000002F2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdGetRootHubDeviceNode	xboxkrnl	0x00000370	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdIsDeviceAuthenticated	xboxkrnl	0x000002E9	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdNatalHubRegisterNotificationCallback	xboxkrnl	0x00000374	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdOpenDefaultEndpoint	xboxkrnl	0x000002EA	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdOpenEndpoint	xboxkrnl	0x000002EB	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdQueueAsyncTransfer	xboxkrnl	0x000002EC	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdQueueCloseDefaultEndpoint	xboxkrnl	0x000002ED	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdQueueCloseEndpoint	xboxkrnl	0x000002EE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdQueueIsochTransfer	xboxkrnl	0x0000037F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdRegisterDriverObject	xboxkrnl	0x000002F3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdRemoveDeviceComplete	xboxkrnl	0x000002EF	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdResetDevice	xboxkrnl	0x000002F6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdResetEndpoint	xboxkrnl	0x0000037C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdSetTimer	xboxkrnl	0x0000037D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdTitleDriverResetAllUnrecognizedPorts	xboxkrnl	0x0000037A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdTitleDriverSetUnrecognizedPort	xboxkrnl	0x0000037B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	UsbdUnregisterDriverObject	xboxkrnl	0x000002F4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		camera/Kinect		
+3	VdBlockUntilGUIIdle	xboxkrnl	0x000001B0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdDisplayFatalError	xboxkrnl	0x000001B2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdEnableClosedCaption	xboxkrnl	0x000001B3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdEnableDisablePowerSavingMode	xboxkrnl	0x000001B5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdEnableHDCP	xboxkrnl	0x00000271	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdEnableWMAProOverHDMI	xboxkrnl	0x000002AE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdEnumerateVideoModes	xboxkrnl	0x00000270	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGenerateGPUCSCCoefficients	xboxkrnl	0x000001B7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGet3dVideoFormat	xboxkrnl	0x00000367	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGetClosedCaptionReadyStatus	xboxkrnl	0x000001B8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGetDisplayDiscoveryData	xboxkrnl	0x0000027E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGetDisplayModeOverride	xboxkrnl	0x000001BB	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGetOption	xboxkrnl	0x000002D9	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdGetWSS2Data	xboxkrnl	0x00000368	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdInitializeScaler	xboxkrnl	0x000001C4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdQueryRealVideoMode	xboxkrnl	0x000002D2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	stub	stub		kernel core/other		
+3	VdQueryVideoCapabilities	xboxkrnl	0x00000365	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdReadDVERegisterUlong	xboxkrnl	0x000001CB	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdReadEEDIDBlock	xboxkrnl	0x0000026F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdReadWriteHSIOCalibrationFlag	xboxkrnl	0x000001CC	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdRegisterGraphicsNotification	xboxkrnl	0x000001CD	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdRegisterHDCPNotification	xboxkrnl	0x00000272	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdRegisterXamGraphicsNotification	xboxkrnl	0x000001CE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSendClosedCaptionData	xboxkrnl	0x000001CF	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSet3dVideoFormat	xboxkrnl	0x00000369	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetCGMSOption	xboxkrnl	0x000001D0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetCGMSState	xboxkrnl	0x000002D6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetColorProfileAdjustment	xboxkrnl	0x000001D1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetCscMatricesOverride	xboxkrnl	0x000001D2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetHDCPOption	xboxkrnl	0x000001D6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetHDCPRevocationList	xboxkrnl	0x000002A1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetMacrovisionOption	xboxkrnl	0x000001D7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetOption	xboxkrnl	0x000002DA	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetSCMSState	xboxkrnl	0x000002D7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetStudioRGBMode	xboxkrnl	0x00000379	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetWSS2Data	xboxkrnl	0x0000036A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetWSSData	xboxkrnl	0x000001DA	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdSetWSSOption	xboxkrnl	0x000001DB	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdStartDisplayDiscovery	xboxkrnl	0x000002A0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdTurnDisplayOff	xboxkrnl	0x000001DD	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdTurnDisplayOn	xboxkrnl	0x000001DE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VdWriteDVERegisterUlong	xboxkrnl	0x000001E0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_video.cpp		stub-junk	absent	stub		kernel core/other		
+3	VeSetHandlers	xboxkrnl	0x00000394	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	VgcHandler_SetHandlers	xboxkrnl	0x00000389	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	VvcHandlerCancelTransfers	xboxkrnl	0x0000038A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	VvcHandlerRetrieveVoiceExtension	xboxkrnl	0x0000038B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiBeginAuthentication	xboxkrnl	0x000002FA	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiCalculateRegulatoryDomain	xboxkrnl	0x00000307	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiChannelToFrequency	xboxkrnl	0x00000309	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiCheckCounterMeasures	xboxkrnl	0x000002FB	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiChooseAuthenCipherSetFromBSSID	xboxkrnl	0x000002FC	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiCompleteAuthentication	xboxkrnl	0x000002FD	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiDeduceNetworkType	xboxkrnl	0x00000302	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiGetAssociationIE	xboxkrnl	0x000002FE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiOnMICError	xboxkrnl	0x000002FF	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiPrepareAuthenticationContext	xboxkrnl	0x00000300	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiRecvEAPOLPacket	xboxkrnl	0x00000301	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	WifiSelectAdHocChannel	xboxkrnl	0x00000308	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdControl	xboxkrnl	0x000002E0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFCancelIo	xboxkrnl	0x00000288	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFDeviceControl	xboxkrnl	0x00000286	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFEffectOperation	xboxkrnl	0x00000285	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFGetDeviceInfo	xboxkrnl	0x00000282	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFSetDeviceGain	xboxkrnl	0x00000287	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFSetEffect	xboxkrnl	0x00000283	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFSetRumble	xboxkrnl	0x00000289	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdFFUpdateEffect	xboxkrnl	0x00000284	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdGetCapabilities	xboxkrnl	0x000001E5	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdGetDevicePid	xboxkrnl	0x00000316	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdGetDeviceStats	xboxkrnl	0x000001EC	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdGetFailedConnectionOrBind	xboxkrnl	0x00000385	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdGetLastTextInputTime	xboxkrnl	0x000002AD	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdGetTextDeviceKeyLocks	xboxkrnl	0x000002C9	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdNotify	xboxkrnl	0x000001E8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdPassThroughRFCommand	xboxkrnl	0x0000024A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdPowerDownDevice	xboxkrnl	0x00000261	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdRawState	xboxkrnl	0x000001E9	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdReadState	xboxkrnl	0x000001E6	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdReadTextKeystroke	xboxkrnl	0x00000277	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdResetDevice	xboxkrnl	0x000001ED	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSendStayAliveRequest	xboxkrnl	0x0000027F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetFailedConnectionOrBindCallback	xboxkrnl	0x00000386	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetMinMaxAuthDelay	xboxkrnl	0x00000388	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetRFPowerMode	xboxkrnl	0x000001EF	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetRadioFrequency	xboxkrnl	0x000001F0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetRingOfLight	xboxkrnl	0x000001EE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetTextDeviceKeyLocks	xboxkrnl	0x000002C8	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetTextMessengerIndicator	xboxkrnl	0x000002B0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdSetWifiChannel	xboxkrnl	0x00000305	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XInputdWriteState	xboxkrnl	0x000001E7	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_hid.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedActivate	xboxkrnl	0x000001E4	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedClose	xboxkrnl	0x000001E3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedGetBatteryStatus	xboxkrnl	0x00000281	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedGetDirectionalData	xboxkrnl	0x00000327	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedHeadsetPresent	xboxkrnl	0x000001E1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedIsActiveProcess	xboxkrnl	0x0000035C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedSendVPort	xboxkrnl	0x00000280	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XVoicedSubmitPacket	xboxkrnl	0x000001E2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_misc.cpp		stub-junk	absent	stub		kernel core/other		
+3	XeCryptAesCbcMac	xboxkrnl	0x00000360	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptAesCtr	xboxkrnl	0x0000035F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptAesDmMac	xboxkrnl	0x00000361	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptAesGcmFinalize	xboxkrnl	0x0000039E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptAesGcmInitialize	xboxkrnl	0x0000039C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptAesGcmUpdate	xboxkrnl	0x0000039D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptBnDwLeDhEqualBase	xboxkrnl	0x0000015C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptBnDwLeDhInvalBase	xboxkrnl	0x0000015D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptBnDwLeDhModExp	xboxkrnl	0x0000015E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptBnQwNeModExp	xboxkrnl	0x00000167	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptBnQwNeModExpRoot	xboxkrnl	0x00000168	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptEccEcdhExponentiate	xboxkrnl	0x000003A1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptEccEcdhGenerateKeypair	xboxkrnl	0x000003A0	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptEccEcdsaGenerateSignature	xboxkrnl	0x000003A2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptEccEcdsaVerifySignature	xboxkrnl	0x000003A3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeCryptSha224Init	xboxkrnl	0x00000396	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysAesCbc	xboxkrnl	0x0000024B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDes2Cbc	xboxkrnl	0x0000024C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDes2CbcUsingKey	xboxkrnl	0x00000252	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDesCbc	xboxkrnl	0x0000024D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDesCbcUsingKey	xboxkrnl	0x00000253	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDvdAuthAP25GetTableVersion	xboxkrnl	0x0000029A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDvdAuthAP25InstallTable	xboxkrnl	0x00000299	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDvdAuthExActivate	xboxkrnl	0x000002A3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDvdAuthExInstall	xboxkrnl	0x0000033E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysDvdAuthExSave	xboxkrnl	0x0000033D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysExGetKey	xboxkrnl	0x0000028E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysExSaveKeyVault	xboxkrnl	0x0000028C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysExSetKey	xboxkrnl	0x0000028D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysExecute	xboxkrnl	0x0000025F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysFcrtLoad	xboxkrnl	0x0000031B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysFcrtSave	xboxkrnl	0x0000031C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysFcrtSet	xboxkrnl	0x0000031D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGeneratePrivateKey	xboxkrnl	0x00000240	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGenerateRandomKey	xboxkrnl	0x00000243	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetConsoleCertificate	xboxkrnl	0x0000001F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetDigest	xboxkrnl	0x00000245	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetFactoryChallenge	xboxkrnl	0x0000023A	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetMediaID	xboxkrnl	0x000002B2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetProtectedFlag	xboxkrnl	0x0000029B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetStatus	xboxkrnl	0x0000023F	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetTruncatedSecondaryConsoleId	xboxkrnl	0x00000363	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetUpdateSequence	xboxkrnl	0x000002A2	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysGetVersions	xboxkrnl	0x00000260	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysInitializeFuses	xboxkrnl	0x0000023C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysLoadKeyVault	xboxkrnl	0x000002B3	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysLockSystemUpdate	xboxkrnl	0x0000025E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysObfuscate	xboxkrnl	0x00000254	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysObfuscateEx	xboxkrnl	0x00000346	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysRevokeIsDeviceRevoked	xboxkrnl	0x0000032B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysRevokeSaveSettings	xboxkrnl	0x000002AF	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysRevokeUpdateDynamic	xboxkrnl	0x000002CE	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSaveBootLoader	xboxkrnl	0x0000023D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSaveBootLoaderEx	xboxkrnl	0x00000250	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSaveKeyVault	xboxkrnl	0x0000023E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSaveSystemUpdate	xboxkrnl	0x0000025D	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecurityGetActivated	xboxkrnl	0x00000298	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecurityGetDetected	xboxkrnl	0x00000296	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecurityInitialize	xboxkrnl	0x00000292	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecurityLoadSettings	xboxkrnl	0x00000293	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecuritySaveSettings	xboxkrnl	0x00000294	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecuritySetActivated	xboxkrnl	0x00000297	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecuritySetDetected	xboxkrnl	0x00000295	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSecuritySetStat	xboxkrnl	0x000002D1	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSetFactoryResponse	xboxkrnl	0x0000023B	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSetKey	xboxkrnl	0x00000242	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSetProtectedFlag	xboxkrnl	0x0000029C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysSetRevocationList	xboxkrnl	0x0000027C	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysUnObfuscate	xboxkrnl	0x00000255	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysUnObfuscateEx	xboxkrnl	0x00000347	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysVerifyPIRSSignature	xboxkrnl	0x0000035E	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		
+3	XeKeysVerifyRSASignature	xboxkrnl	0x00000258	kFunction	stub-junk		src/kernel/xboxkrnl/xboxkrnl_crypt.cpp		stub-junk	absent	stub		crypto		

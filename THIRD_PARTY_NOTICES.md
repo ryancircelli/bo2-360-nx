@@ -103,3 +103,9 @@ Call of Duty and Call of Duty: Black Ops II are trademarks of Activision Publish
 trademark of Nintendo. Xbox 360 is a trademark of Microsoft. GitHub and the GitHub mark are trademarks of GitHub, Inc. This project is not affiliated with or endorsed by any of them.
 
 XAM title classifiers in `sdk/src/kernel/xam/title_id_utils.h` and their wrappers in `xam_info.cpp` are adapted from the already credited Xenia Canary `title_id_utils.h` / `xam_info.cc` (BSD-3-Clause; original notices retained).
+
+Crypto backfill continuation: `XeCryptBnQwNeModInv` and `XeCryptBnQwNeModMul` in
+`sdk/src/kernel/xboxkrnl/xboxkrnl_crypt.cpp` are adapted from xenia-canary
+`src/xenia/kernel/xboxkrnl/xboxkrnl_crypt.cc` (BSD-3-Clause, Ben Vanik and Xenia contributors).
+PKCS1 block formatting/verification is an original implementation from a written behaviour
+specification; SHA224 initialization follows FIPS 180-4. No ExCrypt code was imported.

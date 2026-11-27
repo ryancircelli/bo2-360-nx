@@ -45,12 +45,12 @@ u32 XUsbcamGetState_entry() {
 REX_EXPORT(__imp__XUsbcamCreate, rex::kernel::xboxkrnl::XUsbcamCreate_entry)
 REX_EXPORT(__imp__XUsbcamGetState, rex::kernel::xboxkrnl::XUsbcamGetState_entry)
 
-REX_EXPORT_STUB(__imp__XUsbcamSetCaptureMode);
-REX_EXPORT_STUB(__imp__XUsbcamGetConfig);
-REX_EXPORT_STUB(__imp__XUsbcamSetConfig);
-REX_EXPORT_STUB(__imp__XUsbcamReadFrame);
-REX_EXPORT_STUB(__imp__XUsbcamSnapshot);
-REX_EXPORT_STUB(__imp__XUsbcamSetView);
-REX_EXPORT_STUB(__imp__XUsbcamGetView);
-REX_EXPORT_STUB(__imp__XUsbcamDestroy);
-REX_EXPORT_STUB(__imp__XUsbcamReset);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamSetCaptureMode, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamGetConfig, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamSetConfig, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamReadFrame, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamSnapshot, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamSetView, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamGetView, 0x48F);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamDestroy, 0);
+REX_EXPORT_STUB_RETURN(__imp__XUsbcamReset, 0x48F);
