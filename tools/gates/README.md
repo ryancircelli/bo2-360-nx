@@ -17,7 +17,7 @@ $G speed nfsmw --a OLD.app --b NEW.app          # same through the drive route's
 $G install nfsmw --app NEW.app --repo ~/dev/bo2-360-nx-<topic> [--integration origin/nfs-tonight] [--dry-run]
 $G replay BUILD_DIR --repo ~/dev/bo2-360-nx-<topic> [--only a,b]   # picture-regression replay of the saved GPU traces (sdk/tools/gputest/replay-gate); run first for any sdk/src/graphics change
 ```
-GAME = `bo2 nfsmw fh1 nfshp bo1 nfsmw2012` (nfsmw2012: boot and install, no drive route yet). `--app` defaults to the installed app in ~/Games/Launchers (runq clones it; it is
+GAME = `bo2 nfsmw fh1 nfshp bo1 gears ac1 nfsmw2012` (nfsmw2012: boot/shot only, its drive FAILs closed; a game needs a rule in driving.py to pass `drive`; `$G selftest` runs the kit tests, no game). `--app` defaults to the installed app in ~/Games/Launchers (runq clones it; it is
 never touched). Everything but `install`/`set`/`speed` is a runq job (class harness, `--class proof|ship` to change), so
 it is muted, minimized, on its own UDP ports, SDL_HIDAPI off, and waits its turn. `--now` runs inline (debug only).
 

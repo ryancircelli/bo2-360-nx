@@ -7,6 +7,14 @@ import re
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Every gate game needs a rule here; a game without one can never PASS drive (fail closed).
+RACERS = ('nfsmw', 'nfsmw2012')          # speed unit in the lower-right HUD
+SHOOTERS = ('bo2', 'bo1')
+# Third-person games with no speed HUD: a log line only the running campaign writes, plus movement between two clean frames.
+LOG_MARKER = {'gears': re.compile(r'default_checkpoint\.sav')}
+# ac1: on-screen prompt text of the Animus-lab/first-level play state, both frames.
+TEXT_MARKER = {'ac1': re.compile(r'press any button to interact|hidden blade|notoriety|synchroni[sz]', re.I)}
+GAMES = RACERS + SHOOTERS + ('fh1', 'nfshp') + tuple(LOG_MARKER) + tuple(TEXT_MARKER)
 MENU = re.compile(r'safe\s*house|resume free roam|select car|career menu|pause menu|leave.*safe|main menu|photo mode|sponsor challenges|resume game|restart level|quit game', re.I)
 
 
@@ -104,6 +112,12 @@ def scene_change(before, after):
 
 def verify(game, out, log):
     proof = {'game': game, 'passed': False, 'samples': [], 'pairs': [], 'errors': []}
+    if game not in GAMES:
+        proof['reason'] = f'no gameplay rule for {game}: add one to tools/gates/driving.py'
+        with open(os.path.join(out, 'driving.json'), 'w') as f:
+            json.dump(proof, f, indent=2)
+        return proof
+    log_ok = game not in LOG_MARKER or bool(LOG_MARKER[game].search(log))
     paths = sorted(glob.glob(os.path.join(out, 'shots', 'drive*.ppm')), key=os.path.getmtime)
     shooter = game in ('bo2', 'bo1')
     in_match = game == 'bo2' and any("the game's client is in a match" in line
@@ -124,6 +138,10 @@ def verify(game, out, log):
                 sample['hud_present'] = sample['speed'] is not None
             if game == 'nfshp':
                 sample['race_progress'] = race_progress(sample['words'])
+            if game in TEXT_MARKER:
+                sample['hud_present'] = bool(TEXT_MARKER[game].search(' '.join(w['text'] for w in sample['words'])))
+            if game in LOG_MARKER:
+                sample['hud_present'] = sample['valid_scene'] and log_ok   # no HUD text to read: the log marker is the state
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             proof['errors'].append(str(error))
         proof['samples'].append(sample)
@@ -147,6 +165,7 @@ def verify(game, out, log):
             continue
         moving = delta is not None and delta >= 8
         state = (in_match and a['valid_scene'] and b['valid_scene']) if shooter else a['hud_present'] and b['hud_present']
+        state = bool(state) and (a['valid_scene'] and b['valid_scene'] if game in LOG_MARKER else True)
         if game == 'bo1':
             state = (bo1_loaded and a['valid_scene'] and b['valid_scene']
                      and a.get('bo1_hud', False) and b.get('bo1_hud', False))
@@ -156,7 +175,8 @@ def verify(game, out, log):
         proof['pairs'].append({'before': a['path'], 'after': b['path'], 'mean_delta': delta,
                                'gameplay_state': state, 'passed': bool(moving and state)})
     proof['passed'] = any(pair['passed'] for pair in proof['pairs'])
-    proof['reason'] = 'gameplay and scene movement observed' if proof['passed'] else 'no verified gameplay movement'
+    proof['reason'] = ('gameplay and scene movement observed' if proof['passed'] else
+                       'no verified gameplay movement' + ('' if log_ok else f' (log marker {LOG_MARKER[game].pattern} never written)'))
     with open(os.path.join(out, 'driving.json'), 'w') as f:
         json.dump(proof, f, indent=2)
     return proof

@@ -85,6 +85,26 @@ class GameplayProof(unittest.TestCase):
         self.assertTrue(self.exercise([], game='bo2', log="the game's client is in a match"))
         self.assertFalse(self.exercise([], moving=False, game='bo2', log="the game's client is in a match"))
 
+    def test_gears_needs_campaign_log_marker_and_movement(self):
+        log = "XamContentCreate root 'save' content 'default_checkpoint.sav'"
+        self.assertTrue(self.exercise([], game='gears', log=log))
+        self.assertFalse(self.exercise([], game='gears'))                       # alive in a menu: no marker
+        self.assertFalse(self.exercise([], game='gears', log=log, moving=False))
+        self.assertFalse(self.exercise([{'text': 'Main Menu', 'x': .5, 'y': .5}], game='gears', log=log))
+
+    def test_ac1_needs_play_state_text_and_movement(self):
+        words = [{'text': 'PRESS ANY BUTTON TO INTERACT', 'x': .5, 'y': .8}]
+        self.assertTrue(self.exercise(words, game='ac1'))
+        self.assertFalse(self.exercise([], game='ac1'))
+        self.assertFalse(self.exercise(words, game='ac1', moving=False))
+
+    def test_game_without_a_rule_cannot_pass(self):
+        self.assertFalse(self.exercise(hud(60), game='newgame-without-rule'))
+
+    def test_nfsmw2012_uses_the_speed_hud(self):
+        self.assertTrue(self.exercise(hud(60), game='nfsmw2012'))
+        self.assertFalse(self.exercise([], game='nfsmw2012'))
+
 
 if __name__ == '__main__':
     unittest.main()

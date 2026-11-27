@@ -271,7 +271,11 @@ bool WindowSDL::OpenImpl() {
   // desired state so a reopened window comes back with the state it had.
   ApplyTextInputActiveNow();
   ApplyCursorVisibilityNow();
-  SDL_ShowWindow(sdl_window_);
+  // A test run never shows the window at all: minimize-at-show still left a 1280x752 window on screen for seconds
+  // (the guard killed Gears at 4-8 s). Hidden windows still get a layer and present.
+  if (!REXCVAR_GET(window_start_minimized)) {
+    SDL_ShowWindow(sdl_window_);
+  }
 
   // Actualize state for the common Window code. Listener dispatch is handled
   // by Window::Open after OpenImpl returns; these only record initial state.
@@ -597,6 +601,13 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
       OnMinimized(destruction_receiver);
       break;
     case SDL_EVENT_WINDOW_RESTORED:
+      // A test run (window_start_minimized) must never end up on the owner's screen: whatever restores the window
+      // later (a game mode set, a fullscreen toggle, the app being raised), put it back. Seen on v0.11 apps ~19 s in.
+      if (REXCVAR_GET(window_start_minimized) && sdl_window_) {
+        REXLOG_INFO("Window restored while start-minimized is set; minimizing it again");
+        SDL_MinimizeWindow(sdl_window_);
+        break;
+      }
       OnRestored(destruction_receiver);
       break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
