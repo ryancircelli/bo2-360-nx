@@ -1339,6 +1339,15 @@ void KernelState::CompleteOverlappedDeferredEx(
   REXSYS_DEBUG("CompleteOverlappedDeferredEx: queuing for overlapped {:08X}", overlapped_ptr);
   auto ptr = memory()->TranslateVirtual(overlapped_ptr);
   XOverlappedSetResult(ptr, X_ERROR_IO_PENDING);
+  // The console clears the caller's event when an asynchronous call starts. Without this, an OVERLAPPED
+  // reused with its event still set from the previous call wakes its waiter at once, while the result
+  // still says pending. (xenia-canary does the same in its CompleteOverlappedDeferredEx.)
+  if (X_HANDLE event_handle = XOverlappedGetEvent(ptr)) {
+    auto ev = object_table()->LookupObject<XObject>(event_handle);
+    if (ev && ev->type() == XObject::Type::Event) {
+      static_cast<XEvent*>(ev.get())->Reset();
+    }
+  }
   X_HANDLE thread_handle = XThread::GetCurrentThreadHandle();
   auto global_lock = global_critical_region_.Acquire();
   dispatch_queue_.push_back(

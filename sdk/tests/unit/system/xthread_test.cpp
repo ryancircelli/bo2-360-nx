@@ -20,6 +20,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/object_table.h>
 #include <rex/system/xevent.h>
+#include <rex/system/xio.h>
+#include <rex/system/xmemory.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread/fiber.h>
@@ -279,4 +281,33 @@ TEST_CASE("An object that lost its handle slot cannot close the slot's next owne
   CHECK(table->LookupObject<rex::system::XObject>(handle).get() == nullptr);
   CHECK(table->ReleaseHandle(handle) == X_STATUS_INVALID_HANDLE);  // closed handles stay closed
   CHECK(table->RetainHandle(handle) == X_STATUS_INVALID_HANDLE);
+}
+
+TEST_CASE("Starting a deferred overlapped call clears the caller's event", "[runtime][overlapped]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+
+  auto event = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(ks));
+  event->Initialize(true, true);  // manual reset, still set from "the previous call"
+  const uint32_t overlapped = ks->memory()->SystemHeapAlloc(sizeof(rex::system::XAM_OVERLAPPED));
+  REQUIRE(overlapped != 0);
+  auto* ov = ks->memory()->TranslateVirtual<rex::system::XAM_OVERLAPPED*>(overlapped);
+  *ov = {};
+  ov->event = event->handle();
+
+  std::atomic<uint32_t> wait_status{0xFFFFFFFFu};
+  // The deferred call records the calling guest thread, so it has to be made from one.
+  auto caller = rex::system::object_ref<rex::system::XHostThread>(
+      new rex::system::XHostThread(ks, 128 * 1024, 0, [&]() {
+        ks->CompleteOverlappedDeferred([]() {}, overlapped, 0);
+        uint64_t no_wait = 0;
+        wait_status.store(event->Wait(0, 0, 0, &no_wait), std::memory_order_release);
+        return 0;
+      }));
+  REQUIRE(caller->Create() == X_STATUS_SUCCESS);
+  REQUIRE(caller->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+  CHECK(wait_status.load(std::memory_order_acquire) == uint32_t(X_STATUS_TIMEOUT));
 }
