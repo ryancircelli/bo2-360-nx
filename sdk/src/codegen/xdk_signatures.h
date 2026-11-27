@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -36,5 +37,9 @@ std::vector<uint32_t> FindXdkSignature(const uint8_t* data, uint32_t size, uint3
 
 /// (key, address) for every built-in signature found exactly once in the executable sections.
 std::vector<std::pair<std::string, uint32_t>> FindXdkLibraryFunctions(const BinaryView& binary);
+
+/// (setjmp, longjmp) when the image holds the XDK's pair and calls setjmp directly: what a game config would
+/// otherwise name as setjmp_address / longjmp_address.
+std::optional<std::pair<uint32_t, uint32_t>> FindXdkSetjmp(const BinaryView& binary);
 
 }  // namespace rex::codegen

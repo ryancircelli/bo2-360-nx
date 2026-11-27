@@ -21,6 +21,7 @@
 #include <rex/logging.h>
 
 #include "codegen_logging.h"
+#include "xdk_signatures.h"
 #include <rex/memory/utils.h>
 #include <rex/system/export_resolver.h>
 #include <rex/types.h>
@@ -529,6 +530,14 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
         importCount, resolvedCount, unresolvedCount, variableCount);
   }
 
+  // setjmp/longjmp by signature, unless the game config names them.
+  if (config.setJmpAddress == 0 && config.longJmpAddress == 0) {
+    if (const auto jmp = FindXdkSetjmp(binary)) {
+      REXCODEGEN_INFO("[xdk] setjmp recognised at 0x{:08X}, longjmp at 0x{:08X}", jmp->first, jmp->second);
+      config.setJmpAddress = jmp->first;
+      config.longJmpAddress = jmp->second;
+    }
+  }
   if (config.longJmpAddress != 0)
     graph.declareNoReturn(config.longJmpAddress);
 

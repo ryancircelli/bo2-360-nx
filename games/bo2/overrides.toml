@@ -8,18 +8,12 @@
 #  Fields per function (all optional): name, size | end, parent, share_registers.
 # ============================================================================
 
-# --- setjmp / longjmp (root keys: must stay ABOVE [functions]) ---------------
+# --- setjmp / longjmp ---------------------------------------------------------
 # BO2 recovers from Com_Error by longjmp-ing back to a setjmp (20 call sites).
 # A static recompile cannot jump into the middle of a C++ function, so the
 # codegen routes these two through the runtime's ppc_setjmp / ppc_longjmp.
-# Without them the first boot died 3 s in, writing to 0x826F6D7C, just after
-# the setjmp call in sub_826F6D10.
-#   0x82918CA0 setjmp : checks a hook at 0x84BF87D4, then stfd f14-f31,
-#                       std r13-r31, stvx128 v64-v127 into the buffer at r3
-#   0x82919E50 longjmp: r7 = env, r6 = val (0 -> 1), lfd f14.. / ld r13..
-#                       from the buffer
-setjmp_address = 0x82918CA0
-longjmp_address = 0x82919E50
+# It finds them itself, by the XDK's instructions (sdk/src/codegen/xdk_signatures.cpp):
+# setjmp 0x82918CA0, longjmp 0x82919E50.
 
 # --- mfmsr / mtmsrd: no global lock (root key) -------------------------------
 # 671 game functions (1,120 sites) wrap their lwarx/stwcx. atomics in
