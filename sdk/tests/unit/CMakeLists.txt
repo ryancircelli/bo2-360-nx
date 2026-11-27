@@ -242,3 +242,8 @@ target_link_libraries(xam_notify_entry_tests PRIVATE rexruntime Catch2::Catch2Wi
 set_target_properties(xam_notify_entry_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME xam_notify_entry_tests COMMAND xam_notify_entry_tests)
+
+add_executable(instance_ports_tests system/instance_ports_test.cpp)
+target_include_directories(instance_ports_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(instance_ports_tests PRIVATE Catch2::Catch2WithMain)
+add_test(NAME instance_ports_tests COMMAND instance_ports_tests)

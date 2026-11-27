@@ -10,6 +10,7 @@
  */
 
 #include <rex/instance_env.h>
+#include <rex/system/instance_ports.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -55,6 +56,10 @@ REXCVAR_DEFINE_INT32(net_system_port_offset, 30000, "Kernel",
                      "System link: a title's fixed port below 1024 is bound and addressed this much higher (the same "
                      "on every console), since the Switch refuses those ports. 0 = the title's own ports")
     .range(0, 64511);
+REXCVAR_DEFINE_INT32(net_instance_port_stride, 1024, "Kernel",
+                     "Several copies of a title on one machine (REX_INSTANCE 0..15): each copy's moved ports sit this "
+                     "much higher than the previous copy's. 1024 keeps every low port of every copy apart")
+    .range(1, 4096);
 REXCVAR_DECLARE(bool, net_online_trace);
 REXCVAR_DEFINE_BOOL(net_system_link_trace, false, "Kernel",
                     "System link: log the first packets sent and received on a title's moved ports (below 1024)");
@@ -285,18 +290,12 @@ bool OnLan(uint32_t ip) {
   return LanAddress(&lan, &mask) && mask && (ip & mask) == (lan & mask);
 }
 
-uint16_t HostPort(uint16_t guest_port) {
-  const int offset = REXCVAR_GET(net_system_port_offset);
-  if (guest_port && guest_port < 1024 && offset) return uint16_t(guest_port + offset);
-  if (guest_port == 3074) {
-    if (const char* value = rex::InstanceEnv()) {
-      char* end = nullptr;
-      const long instance = std::strtol(value, &end, 10);
-      if (end && *end == '\0' && instance >= 0 && instance < 16) return uint16_t(3074 + instance * 16);
-    }
-  }
-  return guest_port;
+uint16_t HostPortFor(uint16_t guest_port, int instance) {
+  return instance_ports::Host(guest_port, instance, REXCVAR_GET(net_system_port_offset),
+                              REXCVAR_GET(net_instance_port_stride));
 }
+
+uint16_t HostPort(uint16_t guest_port) { return HostPortFor(guest_port, rex::InstanceIndex()); }
 
 namespace {
 // The first packets of each kind on a moved port (net_system_link_trace).
@@ -313,20 +312,12 @@ void Trace(const char* what, uint32_t ip, uint16_t guest_port, int bytes, int er
 void TraceSend(uint32_t ip, uint16_t guest_port, int bytes, int error) { Trace("sent to", ip, guest_port, bytes, error); }
 void TraceReceive(uint32_t ip, uint16_t guest_port, int bytes) { Trace("received from", ip, guest_port, bytes, 0); }
 
-uint16_t GuestPort(uint16_t host_port) {
-  // Receive traffic from any local instance's disjoint port block, not just
-  // this process's block. The instance stride leaves room for BO2's ports.
-  for (int instance = 0; instance < 16; ++instance) {
-    const int first = 31000 + instance * 16;  // host offset + BO2 title ports 1000..1015
-    if (host_port >= first && host_port < first + 16) return uint16_t(1000 + host_port - first);
-    const int system_link = 3074 + instance * 16;
-    if (host_port >= system_link && host_port < system_link + 16) {
-      return uint16_t(3074 + host_port - system_link);
-    }
-  }
-  const int offset = REXCVAR_GET(net_system_port_offset);
-  return offset && host_port >= offset && host_port < offset + 1024 ? uint16_t(host_port - offset) : host_port;
+uint16_t GuestPort(uint16_t host_port, int* instance) {
+  return instance_ports::Guest(host_port, rex::InstanceIndex() >= 0, REXCVAR_GET(net_system_port_offset),
+                               REXCVAR_GET(net_instance_port_stride), instance);
 }
+
+uint16_t GuestPort(uint16_t host_port) { return GuestPort(host_port, nullptr); }
 
 namespace {
 // The last sender per moved port (LastPeer). A handful of ports at most; a new port takes the oldest entry.
@@ -1222,7 +1213,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* guest_name, int name_len) {
   const uint32_t guest_ip = uint32_t(moved.sin_addr);
   const bool instance_address = guest_ip >= 0x7F000101u && guest_ip <= 0x7F000110u;
   if (rex::InstanceEnv() && (!moved.sin_addr || instance_address) && guest_name->sin_port &&
-      (guest_name->sin_port < 1024 || guest_name->sin_port == 3074)) {
+      instance_ports::Moved(guest_name->sin_port)) {
     // Guest XNADDRs use a per-copy loopback identity, but macOS only exposes
     // 127.0.0.1 on lo0 by default. Port blocks keep these host binds distinct.
     moved.sin_addr = 0x7F000001u;
@@ -1259,7 +1250,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* guest_name, int name_len) {
   bound_ = true;
   bound_port_ = guest_name->sin_port;
   // A title port internet play uses (a moved one): the online relay sends its STUN requests and punches from it.
-  if (type_ == X_SOCK_DGRAM && bound_port_ && (bound_port_ < 1024 || bound_port_ == 3074)) {
+  if (type_ == X_SOCK_DGRAM && bound_port_ && instance_ports::Moved(bound_port_)) {
     system_link::RegisterPortSocket(system_link::HostPort(bound_port_), native_handle_);
     port_registered_ = true;
   }
@@ -1435,19 +1426,9 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
       system_link::TraceInternet("received from", source, ntohs(nfrom.sin_port), from->sin_port, buf, ret);
     }
     if (ret > 0 && source == 0x7F000001u) {
-      const uint16_t host_port = ntohs(nfrom.sin_port);
-      for (int instance = 0; instance < 16; ++instance) {
-        const uint16_t first = uint16_t(31000 + instance * 16);
-        if (host_port >= first && host_port < first + 16) {
-          reported = 0x7F000101u + uint32_t(instance);
-          break;
-        }
-        const uint16_t system_link = uint16_t(3074 + instance * 16);
-        if (host_port >= system_link && host_port < system_link + 16) {
-          reported = 0x7F000101u + uint32_t(instance);
-          break;
-        }
-      }
+      int instance = -1;
+      system_link::GuestPort(ntohs(nfrom.sin_port), &instance);
+      if (instance >= 0) reported = 0x7F000101u + uint32_t(instance);
     }
     from->sin_addr = reported;  // BE <- BE
     if (ret > 0) {
@@ -1486,13 +1467,6 @@ int LocalInstance(uint32_t address) {
   return address >= 0x7F000101u && address <= 0x7F000110u ? int(address - 0x7F000101u) : -1;
 }
 
-int ConfiguredInstance() {
-  const char* value = rex::InstanceEnv();
-  if (!value) return -1;
-  char* end = nullptr;
-  const long instance = std::strtol(value, &end, 10);
-  return end && *end == '\0' && instance >= 0 && instance < 16 ? int(instance) : -1;
-}
 }  // namespace
 
 int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_IN* to,
@@ -1534,12 +1508,11 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
     nto.sin_addr.s_addr = htonl(address);
     nto.sin_family = to->sin_family;
     nto.sin_port = htons(system_link::HostPort(to->sin_port));
-    if (to->sin_port && (to->sin_port < 1024 || to->sin_port == 3074)) {
+    if (instance_ports::Moved(to->sin_port)) {
       const int target_instance = LocalInstance(address);
       if (target_instance >= 0) {
         nto.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        nto.sin_port = htons(to->sin_port == 3074 ? uint16_t(3074 + target_instance * 16)
-                                                  : uint16_t(30000 + target_instance * 16 + to->sin_port));
+        nto.sin_port = htons(system_link::HostPortFor(to->sin_port, target_instance));
       }
     }
     // Online: a console on the internet gets the datagram at the port it was last heard from.
@@ -1594,14 +1567,12 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
   // UDP sockets. Fan out the title's discovery datagram to each instance's
   // unique loopback address and port block. This stays entirely local.
   if (to && IsBroadcast(ntohl(nto.sin_addr.s_addr)) && to->sin_port &&
-      (to->sin_port < 1024 || to->sin_port == 3074) &&
-      rex::InstanceEnv()) {
+      instance_ports::Moved(to->sin_port) && rex::InstanceEnv()) {
     for (int instance = 0; instance < 16; ++instance) {
-      if (instance == ConfiguredInstance()) continue;
+      if (instance == rex::InstanceIndex()) continue;
       sockaddr_in copy = nto;
       copy.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      copy.sin_port = htons(to->sin_port == 3074 ? uint16_t(3074 + instance * 16)
-                                                 : uint16_t(30000 + instance * 16 + to->sin_port));
+      copy.sin_port = htons(system_link::HostPortFor(to->sin_port, instance));
       const int copied = sendto(native_handle_, data, buf_len, flags, (sockaddr*)&copy, sizeof(copy));
       if (REXCVAR_GET(net_system_link_trace)) {
         REXSYS_INFO("[system link] local broadcast copy for instance {} to 127.0.0.1:{}: {}", instance,

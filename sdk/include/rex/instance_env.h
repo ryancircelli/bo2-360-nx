@@ -17,4 +17,13 @@ inline const char* InstanceCountEnv() {
   return std::getenv("BO2_INSTANCE_COUNT");
 }
 
+// This process's instance (0..15), or -1 when unset or malformed.
+inline int InstanceIndex() {
+  const char* value = InstanceEnv();
+  if (!value) return -1;
+  char* end = nullptr;
+  const long instance = std::strtol(value, &end, 10);
+  return end && *end == '\0' && instance >= 0 && instance < 16 ? int(instance) : -1;
+}
+
 }  // namespace rex

@@ -177,9 +177,6 @@ void rex::RegisterGame(rex::GameApi& api) {
   // (native/bo2zm_native_system.cpp); ReXApp only loads the Xenos plugin when
   // config.graphics is empty.
   api.OnPreSetup([](rex::GameApp&, rex::RuntimeConfig& config) {
-    if (const auto instance = Bo2InstanceIndex()) {
-      rex::cvar::SetFlagByName("net_system_port_offset", std::to_string(30000 + 16 * *instance));
-    }
     if (const auto count = Bo2InstanceCount()) {
       const auto instance = Bo2InstanceIndex();
       if (!instance || *instance >= *count) {
