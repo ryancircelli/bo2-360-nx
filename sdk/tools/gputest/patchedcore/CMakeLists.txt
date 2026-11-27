@@ -25,7 +25,8 @@ endif()
 
 include(${_metal_dir}/sources.cmake)   # REXGPU_METAL_COMMON_SOURCES (the shared core, ${SDK}/...)
 set(_flags ${_metal_dir}/compat.h)
-set(_inc BEFORE PRIVATE ${SDK}/include ${SDK} ${_metal_dir}/port ${_metal_dir})
+set(_inc BEFORE PRIVATE ${SDK}/include ${SDK} ${_metal_dir}/port ${_metal_dir}
+    ${PROJECT_SOURCE_DIR}/thirdparty/renderdoc ${PROJECT_SOURCE_DIR})
 set(_opts -fno-strict-aliasing -ffp-model=strict -fno-char8_t -Wno-unused-variable)
 
 # 1. The shared core alone, with only the platform-neutral compat layer: proves it needs nothing Metal.
