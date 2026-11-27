@@ -43,6 +43,7 @@ TEST_CASE("lstrlenW reads big endian UTF-16 and stops at the first terminator", 
   CHECK(lstrlenW_entry(mapped_u16(text + 4, 0x1008)) == 0);
 }
 
+#include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #define STUB_DECL(n) extern "C" void n(PPCContext&, uint8_t*)
 STUB_DECL(__imp__XamNuiGetDeviceSerialNumber);
