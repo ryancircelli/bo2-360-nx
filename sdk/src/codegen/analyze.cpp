@@ -50,6 +50,47 @@ std::vector<uint32_t> tailBranchTargets(const CodegenContext& ctx) {
   return out;
 }
 
+/// Addresses loaded with a lis+addi / lis+ori pair in executable code whose previous word ends a
+/// function or is a call. A call to a function that never returns lets the body walk run on into the
+/// next function; the pointer is the only mark of where that function starts (this replaced the
+/// "lis+addi" rows of tools/codegen_gaps.py).
+std::vector<uint32_t> pointerEntries(const CodegenContext& ctx) {
+  using rex::memory::load_and_swap;
+  const BinaryView& bin = ctx.binary();
+  const uint32_t lo = bin.baseAddress(), hi = bin.baseAddress() + bin.imageSize();
+  std::vector<uint32_t> out;
+  auto consider = [&](uint32_t t) {
+    if (t % 4 || !bin.isExecutable(t) || !bin.isExecutable(t - 4) || bin.isInImportExportRange(t) ||
+        ctx.Config().functions.contains(t) || ctx.graph.getFunction(t) || !ctx.graph.getFunctionContaining(t))
+      return;  // only a target inside another function's body is a swallowed function
+    const uint32_t prev = load_and_swap<uint32_t>(bin.translate(t - 4));
+    const uint32_t w = load_and_swap<uint32_t>(bin.translate(t));
+    const bool exitOrCall = prev == 0x4E800020 || prev == 0x4E800420 || (prev >> 26) == 18;
+    if (exitOrCall && w != 0 && !(w >= lo && w < hi))
+      out.push_back(t);
+  };
+  for (const auto& sec : bin.sections()) {
+    if (!sec.executable)
+      continue;
+    for (uint32_t a = sec.baseAddress; a + 4 <= sec.end(); a += 4) {
+      const uint32_t w = load_and_swap<uint32_t>(sec.data + (a - sec.baseAddress));
+      if ((w >> 26) != 15 || (w & 0xFFFF) < 0x8000 || ((w >> 16) & 31) != 0)
+        continue;  // lis rD, hi (addis rD, 0, hi) with a negative hi: an 0x8xxxxxxx address
+      const uint32_t rd = (w >> 21) & 31, base = (w & 0xFFFF) << 16;
+      for (uint32_t j = 1; j <= 6 && a + 4 * j + 4 <= sec.end(); ++j) {
+        const uint32_t v = load_and_swap<uint32_t>(sec.data + (a + 4 * j - sec.baseAddress));
+        if ((v >> 26) == 14 && ((v >> 16) & 31) == rd)
+          consider(base + static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(v & 0xFFFF))));
+        else if ((v >> 26) == 24 && ((v >> 21) & 31) == rd)
+          consider(base | (v & 0xFFFF));
+      }
+    }
+  }
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
 Result<void> AnalyzeOnce(CodegenContext& ctx, ProgressReporter* reporter);
 
 }  // namespace
@@ -61,7 +102,12 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   const AnalysisState start = ctx.analysisState();
   for (int round = 1;; ++round) {
     auto result = AnalyzeOnce(ctx, reporter);
-    const auto targets = result ? std::vector<uint32_t>{} : tailBranchTargets(ctx);
+    auto targets = result ? std::vector<uint32_t>{} : tailBranchTargets(ctx);
+    if (round == 1) {
+      const auto pointers = pointerEntries(ctx);
+      REXCODEGEN_INFO("Analyze: {} lis+addi targets inside another function's body", pointers.size());
+      targets.insert(targets.end(), pointers.begin(), pointers.end());
+    }
     if (targets.empty() || round == 16)
       return result;
     REXCODEGEN_INFO("Analyze: {} tail-branch targets declared as functions, analysing again (round {})",
