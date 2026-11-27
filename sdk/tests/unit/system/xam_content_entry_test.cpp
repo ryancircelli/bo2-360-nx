@@ -14,6 +14,7 @@
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_manager.h>
+#include <rex/system/xenumerator.h>
 #include <rex/system/xevent.h>
 #include <rex/system/xio.h>
 
