@@ -140,3 +140,92 @@ TEST_CASE("STFS header reader rejects missing short and invalid magic packages",
   }
   CHECK_FALSE(rex::filesystem::StfsContainerDevice::ReadPackageHeader(path));
 }
+
+namespace {
+// Synthetic read-only STFS (one hash-table slot per 170 blocks): slot 0 = hash table,
+// slot n+1 = data block n. Block 0 = directory, 1 = a.txt, 2-3 = sub\b.bin (chained).
+std::filesystem::path WriteSyntheticStfs(const std::filesystem::path& dir, const std::string& b_bin) {
+  using namespace rex::filesystem;
+  constexpr size_t kBlock = 0x1000, kHeader = 0xA000;  // round_up(header_size, 0x1000)
+  std::vector<uint8_t> img(kHeader + 5 * kBlock, 0);
+  auto* hdr = reinterpret_cast<StfsHeader*>(img.data());
+  hdr->header.magic = XContentPackageType::kCon;
+  hdr->header.header_size = sizeof(StfsHeader);
+  auto& d = hdr->metadata.volume_descriptor.stfs;
+  d.descriptor_length = sizeof(StfsVolumeDescriptor);
+  d.flags.bits.read_only_format = 1;
+  d.file_table_block_count = 1;
+  d.set_file_table_block_number(0);
+  d.total_block_count = 4;
+  hdr->metadata.volume_type = XContentVolumeType::kStfs;
+
+  auto* hash = reinterpret_cast<StfsHashTable*>(img.data() + kHeader);
+  hash->entries[0].set_level0_next_block(0xFFFFFF);  // directory
+  hash->entries[1].set_level0_next_block(0xFFFFFF);  // a.txt
+  hash->entries[2].set_level0_next_block(3);         // b.bin chain 2 -> 3
+  hash->entries[3].set_level0_next_block(0xFFFFFF);
+
+  auto* dir_block = reinterpret_cast<StfsDirectoryBlock*>(img.data() + kHeader + 1 * kBlock);
+  auto fill = [](StfsDirectoryEntry& e, const char* name, bool is_dir, uint16_t parent, uint32_t start,
+                 uint32_t len) {
+    std::memcpy(e.name, name, std::strlen(name));
+    e.flags.name_length = std::strlen(name);
+    e.flags.directory = is_dir;
+    e.directory_index = parent;
+    e.set_start_block_number(start);
+    e.set_allocated_data_blocks((len + 0xFFF) / 0x1000);
+    e.length = len;
+  };
+  fill(dir_block->entries[0], "sub", true, 0xFFFF, 0, 0);
+  fill(dir_block->entries[1], "a.txt", false, 0xFFFF, 1, 5);
+  fill(dir_block->entries[2], "b.bin", false, 0, 2, uint32_t(b_bin.size()));
+  std::memcpy(img.data() + kHeader + 2 * kBlock, "hello", 5);
+  std::memcpy(img.data() + kHeader + 3 * kBlock, b_bin.data(), std::min<size_t>(b_bin.size(), kBlock));
+  if (b_bin.size() > kBlock) std::memcpy(img.data() + kHeader + 4 * kBlock, b_bin.data() + kBlock, b_bin.size() - kBlock);
+
+  auto path = dir / "pkg";
+  std::ofstream(path, std::ios::binary).write(reinterpret_cast<char*>(img.data()), img.size());
+  return path;
+}
+}  // namespace
+
+TEST_CASE("STFS container mounts a synthetic package and reads chained files", "[vfs][stfs]") {
+  Temp temp;
+  std::string b(0x1000 + 100, 'x');
+  b[0x1000 - 1] = 'A';  // last byte of first block
+  b[0x1000] = 'B';      // first byte of second block
+  auto path = WriteSyntheticStfs(temp.path, b);
+
+  rex::filesystem::StfsContainerDevice device("\\Device\\Cdrom0", path);
+  REQUIRE(device.Initialize());
+  CHECK(device.is_read_only());
+  CHECK(device.total_allocation_units() == 4);
+
+  auto* a = device.ResolvePath("a.txt");
+  REQUIRE(a != nullptr);
+  CHECK(a->size() == 5);
+  rex::filesystem::File* raw = nullptr;
+  REQUIRE(a->Open(1, &raw) == X_STATUS_SUCCESS);
+  std::unique_ptr<rex::filesystem::File, DestroyFile> file(raw);
+  std::array<uint8_t, 8> buf{};
+  size_t n = 0;
+  REQUIRE(file->ReadSync(buf, 0, &n) == X_STATUS_SUCCESS);
+  CHECK(n == 5);
+  CHECK(std::memcmp(buf.data(), "hello", 5) == 0);
+
+  auto* sub = device.ResolvePath("sub");
+  REQUIRE(sub != nullptr);
+  auto* bin = device.ResolvePath("sub\\b.bin");
+  REQUIRE(bin != nullptr);
+  CHECK(bin->size() == b.size());
+  REQUIRE(bin->Open(1, &raw) == X_STATUS_SUCCESS);
+  std::unique_ptr<rex::filesystem::File, DestroyFile> bfile(raw);
+  std::vector<uint8_t> out(b.size());
+  REQUIRE(bfile->ReadSync(out, 0, &n) == X_STATUS_SUCCESS);
+  CHECK(n == b.size());
+  CHECK(std::memcmp(out.data(), b.data(), b.size()) == 0);  // crosses the chained block boundary
+  REQUIRE(bfile->ReadSync(std::span<uint8_t>(buf.data(), 2), 0x1000 - 1, &n) == X_STATUS_SUCCESS);
+  CHECK((buf[0] == 'A' && buf[1] == 'B'));
+
+  CHECK(device.ResolvePath("nope.txt") == nullptr);
+}
