@@ -353,8 +353,9 @@ bool build_mtmsrd(BuilderContext& ctx) {
 bool build_mtfsf(BuilderContext& ctx) {
   uint32_t fm = ctx.insn.operands[0];
   uint32_t mask = 0;
+  // FM's low bit selects FPSCR field 7, the low nibble, where the rounding mode is.
   for (int j = 0; j < 8; j++) {
-    if (fm & (1 << (7 - j)))
+    if (fm & (1 << j))
       mask |= 0xF << (4 * j);
   }
   if (mask == 0xFFFFFFFF) {
