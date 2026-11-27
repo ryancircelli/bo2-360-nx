@@ -32,11 +32,17 @@ Layout of the app:
   Contents/Resources/runtime/       the real vulkan/ (loader, MoltenVK, icd file), shader library, bo2zm.toml
   Contents/Resources/data/          the clones, with --data-mode clone
 
+Large files (the shader library, the cloned game data) sit in signed data bundles Contents/PlugIns/<name>.bundle
+behind relative links in Resources, so the app's seal holds each by its code hash and a pack that changes only the
+host re-signs in seconds: a bundle of the app being replaced is cloned with its signature while <out.app>.key says
+it was made from the same inputs and its files are as the last pack left them. Idea from nxnative's dm/mac/pack_app.py
+data bundles (MIT, Copyright (c) 2026 seedds), written for this project.
+
 Every Mach-O gets @loader_path and @executable_path/../Frameworks as its only rpaths (build-machine rpaths are
 removed), then everything is ad-hoc signed (--sign - ; no hardened runtime, so the game's dlopen of the GPU plugin
 needs no entitlement), inner files first.
 """
-import argparse, ctypes, os, plistlib, re, shutil, subprocess, sys, tempfile, tomllib
+import argparse, ctypes, hashlib, json, os, plistlib, re, shutil, subprocess, sys, tempfile, tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script folder from sys.path
@@ -78,6 +84,28 @@ def can_clone(src, dst_dir):
 def copy_tree(src, dst, clone):
     """cp -R (with -c: APFS clones; a file that cannot be cloned is copied)."""
     run(['/bin/cp', '-R'] + (['-c'] if clone else []) + [src, dst])
+
+
+def free_bytes(path):
+    """Bytes a write the user asked for can use on the volume of path: statvfs counts only unallocated blocks, but on
+    APFS macOS also frees purgeable space (local snapshots, caches) on demand, and reports it as the volume's
+    NSURLVolumeAvailableCapacityForImportantUsage. Never less than statvfs. Idea from nxnative's vol_space.py (MIT, seedds)."""
+    raw = shutil.disk_usage(path).free
+    try:
+        cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+        cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+        cf.CFURLCreateFromFileSystemRepresentation.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool)
+        cf.CFURLCopyResourcePropertyForKey.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+        cf.CFNumberGetValue.argtypes = (ctypes.c_void_p, ctypes.c_long, ctypes.c_void_p)
+        key = ctypes.c_void_p.in_dll(cf, 'kCFURLVolumeAvailableCapacityForImportantUsageKey')
+        b = os.fsencode(Path(path).resolve())
+        url = cf.CFURLCreateFromFileSystemRepresentation(None, b, len(b), True)
+        v, n = ctypes.c_void_p(), ctypes.c_int64()
+        if url and cf.CFURLCopyResourcePropertyForKey(url, key, ctypes.byref(v), None) and v and cf.CFNumberGetValue(v, 4, ctypes.byref(n)):
+            return max(raw, n.value)
+    except (AttributeError, OSError, ValueError):
+        pass
+    return raw
 
 
 def tree_bytes(p):
@@ -213,8 +241,11 @@ def sign_one(target, identity):
         run(['codesign', '--force', '--sign', identity, target])
 
 
-def sign_all(app, identity):
-    machos = sorted((p for p in app.rglob('*') if p.is_file() and not p.is_symlink() and is_macho(p)),
+def sign_all(app, identity, nested=()):
+    for b in nested:   # new data bundles first: the app's seal then takes each one's code hash, not its files
+        sign_one(b, identity)
+    plugins = app / 'Contents/PlugIns'
+    machos = sorted((p for p in app.rglob('*') if p.is_file() and not p.is_symlink() and plugins not in p.parents and is_macho(p)),
                     key=lambda p: -len(p.parts))
     launcher = app / 'Contents/MacOS' / EXE_NAME
     for p in machos:
@@ -222,6 +253,67 @@ def sign_all(app, identity):
             sign_one(p, identity)
     sign_one(launcher, identity)
     sign_one(app, identity)
+
+
+# ---- data bundles (reused, signed) --------------------------------------------------------------------------------
+
+DATA_FORMAT = 'bo2 data bundle 1'
+
+
+def inventory(root):
+    """Rows (relative path, mode, size, mtime_ns, ctime_ns, link target) of a tree or file: stat only, no reads."""
+    root = Path(root)
+    rows = []
+    for p in sorted([root, *root.rglob('*')] if root.is_dir() else [root]):
+        st = p.lstat()
+        rows.append([str(p.relative_to(root)) if p != root else '.', st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns,
+                     os.readlink(p) if p.is_symlink() else None])
+    return rows
+
+
+def sha(obj): return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
+
+
+def read_key(out):
+    try: return json.loads(Path(f'{out}.key').read_text())
+    except (OSError, ValueError): return {}
+
+
+def data_bundle(res, name): return res.parent / 'PlugIns' / f'{name}.bundle'
+
+
+def place_data(c, old_app, previous, name, items, bundle_id, sign_id, fresh, data):
+    """Put the files of items [(path in Resources, source, copy function)] into PlugIns/<name>.bundle and link them
+    at their usual place in Resources. The bundle of the old app is cloned when the last pack made it from these
+    inputs and nothing in it changed since (its seal in the app is its code hash only, so a changed file would go in
+    unseen); otherwise it is filled here and signed in sign_all. Returns True when reused."""
+    res = c / 'Resources'
+    b = data_bundle(res, name)
+    key = sha([DATA_FORMAT, hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), sign_id, bundle_id, name, [(t, inventory(src)) for t, src, _ in items]])
+    data[name] = {'key': key}
+    reuse = False
+    if old_app and previous.get('data', {}).get(name, {}).get('key') == key:
+        ob = data_bundle(old_app / 'Contents/Resources', name)
+        try: reuse = ob.is_dir() and sha(inventory(ob)) == previous['data'][name].get('files')
+        except OSError: reuse = False
+    if reuse:
+        b.parent.mkdir(exist_ok=True)
+        run(['/bin/cp', '-cR', ob, b])
+    else:
+        (b / 'Contents/Resources').mkdir(parents=True)
+        (b / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+            'CFBundleIdentifier': f'{bundle_id}.data.{name.lower()}', 'CFBundleName': name, 'CFBundlePackageType': 'BNDL',
+            'CFBundleInfoDictionaryVersion': '6.0'}))
+        for top, src, fill in items:
+            dst = b / 'Contents/Resources' / top
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            fill(src, dst)
+        fresh.append(b)
+    for top, _, _ in items:
+        link = res / top
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(os.path.relpath(b / 'Contents/Resources' / top, link.parent))
+    return reuse
 
 
 def replace_app(tmp, out):
@@ -344,10 +436,17 @@ def pack(a):
         vulkan_runtime_from_homebrew(rt / 'vulkan')
     link_into_macos(mac, rt, 'vulkan')
 
+    old_app = out if out.is_dir() else None
+    previous = read_key(out) if old_app else {}
+    fresh, data_keys = [], {}   # data bundles filled in this pack (signed below), and every bundle's key for <out.app>.key
+    sign_id = f'{a.sign}'
     step('shader library')
     clone_shaders = bool(shader_files) and can_clone(shader_files[0], mac)
+    if shader_files:
+        if place_data(c, old_app, previous, 'ShaderLibrary', [(f'runtime/{f.name}', f, lambda s_, d_: copy_tree(s_, d_, clone_shaders)) for f in shader_files],
+                      a.bundle_id, sign_id, fresh, data_keys):
+            step('shader library (reused, signed)')
     for f in shader_files:
-        copy_tree(f, rt / f.name, clone_shaders)
         link_into_macos(mac, rt, f.name)
 
     if toml:
@@ -359,17 +458,20 @@ def pack(a):
         step('game data (APFS clones)' if can_clone(data / 'game', res) else 'game data (plain copies: not the same APFS volume)')
         clone = can_clone(data / 'game', res)
         if not clone:
-            free = shutil.disk_usage(res).free
+            free = free_bytes(res)
             need = sum(tree_bytes(data / d) for d in ('game', 'update', 'content') if (data / d).exists()) or tree_bytes(data)
             if need + (1 << 30) > free:
                 raise SystemExit(f'the data needs {need / 2**30:.1f} GB on the volume of {out.parent}, {free / 2**30:.1f} GB are free; use --data-mode external')
-        if (data / 'game').is_dir():
-            (res / 'data').mkdir()
-            for d in ('game', 'update', 'content'):
-                if (data / d).exists():
-                    copy_tree(data / d, res / 'data' / d, clone)
-        else:   # the extracted disc itself
-            copy_tree(data, res / 'data', clone)
+        def fill_data(src, dst):
+            if (src / 'game').is_dir():
+                dst.mkdir()
+                for d in ('game', 'update', 'content'):
+                    if (src / d).exists():
+                        copy_tree(src / d, dst / d, clone)
+            else:   # the extracted disc itself
+                copy_tree(src, dst, clone)
+        if place_data(c, old_app, previous, 'GameData', [('data', data, fill_data)], a.bundle_id, sign_id, fresh, data_keys):
+            step('game data (reused, signed)')
 
     has_icon = False
     if icon is not None:
@@ -412,11 +514,17 @@ def pack(a):
     (c / 'PkgInfo').write_text('APPL????')
 
     step(f'signing ({"ad-hoc" if a.sign == "-" else a.sign})')
-    sign_all(tmp, a.sign)
-    run(['codesign', '--verify', '--deep', '--strict', tmp])
+    sign_all(tmp, a.sign, fresh)
+    # no --deep: it reads every byte of every data bundle again (the seal holds a bundle by its code hash); a bundle made here was verified after signing
+    run(['codesign', '--verify', '--strict', tmp])
+    for b in fresh:
+        run(['codesign', '--verify', '--strict', b])
 
     replace_app(tmp, out)
     shutil.rmtree(tmp, ignore_errors=True)   # the old app after a swap
+    for name, k in data_keys.items():
+        k['files'] = sha(inventory(data_bundle(out / 'Contents/Resources', name)))   # as the last pack left it, signature included
+    Path(f'{out}.key').write_text(json.dumps({'data': data_keys}, sort_keys=True) + '\n')
     print(f'app: {out}', flush=True)
 
 

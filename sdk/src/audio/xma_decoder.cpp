@@ -299,6 +299,7 @@ void ReportXma() {
 }  // namespace
 
 void XmaDecoder::WorkerThreadMain() {
+  worker_loop_running_ = true;
   while (worker_running_) {
     // Okay, let's loop through XMA contexts to find ones we need to decode!
     bool did_work = false;
@@ -367,6 +368,7 @@ void XmaDecoder::WorkerThreadMain() {
     // No work done this iteration, block until signaled.
     rex::thread::Wait(work_event_.get(), false);
   }
+  worker_loop_running_ = false;
 }
 
 void XmaDecoder::Shutdown() {
@@ -622,6 +624,10 @@ void XmaDecoder::Pause() {
     return;
   }
   paused_ = true;
+  // No worker loop to park (not started yet, or already shut down): waiting for it would never return.
+  if (!worker_loop_running_) {
+    return;
+  }
 
   if (work_event_) {
     work_event_->Set();
