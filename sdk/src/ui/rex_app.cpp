@@ -47,6 +47,8 @@
 #include <rex/system/gpu_plugin.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/savepoint.h>
+#include <rex/system/user_module.h>
+#include <rex/system/xex_module.h>
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/keybinds.h>
@@ -370,6 +372,19 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
   status = runtime_->LoadXexImage(xex_image);
   if (XFAILED(status)) {
     auto msg = fmt::format("Failed to load XEX ({}): {:08X}", xex_image, status);
+    REXLOG_ERROR("{}", msg);
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+    return false;
+  }
+
+  // Code generated from another executable or title update would run against the wrong data silently.
+  if (auto* xex = runtime_->kernel_state()->GetExecutableModule()->xex_module();
+      xex->base_address() != ppc_info_.image_base || xex->image_size() != ppc_info_.image_size) {
+    auto msg = fmt::format(
+        "The game executable {} does not match this build (loaded image {:08X}+{:X}, built for "
+        "{:08X}+{:X}). Check the game files and the title update.",
+        xex_image, xex->base_address(), xex->image_size(), ppc_info_.image_base,
+        ppc_info_.image_size);
     REXLOG_ERROR("{}", msg);
     rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
     return false;

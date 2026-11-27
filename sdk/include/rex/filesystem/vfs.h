@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -33,6 +34,9 @@ class VirtualFileSystem {
 
   bool RegisterDevice(std::unique_ptr<Device> device);
   bool UnregisterDevice(const std::string_view path);
+  // Puts `device` in place of the registered device with the same mount path (disc swap). The old
+  // device is kept alive until shutdown: open files and resolved entries still point into it.
+  bool ReplaceDevice(std::unique_ptr<Device> device);
 
   bool RegisterSymbolicLink(const std::string_view path, const std::string_view target);
   bool UnregisterSymbolicLink(const std::string_view path);
@@ -51,9 +55,15 @@ class VirtualFileSystem {
  private:
   rex::thread::global_critical_region global_critical_region_;
   std::vector<std::unique_ptr<Device>> devices_;
+  std::vector<std::unique_ptr<Device>> retired_devices_;
   std::unordered_map<std::string, std::string> symlinks_;
 
   bool ResolveSymbolicLink(const std::string_view path, std::string& result);
 };
+
+// Host folder holding disc `disc` of a multi-disc game: <game_root>/../disc<N> when it exists,
+// else game_root itself for the boot disc. Empty when that disc is not in the game folder.
+std::filesystem::path DiscRoot(const std::filesystem::path& game_root, uint32_t disc,
+                               uint32_t boot_disc);
 
 }  // namespace rex::filesystem

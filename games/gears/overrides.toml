@@ -1,0 +1,13 @@
+# Derived analysis entries only.
+[functions]
+
+# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
+"0x825F1F28" = { }   # addi r11, r3, 4; lwz r10, 4(r11); addi r3, r10, 1; stw r3, 4(r11); blr   <- 0x825F8A0C
+"0x82913BD0" = { }   # lfs f0, 0(r4); lis r11, -0x7e00; lfs f6, 0(r3); fsubs f13, f0, f6; lfs f12, 8(r4); lfs f11, 8(r3)   <- 0x82957980
+"0x82A39A50" = { }   # lwz r11, 0x16c(r3); slwi r10, r4, 7; add r11, r11, r10; lfs f1, 0xc(r11); blr   <- 0x829B5518
+
+# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
+"0x825F8A68" = { }   # addi r3, r3, 0x10; b 0x825f51d8   <- 0x825F9AF4
+"0x825F8A70" = { }   # addi r3, r3, 0x10; b 0x825f54a0   <- 0x825F9B3C
+"0x825F8A78" = { }   # addi r3, r3, 0x10; b 0x825f5a70   <- 0x825F9B0C
+"0x825F8A90" = { }   # lfs f0, 0x70(r3); li r3, 0; stfs f0, 0(r4); blr   <- 0x825F9B34

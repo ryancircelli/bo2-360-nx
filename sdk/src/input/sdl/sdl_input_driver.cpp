@@ -679,21 +679,23 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
   }
   auto& controller = controllers_.at(*idx);
 
-  uint16_t xbuttons = controller.state.gamepad.buttons;
   // Lookup the XInput button code.
   if (event.gbutton.button >= xbutton_lookup.size()) {
     // A newer SDL Version may have added new buttons.
     REXLOG_INFO("SDL HID: Unknown button was pressed: {}.", event.gbutton.button);
     return;
   }
-  auto xbutton = xbutton_lookup.at(event.gbutton.button);
-  // Pressed or released?
+  // The Guide button is always read: the input system gives it to the Guide overlay or the game (guide_button).
+  const uint32_t bit = 1u << event.gbutton.button;
   if (event.gbutton.down) {
-    // The Guide button is always read: the input system gives it to the Guide
-    // overlay or the game (guide_button).
-    xbuttons |= xbutton;
+    controller.sdl_buttons_down |= bit;
   } else {
-    xbuttons &= ~xbutton;
+    controller.sdl_buttons_down &= ~bit;
+  }
+  // Rebuilt from every SDL button down, so letting go of a paddle does not release the face button it shares.
+  uint16_t xbuttons = 0;
+  for (size_t i = 0; i < xbutton_lookup.size(); ++i) {
+    if (controller.sdl_buttons_down & (1u << i)) xbuttons |= xbutton_lookup[i];
   }
   controller.state.gamepad.buttons = xbuttons;
   controller.state_changed = true;

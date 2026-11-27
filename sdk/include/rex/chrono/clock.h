@@ -85,6 +85,9 @@ class Clock {
   static uint64_t frame_lock_frames();
   // Frames that took longer than clock_frame_lock_stall_ms (guest time ran with wall time in them).
   static uint64_t frame_lock_stalls();
+  // Guest ticks at the last frame, and setting it back there (a bench round rewinds the game and its clock together).
+  static uint64_t frame_lock_base();
+  static void RewindFrameLock(uint64_t base);
 
   // Sets the system time of the guest.
   static void SetGuestSystemTime(uint64_t system_time);

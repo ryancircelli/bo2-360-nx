@@ -80,6 +80,11 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info, size_t le
     }
   }
 
+  // Writes do not update the tree; refresh sizes on writable devices (saves) like Xenia does.
+  if (!entry->is_read_only()) {
+    entry->update();
+  }
+
   auto end = reinterpret_cast<uint8_t*>(out_info) + length;
   const auto& entry_name = entry->name();
   if (reinterpret_cast<uint8_t*>(&out_info->file_name[0]) + entry_name.size() > end) {

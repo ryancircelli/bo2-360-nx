@@ -222,6 +222,25 @@ inline simde__m128i simde_mm_avg_epi32(simde__m128i a, simde__m128i b) {
                             simde_mm_and_si128(simde_mm_or_si128(a, b), simde_mm_set1_epi32(1)));
 }
 
+// vexptefp: exp2 estimate with out-of-range handling (x>=128 -> +inf, x<=-127 -> 0, NaN -> NaN)
+inline simde__m128 vexptefp_ps(simde__m128 x0) {
+  simde__m128 x = simde_mm_min_ps(simde_mm_max_ps(x0, simde_mm_set1_ps(-127.0f)), simde_mm_set1_ps(128.0f));
+  simde__m128 n = simde_mm_round_ps(x, SIMDE_MM_FROUND_TO_NEG_INF | SIMDE_MM_FROUND_NO_EXC);
+  simde__m128 f = simde_mm_sub_ps(x, n);
+  // 4th-order minimax polynomial for 2^f, f in [0,1), ~12-bit accuracy
+  simde__m128 p = simde_mm_set1_ps(1.8775767e-3f);
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(8.9893397e-3f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(5.5826318e-2f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(2.4015361e-1f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(6.9315308e-1f));
+  p = simde_mm_add_ps(simde_mm_mul_ps(p, f), simde_mm_set1_ps(1.0f));
+  // 2^n via exponent bits; n=128 -> 0x7F800000 (+inf), n=-127 -> 0
+  simde__m128i exp_bits = simde_mm_slli_epi32(simde_mm_add_epi32(simde_mm_cvttps_epi32(n), simde_mm_set1_epi32(127)), 23);
+  simde__m128 r = simde_mm_mul_ps(p, simde_mm_castsi128_ps(exp_bits));
+  // NaN input: max/min above would swallow it, so pass it through
+  return simde_mm_blendv_ps(r, x0, simde_mm_cmpunord_ps(x0, x0));
+}
+
 // Convert unsigned 32-bit integers to floats
 inline simde__m128 simde_mm_cvtepu32_ps_(simde__m128i src1) {
   simde__m128i xmm1 = simde_mm_add_epi32(src1, simde_mm_set1_epi32(127));

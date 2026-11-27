@@ -12,13 +12,18 @@
   gate.py save    GAME --scene NAME [--at S] [--ff 2]     drive route to a moment, write the save point SAVEPOINTS/GAME/NAME.sp
   boot|shot|drive ... --savepoint NAME|FILE               start from a save point instead of booting (seconds, not minutes)
 
-GAME = bo2 | nfsmw | fh1 | nfshp | bo1.  APP defaults to the installed app in ~/Games/Launchers (it is cloned by runq, never
+GAME = bo2 | nfsmw | fh1 | nfshp | bo1 | gears.  APP defaults to the installed app in ~/Games/Launchers (it is cloned by runq, never
 changed). Every gate but install/set/speed is queued as a runq job (class harness; --class to change, --now runs it
 inline, for debugging only), so it is muted, minimized, on its own UDP ports and never opens a real pad. Output goes to
 --out (default ~/Games/Xbox360/bo2-build/runs/gates/<game>-<gate>-<time>/). Exit 0 = PASS, 1 = FAIL, 2 = setup error.
 Docs: tools/gates/README.md, WORKFLOW.md "Standard gates".
 """
 import argparse, glob, hashlib, json, math, os, plistlib, re, shutil, signal, subprocess, sys, time, uuid
+import importlib.util
+_driving_spec = importlib.util.spec_from_file_location("gate_driving", os.path.join(os.path.dirname(os.path.abspath(__file__)), "driving.py"))
+_driving = importlib.util.module_from_spec(_driving_spec)
+_driving_spec.loader.exec_module(_driving)
+verify_driving = _driving.verify
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +38,7 @@ SAVEPOINTS = os.path.join(HOME, 'Games', 'Xbox360', 'bo2-build', 'savepoints')
 # scene_s = guest seconds the drive route needs to reach a scene worth a screenshot; settle_s = guest seconds
 # at the front end before the Guide gate presses the Guide button (no route needed: the Guide is app-level).
 GAMES = {
+    'gears': dict(app='Gears of War.app', drive='gears-drive', scene_s=180, settle_s=60, seed='gears-360'),
     # save_log: `save` counts --at from this log line (boot time varies with machine load; a save on a loading screen is useless)
     'bo2':   dict(app='BO2 Zombies.app',                  drive='town4', scene_s=140, settle_s=60, seed=None,
                   save_log='[cheats] guest memory in a match', save_after_s=30),
@@ -40,6 +46,9 @@ GAMES = {
     'fh1':   dict(app='Forza Horizon.app',                drive='fh1-drive', scene_s=150, settle_s=75, seed='fh1-360'),
     'nfshp': dict(app='Need for Speed Hot Pursuit.app',   drive='nfshp-drive', scene_s=480, settle_s=75, seed='nfshp-360'),
     'bo1':   dict(app='Black Ops.app',                    drive='bo1-drive', scene_s=700, settle_s=60, seed='bo1'),
+    # No drive route yet: boot and install only.
+    'nfsmw2012': dict(app='Need for Speed Most Wanted 2012.app', drive=None, scene_s=180, settle_s=75, seed='nfsmw2012-360'),
+    'ac1':   dict(app="Assassin's Creed.app",             drive=None, scene_s=180, settle_s=75, seed='ac1-360'),
 }
 SET_GAMES = ['bo2', 'nfsmw', 'fh1']
 ERR_KIND = re.compile(r'\] \[(warning|error|critical)\]')
@@ -190,6 +199,7 @@ class Game:
             'SDL_HIDAPI_LIBUSB': '0', 'SDL_JOYSTICK_HIDAPI': '0',   # never open the owner's real pads
             'SDL_WINDOW_ACTIVATE_WHEN_SHOWN': '0', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED': '0', 'SDL_HINT_MAC_BACKGROUND_APP': '1',
             f'{prefix}_SUPPORT_DIR': self.support, f'{prefix}_LOG_DIR': self.logs, f'{prefix}_NO_DIALOG': '1', 'BO2_NO_DIALOG': '1',
+            'METAL360_SUPPORT_DIR': self.support, 'METAL360_LOG_DIR': self.logs, 'METAL360_NO_DIALOG': '1',
             'REX_LOG_LEVEL': 'info', 'REX_INPUT_LOG_STATE': 'true', 'MVK_CONFIG_FAST_MATH_ENABLED': '0',
             'REX_NET_SYSTEM_PORT_OFFSET': os.environ.get('REX_NET_SYSTEM_PORT_OFFSET') or str(free_port_offset()),
         })
@@ -393,13 +403,18 @@ def g_drive(a, G):
     t_end = G.t0 + (length + 20) / (a.ff or 1) + 30
     nxt, n = time.monotonic() + 60, 0
     died = None
+    burst_until = None
     while time.monotonic() < t_end:
         if not G.alive():
             died = G.exit_code()
             break
-        if time.monotonic() >= nxt:
+        now = time.monotonic()
+        if burst_until is None and ((a.game == 'nfsmw' and 'INGAMEB.LZC' in G.log_text())
+                                   or (a.game == 'bo1' and 'zombie_theater.ff' in G.log_text())):
+            burst_until, nxt = now + 60, now
+        if now >= nxt:
             G.shot(f'drive{n:02d}')
-            n, nxt = n + 1, nxt + 60
+            n, nxt = n + 1, now + (2 if burst_until and now < burst_until else 60)
         time.sleep(1)
     alive = G.alive()
     if alive:
@@ -408,12 +423,13 @@ def g_drive(a, G):
     crash = CRASH.search(text)
     G.stop()
     new = baseline_diff(G, a.kinds_from, a.out)
+    proof = verify_driving(a.game, a.out, text)
     sd = os.path.join(G.out, 'shots')
     first, last = (os.path.join(sd, f) for f in ('drive00.png', 'drive-end.png'))
     # a drive that keeps a picture identical start to end has stopped (a fresh load can freeze a few frames in)
     frozen = alive and os.path.exists(first) and os.path.exists(last) and open(first, 'rb').read() == open(last, 'rb').read()
-    ok = alive and not crash and not frozen
-    facts = f'route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
+    ok = alive and not crash and proof["passed"] and not frozen
+    facts = f'gameplay {proof["passed"]} route {os.path.basename(route) if route else "-"} {length:.0f}s alive {alive} shots {n + 1}'
     if frozen:
         facts += ' FROZEN (first and last shots identical)'
     if died is not None:
@@ -896,7 +912,7 @@ def g_replay(a):
 
 
 def game_word(game):
-    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops'}[game]
+    return {'bo2': 'bo2', 'nfsmw': 'most wanted', 'fh1': 'forza', 'nfshp': 'hot pursuit', 'bo1': 'black ops', 'nfsmw2012': 'most wanted 2012', 'gears': 'gears of war', 'ac1': 'assassin'}[game]
 
 
 # ----------------------------------------------------------------------------------------------- cli

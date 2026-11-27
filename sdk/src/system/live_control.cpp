@@ -7,11 +7,14 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <thread>
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/input/input_record.h>
+#include <rex/input/script/script_input_driver.h>
 #include <rex/system/patch.h>
 #include <rex/system/savepoint.h>
 
@@ -113,6 +116,19 @@ std::string Savepoint(const std::string& args) {
   return ControlInProcessSavepoint(args, 100000);
 }
 
+// record PATH: every pad input since start (routes and live presses alike) in the hid_replay_input format.
+std::string Record(const std::string& args) {
+  const std::string path = Trim(args);
+  if (path.empty()) return "error usage: record PATH";
+  const auto samples = input::GlobalInputRing().Window(input::ProcessMs(), input::ProcessMs());
+  std::ofstream out(path, std::ios::trunc);
+  out << input::SamplesToText(samples);
+  if (!out) return "error cannot write " + path;
+  // The file's times start at its first sample: first_ms is when that was (hid_replay_delay for the replay).
+  return "ok recorded " + std::to_string(samples.size()) + " samples to " + path + " first_ms " +
+         std::to_string(samples.empty() ? 0 : samples.front().ms);
+}
+
 }  // namespace
 
 std::string LiveControlCommand(const std::string& command, const std::string& args) {
@@ -122,6 +138,10 @@ std::string LiveControlCommand(const std::string& command, const std::string& ar
   if (command == "slots") return Slots(args);
   if (command == "timescale") return Timescale(args);
   if (command == "savepoint") return Savepoint(args);
+  if (command == "record") return Record(args);
+#if !REX_PLATFORM_SWITCH
+  if (std::string pad = input::script::LivePadCommand(command, args); !pad.empty()) return pad;
+#endif
   return {};
 }
 

@@ -329,6 +329,10 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
       // Directories only.
       continue;
     }
+    const auto entry_name = rex::path_to_utf8(file_info.name);
+    if (entry_name.ends_with(".staging") || entry_name.ends_with(".old")) {
+      continue;  // left by the reverted atomic-save build (1117fd8e); may hold unsaved progress, never list or delete
+    }
 
     XCONTENT_AGGREGATE_DATA content_data{};
     if (ReadContentHeaderFile(rex::path_to_utf8(file_info.name), xuid, title_id, content_type,

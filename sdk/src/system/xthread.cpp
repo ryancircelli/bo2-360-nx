@@ -38,6 +38,7 @@
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread_audio.h>
+#include <rex/thread_spin.h>
 #include <rex/vec128.h>
 
 #if REX_PLATFORM_SWITCH
@@ -1111,7 +1112,8 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
     if (out_suspend_count) {
       *out_suspend_count = previous;
     }
-    should_resume_host = (guest_thread->suspend_count == 0);
+    // Only the guest count's 1->0 step owns a host park; Resume at 0 must not release a savepoint park.
+    should_resume_host = (previous == 1);
     suspend_cv_.notify_all();
   }
 
@@ -1134,6 +1136,35 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
 
 X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
   auto guest_thread = guest_object<X_KTHREAD>();
+#if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+  if (IsInThread(this)) {
+    uint32_t previous = SelfSuspend();
+    if (out_suspend_count) {
+      *out_suspend_count = previous;
+    }
+    return X_STATUS_SUCCESS;
+  }
+  // Same lock as Resume: the host thread is parked only on the guest count's 0->1 step and released on its
+  // 1->0 step, so nested suspends and a racing Resume cannot leave the host count above the guest count.
+  std::lock_guard<std::mutex> lock(suspend_mutex_);
+  uint8_t previous = guest_thread->suspend_count;
+  if (out_suspend_count) {
+    *out_suspend_count = previous;
+  }
+  if (previous == 0xFF) {
+    return X_STATUS_UNSUCCESSFUL;  // NT: STATUS_SUSPEND_COUNT_EXCEEDED
+  }
+  guest_thread->suspend_count = previous + 1;
+  if (previous != 0) {
+    return X_STATUS_SUCCESS;
+  }
+  uint32_t unused_host_suspend_count = 0;
+  if (!thread_->Suspend(&unused_host_suspend_count)) {
+    guest_thread->suspend_count = previous;
+    return X_STATUS_UNSUCCESSFUL;
+  }
+  return X_STATUS_SUCCESS;
+#else
   uint8_t previous_suspend_count =
       reinterpret_cast<std::atomic_uint8_t*>(&guest_thread->suspend_count)->fetch_add(1);
   if (out_suspend_count) {
@@ -1146,6 +1177,7 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
     return X_STATUS_SUCCESS;
   }
   return thread_->Suspend(&unused_host_suspend_count) ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
+#endif
 }
 
 #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
@@ -1264,6 +1296,7 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
         rex::thread::Sleep(std::chrono::microseconds(100));
       } else {
         rex::thread::MaybeYield();
+        rex::thread::NoteGuestPoll();
       }
     } else if (DelayReported(thread_name_)) {
       const auto before = std::chrono::steady_clock::now();

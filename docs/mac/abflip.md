@@ -1,7 +1,7 @@
 # Runtime benchmark factors
 
 `bo2zm_benchmark_ab_s` keeps the existing 2x2 arm order. Set
-`REX_BO2ZM_BENCHMARK_AB_FACTORS=waits_fence_wake,metal_encode_thread`
+`REX_BO2ZM_BENCHMARK_AB_FACTORS=metal_type0_register_batching,metal_encode_thread`
 to map the first factor to bit 0 and the second to bit 1. At startup the
 app rejects unknown, duplicate, empty, or more than two names. The Metal
 factors are available on macOS. Each switch returns to its startup value
@@ -12,13 +12,6 @@ Every arm transition, including the final `arm=-1`, writes a normal perf.tsv
 `factors=name=0|1,...` fields. Events share the frame rows' time base.
 `REX_BO2ZM_BENCHMARK_AB_SETTLE_S` defaults to 3. The benchmark summary
 excludes entire frame intervals overlapping this settle period.
-
-Fence-wake uses a relaxed atomic initialized from `bo2zm_waits_fence_wake`.
-A transition cannot invalidate a sleep: its mask is local, notifications
-are advisory, the guest rechecks its predicate, and the existing maximum
-wait timeout still applies. A sleep started while off can miss the first
-new fence notification; a sleep started while on and then disabled can
-last to the normal timeout. The settle period excludes this transition.
 
 Metal's encode-thread cvar exists and defaults to false. Requests live in
 rexruntime, shared by the app and the dynamically loaded Metal plugin,

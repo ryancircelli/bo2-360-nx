@@ -14,6 +14,8 @@
 #include <rex/input/script/script_events.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cstring>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -380,6 +382,68 @@ void ControlsToGamepad(uint32_t controls, int look_percent, X_INPUT_GAMEPAD* out
   out->thumb_ry = axis(controls, kControlLookUp, kControlLookDown, look);
 }
 
+namespace {
+
+// Live layer (LivePadCommand): what a running test adds on top of each script pad.
+struct LiveTap {
+  double start, end;
+  uint32_t bits;
+  bool seen;  // a tap lasts until one poll saw it, so a slow frame never drops it
+};
+struct LivePad {
+  uint32_t held = 0;
+  std::vector<LiveTap> taps;
+  double queue_end = -1;  // end of the last queued tap (none yet: the first tap is not delayed)
+  int16_t axis[4] = {};      // lx ly rx ry
+  double axis_until[4] = {};  // 0 off, -1 until changed, else LiveNow() expiry
+  uint8_t trig[2] = {};
+  double trig_until[2] = {};
+};
+std::mutex g_live_mutex;
+LivePad g_live[kMaxGuestUsers];
+std::atomic<size_t> g_live_pads{0};
+
+double LiveNow() {
+  static const auto start = std::chrono::steady_clock::now();
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+bool LiveOn(double until, double now) { return until < 0 || (until > 0 && now < until); }
+
+// Buttons the live layer holds now; analog overrides go to *analog with *mask (bits as Pad::live_mask).
+uint32_t LiveOverlay(size_t index, X_INPUT_GAMEPAD* analog, uint8_t* mask) {
+  std::lock_guard<std::mutex> lock(g_live_mutex);
+  LivePad& p = g_live[index];
+  const double now = LiveNow();
+  std::erase_if(p.taps, [&](const LiveTap& t) { return t.seen && now >= t.end; });
+  uint32_t bits = p.held;
+  for (auto& t : p.taps) {
+    if (now >= t.start) {
+      bits |= t.bits;
+      t.seen = true;
+    }
+  }
+  *analog = {};
+  *mask = 0;
+  be<int16_t>* axes[4] = {&analog->thumb_lx, &analog->thumb_ly, &analog->thumb_rx, &analog->thumb_ry};
+  for (int i = 0; i < 4; i++) {
+    if (LiveOn(p.axis_until[i], now)) {
+      *axes[i] = p.axis[i];
+      *mask |= 1 << i;
+    }
+  }
+  uint8_t* trig[2] = {&analog->left_trigger, &analog->right_trigger};
+  for (int i = 0; i < 2; i++) {
+    if (LiveOn(p.trig_until[i], now)) {
+      *trig[i] = p.trig[i];
+      *mask |= 16 << i;
+      if (p.trig[i] >= 0x80) bits |= i ? kControlRT : kControlLT;  // keystroke for menus that read them
+    }
+  }
+  return bits;
+}
+
+}  // namespace
+
 ScriptInputDriver::ScriptInputDriver(std::vector<std::vector<Step>> scripts, int look_percent,
                                      Clock clock)
     : InputDriver(nullptr, 0), look_percent_(look_percent), clock_(std::move(clock)) {
@@ -405,6 +469,7 @@ ScriptInputDriver::ScriptInputDriver(std::vector<std::vector<Step>> scripts, int
     }
     pads_.push_back(std::move(pad));
   }
+  g_live_pads = pads_.size();
 }
 
 namespace {
@@ -512,10 +577,18 @@ bool ScriptInputDriver::Update(size_t index) {
   if (!pad.connected) {
     return false;
   }
-  if (frame.controls != pad.controls) {
+  X_INPUT_GAMEPAD live;
+  uint8_t live_mask = 0;
+  const uint32_t controls = frame.controls | LiveOverlay(index, &live, &live_mask);
+  if (live_mask != pad.live_mask || std::memcmp(&live, &pad.live, sizeof live) != 0) {
+    pad.live = live;
+    pad.live_mask = live_mask;
+    pad.packet++;
+  }
+  if (controls != pad.controls) {
     for (const auto& control : kControls) {
       const bool was = pad.controls & control.bits;
-      const bool is = frame.controls & control.bits;
+      const bool is = controls & control.bits;
       if (was == is || control.key == 0) {
         continue;
       }
@@ -525,7 +598,7 @@ bool ScriptInputDriver::Update(size_t index) {
       key.user_index = static_cast<uint8_t>(index);
       pad.keys.push_back(key);
     }
-    pad.controls = frame.controls;
+    pad.controls = controls;
     pad.packet++;
   }
   return true;
@@ -567,6 +640,13 @@ X_RESULT ScriptInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state
     *out_state = {};
     out_state->packet_number = pad->packet;
     ControlsToGamepad(pad->controls, look_percent_, &out_state->gamepad);
+    auto& g = out_state->gamepad;
+    if (pad->live_mask & 1) g.thumb_lx = pad->live.thumb_lx;
+    if (pad->live_mask & 2) g.thumb_ly = pad->live.thumb_ly;
+    if (pad->live_mask & 4) g.thumb_rx = pad->live.thumb_rx;
+    if (pad->live_mask & 8) g.thumb_ry = pad->live.thumb_ry;
+    if (pad->live_mask & 16) g.left_trigger = pad->live.left_trigger;
+    if (pad->live_mask & 32) g.right_trigger = pad->live.right_trigger;
   }
   return X_ERROR_SUCCESS;
 }
@@ -617,6 +697,108 @@ X_RESULT ScriptInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t /*flags*/,
   }
   pad->keys.pop_front();
   return X_ERROR_SUCCESS;
+}
+
+std::string LivePadCommand(std::string_view command, std::string_view args) {
+  if (command != "press" && command != "hold" && command != "release" && command != "stick" &&
+      command != "trigger" && command != "pad") {
+    return {};
+  }
+  std::vector<std::string> words;
+  size_t slot = 0;
+  for (std::string_view rest = Trim(args); !rest.empty(); rest = Trim(rest)) {
+    const size_t sp = std::min(rest.find_first_of(" \t"), rest.size());
+    std::string word = Lower(rest.substr(0, sp));
+    rest.remove_prefix(sp);
+    if (word.size() == 2 && word[0] == 'p' && word[1] >= '1' && word[1] <= '4') {
+      slot = static_cast<size_t>(word[1] - '1');
+    } else {
+      words.push_back(std::move(word));
+    }
+  }
+  const auto arg = [&](size_t i) { return i < words.size() ? std::string_view(words[i]) : std::string_view(); };
+  uint32_t bits = 0;
+  bool disconnect = false;
+  const bool named = !arg(0).empty() && ControlBits(arg(0), bits, disconnect) && !disconnect;
+  if (command == "press" && !named) {
+    return {};  // not a pad control: the keyboard press of the test channel may know it
+  }
+  const size_t pads = g_live_pads.load();
+  if (slot >= pads) {
+    return fmt::format("error no virtual pad {} ({} in this game; start the live session with --pads N)",
+                       slot + 1, pads);
+  }
+  const auto number = [](std::string_view text, double lo, double hi, double& out) {
+    const std::string copy(text);
+    char* end = nullptr;
+    out = std::strtod(copy.c_str(), &end);
+    return !copy.empty() && end == copy.c_str() + copy.size() && out >= lo && out <= hi;
+  };
+  std::lock_guard<std::mutex> lock(g_live_mutex);
+  LivePad& p = g_live[slot];
+  const double now = LiveNow();
+  const std::string who = fmt::format("p{}", slot + 1);
+  if (command == "press") {
+    double ms = 150;
+    if (!arg(1).empty() && !number(arg(1), 20, 10000, ms)) {
+      return "error usage: press NAMES [20..10000 ms] [pN]";
+    }
+    const double start = std::max(now, p.queue_end + 0.06);  // taps queue, with a release gap between
+    p.taps.push_back({start, start + ms / 1000.0, bits, false});
+    p.queue_end = start + ms / 1000.0;
+    return fmt::format("ok press {} {} in {} ms for {} ms", arg(0), who, static_cast<int>((start - now) * 1000),
+                       static_cast<int>(ms));
+  }
+  if (command == "hold") {
+    if (!named) return "error usage: hold NAMES [pN]";
+    p.held |= bits;
+    return fmt::format("ok hold {} {}", arg(0), who);
+  }
+  if (command == "release") {
+    if (arg(0) == "all") {
+      p = LivePad{};
+      return "ok released all " + who;
+    }
+    if (!named) return "error usage: release NAMES|all [pN]";
+    p.held &= ~bits;
+    return fmt::format("ok release {} {}", arg(0), who);
+  }
+  if (command == "stick" || command == "trigger") {
+    const bool stick = command == "stick";
+    const int side = arg(0) == "l" ? 0 : arg(0) == "r" ? 1 : -1;
+    double x = 0, y = 0, ms = 0;
+    const size_t ms_at = stick ? 3 : 2;
+    const bool off = arg(1) == "off";
+    const bool ok = side >= 0 && (off || (stick ? number(arg(1), -1, 1, x) && number(arg(2), -1, 1, y)
+                                                : number(arg(1), 0, 1, x))) &&
+                    (off || arg(ms_at).empty() || number(arg(ms_at), 20, 60000, ms));
+    if (!ok) {
+      return stick ? "error usage: stick l|r X Y [ms] [pN] (X, Y -1..1, up = +Y) | stick l|r off"
+                   : "error usage: trigger l|r V [ms] [pN] (V 0..1) | trigger l|r off";
+    }
+    const double until = off ? 0 : ms > 0 ? now + ms / 1000.0 : -1;
+    if (stick) {
+      p.axis[side * 2] = static_cast<int16_t>(std::lround(x * 32767));
+      p.axis[side * 2 + 1] = static_cast<int16_t>(std::lround(y * 32767));
+      p.axis_until[side * 2] = p.axis_until[side * 2 + 1] = until;
+    } else {
+      p.trig[side] = static_cast<uint8_t>(std::lround(x * 255));
+      p.trig_until[side] = until;
+    }
+    return off ? fmt::format("ok {} {} off {}", command, arg(0), who)
+               : fmt::format("ok {} {} {}{}{} {}", command, arg(0), x, stick ? fmt::format(" {}", y) : "",
+                             ms > 0 ? fmt::format(" for {} ms", ms) : " held", who);
+  }
+  // pad: what the live layer applies now
+  std::string out = fmt::format("ok {} of {} held 0x{:x} taps {}", who, pads, p.held, p.taps.size());
+  const char* names[] = {"lx", "ly", "rx", "ry"};
+  for (int i = 0; i < 4; i++) {
+    if (LiveOn(p.axis_until[i], now)) out += fmt::format(" {} {}", names[i], p.axis[i]);
+  }
+  for (int i = 0; i < 2; i++) {
+    if (LiveOn(p.trig_until[i], now)) out += fmt::format(" {} {}", i ? "rt" : "lt", p.trig[i]);
+  }
+  return out;
 }
 
 }  // namespace rex::input::script

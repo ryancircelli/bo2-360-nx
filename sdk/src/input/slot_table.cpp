@@ -63,6 +63,11 @@ std::string DeviceModelKey(const DeviceInfo& info) {
 namespace {
 
 std::string ReservationModelKey(const DeviceInfo& info) {
+  // Vendor and name, not product id: Xbox pads change product id with transport (Series 0b12 USB, 0b13 Bluetooth)
+  // while SDL names the model the same either way.
+  if (info.vendor_id && !info.name.empty()) {
+    return fmt::format("{:04x}:", info.vendor_id) + Lower(info.name);
+  }
   if (info.vendor_id || info.product_id) {
     return fmt::format("{:04x}:{:04x}", info.vendor_id, info.product_id);
   }
@@ -332,10 +337,11 @@ uint32_t SlotTable::AssignOrdinal(const DeviceInfo& fresh, const std::vector<Dev
     return ordinal;
   };
 
-  // 0. A pad that names its own player (script pads).
-  if (!fresh.synthetic && fresh.fixed_user >= 0 &&
-      static_cast<uint32_t>(fresh.fixed_user) < kMaxGuestUsers && !taken(fresh.fixed_user)) {
-    return take(static_cast<uint32_t>(fresh.fixed_user));
+  // 0. A pad that names its own player (script and replay pads). It shares the player with any pad already there
+  // (a player's pads are merged), so a replay and a route can both drive player 1.
+  if (!fresh.synthetic && fresh.fixed_user >= 0 && static_cast<uint32_t>(fresh.fixed_user) < kMaxGuestUsers) {
+    return taken(fresh.fixed_user) ? static_cast<uint32_t>(fresh.fixed_user)
+                                   : take(static_cast<uint32_t>(fresh.fixed_user));
   }
 
   // 1. Pinned in the config.

@@ -360,13 +360,11 @@ void MslShaderTranslator::StartTranslation() {
   if (shader.uses_register_dynamic_addressing()) {
     Fail("dynamic register addressing");
   }
-  if (shader.memexport_eM_written() && !is_vertex_shader()) {
-    Fail("memexport in a pixel shader");
-  }
   if (is_vertex_shader()) {
     StartVertexShader();
     return;
   }
+  DeclareMemExport();
   // Float24 depth (docs/no-converter.md): converted in the epilogue like
   // CompletePixelShader_DSV_DepthTo24Bit, from the position's depth. The DXBC
   // declares SV_Position with sample interpolation for this; the converter's
@@ -1397,6 +1395,26 @@ void MslShaderTranslator::ExportToMemory(uint8_t export_eM) {
   Close();
 }
 
+void MslShaderTranslator::DeclareMemExport() {
+  uint8_t eM = current_shader().memexport_eM_written();
+  if (!eM) {
+    return;
+  }
+  // Memory export allowed: the shared memory is bound as a UAV. Helper pixels
+  // (derivative-only invocations) must not export, as on the console.
+  Line("uint xe_me_en = ((xe_sys[{}] & {}) != 0u{}) ? 0xFFFFFFFFu : 0u;",
+       offsetof(SystemConstants, flags) / 4,
+       U(DxbcShaderTranslator::kSysFlag_SharedMemoryIsUAV),
+       is_vertex_shader() ? "" : " && !simd_is_helper_thread()");
+  Line("uint xe_me_written = 0u;");
+  Line("float4 xe_eA = float4(0.0f);");
+  for (uint32_t i = 0; i < 5; ++i) {
+    if (eM & (1u << i)) {
+      Line("float4 xe_eM{} = float4(0.0f);", i);
+    }
+  }
+}
+
 void MslShaderTranslator::StartVertexShader() {
   Modification m = modification();
   // Domain shaders: the quad domain with patch indexing only, the only kind
@@ -1441,19 +1459,7 @@ void MslShaderTranslator::StartVertexShader() {
   Line("float4 xe_pos = float4(0.0f);");
   Line("float4 xe_pse = float4(-1.0f, 0.0f, 0.0f, 0.0f);");
   Line("int xe_vfetch_address = 0;");
-  if (uint8_t eM = current_shader().memexport_eM_written()) {
-    // Memory export allowed: the shared memory is bound as a UAV.
-    Line("uint xe_me_en = ((xe_sys[{}] & {}) != 0u) ? 0xFFFFFFFFu : 0u;",
-         offsetof(SystemConstants, flags) / 4,
-         U(DxbcShaderTranslator::kSysFlag_SharedMemoryIsUAV));
-    Line("uint xe_me_written = 0u;");
-    Line("float4 xe_eA = float4(0.0f);");
-    for (uint32_t i = 0; i < 5; ++i) {
-      if (eM & (1u << i)) {
-        Line("float4 xe_eM{} = float4(0.0f);", i);
-      }
-    }
-  }
+  DeclareMemExport();
   if (domain_quad) {
     // DxbcShaderTranslator::StartDomainShader, kQuadDomainPatchIndexed:
     // r0.x = patch index (from the hull shader), r0.yz = domain location,
@@ -3265,6 +3271,30 @@ void MslShaderTranslator::ProcessTextureFetchInstruction(
       Close();
     }
     Close();
+    // Normalized num_format: unsigned components of fixed formats with up to
+    // 16-bit components are rounded to 16 fractional bits, as the texture unit
+    // returns them (Xenia-canary TextureCache::GetIntegerScaleBits; FH1/FH2
+    // SSAO masks compare filtered samples at that precision).
+    Open("else");
+    std::string qf = NewTemp("qf");
+    Line("uint {} = {} & 63u;", qf, FetchWord(tf, 1));
+    // Bit per TextureFormat: FormatInfo::fixed with no component over 16 bits.
+    Open(fmt::format("if (((({} < 32u) ? 0x0723E7FCu : 0x5DC60000u) >> ({} & "
+                     "31u)) & 1u)",
+                     qf, qf));
+    for (uint32_t i = 0; i < 4; ++i) {
+      if (!(nonzero & (1u << i))) continue;
+      Open(fmt::format(
+          "if (extract_bits({}, {}, 2) == {}u)",
+          SysU(offsetof(SystemConstants, texture_swizzled_signs) +
+               sizeof(uint32_t) * (tf >> 2)),
+          (tf & 3) * 8 + 2 * i, uint32_t(xenos::TextureSign::kUnsigned)));
+      Line("{}.{} = rint({}.{} * 65536.0f) * (1.0f / 65536.0f);", res,
+           kComp[i], res, kComp[i]);
+      Close();
+    }
+    Close();
+    Close();
     std::string e = NewTemp("ea");
     Line("float {} = as_type<float>(extract_bits(as_type<int>({}), 13, 6) * "
          "{} + as_type<int>(1.0f));",
@@ -3579,6 +3609,10 @@ std::vector<uint8_t> MslShaderTranslator::CompleteTranslation() {
     }
     CompleteVertexShader();
   } else {
+    if (uint8_t eM =
+            current_shader().memexport_eM_potentially_written_before_end()) {
+      ExportToMemory(eM);
+    }
     CompletePixelShader();
   }
   if (failed()) {
