@@ -54,18 +54,18 @@ REX_EXPORT(__imp__XamVoiceCreate, rex::kernel::xam::XamVoiceCreate_entry)
 REX_EXPORT(__imp__XamVoiceClose, rex::kernel::xam::XamVoiceClose_entry)
 REX_EXPORT(__imp__XamVoiceHeadsetPresent, rex::kernel::xam::XamVoiceHeadsetPresent_entry)
 
-REX_EXPORT_STUB(__imp__XamMuteSound);
-REX_EXPORT_STUB(__imp__XamVoiceDisableMicArray);
-REX_EXPORT_STUB(__imp__XamVoiceGetBatteryStatus);
-REX_EXPORT_STUB(__imp__XamVoiceGetDirectionalData);
-REX_EXPORT_STUB(__imp__XamVoiceGetMicArrayAudio);
-REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayAudioEx, 0x32);
-REX_EXPORT_STUB(__imp__XamVoiceGetMicArrayFilenameDesc);
-REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayStatus, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayUnderrunStatus, 0x32);
-REX_EXPORT_STUB(__imp__XamVoiceMuteMicArray);
-REX_EXPORT_STUB(__imp__XamVoiceRecordUserPrivileges);
-REX_EXPORT_STUB(__imp__XamVoiceSetAudioCaptureRoutine);
-REX_EXPORT_STUB(__imp__XamVoiceSetMicArrayBeamAngle);
+REX_EXPORT_STUB_RETURN(__imp__XamMuteSound, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceDisableMicArray, 0x8007048f);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetBatteryStatus, 0x8007048f);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetDirectionalData, 0x8007048f);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayAudio, 0x8007048f);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayAudioEx, 0x8007048F);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayFilenameDesc, 0x8007048f);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayStatus, 0x8007048F);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceGetMicArrayUnderrunStatus, 0x8007048F);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceMuteMicArray, 0x8007048f);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceRecordUserPrivileges, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceSetAudioCaptureRoutine, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamVoiceSetMicArrayBeamAngle, 0x8007048f);
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__XamVoiceSetMicArrayIdleUsers)  // no reference implementation; success, no log
 REX_EXPORT_STUB_RETURN(__imp__XamVoiceSubmitPacket, 0);
