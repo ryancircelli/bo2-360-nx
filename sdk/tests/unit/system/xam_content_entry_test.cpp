@@ -243,7 +243,7 @@ TEST_CASE("Content enumeration lists user and common content with the host path"
           X_ERROR_SUCCESS);
   CHECK(uint32_t(size) == sizeof(XCONTENT_DATA) * 8);
   REQUIRE(uint32_t(handle) != 0);
-  auto e = f.kernel()->object_table()->LookupObject<rex::system::XEnumerator>(handle);
+  auto e = f.kernel()->object_table()->LookupObject<rex::system::XStaticUntypedEnumerator>(handle);
   REQUIRE(e);
   CHECK(e->item_count() == 2);
   // Unknown device: invalid argument and the size is zeroed.
@@ -255,7 +255,7 @@ TEST_CASE("Content enumeration lists user and common content with the host path"
   rex::be<uint32_t> h2 = 0;
   REQUIRE(XamContentCreateEnumerator_entry(0, 2 /*ODD*/, 1, 0, 8, mapped_u32(&size, 0),
                                            mapped_u32(&h2, 0)) == X_ERROR_SUCCESS);
-  CHECK(f.kernel()->object_table()->LookupObject<rex::system::XEnumerator>(h2)->item_count() == 0);
+  CHECK(f.kernel()->object_table()->LookupObject<rex::system::XStaticUntypedEnumerator>(h2)->item_count() == 0);
   // No such user.
   CHECK(XamContentCreateEnumerator_entry(3, 1, 1, 0, 8, mapped_u32(&size, 0), mapped_u32(&h2, 0)) ==
         X_ERROR_NO_SUCH_USER);
