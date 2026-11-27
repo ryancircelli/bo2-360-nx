@@ -61,6 +61,9 @@ std::vector<std::filesystem::path> CollectModuleInputs(const RecompilerConfig& c
 
   std::vector<fs::path> inputs;
   inputs.push_back(configDir / cfg.filePath);
+  // The loader applies a sibling title-update patch (<name>p), so it changes the code too.
+  if (auto patch = fs::path((configDir / cfg.filePath).string() + "p"); fs::exists(patch))
+    inputs.push_back(patch);
   inputs.push_back(manifestPath);
   for (const auto& loaded : cfg.loadedFiles) {
     inputs.emplace_back(loaded);

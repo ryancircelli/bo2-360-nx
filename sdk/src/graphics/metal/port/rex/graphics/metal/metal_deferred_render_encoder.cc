@@ -24,6 +24,7 @@ enum class DeferredRenderEncoder::Op : uint16_t {
   kSetRenderPipelineState,
   kSetDepthStencilState,
   kSetStencilReferenceValue,
+  kSetStencilReferenceValues,
   kSetViewport,
   kSetScissorRect,
   kSetBlendColor,
@@ -483,6 +484,17 @@ REX_DEFERRED_U32(setTriangleFillMode, kSetTriangleFillMode,
 REX_DEFERRED_U32(setDepthClipMode, kSetDepthClipMode, MTL::DepthClipMode)
 #undef REX_DEFERRED_U32
 
+void DeferredRenderEncoder::setStencilReferenceValues(uint32_t front,
+                                                      uint32_t back) {
+  if (!deferred_) {
+    real_->setStencilReferenceValues(front, back);
+    return;
+  }
+  // Guest stencil refs are 8-bit, so both fit in one U32Arg.
+  Record<U32Arg>(Op::kSetStencilReferenceValues)->value =
+      (front & 0xFFFF) | (back << 16);
+}
+
 void DeferredRenderEncoder::setViewport(MTL::Viewport viewport) {
   if (!deferred_) {
     real_->setViewport(viewport);
@@ -889,6 +901,11 @@ void DeferredRenderEncoder::Replay(Chunk& chunk) {
       case Op::kSetStencilReferenceValue:
         enc->setStencilReferenceValue(arg((U32Arg*)nullptr)->value);
         break;
+      case Op::kSetStencilReferenceValues: {
+        uint32_t refs = arg((U32Arg*)nullptr)->value;
+        enc->setStencilReferenceValues(refs & 0xFFFF, refs >> 16);
+        break;
+      }
       case Op::kSetCullMode:
         enc->setCullMode(MTL::CullMode(arg((U32Arg*)nullptr)->value));
         break;

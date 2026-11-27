@@ -154,7 +154,7 @@ void BuilderContext::inlineSaveRestoreHelper(const rex::codegen::FunctionNode& h
 
 std::string BuilderContext::r(size_t index) {
   const auto& cfg = config();
-  if ((cfg.nonArgumentRegistersAsLocalVariables &&
+  if ((cfg.nonArgumentRegistersAsLocalVariables && !fn.sharesRegisters() &&
        (index == 0 || index == 2 || index == 11 || index == 12)) ||
       (localizeNonVolatiles() && index >= 14)) {
     locals.r[index] = true;

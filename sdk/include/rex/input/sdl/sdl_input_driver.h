@@ -72,6 +72,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     X_INPUT_STATE state;
     bool state_changed;
     bool is_active;
+    // SDL buttons down (bit per SDL_GamepadButton): several share one XInput bit (paddles, misc, touchpad).
+    uint32_t sdl_buttons_down;
     DeviceId id;
     // Identity and diagnostics, read once when the pad is opened.
     std::string serial;

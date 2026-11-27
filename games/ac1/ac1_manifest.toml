@@ -1,0 +1,11 @@
+# Assassin's Creed (Xbox 360, title 555307D4, Ubisoft Montreal, Anvil/Scimitar engine): one executable, default.xex
+# (original PE scimitar_final_ltcg.exe). gaps.toml is derived by tools/codegen_gaps.py.
+[project]
+name = "ac1"
+sdk_version = "0.10.0"
+game_root = "."
+
+[entrypoint]
+file_path = "default.xex"
+out_directory_path = "generated/default"
+includes = ["overrides.toml", "gaps.toml"]

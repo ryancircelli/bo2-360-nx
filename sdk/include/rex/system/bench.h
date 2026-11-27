@@ -16,6 +16,8 @@ void Arm(const char* reason);
 void OnFrame();
 // GPU time of one finished command buffer.
 void AddGpuNs(uint64_t ns);
+// Bench rounds: the save and the rewinds run here, between command batches (rex::system::ServiceSavepointRequest).
+void ServiceRounds();
 bool Enabled();
 
 }  // namespace rex::bench

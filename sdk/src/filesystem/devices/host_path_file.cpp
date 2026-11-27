@@ -667,7 +667,8 @@ HostPathFile::HostPathFile(uint32_t file_access, HostPathEntry* entry,
    */
   if (file_handle_ && entry && entry->is_read_only() && !wants_write &&
       (REXCVAR_GET(switch_io_cache_mb) > 0 || REXCVAR_GET(switch_io_ranges_mb) > 0)) {
-    cache_id_ = PathId(entry->path());
+    // Absolute path: game: and update: are both read-only and can hold the same relative path.
+    cache_id_ = PathId(entry->absolute_path());
   }
   if (file_handle_ && kb > 0 && entry && entry->is_read_only() && !wants_write) {
     const int64_t max = REXCVAR_GET(switch_io_windows_max);

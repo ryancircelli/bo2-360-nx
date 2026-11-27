@@ -1987,7 +1987,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
     uint64_t args[] = {source_kind, callback_data_.load(std::memory_order_acquire)};
     dispatcher_->ExecuteInterrupt(thread->thread_state(), callback, args, 2);
     interrupts_.fetch_add(1, std::memory_order_relaxed);  // NOTE: also called from LoopVblank (another thread)
-    WarnProgressRing();  // some D3D waits also check the interrupt counter
   }
 
   int LoopVblank() {
@@ -2153,8 +2152,6 @@ class NativeRenderSystem final : public rex::system::IGraphicsSystem {
       if (to_return) {
         rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(to_return), read);
       }
-      // After returning it: the game's D3D waits sleep until this notification (bo2zm_waits.cpp).
-      WarnProgressRing();
     }
     return 0;
   }

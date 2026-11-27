@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <rex/assert.h>
+#include <rex/chrono/clock.h>
 #include <rex/audio/conversion.h>
 #include <rex/audio/downmix.h>
 #include <rex/audio/flags.h>
@@ -288,7 +289,29 @@ void SDLAudioDriver::Pump() {
   const auto interval =
       std::chrono::nanoseconds(1'000'000'000ll * channel_samples_ / frame_frequency_);
   auto deadline = Clock::now() + interval;
+  uint64_t guest_next = 0;  // frame-locked: next pump in guest ticks
   while (pump_active_.load(std::memory_order_relaxed)) {
+    if (rex::chrono::Clock::frame_locked()) {
+      // Bench: one mix per guest-time interval, whatever the wall clock does, so the mixing per frame is the same
+      // solo or beside other work. The game's own clock is frame-locked, so wall pacing would mix more when slower.
+      const uint64_t hz = rex::chrono::Clock::guest_tick_frequency();
+      const uint64_t step = hz * channel_samples_ / frame_frequency_;
+      const uint64_t now = rex::chrono::Clock::QueryGuestTickCount();
+      if (!guest_next || guest_next > now + 2 * step) guest_next = now + step;  // start, or the clock was rewound
+      if (now < guest_next) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+      guest_next += step;
+      size_t in_queue;
+      {
+        std::unique_lock<std::mutex> guard(frames_mutex_);
+        in_queue = frames_queued_.size();
+      }
+      if (in_queue <= 64) semaphore_->Release(1, nullptr);  // bound only: the device may play slower than mixed
+      continue;
+    }
+    guest_next = 0;
     const auto now = Clock::now();
     if (now < deadline) {
 #if defined(__APPLE__)

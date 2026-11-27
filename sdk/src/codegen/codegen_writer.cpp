@@ -28,6 +28,7 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/export_resolver.h>
+#include <rex/system/xmemory.h>
 
 #include "codegen_logging.h"
 #include "file_io.h"
@@ -479,6 +480,12 @@ bool CodegenWriter::write(bool force) {
     }
     out = renderWithJson(registry, "codegen/sources_cmake", tmplData);
     SaveCurrentOutData("sources.cmake");
+  }
+
+  // The loaded image (title update applied) this code came from, for tools that read its data (metal360).
+  if (runtime_) {
+    auto* image = runtime_->memory()->TranslateVirtual<const char*>(ctx_.binary().baseAddress());
+    pendingWrites.emplace_back("image.bin", std::string(image, ctx_.binary().imageSize()));
   }
 
   // Write all buffered files to disk

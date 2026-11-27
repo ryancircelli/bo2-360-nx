@@ -13,6 +13,7 @@
  *              role as a function dispatch table rather than a CPU emulator.
  */
 
+#include <cstdio>
 #include <unordered_set>
 
 #include <rex/assert.h>
@@ -38,6 +39,9 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
 }  // namespace
 
 static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+  // The async logger can lose this line on abort; stderr is unbuffered.
+  fprintf(stderr, "Call to invalid or unregistered function at guest address 0x%08X (lr 0x%08X)\n",
+          (unsigned)ctx.last_indirect_target, (unsigned)ctx.lr);
   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
             ctx.last_indirect_target);
 }
