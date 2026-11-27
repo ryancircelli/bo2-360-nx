@@ -272,9 +272,15 @@ TEST_CASE("An object that lost its handle slot cannot close the slot's next owne
   const auto handle = stale->handle();
   table->Rewind(saved);
 
-  auto owner = rex::system::object_ref<rex::system::XEvent>(new rex::system::XEvent(runtime.kernel_state()));
-  owner->Initialize(true, false);
-  REQUIRE(owner->handle() == handle);
+  // The table hands out free slots in its own order: make objects until one lands on the old slot.
+  std::vector<rex::system::object_ref<rex::system::XEvent>> made;
+  rex::system::object_ref<rex::system::XEvent> owner;
+  for (int i = 0; i < 64 && !owner; ++i) {
+    made.emplace_back(new rex::system::XEvent(runtime.kernel_state()));
+    made.back()->Initialize(true, false);
+    if (made.back()->handle() == handle) owner = made.back();
+  }
+  REQUIRE(owner.get() != nullptr);
 
   stale->ReleaseHandle();
   CHECK(table->LookupObject<rex::system::XObject>(handle).get() == owner.get());
