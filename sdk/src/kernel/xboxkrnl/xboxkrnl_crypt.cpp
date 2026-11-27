@@ -867,36 +867,35 @@ void XeCryptBnQwNeModMul_entry(mapped_u64 qw_a, mapped_u64 qw_b, mapped_u64 qw_o
   }
 }
 
-// Xenia Canary RotSumSha, adapted to local SHA1 and mapped pointer helpers.
+// Original implementation from the written RotSumSha behaviour specification.
+// The upstream RotSum helper cites ExCrypt; no code from that helper is retained.
 void XeCryptRotSumSha_entry(mapped_void in1, u32 n1, mapped_void in2, u32 n2,
                             mapped_void out, u32 out_size) {
-  std::array<be_u64, 4> state{};
-  const auto add = [&state](mapped_void data, u32 size) {
-    uint64_t sum[4];
-    std::copy(state.begin(), state.end(), sum);
-    for (u32 i = 0; i < size / 8; ++i) {
-      be_u64 word;
-      std::memcpy(&word, data.as<const uint8_t*>() + size_t{i} * 8, 8);
-      const uint64_t value = word;
-      sum[1] += value;
-      sum[3] -= value;
-      if (sum[1] < value) ++sum[0];
-      if (sum[3] > value) --sum[2];
-      sum[1] = std::rotl(sum[1], 29);
-      sum[3] = std::rotl(sum[3], 31);
+  uint64_t positive_carries = 0, positive = 0, negative_carries = 0, negative = 0;
+  for (const auto& part : {std::pair{in1, n1}, std::pair{in2, n2}}) {
+    const auto* bytes = part.first.as<const uint8_t*>();
+    for (size_t offset = 0; offset + 8 <= part.second; offset += 8) {
+      uint64_t word = 0;
+      for (size_t byte = 0; byte != 8; ++byte) word = (word << 8) | bytes[offset + byte];
+      const uint64_t added = positive + word;
+      const uint64_t subtracted = negative - word;
+      positive_carries += added < word;
+      negative_carries -= subtracted > word;
+      positive = std::rotl(added, 29);
+      negative = std::rotl(subtracted, 31);
     }
-    std::copy(std::begin(sum), std::end(sum), state.begin());
-  };
-  add(in1, n1);
-  add(in2, n2);
+  }
+  std::array<uint8_t, 32> checksum;
+  const uint64_t words[] = {positive_carries, positive, negative_carries, negative};
+  for (size_t i = 0; i < checksum.size(); ++i) {
+    checksum[i] = static_cast<uint8_t>(words[i / 8] >> (56 - 8 * (i % 8)));
+  }
   sha1::SHA1 sha;
-  sha.processBytes(state.data(), sizeof(state));
-  sha.processBytes(state.data(), sizeof(state));
+  for (int copy = 0; copy < 2; ++copy) sha.processBytes(checksum.data(), checksum.size());
   if (n1) sha.processBytes(in1.as<const uint8_t*>(), n1);
   if (n2) sha.processBytes(in2.as<const uint8_t*>(), n2);
-  for (auto& word : state) word = ~static_cast<uint64_t>(word);
-  sha.processBytes(state.data(), sizeof(state));
-  sha.processBytes(state.data(), sizeof(state));
+  for (auto& byte : checksum) byte ^= 0xff;
+  for (int copy = 0; copy < 2; ++copy) sha.processBytes(checksum.data(), checksum.size());
   uint8_t digest[20];
   sha.finalize(digest);
   std::copy_n(digest, std::min<size_t>(sizeof(digest), out_size), out.as<uint8_t*>());
