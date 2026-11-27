@@ -46,6 +46,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK PR 638 `4202e25` (beeeeswax; open upstream) | XMA ignores a loop end inside the packet header | `sdk/src/audio/xma_context.cpp`, `sdk/include/rex/audio/xma/context.h` |
 | ReXGlue SDK PR 531 `44322407` (Drew Atz; open upstream) | Compared only: its single-object SignalAndWait / set-reset fixes were already here; the multi-object queued wait is our own, after the same idea | `sdk/src/core/threading_posix.cpp`, `sdk/tests/unit/core/thread_wait_test.cpp` |
 | Xenia Canary `59496965b` (Adrian) | SetThreadName checks the exception record's parameter count | `sdk/src/kernel/xboxkrnl/xboxkrnl_debug.cpp` |
+| Xenia Canary `f21fc2dc4` (Adrian) | Studied only: guest exception dispatch and unwinding; nothing ported, design note for a recompiled version | `docs/guest-exception-dispatch.md` |
 
 ## Libraries
 
