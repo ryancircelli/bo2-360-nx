@@ -42,8 +42,8 @@ The SDK changes every module must see the same way (in `xenos.h`, `texture/info.
 itself, not in the patches.
 
 This is the converter-free configuration (`FABLE2_NO_CONVERTER=1`): guest shaders are translated by the native
-Xenos to MSL translator only. The DXBC to DXIL to Metal Shader Converter sources are kept in `port/` but not
-compiled, so neither dxilconv nor Apple's converter library is needed.
+Xenos to MSL translator only. The DXBC to DXIL to Metal Shader Converter wrapper sources were deleted (tag `rejected/msc-converter-sources`), so
+neither dxilconv nor Apple's converter library is needed.
 
 `rexgpu-metal-msl-xlate` (not built by default) runs the translator offline on dumped Xenos shaders.
 

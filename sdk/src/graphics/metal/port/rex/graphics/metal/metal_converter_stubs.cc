@@ -1,6 +1,7 @@
 // FABLE2_NO_CONVERTER builds (docs/no-converter.md): stand-ins for the
 // DXBC -> DXIL (dxilconv) and DXIL -> Metal (Metal Shader Converter) wrappers,
-// compiled instead of dxbc_to_dxil_converter.cc and metal_shader_converter.cc.
+// the only implementation (the real wrappers were deleted; restore from tag
+// rejected/msc-converter-sources).
 // Neither library is linked or shipped. Every request fails, and the census
 // logs the first refusal per purpose at error level with the shader hash, so
 // a draw path that still needs the converter is loud, never silent.
