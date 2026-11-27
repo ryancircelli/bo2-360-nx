@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -158,6 +159,57 @@ TEST_CASE("getpeername validates length and distinguishes unconnected sockets", 
     ok &= NetDll_getpeername_entry(1, socket->handle(), Map(&peer), Map(&length)) == 0;
     ok &= peer.sin_addr == 0x7F000001 && peer.sin_port == 54321;
     socket->Close();
+    return ok;
+  });
+}
+
+#include "kernel/xbdm/debug_services.h"
+
+TEST_CASE("XBDM services copy mapped memory, validate ranges, and identify the retail console", "[kernel][xbdm]") {
+  WithKernel([](rex::Runtime& runtime) {
+    using namespace rex;
+    using namespace rex::kernel::xbdm;
+    auto allocation = DmAllocatePool_entry(256);
+    if (!allocation) return false;
+    auto data = runtime.memory()->TranslateVirtual(allocation);
+    std::memcpy(data, "debug service", 14);
+    mapped_void source(data, allocation), destination(data + 64, allocation + 64);
+    be_u32 copied{999};
+    bool ok = DmGetMemory_entry(source, 14, destination, Map(&copied)) == kDmSuccess;
+    ok &= copied == 14 && std::memcmp(data + 64, data, 14) == 0;
+    data[0] = 'D';
+    ok &= DmSetMemory_entry(destination, 14, source, Map(&copied)) == kDmSuccess;
+    ok &= data[64] == 'D' && copied == 14;
+    // Validate overflow before touching host data; output count must be cleared.
+    copied = 999;
+    ok &= DmGetMemory_entry(mapped_void(data, 0xFFFFFFF0), 32, destination, Map(&copied))
+          == kDmFailure && copied == 0;
+    copied = 999;
+    ok &= DmSetMemory_entry(destination, 1, nullptr, Map(&copied)) == X_E_INVALIDARG
+          && copied == 0;
+    be_u32 capacity{1}, console_type{0};
+    std::memset(data + 128, 0x5A, 32);
+    mapped_void name(data + 128, allocation + 128);
+    ok &= DmGetXboxName_entry(name, Map(&capacity)) == kDmBufferTooSmall && data[128] == 0x5A;
+    capacity = 32;
+    ok &= DmGetXboxName_entry(name, Map(&capacity)) == kDmSuccess;
+    ok &= std::strcmp(reinterpret_cast<char*>(data + 128), "Xbox360Name") == 0;
+    ok &= DmGetConsoleType_entry(Map(&console_type)) == kDmSuccess && console_type == ~0u;
+    ok &= DmGetConsoleType_entry(nullptr) == X_E_INVALIDARG;
+    be_u32 ids[32]{};
+    capacity = 32;
+    ok &= DmGetThreadList_entry(Map(ids), Map(&capacity)) == kDmSuccess;
+    const auto id = rex::system::XThread::GetCurrentThreadId();
+    bool found = false;
+    for (u32 i = 0; i < std::min(u32(capacity), 32u); ++i) found |= ids[i] == id;
+    ok &= found;
+    capacity = 0;
+    ids[0] = 0xCAFE;
+    ok &= DmGetThreadList_entry(Map(ids), Map(&capacity)) == kDmBufferTooSmall
+          && ids[0] == 0xCAFE;
+    ok &= DmResumeThread_entry(~0u) == kDmFailure;
+    ok &= DmSuspendThread_entry(~0u) == kDmFailure;
+    ok &= DmFreePool_entry(source) == kDmSuccess;
     return ok;
   });
 }

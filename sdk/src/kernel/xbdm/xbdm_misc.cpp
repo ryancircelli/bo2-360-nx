@@ -13,8 +13,108 @@
 #include <rex/logging.h>
 #include <rex/hook.h>
 
-// No debug monitor here: calls that must report a result fail with XBDM_UNDEFINED rather than claim success.
-REX_EXPORT_STUB(__imp__DmAllocatePool);
+#include "debug_services.h"
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <vector>
+#include <rex/memory/utils.h>
+#include <rex/system/xthread.h>
+
+namespace rex::kernel::xbdm {
+using namespace rex::system;
+
+u32 DmAllocatePool_entry(u32 bytes) {
+  return REX_KERNEL_MEMORY()->SystemHeapAlloc(bytes);
+}
+
+u32 DmFreePool_entry(mapped_void allocation) {
+  if (!allocation) return X_E_INVALIDARG;
+  REX_KERNEL_MEMORY()->SystemHeapFree(allocation.guest_address());
+  return kDmSuccess;
+}
+
+u32 DmGetXboxName_entry(mapped_void name, mapped_u32 capacity) {
+  if (!name || !capacity) return X_E_INVALIDARG;
+  // Same fallback console name as the credited Xenia debug monitor.
+  constexpr char console_name[] = "Xbox360Name";
+  if (*capacity < sizeof(console_name)) return kDmBufferTooSmall;
+  std::memcpy(name.host_address(), console_name, sizeof(console_name));
+  return kDmSuccess;
+}
+
+u32 DmGetConsoleType_entry(mapped_u32 type) {
+  if (!type) return X_E_INVALIDARG;
+  *type = ~0u;  // Retail; this runtime does not expose devkit hardware.
+  return kDmSuccess;
+}
+
+namespace {
+bool Accessible(mapped_void pointer, u32 bytes, bool writable) {
+  const u32 address = pointer.guest_address();
+  if (!pointer || !address || !bytes || bytes - 1 > UINT32_MAX - address) return false;
+  auto heap = REX_KERNEL_MEMORY()->LookupHeap(address);
+  if (!heap) return false;
+  // QueryRangeAccess takes an inclusive last address.
+  const auto access = heap->QueryRangeAccess(address, address + bytes - 1);
+  return writable ? access == memory::PageAccess::kReadWrite
+                  : access != memory::PageAccess::kNoAccess;
+}
+
+u32 CopyDebugMemory(mapped_void source, u32 bytes, mapped_void destination, mapped_u32 copied) {
+  if (copied) *copied = 0;
+  if (!source || !destination || !bytes) return X_E_INVALIDARG;
+  // Both sides must belong to mapped guest memory. Validate before touching it,
+  // including address overflow and pages straddling the end of a heap.
+  if (!Accessible(source, bytes, false) || !Accessible(destination, bytes, true))
+    return kDmFailure;
+  std::memmove(destination.host_address(), source.host_address(), bytes);
+  if (copied) *copied = bytes;
+  return kDmSuccess;
+}
+}
+
+u32 DmGetMemory_entry(mapped_void source, u32 bytes, mapped_void destination, mapped_u32 copied) {
+  return CopyDebugMemory(source, bytes, destination, copied);
+}
+
+u32 DmSetMemory_entry(mapped_void destination, u32 bytes, mapped_void source, mapped_u32 copied) {
+  return CopyDebugMemory(source, bytes, destination, copied);
+}
+
+u32 DmGetThreadList_entry(mapped_u32 output, mapped_u32 capacity) {
+  if (!output || !capacity) return X_E_INVALIDARG;
+  // Snapshot pinned objects, then filter through the active thread registry.
+  // Object tables can contain duplicate handles and retained exited threads.
+  std::vector<u32> ids;
+  for (const auto& thread : REX_KERNEL_OBJECTS()->GetObjectsByType<XThread>()) {
+    const auto id = thread->thread_id();
+    if (REX_KERNEL_STATE()->GetThreadByID(id)) ids.push_back(id);
+  }
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  const u32 available = *capacity;
+  if (ids.size() > available) return kDmBufferTooSmall;
+  // Only write the entries actually returned; callers own any remaining space.
+  for (size_t i = 0; i < ids.size(); ++i) output[i] = ids[i];
+  *capacity = u32(ids.size());
+  return kDmSuccess;
+}
+
+u32 DmResumeThread_entry(u32 id) {
+  auto thread = REX_KERNEL_STATE()->GetThreadByID(id);
+  if (!thread || XFAILED(thread->Resume())) return kDmFailure;
+  return kDmSuccess;
+}
+
+u32 DmSuspendThread_entry(u32 id) {
+  auto thread = REX_KERNEL_STATE()->GetThreadByID(id);
+  if (!thread || XFAILED(thread->Suspend())) return kDmFailure;
+  return kDmSuccess;
+}
+}
+
+REX_EXPORT(__imp__DmAllocatePool, rex::kernel::xbdm::DmAllocatePool_entry)
 REX_EXPORT_STUB(__imp__DmAllocatePoolWithTag);
 REX_EXPORT_STUB(__imp__DmCloseCounters);
 REX_EXPORT_STUB(__imp__DmCloseLoadedModules);
@@ -22,14 +122,14 @@ REX_EXPORT_STUB(__imp__DmCloseModuleSections_);
 REX_EXPORT_STUB(__imp__DmCloseNotificationSession);
 REX_EXPORT_STUB(__imp__DmClosePerformanceCounter);
 REX_EXPORT_STUB(__imp__DmContinueThread);
-REX_EXPORT_STUB(__imp__DmFreePool);
-REX_EXPORT_STUB_RETURN(__imp__DmGetMemory, 0x82DA0000);
+REX_EXPORT(__imp__DmFreePool, rex::kernel::xbdm::DmFreePool_entry)
+REX_EXPORT(__imp__DmGetMemory, rex::kernel::xbdm::DmGetMemory_entry)
 REX_EXPORT_STUB(__imp__DmGetModuleLongName);
 REX_EXPORT_STUB(__imp__DmGetProcAddress);
 REX_EXPORT_STUB(__imp__DmGetThreadContext);
-REX_EXPORT_STUB_RETURN(__imp__DmGetThreadList, 0x82DA0000);
+REX_EXPORT(__imp__DmGetThreadList, rex::kernel::xbdm::DmGetThreadList_entry)
 REX_EXPORT_STUB(__imp__DmGetXbeInfo);
-REX_EXPORT_STUB_RETURN(__imp__DmGetXboxName, 0x82DA0000);
+REX_EXPORT(__imp__DmGetXboxName, rex::kernel::xbdm::DmGetXboxName_entry)
 REX_EXPORT_STUB(__imp__DmGo);
 REX_EXPORT_STUB(__imp__DmHaltThread);
 REX_EXPORT_STUB(__imp__DmIsDebuggerPresent);
@@ -44,18 +144,18 @@ REX_EXPORT_STUB(__imp__DmRegisterCommandProcessor);
 REX_EXPORT_STUB(__imp__DmRegisterNotificationProcessor);
 REX_EXPORT_STUB(__imp__DmRegisterPerformanceCounter);
 REX_EXPORT_STUB(__imp__DmRemoveBreakpoint);
-REX_EXPORT_STUB_RETURN(__imp__DmResumeThread, 0x82DA0000);
+REX_EXPORT(__imp__DmResumeThread, rex::kernel::xbdm::DmResumeThread_entry)
 REX_EXPORT_STUB(__imp__DmSendNotificationString);
 REX_EXPORT_STUB(__imp__DmSetBreakpoint);
 REX_EXPORT_STUB(__imp__DmSetDataBreakpoint);
 REX_EXPORT_STUB(__imp__DmSetInitialBreakpoint);
-REX_EXPORT_STUB_RETURN(__imp__DmSetMemory, 0x82DA0000);
+REX_EXPORT(__imp__DmSetMemory, rex::kernel::xbdm::DmSetMemory_entry)
 REX_EXPORT_STUB(__imp__DmSetThreadContext);
 REX_EXPORT_STUB(__imp__DmSetTitle);
 REX_EXPORT_STUB(__imp__DmSetXboxName);
 REX_EXPORT_STUB(__imp__DmStop);
 REX_EXPORT_STUB(__imp__DmStopOn);
-REX_EXPORT_STUB_RETURN(__imp__DmSuspendThread, 0x82DA0000);
+REX_EXPORT(__imp__DmSuspendThread, rex::kernel::xbdm::DmSuspendThread_entry)
 REX_EXPORT_STUB(__imp__DmThreadUserData);
 REX_EXPORT_STUB(__imp__DmUnloadExtension);
 REX_EXPORT_STUB_RETURN(__imp__DmWalkLoadedModules, 0x82DA0104);
@@ -121,7 +221,7 @@ REX_EXPORT_STUB(__imp__DmTraceStartRecordingFunction);
 REX_EXPORT_STUB(__imp__DmTraceSetBufferSize);
 REX_EXPORT_STUB(__imp__DmTraceStopRecording);
 REX_EXPORT_STUB(__imp__DmTraceSaveBuffer);
-REX_EXPORT_STUB(__imp__DmGetConsoleType);
+REX_EXPORT(__imp__DmGetConsoleType, rex::kernel::xbdm::DmGetConsoleType_entry)
 REX_EXPORT_STUB(__imp__DmMapDevkitDrive);
 REX_EXPORT_STUB(__imp__DmWalkLoadedModulesEx);
 REX_EXPORT_STUB(__imp__DmGetXexHeaderField);
