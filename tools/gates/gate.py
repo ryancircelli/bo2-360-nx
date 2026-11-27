@@ -22,6 +22,9 @@ _driving_spec = importlib.util.spec_from_file_location("gate_driving", os.path.j
 _driving = importlib.util.module_from_spec(_driving_spec)
 _driving_spec.loader.exec_module(_driving)
 verify_driving = _driving.verify
+_ig_spec = importlib.util.spec_from_file_location("gate_install_guard", os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_guard.py"))
+install_guard = importlib.util.module_from_spec(_ig_spec)
+_ig_spec.loader.exec_module(install_guard)
 
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +63,17 @@ def log_hit(m):
 
 
 # ----------------------------------------------------------------------------------------------- helpers
+TESTED_APP = None   # the app this process tests (set in main); its fingerprint goes into gate.json so install can match gates to the build
+
+
+def _build_of(game):
+    app = TESTED_APP or (installed_app(game) if game in GAMES else None)
+    try:
+        return install_guard.fingerprint(app) if app and os.path.isdir(app) else None
+    except OSError:
+        return None
+
+
 def out_line(verdict, gate, game, facts, evidence, out=None):
     line = f'{verdict} {gate} {game} {facts} | {evidence}'
     if out:
@@ -67,7 +81,7 @@ def out_line(verdict, gate, game, facts, evidence, out=None):
         with open(os.path.join(out, 'gate.txt'), 'w') as f:
             f.write(line + '\n')
         with open(os.path.join(out, 'gate.json'), 'w') as f:
-            json.dump(dict(verdict=verdict, gate=gate, game=game, facts=facts, evidence=evidence), f)
+            json.dump(dict(verdict=verdict, gate=gate, game=game, facts=facts, evidence=evidence, build=_build_of(game)), f)
     print(line, flush=True)
     return 0 if verdict == 'PASS' else 1
 
@@ -789,6 +803,32 @@ def g_install(a):
                 fails.append(f'bundle id {pn.get("CFBundleIdentifier")} != installed {po.get("CFBundleIdentifier")}: wrong game?')
         except (OSError, plistlib.InvalidFileException) as e:
             fails.append(f'Info.plist unreadable: {e}')
+    # 3b. install guard: losses vs the installed app (refuse unless --allow-loss names each), and the manifest's gates for this build
+    old = dest if os.path.isdir(dest) else None
+    manifest = install_guard.load_manifest(game)
+    allowed = {x for v in a.allow_loss for x in v.split(',') if x}
+    try:
+        lost = install_guard.losses(new, old, manifest)
+        text = install_guard.report(new, old, lost, allowed)
+        with open(os.path.join(out, 'install-diff.txt'), 'w') as f:
+            f.write(text + '\n')
+        print(text)
+        unallowed = sorted(set(lost) - allowed)
+        if unallowed:
+            fails.append('REFUSED, would lose: ' + ', '.join(unallowed) + ' (name each in --allow-loss only if intended)')
+        stale = sorted(allowed - set(lost))
+        if stale:
+            notes.append('--allow-loss names nothing lost: ' + ', '.join(stale))
+        if manifest is None:
+            notes.append(f'no games/{game}/install_manifest.toml (no required gates)')
+        else:
+            build = install_guard.fingerprint(new)
+            miss = install_guard.missing_gates(game, build, manifest, install_guard.gate_records(RUNS))
+            notes.append(f'build {build}')
+            if miss:
+                fails.append(f'no PASS record for build {build} of gate(s): {" ".join(miss)} (run them on this exact app first)')
+    except (OSError, plistlib.InvalidFileException) as e:
+        fails.append(f'install guard could not read the bundles: {e}')
     if fails:
         return out_line('FAIL', 'install', game, '; '.join(fails) + ' | ' + '; '.join(notes), out, out)
     if a.dry_run:
@@ -801,6 +841,7 @@ def g_install(a):
         subprocess.run(['cp', '-cR', dest, restore], check=True)
         rc = sh(['codesign', '--verify', '--deep', '--strict', restore]).returncode
         notes.append(f'restore copy codesign rc {rc}')
+        shutil.copy(os.path.join(out, 'install-diff.txt'), restore + '.install-diff.txt')
     # 5. swap in place: same folder, no "(previous)" copy left behind
     os.makedirs(dest_dir, exist_ok=True)
     rs = sh(['rsync', '-a', '--delete', new + '/', dest + '/'])
@@ -859,12 +900,14 @@ def main():
     p.add_argument('--inner', action='store_true', help=argparse.SUPPRESS)
     p.add_argument('--a'), p.add_argument('--b'), p.add_argument('--pairs', type=int, default=3), p.add_argument('--bench', action='store_true', help='speed bo2: deterministic bench instead of fps pairs'), p.add_argument('--no-control-cache', action='store_true')
     p.add_argument('--only'), p.add_argument('--repo'), p.add_argument('--head', default='HEAD'), p.add_argument('--integration', default='origin/main')
-    p.add_argument('--dest'), p.add_argument('--restore-dir', dest='restore_dir'), p.add_argument('--dry-run', action='store_true')
+    p.add_argument('--allow-loss', action='append', default=[], dest='allow_loss', help='install: loss ids (from the diff) that are intended, comma-separated or repeated'), p.add_argument('--dest'), p.add_argument('--restore-dir', dest='restore_dir'), p.add_argument('--dry-run', action='store_true')
     argv = sys.argv[1:]
     inner = '--inner' in argv
     if inner:
         argv.remove('--inner')
     a = p.parse_args(argv)
+    global TESTED_APP
+    TESTED_APP = os.path.abspath(a.app) if a.app and a.gate != 'install' else None
     if a.gate == 'open' and a.secs == 45:
         a.secs = 90
     if a.gate == 'set':
