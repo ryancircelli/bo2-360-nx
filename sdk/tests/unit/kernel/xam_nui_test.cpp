@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <rex/kernel/xam/nui.h>
+#include <rex/ppc/context.h>
 #include <rex/system/xtypes.h>
 #include <algorithm>
 #include <iterator>
@@ -67,4 +68,15 @@ TEST_CASE("Unavailable Kinect and subscription dialogs fail deliberately", "[ker
   // Invalid requests must fail before accessing a kernel instance.
   CHECK(XamShowMarketplaceUI_entry(4, 0, 0, 0, 0, 0) == X_ERROR_INVALID_PARAMETER);
   CHECK(XamShowMarketplaceUI_entry(0, 25, 0, 0, 0, 0) == X_ERROR_INVALID_PARAMETER);
+}
+
+extern "C" void __imp__XamNuiIdentityGetSessionId(PPCContext&, uint8_t*);
+extern "C" void __imp__XamNuiSkeletonGetBestSkeletonIndex(PPCContext&, uint8_t*);
+TEST_CASE("Kinect export hooks retain the full guest return register", "[kernel][nui][abi]") {
+  PPCContext context{};
+  __imp__XamNuiIdentityGetSessionId(context, nullptr);
+  CHECK(context.r3.u64 == 0xDEADF00DDEADF00Dull);
+  context.r3.u64 = 0;
+  __imp__XamNuiSkeletonGetBestSkeletonIndex(context, nullptr);
+  CHECK(context.r3.u64 == 0xFFFFFFFFFFFFFFFFull);
 }

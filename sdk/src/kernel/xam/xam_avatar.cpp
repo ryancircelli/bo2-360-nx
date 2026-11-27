@@ -35,6 +35,19 @@ void XamAvatarShutdown_entry() {
   // No-op.
 }
 
+// xenia-canary 2da2519 xam_avatar.cc (BSD-3-Clause). No avatar
+// resources exist while initialization is disabled, so both required sizes are zero.
+u32 XamAvatarGetAssetsResultSize_entry(u32, mapped_u32 result_size, mapped_u32 gpu_size) {
+  if (!result_size || !gpu_size) return X_E_INVALIDARG;
+  *result_size = 0;
+  *gpu_size = 0;
+  return X_ERROR_SUCCESS;
+}
+u32 XamAvatarGetInstrumentation_entry(u64, mapped_u32 output) {
+  if (output) *output = 0;
+  return 1;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -49,9 +62,9 @@ REX_EXPORT_STUB(__imp__XamAvatarGenerateMipMaps);
 REX_EXPORT_STUB(__imp__XamAvatarGetAssetBinary);
 REX_EXPORT_STUB(__imp__XamAvatarGetAssetIcon);
 REX_EXPORT_STUB(__imp__XamAvatarGetAssets);
-REX_EXPORT_STUB(__imp__XamAvatarGetAssetsResultSize);
+REX_EXPORT(__imp__XamAvatarGetAssetsResultSize, rex::kernel::xam::XamAvatarGetAssetsResultSize_entry)
 REX_EXPORT_STUB(__imp__XamAvatarGetInstalledAssetPackageDescription);
-REX_EXPORT_STUB(__imp__XamAvatarGetInstrumentation);
+REX_EXPORT(__imp__XamAvatarGetInstrumentation, rex::kernel::xam::XamAvatarGetInstrumentation_entry)
 REX_EXPORT_STUB(__imp__XamAvatarGetManifestLocalUser);
 REX_EXPORT_STUB(__imp__XamAvatarGetManifestsByXuid);
 REX_EXPORT_STUB(__imp__XamAvatarGetMetadataRandom);

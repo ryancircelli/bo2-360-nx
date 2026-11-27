@@ -191,17 +191,17 @@ i32 XamUserGetDeviceContext_entry(u32 user_index, u32 unk, mapped_u32 out_ptr) {
 // kept; we emulate no portal, so a valid call fails with DEVICE_NOT_CONNECTED.
 static constexpr u32 kPortalBufferSize = 0x20;
 static u32 NonControllerRawEx(u32 device_id, mapped_u32 buffer_ptr, mapped_u32 length_ptr,
-                              bool needs_state_ptr, mapped_u32 state_ptr) {
+                              bool needs_state_ptr, mapped_u16 state_ptr) {
   if (device_id != 5 && device_id != 6) return X_ERROR_INVALID_PARAMETER;
   if (!buffer_ptr || !length_ptr || (needs_state_ptr && !state_ptr)) return X_ERROR_INVALID_PARAMETER;
   if (*length_ptr == 0 || *length_ptr > kPortalBufferSize) return X_ERROR_INVALID_PARAMETER;
   return X_ERROR_DEVICE_NOT_CONNECTED;
 }
 u32 XamInputNonControllerGetRawEx_entry(u32 device_id, mapped_u32 buffer_ptr,
-                                        mapped_u32 length_ptr, mapped_u32 state_ptr) {
+                                        mapped_u32 length_ptr, mapped_u16 state_ptr) {
   return NonControllerRawEx(device_id, buffer_ptr, length_ptr, true, state_ptr);
 }
-u32 XamInputNonControllerGetRaw_entry(mapped_u32 state_ptr, mapped_u32 length_ptr,
+u32 XamInputNonControllerGetRaw_entry(mapped_u16 state_ptr, mapped_u32 length_ptr,
                                       mapped_u32 buffer_ptr) {
   return NonControllerRawEx(5, buffer_ptr, length_ptr, true, state_ptr);
 }
