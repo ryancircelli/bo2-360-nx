@@ -262,16 +262,6 @@ bool RecordDemotion(const PlainKey& key, const Variant& v);
 AutoLearn* AutoLearnAfterDemotion(AutoLearn* existing, const Variant& v,
                                   const PlainKey& key);
 
-// --- Bake --------------------------------------------------------------------
-// Replaces, in disassembled AIR text, what the shader computes from candidate
-// dwords with literals: bit-field extracts and masks of invariant bits become
-// constants; a load used otherwise is replaced whole when all its bits are
-// invariant. `baked` receives the dwords and bits actually used (the guard).
-// Returns false (text untouched) when nothing could be baked.
-bool BakeAir(std::string& ll, const std::vector<GuardEntry>& candidates,
-             bool bake_floats, std::vector<GuardEntry>* baked,
-             std::string* error);
-
 // --- Record payloads (artifact store) ------------------------------------------
 // Index record: which dwords the variant guards and what learn data made it.
 std::vector<uint8_t> SerializeIndex(uint64_t learn_hash,

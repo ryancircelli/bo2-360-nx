@@ -164,79 +164,6 @@ MetalShader::MetalTranslation::~MetalTranslation() {
   }
 }
 
-bool MetalShader::MetalTranslation::InstallOptimizedMetal(
-    MTL::Device* device, const std::vector<uint8_t>& metallib) {
-  if (!device || metallib.empty()) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(metal_translation_mutex_);
-  if (!metal_function_ || optimized_function_.load(std::memory_order_relaxed)) {
-    return false;
-  }
-  dispatch_data_t data = dispatch_data_create(
-      metallib.data(), metallib.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-  NS::Error* error = nullptr;
-  MTL::Library* library = device->newLibrary(data, &error);
-  dispatch_release(data);
-  if (!library) {
-    return false;
-  }
-  MTL::Function* function = library->newFunction(
-      NS::String::string(function_name_.c_str(), NS::UTF8StringEncoding));
-  if (!function) {
-    library->release();
-    return false;
-  }
-  static const bool shader_labels = [] {
-    const char* v = MetalDebugEnv("SHADER_LABELS");
-    return v && v[0] == '1';
-  }();
-  if (shader_labels) {
-    char label[64];
-    std::snprintf(label, sizeof(label), "ps:%016llX/%llX/O2",
-                  (unsigned long long)shader().ucode_data_hash(),
-                  (unsigned long long)modification());
-    library->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
-  }
-  optimized_library_ = library;
-  optimized_function_.store(function, std::memory_order_release);
-  return true;
-}
-
-void MetalShader::MetalTranslation::MarkInstalledAsOptimized() {
-  std::lock_guard<std::mutex> lock(metal_translation_mutex_);
-  if (metal_function_ && !optimized_function_.load(std::memory_order_relaxed)) {
-    metal_function_->retain();
-    optimized_function_.store(metal_function_, std::memory_order_release);
-  }
-}
-
-bool MetalShader::MetalTranslation::InstallNativeMetal(
-    MTL::Library* library, MTL::Function* function,
-    const std::string& function_name) {
-  std::lock_guard<std::mutex> lock(metal_translation_mutex_);
-  if (!library || !function || !metal_function_ ||
-      optimized_function_.load(std::memory_order_relaxed)) {
-    return false;
-  }
-  static const bool shader_labels = [] {
-    const char* v = MetalDebugEnv("SHADER_LABELS");
-    return v && v[0] == '1';
-  }();
-  if (shader_labels) {
-    char label[64];
-    std::snprintf(label, sizeof(label), "ps:%016llX/%llX/NX",
-                  (unsigned long long)shader().ucode_data_hash(),
-                  (unsigned long long)modification());
-    library->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
-  }
-  native_function_name_ = function_name;
-  optimized_library_ = library;
-  native_xlate_.store(true, std::memory_order_release);
-  optimized_function_.store(function, std::memory_order_release);
-  return true;
-}
-
 bool MetalShader::MetalTranslation::InstallNativePrimary(
     MTL::Library* library, MTL::Function* function,
     const std::string& function_name) {
@@ -268,17 +195,6 @@ bool MetalShader::MetalTranslation::InstallNativePrimary(
   native_primary_.store(true, std::memory_order_release);
   optimized_function_.store(function, std::memory_order_release);
   return true;
-}
-
-void MetalShader::MetalTranslation::SetDxilData(
-    std::vector<uint8_t> dxil_data) {
-  std::lock_guard<std::mutex> lock(metal_translation_mutex_);
-  dxil_data_ = std::move(dxil_data);
-}
-
-std::vector<uint8_t> MetalShader::MetalTranslation::GetDxilDataCopy() const {
-  std::lock_guard<std::mutex> lock(metal_translation_mutex_);
-  return dxil_data_;
 }
 
 uint64_t MetalShader::OffsetFetchConstantMasks() const {

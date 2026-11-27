@@ -109,16 +109,6 @@ DEFINE_int32(metal_native_points, 2,
 DEFINE_bool(metal_ns_specialize, true,
             "Specialize hot optimized pixel shaders by baking their constants.",
             "Metal");
-DEFINE_string(metal_ns_cache_toolchain, "",
-              "Toolchain hash (hex) of a bundled native-shader cache. When "
-              "metal-opt/metallib are missing, optimized shaders then come "
-              "from that cache only (portable builds).",
-              "Metal");
-DEFINE_string(metal_msc_min_target, "",
-              "Shader converter minimum target: empty or 'portable' = "
-              "apple7:15.0 (cache survives OS updates and works on any Apple "
-              "Silicon Mac), 'native' = this Mac, or e.g. 'apple8:14.0'.",
-              "Metal");
 DEFINE_int32(metal_warmup_threads, -1,
              "Total pipeline warm-up threads at startup; -1 = automatic "
              "(performance cores, 2 to 6).",
@@ -262,8 +252,6 @@ void ApplyLegacyMetalEnv() {
       {"metal_native_tess", "FABLE2_NATIVE_TESS", Kind::kRaw},
       {"metal_native_points", "FABLE2_NATIVE_POINTS", Kind::kRaw},
       {"metal_ns_specialize", "FABLE2_NS_SPECIALIZE", Kind::kZeroOff},
-      {"metal_ns_cache_toolchain", "FABLE2_NS_CACHE_TOOLCHAIN", Kind::kRaw},
-      {"metal_msc_min_target", "FABLE2_MSC_MIN_TARGET", Kind::kRaw},
       {"metal_warmup_threads", "FABLE2_WARMUP_THREADS", Kind::kRaw},
       {"metal_shader_prep", "FABLE2_SHADER_PREP", Kind::kRaw},
       {"metal_shader_prep_timeout_s", "FABLE2_SHADER_PREP_TIMEOUT_S", Kind::kRaw},

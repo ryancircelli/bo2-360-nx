@@ -215,9 +215,6 @@ class MetalPipelineCache {
     MetalShader::MetalTranslation* ns_vertex_translation{nullptr};
     MetalShader::MetalTranslation* ns_pixel_translation{nullptr};
     std::atomic<bool> ns_optimized{false};
-    std::atomic<bool> ns_swap_queued{false};
-    // A swap found nothing ready yet (native-shaders workers): counted when a later swap delivers.
-    std::atomic<bool> ns_swap_deferred{false};
     MTL::RenderPipelineState* ns_plain_state{nullptr};
     // FABLE2_NATIVE_XLATE: `state` uses the native vertex function; pipelines
     // replaced by a second swap (kept alive like ns_plain_state).
@@ -291,11 +288,6 @@ class MetalPipelineCache {
   // Ensure the shared DXBC translator has produced DXBC bytecode.
   bool EnsureDxbcTranslationReady(MetalShader::MetalTranslation* translation,
                                   const char* stage_name);
-  // FABLE2_NATIVE_SHADERS: cache key of the optimized form of a plain
-  // pixel-shader metallib; disk-cache lookup (no tools run); and the
-  // optimization itself (runs metal-opt + metallib, background threads only).
-  bool LoadOptimizedPixelShader(const std::vector<uint8_t>& plain,
-                                std::vector<uint8_t>* optimized);
   bool OptimizeGuestPixelShader(uint64_t ucode_hash,
                                 const std::vector<uint8_t>& plain,
                                 std::vector<uint8_t>* optimized);
@@ -405,24 +397,6 @@ class MetalPipelineCache {
   std::atomic<uint64_t> dxil_cache_hits_{0};
   std::atomic<uint64_t> dxil_cache_misses_{0};
   std::atomic<uint64_t> dxil_convert_failures_{0};
-  // FABLE2_NATIVE_SHADERS (docs/native-shaders.md): optimized pixel shaders
-  // installed (and how many came from the disk cache), and fallbacks to the
-  // plain converter output.
-  std::atomic<uint64_t> native_shaders_optimized_{0};
-  std::atomic<uint64_t> native_shaders_cache_hits_{0};
-  std::atomic<uint64_t> native_shaders_fallbacks_{0};
-  std::atomic<uint64_t> native_shaders_opt_ms_total_{0};
-  // Milestone 2 (no first-launch delay): shaders installed plain and queued
-  // for background optimization, optimized libraries made ready in the
-  // background, plain pipelines created / swapped to optimized, failed swaps.
-  std::atomic<uint64_t> native_shaders_queued_{0};
-  std::atomic<uint64_t> native_shaders_ready_{0};
-  std::atomic<uint64_t> native_shaders_plain_pipelines_{0};
-  std::atomic<uint64_t> native_shaders_swapped_{0};
-  std::atomic<uint64_t> native_shaders_swap_failed_{0};
-  // Swaps that found nothing ready to improve yet (the other shader's ready event swaps later).
-  std::atomic<uint64_t> native_shaders_swap_nothing_yet_{0};
-  std::atomic<uint64_t> native_shaders_swap_deferred_done_{0};
   std::atomic<uint64_t> dxil_convert_dxbc_bytes_{0};
   std::atomic<uint64_t> dxil_convert_dxil_bytes_{0};
   std::atomic<uint64_t> dxil_convert_ms_total_{0};
@@ -577,19 +551,8 @@ class MetalPipelineCache {
   std::atomic<uint64_t> pipeline_compile_count_{0};
   std::atomic<uint64_t> pipeline_compile_ms_total_{0};
 
-  // FABLE2_NATIVE_SHADERS background optimizer pool (low QoS): optimizes
-  // queued pixel shaders (hottest first), then rebuilds the standard
-  // pipelines that use them and swaps them in (docs/native-shaders.md).
+  // FABLE2_NATIVE_SHADERS background pool (low QoS): specialization work.
   void NativeShaderThread();
-  void QueueNativeShaderOptimization(
-      MetalShader::MetalTranslation* translation);
-  void RegisterNativeShaderHandle(PipelineHandle* handle);
-  void NativeShaderSwap(PipelineHandle* handle);
-  void LogNativeShaderProgress(const char* what);
-  // FABLE2_NATIVE_XLATE (docs/native-translator.md): translate the guest pixel
-  // shader to MSL, compile it and publish it as the optimized function.
-  // False (nothing published) on any unsupported feature or compile error.
-  bool TryNativeXlate(MetalShader::MetalTranslation* translation);
   // Translates (with optional baked constants) and compiles; the caller owns
   // the returned library and function. False on any failure (logged).
   bool CompileNativeXlate(MetalShader::MetalTranslation* translation,
@@ -619,11 +582,6 @@ class MetalPipelineCache {
   std::vector<std::thread> ns_threads_;
   std::mutex ns_mutex_;
   std::condition_variable ns_cond_;
-  std::vector<MetalShader::MetalTranslation*> ns_optimize_queue_;
-  std::vector<PipelineHandle*> ns_swap_queue_;
-  std::unordered_map<MetalShader::MetalTranslation*,
-                     std::vector<PipelineHandle*>>
-      ns_handles_;
   size_t ns_busy_ = 0;
   bool ns_shutdown_ = false;
   bool ns_idle_logged_ = true;

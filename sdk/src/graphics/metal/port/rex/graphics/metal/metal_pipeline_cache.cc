@@ -603,16 +603,14 @@ bool MetalPipelineCache::InitializeShaderTranslation(
     live_thread_ = std::thread(&MetalPipelineCache::LiveShaderThread, this);
   }
 
-  // FABLE2_NATIVE_SHADERS: tool lookup in the background (warm-up's cache
-  // lookups need the toolchain hash) and the low-priority optimizer pool.
+  // FABLE2_NATIVE_SHADERS: the low-priority specialization pool.
   if (NativeShadersMode() && ns_threads_.empty()) {
-    StartAirOptimizerLookup();
     const uint32_t ns_count = std::min(4u, std::max(1u, logical_cores / 2));
     for (uint32_t i = 0; i < ns_count; ++i) {
       ns_threads_.emplace_back(&MetalPipelineCache::NativeShaderThread, this);
     }
     REXLOG_INFO(
-        "[native-shaders] on: {} background optimizer threads (utility QoS)",
+        "[native-shaders] on: {} background specialization threads (utility QoS)",
         ns_count);
   }
 
@@ -2537,97 +2535,9 @@ bool MetalPipelineCache::EnsureDxbcTranslationReadyLocked(
   return true;
 }
 
-namespace {
-// Cache key of the optimized library: the plain metallib's hash (it already
-// encodes the DXIL and the resolution scale baked into the translation) plus
-// the toolchain hash. Stored as a DXIL-bytecode record with its own options
-// hash, so it can never be mistaken for a DXIL entry.
-MetalDxilBytecodeKey NativeShaderCacheKey(const std::vector<uint8_t>& plain) {
-  MetalDxilBytecodeKey key = {};
-  XXH128_hash_t hash = XXH3_128bits(plain.data(), plain.size());
-  key.dxbc_size = plain.size();
-  key.dxbc_hash_low = hash.low64;
-  key.dxbc_hash_high = hash.high64;
-  key.converter_options_hash = AirOptimizerToolchainHash();
-  key.converter_version = 0x4E530001;  // "NS" v1: metal-opt -O2 + metallib
-  return key;
-}
-}  // namespace
-
-bool MetalPipelineCache::LoadOptimizedPixelShader(
-    const std::vector<uint8_t>& plain, std::vector<uint8_t>* optimized) {
-  if (plain.empty() || !REXCVAR_GET(metal_shader_disk_cache) ||
-      !g_metal_artifact_store || !AirOptimizerCacheReadable()) {
-    return false;
-  }
-  return g_metal_artifact_store->LoadDxilBytecode(NativeShaderCacheKey(plain),
-                                                  optimized) &&
-         !optimized->empty();
-}
-
-bool MetalPipelineCache::OptimizeGuestPixelShader(
-    uint64_t ucode_hash, const std::vector<uint8_t>& plain,
-    std::vector<uint8_t>* optimized) {
-  if (plain.empty() || !AirOptimizerAvailable()) {
-    return false;
-  }
-  std::string error;
-  auto start = std::chrono::steady_clock::now();
-  bool ok = OptimizeMetallibAir(plain, *optimized, &error);
-  native_shaders_opt_ms_total_.fetch_add(
-      ElapsedMs(start, std::chrono::steady_clock::now()),
-      std::memory_order_relaxed);
-  if (!ok) {
-    const uint64_t n =
-        native_shaders_fallbacks_.fetch_add(1, std::memory_order_relaxed) + 1;
-    REXLOG_WARN(
-        "[native-shaders] PS {:016X}: AIR optimization failed ({}); plain "
-        "library stays (fallback #{})",
-        ucode_hash, error, n);
-    return false;
-  }
-  if (REXCVAR_GET(metal_shader_disk_cache) && g_metal_artifact_store) {
-    g_metal_artifact_store->StoreDxilBytecode(NativeShaderCacheKey(plain),
-                                              *optimized);
-  }
-  return true;
-}
-
 // ---------------------------------------------------------------------------
-// FABLE2_NATIVE_SHADERS background optimizer (docs/native-shaders.md, M2)
+// FABLE2_NATIVE_SHADERS native translation (docs/native-shaders.md)
 // ---------------------------------------------------------------------------
-
-void MetalPipelineCache::QueueNativeShaderOptimization(
-    MetalShader::MetalTranslation* translation) {
-  uint8_t expected = 0;
-  if (!NativeXlateMode() && AirOptimizerLookupDone() &&
-      !AirOptimizerAvailable()) {
-    return;  // no Metal Toolchain: logged once by the lookup
-  }
-  if (translation && !NativeXlateMode() &&
-      NativeShaderKeepPlain(translation->shader().ucode_data_hash())) {
-    if (translation->native_shader_state().exchange(2) != 2) {
-      REXLOG_INFO("[native-shaders] PS {:016X}: kept plain (FABLE2_NS_KEEP_PLAIN)",
-                  translation->shader().ucode_data_hash());
-    }
-    return;
-  }
-  if (!translation || ns_threads_.empty() ||
-      !translation->native_shader_state().compare_exchange_strong(expected,
-                                                                  1)) {
-    return;
-  }
-  native_shaders_queued_.fetch_add(1, std::memory_order_relaxed);
-  {
-    std::lock_guard<std::mutex> lock(ns_mutex_);
-    if (ns_start_ == std::chrono::steady_clock::time_point{}) {
-      ns_start_ = std::chrono::steady_clock::now();
-    }
-    ns_idle_logged_ = false;
-    ns_optimize_queue_.push_back(translation);
-  }
-  ns_cond_.notify_one();
-}
 
 bool MetalPipelineCache::CompileNativeXlate(
     MetalShader::MetalTranslation* translation,
@@ -2796,184 +2706,12 @@ bool MetalPipelineCache::NativeXlateBakedUse(
   return true;
 }
 
-bool MetalPipelineCache::TryNativeXlate(
-    MetalShader::MetalTranslation* translation) {
-  MTL::Library* library = nullptr;
-  MTL::Function* function = nullptr;
-  std::string entry;
-  if (!CompileNativeXlate(translation, {}, &library, &function, &entry)) {
-    return false;
-  }
-  if (!translation->InstallNativeMetal(library, function, entry)) {
-    function->release();
-    library->release();
-    return false;
-  }
-  const bool is_vertex =
-      translation->shader().type() == xenos::ShaderType::kVertex;
-  (is_vertex ? native_xlate_ok_vs_ : native_xlate_ok_ps_)
-      .fetch_add(1, std::memory_order_relaxed);
-  const uint64_t n = native_xlate_ok_.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n == 1 || (n & (n - 1)) == 0) {
-    REXLOG_INFO(
-        "[native-xlate] {} native shaders ({} pixel, {} vertex; {} fallbacks, "
-        "{} compile failures); translate {} ms, MSL compile {} ms total, max "
-        "{} ms",
-        n, native_xlate_ok_ps_.load(std::memory_order_relaxed),
-        native_xlate_ok_vs_.load(std::memory_order_relaxed),
-        native_xlate_fallback_.load(std::memory_order_relaxed),
-        native_xlate_compile_failed_.load(std::memory_order_relaxed),
-        native_xlate_translate_us_.load(std::memory_order_relaxed) / 1000,
-        native_xlate_compile_us_.load(std::memory_order_relaxed) / 1000,
-        native_xlate_compile_max_us_.load(std::memory_order_relaxed) / 1000);
-  }
-  return true;
-}
-
-void MetalPipelineCache::RegisterNativeShaderHandle(PipelineHandle* handle) {
-  std::lock_guard<std::mutex> lock(ns_mutex_);
-  MetalShader::MetalTranslation* translation = handle->ns_pixel_translation;
-  if (translation && !translation->optimized_function() &&
-      translation->native_shader_state().load() != 2) {
-    ns_handles_[translation].push_back(handle);
-  }
-  // FABLE2_NATIVE_XLATE: also rebuilt when the native vertex shader is ready.
-  MetalShader::MetalTranslation* vertex = handle->ns_vertex_translation;
-  if (NativeXlateMode() && vertex && !vertex->is_native_xlate() &&
-      vertex->native_shader_state().load() != 2) {
-    ns_handles_[vertex].push_back(handle);
-  }
-}
-
-void MetalPipelineCache::LogNativeShaderProgress(const char* what) {
-  const uint64_t plain =
-      native_shaders_plain_pipelines_.load(std::memory_order_relaxed);
-  const uint64_t swapped = native_shaders_swapped_.load(std::memory_order_relaxed);
-  REXLOG_INFO(
-      "[native-shaders] {} at {:.2f}s after storage init: queued {}, "
-      "optimized-ready {} (+{} from cache at install), plain pipelines {}, "
-      "swapped {}, plain-in-use {}, swap failed {} (deferred for the other "
-      "shader {}, swapped later {}), fallbacks {}, {} ms "
-      "optimizing",
-      what,
-      std::chrono::duration<double>(std::chrono::steady_clock::now() -
-                                    warmup_start_)
-          .count(),
-      native_shaders_queued_.load(std::memory_order_relaxed),
-      native_shaders_ready_.load(std::memory_order_relaxed),
-      native_shaders_cache_hits_.load(std::memory_order_relaxed), plain,
-      swapped, plain > swapped ? plain - swapped : 0,
-      native_shaders_swap_failed_.load(std::memory_order_relaxed),
-      native_shaders_swap_nothing_yet_.load(std::memory_order_relaxed),
-      native_shaders_swap_deferred_done_.load(std::memory_order_relaxed),
-      native_shaders_fallbacks_.load(std::memory_order_relaxed),
-      native_shaders_opt_ms_total_.load(std::memory_order_relaxed));
-}
-
-void MetalPipelineCache::NativeShaderSwap(PipelineHandle* handle) {
-  // Never replace a pipeline that is still being created; a plain pipeline
-  // stays bound until the optimized one is fully built. With
-  // FABLE2_NATIVE_XLATE a pipeline can be swapped twice (pixel shader ready,
-  // then vertex shader ready, or the other way round).
-  handle->WaitForCreation();
-  std::unique_lock<std::recursive_mutex> live_lock(live_mutex_, std::defer_lock);
-  if (!REXCVAR_GET(metal_shader_live_overrides).empty() ||
-      !REXCVAR_GET(metal_shader_live_dump).empty()) live_lock.lock();
-  // exchange, not store: when a ready event found this swap already queued, it published its shader before
-  // its own exchange, and this acquire makes that shader visible to the checks below.
-  handle->ns_swap_queued.exchange(false, std::memory_order_acq_rel);
-  if (!handle->state.load(std::memory_order_acquire)) {
-    return;
-  }
-  const bool had_ps = handle->ns_optimized.load(std::memory_order_acquire);
-  const bool had_vs = handle->ns_vs_native.load(std::memory_order_acquire);
-  const bool want_vs = handle->ns_vertex_translation &&
-                       handle->ns_vertex_translation->is_native_xlate();
-  if (had_ps && (had_vs || !want_vs)) {
-    return;
-  }
-  // Only build when something is ready to improve this pipeline. A swap is queued when either shader
-  // becomes ready; the pipeline's creation may already have picked that shader up (it waits for creation
-  // above), and the other shader may still be pending. Example (cold cache, FABLE2_NATIVE_XLATE): the
-  // native VS is ready before the handle's async creation runs, so creation builds native VS + plain PS
-  // and the VS-ready swap has nothing to add while the PS is still optimizing. That used to build a
-  // redundant pipeline and log "optimized pipeline not created" (soak 2026-10-13, open question 2);
-  // the PS's own ready event swaps it later. Real failures (a pipeline that should improve but doesn't)
-  // still log below.
-  MetalShader::MetalTranslation* ps_translation = handle->ns_pixel_translation;
-  const bool ps_ready = ps_translation && ps_translation->optimized_function() != nullptr;
-  if (!(ps_ready && !had_ps) && !(want_vs && !had_vs)) {
-    native_shaders_swap_nothing_yet_.fetch_add(1, std::memory_order_relaxed);
-    handle->ns_swap_deferred.store(true, std::memory_order_relaxed);
-    return;
-  }
-  bool optimized = false;
-  bool vertex_native = false;
-  MTL::RenderPipelineState* pipeline = CreatePipelineFromHandle(
-      handle, handle->ns_vertex_translation, handle->ns_pixel_translation,
-      &optimized, nullptr, &vertex_native);
-  const bool improves = pipeline && ((optimized && !had_ps) ||
-                                     (vertex_native && !had_vs));
-  if (!improves) {
-    if (pipeline) {
-      pipeline->release();
-    }
-    if (!pipeline || !had_ps) {
-      const uint64_t n =
-          native_shaders_swap_failed_.fetch_add(1, std::memory_order_relaxed) +
-          1;
-      if (n <= 4) {
-        MetalShader::MetalTranslation* ps = handle->ns_pixel_translation;
-        MetalShader::MetalTranslation* vs = handle->ns_vertex_translation;
-        REXLOG_WARN(
-            "[native-shaders] PS {:016X}: optimized pipeline not created; the "
-            "plain pipeline stays (#{}; pipeline {}, optimized {}, vs native "
-            "{}, had ps {} vs {}, want vs {}, ps opt fn {} state {}, vs {:016X} "
-            "native {} state {})",
-            ps->shader().ucode_data_hash(), n, pipeline ? "built" : "null",
-            optimized, vertex_native, had_ps, had_vs, want_vs,
-            ps->optimized_function() != nullptr,
-            int(ps->native_shader_state().load()),
-            vs ? vs->shader().ucode_data_hash() : 0,
-            vs && vs->is_native_xlate(),
-            vs ? int(vs->native_shader_state().load()) : -1);
-      }
-    }
-    return;
-  }
-  // The draw path loads `state` once per draw, so the next lookup binds the
-  // new pipeline; the replaced one stays alive for command buffers that
-  // already reference it.
-  MTL::RenderPipelineState* old =
-      handle->state.exchange(pipeline, std::memory_order_acq_rel);
-  if (!handle->ns_plain_state) {
-    handle->ns_plain_state = old;
-  } else {
-    handle->ns_retired_states.push_back(old);
-  }
-  if (optimized) {
-    handle->ns_optimized.store(true, std::memory_order_release);
-  }
-  if (vertex_native) {
-    handle->ns_vs_native.store(true, std::memory_order_release);
-  }
-  if (optimized && handle->ns_swap_deferred.exchange(false, std::memory_order_relaxed)) {
-    native_shaders_swap_deferred_done_.fetch_add(1, std::memory_order_relaxed);
-  }
-  const uint64_t n =
-      native_shaders_swapped_.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n == 1 || (n & (n - 1)) == 0) {
-    LogNativeShaderProgress("swapped");
-  }
-}
-
 // ---------------------------------------------------------------------------
 // FABLE2_NS_SPECIALIZE: hot-shader specialization (metal_ns_specialize.h,
 // docs/native-shaders.md "Hot-shader specialization")
 // ---------------------------------------------------------------------------
 
 namespace {
-constexpr uint32_t kNs2LibraryVersion = 0x4E530002;  // "NS" v2: specialized
 constexpr uint32_t kNs2IndexVersion = 0x4E530003;    // its guard list
 
 // Same parts as the NS1 key (plain library + toolchain), so the records of a
@@ -2985,7 +2723,7 @@ MetalDxilBytecodeKey Ns2Key(const ns_spec::PlainKey& plain, uint32_t version,
   key.dxbc_size = plain.size;
   key.dxbc_hash_low = plain.low;
   key.dxbc_hash_high = plain.high;
-  key.converter_options_hash = AirOptimizerToolchainHash();
+  key.converter_options_hash = 0;  // was the metal-opt toolchain hash (converter era)
   key.converter_version = version;
   key.reserved = uint32_t(values_hash) ^ uint32_t(values_hash >> 32);
   return key;
@@ -2997,10 +2735,6 @@ void MetalPipelineCache::QueueSpecialization(
   if (!REXCVAR_GET(metal_shader_live_overrides).empty()) return;
   if (!translation || ns_threads_.empty() ||
       !translation->plain_key().valid()) {
-    return;
-  }
-  if (!translation->is_native_primary() && AirOptimizerLookupDone() &&
-      !AirOptimizerCacheReadable()) {
     return;
   }
   uint8_t expected = 0;
@@ -3073,19 +2807,16 @@ void MetalPipelineCache::NsSpecialize(
   } done{translation};
   // FABLE2_NATIVE_FIRST: no converter library to bake; the guard entries
   // come from the native translation itself (no Metal Toolchain needed).
-  const bool native_primary = translation->is_native_primary();
-  if (!native_primary && !AirOptimizerCacheReadable()) {
-    return;
-  }
-  // FABLE2_NATIVE_XLATE: the variant must match the library the shader ends
-  // up with, so wait (background thread) until the native translation of this
-  // shader has been decided.
-  if (NativeXlateMode()) {
-    for (int i = 0; i < 5000 && translation->native_shader_state().load(
-                                    std::memory_order_acquire) != 2;
-         ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  // Every installed translation is native-first (the converter is gone,
+  // rejected/converter-shader-swap); anything else is a bug.
+  if (!translation->is_native_primary()) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      REXLOG_ERROR("[ns-spec] PS {:016X}: not a native-first translation",
+                   translation->shader().ucode_data_hash());
     }
+    return;
   }
   const uint64_t ucode = translation->shader().ucode_data_hash();
   const uint64_t modification = translation->modification();
@@ -3112,21 +2843,16 @@ void MetalPipelineCache::NsSpecialize(
   // 2x, ~1000 misses, 1 demotion). Learn this key's own statistics first
   // (auto-learn, as for any unlearned shader); a variant stored for this key
   // by an earlier session is still used.
-  if (native_primary && record && ns_spec::AutoLearnEnabled() &&
+  if (record && ns_spec::AutoLearnEnabled() &&
       !ns_spec::HasConvergedRecord(plain)) {
     record = nullptr;
   }
   const uint64_t learn_hash = record ? ns_spec::LearnHash(*record) : 0;
-  // Without tools a variant can't be regenerated: a stored one (e.g. from
-  // the portable seed) is used even when the learn data has changed since,
-  // unless it was demoted; the guard keeps it exact either way.
-  const bool can_generate = native_primary || AirOptimizerAvailable();
   MetalArtifactStore* store =
       REXCVAR_GET(metal_shader_disk_cache) ? g_metal_artifact_store.get()
                                            : nullptr;
 
   std::vector<ns_spec::GuardEntry> entries;
-  std::vector<uint8_t> library_bytes;
   bool from_cache = false;
   if (store) {
     std::vector<uint8_t> index_bytes;
@@ -3134,27 +2860,20 @@ void MetalPipelineCache::NsSpecialize(
     if (store->LoadDxilBytecode(Ns2Key(plain, kNs2IndexVersion, 0),
                                 &index_bytes) &&
         ns_spec::ParseIndex(index_bytes, &stored_learn_hash, &entries) &&
-        (!record || stored_learn_hash == learn_hash ||
-         (!can_generate && !ns_spec::Demotions(plain)))) {
+        (!record || stored_learn_hash == learn_hash)) {
       if (entries.empty()) {
         ns_spec_none_.fetch_add(1, std::memory_order_relaxed);
         return;  // learned before: nothing to specialize
       }
-      from_cache = native_primary ||
-                   (store->LoadDxilBytecode(
-                        Ns2Key(plain, kNs2LibraryVersion,
-                               ns_spec::HashEntries(entries)),
-                        &library_bytes) &&
-                    !library_bytes.empty());
+      from_cache = true;
     }
   }
-  uint64_t generate_ms = 0;
   if (!from_cache) {
     entries.clear();
-    if (!record || !can_generate) {
-      // Not learned (or no tools): stays on the normal pipeline. Auto-learn
-      // samples it and asks again once the statistics converge.
-      if (!record && can_generate && ns_spec::AutoLearnEnabled()) {
+    if (!record) {
+      // Not learned: stays on the normal pipeline. Auto-learn samples it and
+      // asks again once the statistics converge.
+      if (ns_spec::AutoLearnEnabled()) {
         translation->spec_needs_learn().store(1, std::memory_order_release);
       }
       return;
@@ -3162,7 +2881,7 @@ void MetalPipelineCache::NsSpecialize(
     std::vector<ns_spec::GuardEntry> candidates = record->Candidates();
     std::string error;
     bool ok = false;
-    if (!candidates.empty() && native_primary) {
+    if (!candidates.empty()) {
       // The candidates the native code reads, with their learned masks.
       std::vector<MslBakedDword> baked;
       baked.reserve(candidates.size());
@@ -3221,17 +2940,6 @@ void MetalPipelineCache::NsSpecialize(
         }
         ok = true;
       }
-    } else if (!candidates.empty()) {
-      auto start = std::chrono::steady_clock::now();
-      ok = SpecializeMetallibAir(
-          translation->metallib_data(),
-          [&](std::string& ll, std::string* e) {
-            return ns_spec::BakeAir(ll, candidates, ns_spec::BakeFloats(),
-                                    &entries, e);
-          },
-          library_bytes, &error);
-      generate_ms = ElapsedMs(start, std::chrono::steady_clock::now());
-      ns_spec_ms_.fetch_add(generate_ms, std::memory_order_relaxed);
     } else {
       error = "nothing to bake (no invariant dwords)";
     }
@@ -3254,11 +2962,6 @@ void MetalPipelineCache::NsSpecialize(
       return;
     }
     if (store) {
-      if (!native_primary) {
-        store->StoreDxilBytecode(Ns2Key(plain, kNs2LibraryVersion,
-                                        ns_spec::HashEntries(entries)),
-                                 library_bytes);
-      }
       store->StoreDxilBytecode(Ns2Key(plain, kNs2IndexVersion, 0),
                                ns_spec::SerializeIndex(learn_hash, entries));
     }
@@ -3278,24 +2981,12 @@ void MetalPipelineCache::NsSpecialize(
     native_variant =
         CompileNativeXlate(translation, baked, &library, &function, &entry);
   }
-  if (!native_variant && native_primary) {
+  if (!native_variant) {
     ns_spec_failed_.fetch_add(1, std::memory_order_relaxed);
     REXLOG_WARN("[ns-spec] PS {:016X}/{:X}: native specialized variant not "
                 "compiled; the normal pipeline stays",
                 ucode, modification);
     return;
-  }
-  if (!native_variant) {
-    dispatch_data_t data =
-        dispatch_data_create(library_bytes.data(), library_bytes.size(),
-                             nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-    NS::Error* error = nullptr;
-    library = device_->newLibrary(data, &error);
-    dispatch_release(data);
-    function = library ? library->newFunction(NS::String::string(
-                             translation->function_name().c_str(),
-                             NS::UTF8StringEncoding))
-                       : nullptr;
   }
   if (!function) {
     if (library) library->release();
@@ -3333,8 +3024,7 @@ void MetalPipelineCache::NsSpecialize(
       "bool/loop {}, fetch {}), {}",
       ucode, modification, native_variant ? " (native MSL)" : "",
       entries.size(), per_kind[0], per_kind[1], per_kind[2],
-      from_cache ? std::string("from cache")
-                 : fmt::format("generated in {} ms", generate_ms));
+      from_cache ? "from cache" : "generated");
 }
 
 void MetalPipelineCache::NsSpecBuild(PipelineHandle* handle) {
@@ -3377,28 +3067,25 @@ void MetalPipelineCache::NativeShaderThread() {
   pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
   for (;;) {
-    PipelineHandle* swap = nullptr;
-    MetalShader::MetalTranslation* translation = nullptr;
     PipelineHandle* spec_build = nullptr;
     MetalShader::MetalTranslation* spec_translation = nullptr;
     {
       std::unique_lock<std::mutex> lock(ns_mutex_);
       ns_cond_.wait(lock, [this] {
-        return ns_shutdown_ || !ns_swap_queue_.empty() ||
-               !ns_optimize_queue_.empty() || !ns_spec_queue_.empty() ||
+        return ns_shutdown_ || !ns_spec_queue_.empty() ||
                !ns_spec_build_queue_.empty();
       });
       if (ns_shutdown_) {
         break;
       }
-      // FABLE2_NS_SPECIALIZE work comes after the optimized-library swaps:
-      // first specialized pipeline builds (a draw is waiting for them), then
-      // optimization, then specialization (cache loads or generation).
-      if (ns_swap_queue_.empty() && !ns_spec_build_queue_.empty()) {
+      // Specialized pipeline builds first (a draw is waiting for them), then
+      // specialization (cache loads or generation).
+      if (!ns_spec_build_queue_.empty()) {
         spec_build = ns_spec_build_queue_.front();
         ns_spec_build_queue_.erase(ns_spec_build_queue_.begin());
-      } else if (ns_swap_queue_.empty() && ns_optimize_queue_.empty()) {
-        // Hottest first, as for optimization.
+      } else {
+        // Hottest shader first (draw lookups so far); ties keep queue order,
+        // which is warm-up order.
         size_t best = 0;
         uint32_t best_uses = ns_spec_queue_[0]->use_count();
         for (size_t i = 1; i < ns_spec_queue_.size(); ++i) {
@@ -3410,24 +3097,6 @@ void MetalPipelineCache::NativeShaderThread() {
         }
         spec_translation = ns_spec_queue_[best];
         ns_spec_queue_.erase(ns_spec_queue_.begin() + best);
-      } else if (!ns_swap_queue_.empty()) {
-        // Swaps first: they deliver an already-optimized shader.
-        swap = ns_swap_queue_.front();
-        ns_swap_queue_.erase(ns_swap_queue_.begin());
-      } else {
-        // Hottest shader first (draw lookups so far); ties keep queue order,
-        // which is warm-up order.
-        size_t best = 0;
-        uint32_t best_uses = ns_optimize_queue_[0]->use_count();
-        for (size_t i = 1; i < ns_optimize_queue_.size(); ++i) {
-          uint32_t uses = ns_optimize_queue_[i]->use_count();
-          if (uses > best_uses) {
-            best = i;
-            best_uses = uses;
-          }
-        }
-        translation = ns_optimize_queue_[best];
-        ns_optimize_queue_.erase(ns_optimize_queue_.begin() + best);
       }
       ++ns_busy_;
     }
@@ -3436,59 +3105,8 @@ void MetalPipelineCache::NativeShaderThread() {
 
     if (spec_build) {
       NsSpecBuild(spec_build);
-    } else if (spec_translation) {
-      NsSpecialize(spec_translation);
-    } else if (swap) {
-      NativeShaderSwap(swap);
     } else {
-      std::vector<uint8_t> optimized;
-      bool ok = NativeXlateMode() && TryNativeXlate(translation);
-      // Cache-only (portable build without Xcode): load, never optimize.
-      if (!ok && AirOptimizerCacheReadable() &&
-          translation->shader().type() == xenos::ShaderType::kPixel &&
-          !NativeShaderKeepPlain(translation->shader().ucode_data_hash())) {
-        const std::vector<uint8_t>& plain = translation->metallib_data();
-        ok = LoadOptimizedPixelShader(plain, &optimized) ||
-             OptimizeGuestPixelShader(translation->shader().ucode_data_hash(),
-                                      plain, &optimized);
-        if (ok && !translation->InstallOptimizedMetal(device_, optimized)) {
-          ok = false;
-          const uint64_t n = native_shaders_fallbacks_.fetch_add(
-                                 1, std::memory_order_relaxed) +
-                             1;
-          REXLOG_WARN(
-              "[native-shaders] PS {:016X}: optimized library rejected; "
-              "plain library stays (fallback #{})",
-              translation->shader().ucode_data_hash(), n);
-        }
-      }
-      uint64_t ready = 0;
-      if (ok) {
-        ready = native_shaders_ready_.fetch_add(1, std::memory_order_relaxed) + 1;
-      }
-      {
-        std::lock_guard<std::mutex> lock(ns_mutex_);
-        translation->native_shader_state().store(2);
-        auto it = ns_handles_.find(translation);
-        if (it != ns_handles_.end()) {
-          if (ok) {
-            for (PipelineHandle* handle : it->second) {
-              const bool wanted =
-                  translation->shader().type() == xenos::ShaderType::kVertex
-                      ? !handle->ns_vs_native.load(std::memory_order_acquire)
-                      : !handle->ns_optimized.load(std::memory_order_acquire);
-              if (wanted && !handle->ns_swap_queued.exchange(true)) {
-                ns_swap_queue_.push_back(handle);
-              }
-            }
-          }
-          ns_handles_.erase(it);
-        }
-      }
-      ns_cond_.notify_all();
-      if (ready == 1 || (ready && (ready & (ready - 1)) == 0)) {
-        LogNativeShaderProgress("optimized");
-      }
+      NsSpecialize(spec_translation);
     }
 
     bool idle = false;
@@ -3498,8 +3116,7 @@ void MetalPipelineCache::NativeShaderThread() {
       ++ns_items_since_idle_log_;
       // Log the first drain, then only drains that did real work (shaders
       // first met in play arrive one at a time).
-      if (!ns_busy_ && ns_swap_queue_.empty() &&
-          ns_optimize_queue_.empty() && ns_spec_queue_.empty() &&
+      if (!ns_busy_ && ns_spec_queue_.empty() &&
           ns_spec_build_queue_.empty() &&
           !ns_idle_logged_ &&
           (!ns_first_idle_logged_ || ns_items_since_idle_log_ >= 16)) {
@@ -3509,11 +3126,8 @@ void MetalPipelineCache::NativeShaderThread() {
         idle = true;
       }
     }
-    if (idle) {
-      LogNativeShaderProgress("background work done");
-      if (ns_spec_queued_.load(std::memory_order_relaxed)) {
-        LogSpecProgress("background work done");
-      }
+    if (idle && ns_spec_queued_.load(std::memory_order_relaxed)) {
+      LogSpecProgress("background work done");
     }
   }
   pool->drain();
@@ -3582,13 +3196,7 @@ int MetalPipelineCache::TryNativeFirst(
         native_xlate_compile_us_.load(std::memory_order_relaxed) / 1000,
         native_xlate_compile_max_us_.load(std::memory_order_relaxed) / 1000);
   }
-  // Nothing to optimize or swap later; pipelines registered for a swap
-  // before the install get their native function at creation.
   translation->native_shader_state().store(2, std::memory_order_release);
-  {
-    std::lock_guard<std::mutex> lock(ns_mutex_);
-    ns_handles_.erase(translation);
-  }
   if (!vertex && NativeShadersMode() &&
       (ns_spec::Enabled() || ns_spec::LearnMode())) {
     translation->SetPlainKey(NativeFirstPlainKey(translation));
@@ -3757,7 +3365,6 @@ MetalPipelineCache::GetOrCreatePipelineState(
     if (!seeded) {
       pixel_translation->NoteUse();
     }
-    RegisterNativeShaderHandle(raw_handle);
   }
 
   // Async path: enqueue for background compilation.
@@ -3781,11 +3388,7 @@ MetalPipelineCache::GetOrCreatePipelineState(
       &vertex_native);
   raw_handle->ns_vs_native.store(vertex_native, std::memory_order_release);
   if (pipeline && raw_handle->ns_pixel_translation) {
-    if (optimized) {
-      raw_handle->ns_optimized.store(true, std::memory_order_release);
-    } else {
-      native_shaders_plain_pipelines_.fetch_add(1, std::memory_order_relaxed);
-    }
+    raw_handle->ns_optimized.store(optimized, std::memory_order_release);
   }
   raw_handle->state.store(pipeline, std::memory_order_release);
   raw_handle->pending_vertex_translation = nullptr;
@@ -4177,8 +3780,6 @@ void MetalPipelineCache::RegisterLiveShader(MetalShader::MetalTranslation* t) {
       std::fclose(f);
     }
   };
-  dump(".metallib", t->metallib_data());
-  dump(".dxil", t->dxil_data());
   dump(".dxbc", t->translated_binary());
   const std::string manifest = fmt::format(
       "entry={}\nstage={}\nhash={:016X}\nmodification={:X}\n"
@@ -4558,11 +4159,7 @@ void MetalPipelineCache::CreationThread(size_t thread_index) {
     }
     handle->ns_vs_native.store(vertex_native, std::memory_order_release);
     if (pipeline && handle->ns_pixel_translation) {
-      if (optimized) {
-        handle->ns_optimized.store(true, std::memory_order_release);
-      } else {
-        native_shaders_plain_pipelines_.fetch_add(1, std::memory_order_relaxed);
-      }
+      handle->ns_optimized.store(optimized, std::memory_order_release);
     }
     handle->state.store(pipeline, std::memory_order_release);
     if (pipeline && handle->storage_write_pending) {
@@ -4614,16 +4211,13 @@ std::string MetalPipelineCache::ShaderPrepCountsJson() {
   return fmt::format(
       "\"stored_pipelines\":{},\"shaders\":{},\"pipelines_compiled\":{},"
       "\"pipeline_compile_ms\":{},\"archive_hits\":{},\"archive_misses\":{},"
-      "\"ns_queued\":{},\"ns_ready\":{},\"ns_from_cache\":{},"
-      "\"ns_fallbacks\":{},\"ns_optimize_ms\":{},\"native_xlate\":{},"
+      "\"native_xlate\":{},"
       "\"native_xlate_fallbacks\":{},\"native_xlate_compile_failed\":{},"
       "\"bank\":{{\"shaders\":{},\"translations\":{},\"ready\":{},\"failed\":{},\"skipped\":{},"
       "\"pending\":{},\"ms\":{}}}",
       stored, shader_cache_.size(), pipeline_compile_count_.load(),
       pipeline_compile_ms_total_.load(), archive_lookup_hits_.load(),
-      archive_lookup_misses_.load(), native_shaders_queued_.load(),
-      native_shaders_ready_.load(), native_shaders_cache_hits_.load(),
-      native_shaders_fallbacks_.load(), native_shaders_opt_ms_total_.load(),
+      archive_lookup_misses_.load(),
       native_xlate_ok_.load(), native_xlate_fallback_.load(),
       native_xlate_compile_failed_.load(), bank_prep_shaders_.load(), bank_prep_total_.load(),
       bank_prep_ok_.load(), bank_prep_failed_.load(), bank_prep_skipped_.load(), bank_prep_pending_.load(),
@@ -4634,7 +4228,7 @@ readiness::Background MetalPipelineCache::ReadinessBackground() {
   readiness::Background bg;
   {
     std::lock_guard<std::mutex> lock(ns_mutex_);
-    bg.ns_pending = uint32_t(ns_busy_ + ns_optimize_queue_.size() + ns_swap_queue_.size());
+    bg.ns_pending = uint32_t(ns_busy_);
     bg.ns_spec_pending =
         uint32_t(ns_spec_queue_.size() + ns_spec_build_queue_.size());
   }

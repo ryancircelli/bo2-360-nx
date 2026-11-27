@@ -70,8 +70,6 @@ config, on the command line (`--metal_retina=false`) or through the environment 
 | `metal_native_tess` | 1 | Tessellation: 0 emulation, 1 exact native, 2 Metal tessellator for all patches, 3 reference pattern. |
 | `metal_native_points` | 2 | Point lists: 0 emulation, 1 per-corner expansion, 2 mesh function. |
 | `metal_ns_specialize` | true | Specialize hot optimized pixel shaders by baking their constants. |
-| `metal_ns_cache_toolchain` | empty | Toolchain hash of a bundled native-shader cache, for builds without metal-opt. |
-| `metal_msc_min_target` | empty | Shader converter target: empty or `portable` (apple7:15.0), `native`, or e.g. `apple8:14.0`. |
 | `metal_warmup_threads` | -1 | Pipeline warm-up threads at startup; -1 picks from the performance core count. |
 | `metal_shader_prep` | empty | `1` or a `.json` status path: warm every shader and pipeline cache, save, exit. |
 | `metal_shader_prep_timeout_s` | 1800 | Guard timeout for `metal_shader_prep`. |

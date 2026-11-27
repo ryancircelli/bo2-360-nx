@@ -32,9 +32,6 @@ class MetalShader : public DxbcShader {
         : DxbcTranslation(shader, modification) {}
     ~MetalTranslation();
 
-    void SetDxilData(std::vector<uint8_t> dxil_data);
-    std::vector<uint8_t> GetDxilDataCopy() const;
-
     // Get the Metal library (contains compiled shader)
     MTL::Library* metal_library() const { return metal_library_; }
 
@@ -64,18 +61,6 @@ class MetalShader : public DxbcShader {
       MTL::Function* f = optimized_function();
       return f ? f : metal_function_;
     }
-    // Creates a library from optimized bytes and publishes its function.
-    // Returns false (nothing published) when Metal rejects it.
-    bool InstallOptimizedMetal(MTL::Device* device,
-                               const std::vector<uint8_t>& metallib);
-    // Marks the installed library as the optimized one (cache hit at install).
-    void MarkInstalledAsOptimized();
-    // FABLE2_NATIVE_XLATE (docs/native-translator.md): publishes a library
-    // compiled from the native Xenos -> MSL translation as the optimized
-    // function (same ABI as the converter's; its own entry point name).
-    // Takes ownership of library and function. False if one is published.
-    bool InstallNativeMetal(MTL::Library* library, MTL::Function* function,
-                            const std::string& function_name);
     // FABLE2_NATIVE_FIRST (docs/no-converter.md): installs the native
     // translation as the shader's only library, before (and instead of) any
     // converter library. It is also published as the optimized function, so
@@ -132,9 +117,6 @@ class MetalShader : public DxbcShader {
       return !translation_claimed_.test_and_set(std::memory_order_acq_rel);
     }
 
-    // Get intermediate data for debugging
-    const std::vector<uint8_t>& dxil_data() const { return dxil_data_; }
-    const std::vector<uint8_t>& metallib_data() const { return metallib_data_; }
     const std::string& function_name() const { return function_name_; }
 
    private:
@@ -152,8 +134,6 @@ class MetalShader : public DxbcShader {
     std::atomic<uint8_t> spec_state_{0};
     std::atomic<uint8_t> spec_needs_learn_{0};
     ns_spec::AutoLearn* spec_auto_ = nullptr;
-    std::vector<uint8_t> dxil_data_;
-    std::vector<uint8_t> metallib_data_;
     std::string function_name_;
     std::string native_function_name_;
     std::atomic<bool> native_xlate_{false};

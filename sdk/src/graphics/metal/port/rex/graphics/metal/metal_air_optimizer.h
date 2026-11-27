@@ -1,23 +1,11 @@
-// Optimized guest shader path (FABLE2_NATIVE_SHADERS, docs/native-shaders.md).
-//
-// Metal Shader Converter output is AIR that never went through the Metal
-// front end's optimization pipeline. Running Apple's `metal-opt -O2` over it
-// (the same pass pipeline `metal` uses for MSL) and repacking it with
-// `metallib` makes the hot Fable II pixel shaders much faster: the Xenos
-// control-flow dispatch loop gets its invariant constant and descriptor loads
-// hoisted (LICM / loop rotation), which the driver compiler does not do.
-//
-// The tools come from the Metal Toolchain (`xcrun --find metal-opt`), which
-// the build already requires. Without them every call returns false and the
-// caller keeps the plain converter output.
+// Native shader path switches (FABLE2_NATIVE_*, docs/native-shaders.md,
+// docs/no-converter.md). The AIR optimizer (metal-opt) that gave the file its
+// name went with the converter: rejected/converter-shader-swap.
 
 #ifndef REX_GRAPHICS_METAL_METAL_AIR_OPTIMIZER_H_
 #define REX_GRAPHICS_METAL_METAL_AIR_OPTIMIZER_H_
 
 #include <cstdint>
-#include <functional>
-#include <string>
-#include <vector>
 
 namespace rex {
 namespace graphics {
@@ -30,11 +18,6 @@ constexpr uint32_t kNativeShadersDefault = 1;
 // 0 = off, 1 = optimize guest pixel shaders. Reads FABLE2_NATIVE_SHADERS once
 // ("0" disables, any other non-empty value enables, unset = default).
 uint32_t NativeShadersMode();
-// FABLE2_NS_EMU_PIPELINES (default on, =0 off): geometry- and
-// tessellation-emulation pipelines also get the optimized pixel shader
-// (rebuilt in the background and swapped once it is ready). Only with
-// NativeShadersMode().
-bool NativeShadersEmuPipelines();
 // FABLE2_NATIVE_XLATE (docs/native-translator.md, default on since
 // 2026-10-13, =0 off): guest pixel and vertex shaders are translated straight to MSL (no DXBC/DXIL/converter code)
 // and published as the optimized function; per-shader fallback to the
@@ -119,46 +102,6 @@ bool NativeRectsMode();
 // FABLE2_NATIVE_XLATE_DUMP=<dir>: writes each translated shader's MSL there
 // (diagnostic; game-derived, keep it in ignored folders).
 const char* NativeXlateDumpDir();
-
-// FABLE2_NS_KEEP_PLAIN=<hash>[,<hash>...] (guest pixel shader ucode hashes, hex):
-// shaders that keep the plain library because -O2 measured slower than plain
-// (docs/native-shaders.md, "Shaders kept plain"). Unset = the built-in list;
-// "none" (or empty) = optimize everything.
-bool NativeShaderKeepPlain(uint64_t ucode_hash);
-
-// True when metal-opt and metallib were found. Looks them up on first call
-// (blocking; xcrun + `metal-opt --version`).
-bool AirOptimizerAvailable();
-
-// True when cached optimized libraries can be used: the tools were found, or
-// FABLE2_NS_CACHE_TOOLCHAIN names the toolchain of a bundled cache (portable
-// build without Xcode). Blocks like AirOptimizerAvailable.
-bool AirOptimizerCacheReadable();
-
-// True once the lookup has finished (AirOptimizerAvailable won't block).
-bool AirOptimizerLookupDone();
-
-// Starts the tool lookup on a background thread so later callers rarely wait.
-void StartAirOptimizerLookup();
-
-// Identifies the toolchain (hash of `metal-opt --version`), for cache keys.
-uint64_t AirOptimizerToolchainHash();
-
-// Optimizes a single-function metallib produced by Metal Shader Converter.
-// Runs two tool processes at utility QoS; call it from a background thread.
-// Returns false (out untouched) when the tools are missing, the library has
-// more than one module, or a tool fails; *error says why.
-bool OptimizeMetallibAir(const std::vector<uint8_t>& metallib,
-                         std::vector<uint8_t>& optimized_out,
-                         std::string* error);
-
-// FABLE2_NS_SPECIALIZE (metal_ns_specialize.h): runs `metal-opt -O2 -S` on
-// the library's module, hands the text to `transform` (constant baking), then
-// `metal-opt -O2` and `metallib` again. Background threads only.
-bool SpecializeMetallibAir(
-    const std::vector<uint8_t>& metallib,
-    const std::function<bool(std::string& ll, std::string* error)>& transform,
-    std::vector<uint8_t>& specialized_out, std::string* error);
 
 }  // namespace metal
 }  // namespace graphics
