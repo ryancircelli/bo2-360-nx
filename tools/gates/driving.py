@@ -24,7 +24,7 @@ CAMPAIGN = {
     'ac1': re.compile(r'assassin\.(?:sav|dat)', re.I),
     'halo3': re.compile(r'010_jungle', re.I),
     'fallout3': re.compile(r'XamShowKeyboardUI.*answered', re.I),
-    'me2': re.compile(r'BIO[AD]_[^\r\n]*Pro(?:Cer|Nor|L)', re.I),
+    'me2': re.compile(r'BIO[ADP]_[^\r\n]*Pro(?:Cer|Nor|L)|BIOGame[^\r\n]*Movies[^\r\n]*Opening_Seq', re.I),
 }
 
 
@@ -34,7 +34,8 @@ def play_state(game, words, log):
     if FRONTEND.search(text) or MENU.search(text):
         return False
     if game == 'nfsmw2012':
-        return hud_present(words)
+        return any(re.fullmatch(r'MPH[I1|]?', w['text'], re.I)
+                   and w['x'] > .85 and w['y'] > .8 for w in words)
     if game == 'ac1' and re.search(r'first person|vision|high profile|synchroni[sz]|interact', text, re.I):
         return True
     if game == 'halo3' and any(w['x'] > .7 and w['y'] < .2 and re.search(r'\d{2,3}', w['text']) for w in words):
@@ -78,7 +79,7 @@ def verify_play(game, out, log):
             kind = trial['kind']
             result = dict(kind=kind, delta=delta)
             if kind.startswith('camera-'):
-                shift, confidence = module.horizontal_motion(a['path'], b['path'])
+                shift, confidence = module.horizontal_motion(a['path'], b['path'], game)
                 result.update(shift=shift, confidence=confidence)
                 passed = passed and confidence >= 1.08 and (shift >= 1 if kind == 'camera-left' else shift <= -1)
             if passed and kind in counts:

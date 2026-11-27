@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 HERE = Path(__file__).parent
@@ -37,6 +38,46 @@ class ConditionRoutes(unittest.TestCase):
             self.assertEqual(routes.horizontal_motion(paths[0],paths[1])[0], 4)
             self.assertEqual(routes.horizontal_motion(paths[0],paths[2])[0], -4)
             self.assertLess(routes.horizontal_motion(paths[0],paths[0])[1], 1.08)
+
+    def test_chase_car_does_not_mask_world_camera_motion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths=[Path(directory,'before.ppm'),Path(directory,'after.ppm')]
+            for path,shift in zip(paths,(0,4)):
+                pixels=bytearray()
+                for y in range(72):
+                    for x in range(128):
+                        xx=x-shift if 16 <= y < 34 else x
+                        value=(xx*73+y*47+(xx*y)%43)%256
+                        pixels.extend([value]*3)
+                path.write_bytes(b'P6\n128 72\n255\n'+pixels)
+            self.assertEqual(routes.horizontal_motion(*paths,game='nfsmw2012')[0],4)
+
+    def test_first_capture_waits_for_renderer_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ppm=Path(directory,'frame.ppm'); self.image(ppm)
+            class Adapter:
+                calls=0
+                flushed=False
+                def shot(self,name):
+                    self.calls+=1
+                    return (None,None) if self.calls==1 else (str(ppm.with_suffix('.png')),None)
+                def alive(self): return True
+                def log_text(self): return ''
+                def ctl(self,command,*args):
+                    self.flushed=command.startswith('flush')
+                    return 'ok'
+            adapter=Adapter()
+            runner=routes.Runner(adapter,dict(game='gears'),directory,driving)
+            with patch.object(driving,'recognize',return_value=[]):
+                runner.snapshot()
+            self.assertTrue(adapter.flushed)
+            self.assertEqual(adapter.calls,2)
+
+    def test_partial_mph_ocr_is_accepted_only_in_driving_hud(self):
+        words=[dict(text='MPHI',x=.92,y=.87)]
+        self.assertTrue(driving.play_state('nfsmw2012',words,''))
+        self.assertFalse(driving.play_state('nfsmw2012',[dict(text='MPHI',x=.2,y=.2)],''))
+        self.assertFalse(driving.play_state('nfsmw2012',words+[dict(text='Main Menu',x=.1,y=.1)],''))
 
     def fixture(self, directory, *, elapsed=160, cinematic=False, missing_state=False, recording=True):
         root = Path(directory)

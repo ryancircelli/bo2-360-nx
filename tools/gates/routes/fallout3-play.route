@@ -12,6 +12,12 @@
       ]
     },
     {
+      "text": "choose sex|\\bBoy\\b|\\bGirl\\b",
+      "commands": [
+        "press a 600"
+      ]
+    },
+    {
       "text": "continue|new|yes|male|female|confirm",
       "commands": [
         "press a 600"

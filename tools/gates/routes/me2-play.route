@@ -18,7 +18,7 @@
       ]
     },
     {
-      "text": "no time to argue|gave you an order|there.s no|wheel",
+      "text": "no time to argue|gave you an order|there.s no|wheel|They.*be here|They damn well",
       "commands": [
         "stick l 1 0 2000",
         "press a 600"

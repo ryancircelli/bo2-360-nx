@@ -25,7 +25,7 @@ def load(path):
     return recipe
 
 
-def horizontal_motion(a, b):
+def horizontal_motion(a, b, game=None):
     """Estimate horizontal scene displacement; return shift and improvement over zero.
 
     Use the central world, excluding HUD and subtitles. Camera interventions in
@@ -48,9 +48,11 @@ def horizontal_motion(a, b):
         return [[sum(pixels[(int(y*h/72)*w + int(x*w/128))*3:(int(y*h/72)*w + int(x*w/128))*3+3])/3
                  for x in range(128)] for y in range(72)]
     aa, bb = gray(a), gray(b)
+    # The chase car is stationary in screen space; use the world above it.
+    rows = range(16, 34, 2) if game == 'nfsmw2012' else range(20, 53, 2)
     def error(dx):
         return sum(abs(aa[y][x] - bb[y][x+dx])
-                   for y in range(20, 53, 2) for x in range(27, 101, 2))
+                   for y in rows for x in range(27, 101, 2))
     errors = {dx: error(dx) for dx in range(-10, 11)}
     shift = min(errors, key=errors.get)
     return shift, errors[0] / max(errors[shift], 1)
@@ -74,12 +76,26 @@ class Runner:
         self.events.append(dict(at=time.monotonic()-self.t0, command=command, reply=reply))
         if not reply.startswith('ok'):
             raise RuntimeError(f'{command}: {reply or "no reply"}')
+        if command.startswith('press '):
+            end = time.monotonic() + 15
+            while time.monotonic() < end and self.game.alive():
+                pad = self.game.ctl('pad')
+                if re.search(r'\btaps 0\b', pad):
+                    break
+            else:
+                raise RuntimeError('wait-for queued pad tap completion timed out')
         return reply
 
     def snapshot(self):
         index = self.capture_index
         self.capture_index += 1
         png, _ = self.game.shot(f'observe-{index:04d}')
+        deadline = time.monotonic() + 30
+        while not png and self.game.alive() and time.monotonic() < deadline:
+            # Control ping can answer before the first rendered frame. This is a
+            # capture-ready condition, not a fixed delay before navigating.
+            self.game.ctl('flush 1500', 5)
+            png, _ = self.game.shot(f'observe-{index:04d}')
         if not png:
             raise RuntimeError('capture failed')
         path = os.path.splitext(png)[0] + '.ppm'
@@ -97,7 +113,7 @@ class Runner:
         for path in (sample['path'], os.path.splitext(sample['path'])[0] + '.png'):
             os.unlink(path)
 
-    def wait_for(self, before, *, timeout=12, change=6, text=None, log=None):
+    def wait_for(self, before, *, timeout=12, change=6, text=None, log=None, motion_sign=None):
         """Bounded event wait, always against the capture/log offset before input."""
         end = time.monotonic() + timeout
         offset = before['log_size']
@@ -108,9 +124,13 @@ class Runner:
             last = self.snapshot()
             joined = ' '.join(w['text'] for w in last['words'])
             delta = self.driving.scene_change(before['path'], last['path'])
+            motion_ok = True
+            if motion_sign is not None:
+                shift, confidence = horizontal_motion(before['path'], last['path'], self.recipe['game'])
+                motion_ok = shift * motion_sign >= 1 and confidence >= 1.08
             if ((text and re.search(text, joined, re.I))
                     or (log and re.search(log, self.game.log_text()[offset:], re.I))
-                    or (not text and not log and delta is not None and delta >= change)):
+                    or (not text and not log and delta is not None and delta >= change and motion_ok)):
                 self.events.append(dict(at=last['at'], wait_for=dict(text=text, log=log, change=change),
                                         matched=True, before=before['path'], after=last['path']))
                 return last
@@ -120,6 +140,7 @@ class Runner:
     def navigate(self):
         deadline = time.monotonic() + self.recipe.get('navigation_timeout_s', 900)
         current = self.snapshot()
+        unhandled, previous_text = 0, None
         while self.game.alive() and time.monotonic() < deadline:
             if current['state']:
                 # Loading a campaign save is not the end of a cinematic. Do not
@@ -133,7 +154,7 @@ class Runner:
                         ready = False
                         break
                     trial = self.trials[-1]
-                    shift, confidence = horizontal_motion(trial['before'], trial['after'])
+                    shift, confidence = horizontal_motion(trial['before'], trial['after'], self.recipe['game'])
                     if shift * sign < 1 or confidence < 1.08:
                         ready = False
                     current = after
@@ -144,13 +165,20 @@ class Runner:
             if rule:
                 for cmd in rule['commands']:
                     self.command(cmd)
+                unhandled = 0
+            elif joined and not current['state']:
+                unhandled = unhandled + 1 if joined == previous_text else 0
+                if unhandled >= 12:
+                    raise RuntimeError('unhandled stable navigation text: ' + joined[:240])
+            previous_text = joined
             current = self.wait_for(current, timeout=12, change=6)
         raise RuntimeError('navigation timed out without a verified gameplay state')
 
     def trial(self, kind, command):
         before = self.snapshot()
         self.command(command)
-        after = self.wait_for(before, timeout=8, change=4)
+        sign = (1 if kind == 'camera-left' else -1) if kind.startswith('camera-') else None
+        after = self.wait_for(before, timeout=2 if sign is not None else 8, change=4, motion_sign=sign)
         self.command('stick l off')
         self.command('stick r off')
         self.command('trigger r off')

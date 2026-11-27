@@ -26,8 +26,8 @@
   ],
   "controls": {
     "movement": "trigger r 1 1800",
-    "camera-left": "stick r -0.45 0 300",
-    "camera-right": "stick r 0.45 0 300",
+    "camera-left": "stick r -0.6 0",
+    "camera-right": "stick r 0.6 0",
     "action": "press a 600"
   }
 }
