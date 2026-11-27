@@ -273,7 +273,8 @@ REX_EXPORT_QUIET_PASSTHROUGH(__imp__ObGetWaitableObject);  // round-2 spec: deli
 REX_EXPORT_QUIET_RETURN(__imp__ObInsertObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 // Every object in this process is title-made; BO2 picks the title pool when this is 1.
 REX_EXPORT_STUB_RETURN(__imp__ObIsTitleObject, 1);
-REX_EXPORT_QUIET_RETURN(__imp__ObLookupAnyThreadByThreadId, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+// Same lookup as ObLookupThreadByThreadId; returning SUCCESS without the out left callers (Halo 3) with a stack-garbage KTHREAD.
+REX_EXPORT(__imp__ObLookupAnyThreadByThreadId, rex::kernel::xboxkrnl::ObLookupThreadByThreadId_entry)
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__ObMakeTemporaryObject);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__ObTranslateSymbolicLink, 0xC0000002);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__NtCreateDirectoryObject, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
