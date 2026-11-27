@@ -119,7 +119,7 @@ REX_EXPORT_STUB(__imp__NomnilGetExtension);
 REX_EXPORT_STUB(__imp__NomnilSetLed);
 REX_EXPORT_STUB(__imp__NomnilStartCloseDevice);
 REX_EXPORT_STUB(__imp__NullCableRequest);
-REX_EXPORT_STUB_RETURN(__imp__PsCamDeviceRequest, 0xC0000002);
+REX_EXPORT_STUB_RETURN(__imp__PsCamDeviceRequest, 0xC000000E /* STATUS_NO_SUCH_DEVICE: no camera */);
 REX_EXPORT_STUB(__imp__RmcDeviceRequest);
 REX_EXPORT_STUB(__imp__TidDeviceRequest);
 REX_EXPORT_STUB(__imp__TitleDeviceAuthRequest);
