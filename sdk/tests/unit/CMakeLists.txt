@@ -173,6 +173,13 @@ set_target_properties(keyboard_answer_tests PROPERTIES
 )
 add_test(NAME keyboard_answer_tests COMMAND keyboard_answer_tests)
 
+add_executable(guest_exception_tests kernel/guest_exception_test.cpp)
+target_link_libraries(guest_exception_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(guest_exception_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
+)
+add_test(NAME guest_exception_tests COMMAND guest_exception_tests)
+
 add_executable(rsa_public_selfcheck crypto/rsa_public_test.cpp)
 target_include_directories(rsa_public_selfcheck PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_test(NAME rsa_public_selfcheck COMMAND rsa_public_selfcheck)

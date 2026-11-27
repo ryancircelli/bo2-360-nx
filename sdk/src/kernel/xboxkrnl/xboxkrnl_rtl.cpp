@@ -18,6 +18,7 @@
 #include <string>
 
 #include <rex/chrono/chrono_steady_cast.h>
+#include <rex/kernel/xboxkrnl/guest_exception.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/kernel/xboxkrnl/rtl.h>
 #include <rex/kernel/xboxkrnl/threading.h>
@@ -588,19 +589,40 @@ u32 RtlComputeCrc32_entry(u32 seed, mapped_void buffer, u32 length) {
   return ~hash;
 }
 
-void RtlCaptureContext_entry() {
-  // TODO(tomc): do we even need this?
-  REXKRNL_WARN("[STUB] RtlCaptureContext called - not implemented");
+// Guest exception dispatch (guest_exception.h); with the switch off these
+// stay the old warning stubs.
+void RtlCaptureContext_entry(u32 context_record) {
+  if (!guest_eh::Enabled()) {
+    REXKRNL_WARN("[STUB] RtlCaptureContext called - not implemented");
+    return;
+  }
+  auto& env = guest_eh::KernelEnv();
+  guest_eh::CaptureContext(*rex::runtime::current_ppc_context(),
+                           env.at<guest_eh::X_CONTEXT>(context_record));
 }
 
-void RtlUnwind_entry() {
-  // TODO(tomc): do we even need this?
-  REXKRNL_WARN("[STUB] RtlUnwind called - not implemented");
+void RtlUnwind_entry(u32 target_frame, u32 target_ip, u32 exception_record, u32 return_value) {
+  if (!guest_eh::Enabled()) {
+    REXKRNL_WARN("[STUB] RtlUnwind called - not implemented");
+    return;
+  }
+  // Throws to the target frame; returns only when no registered frame matches.
+  guest_eh::Unwind(guest_eh::KernelEnv(), *rex::runtime::current_ppc_context(), target_frame,
+                   target_ip, exception_record, return_value);
 }
 
-void __C_specific_handler_entry() {
-  // TODO(tomc): do we even need this?
-  REXKRNL_WARN("[STUB] __C_specific_handler called - not implemented");
+// Writes r3 itself so the switched-off stub leaves r3 untouched, as before.
+void __C_specific_handler_entry(u32 record, u32 establisher_frame, u32 context_record,
+                                u32 dispatcher_context) {
+  if (!guest_eh::Enabled()) {
+    REXKRNL_WARN("[STUB] __C_specific_handler called - not implemented");
+    return;
+  }
+  auto& ctx = *rex::runtime::current_ppc_context();
+  const u32 disposition = guest_eh::CSpecificHandler(guest_eh::KernelEnv(), ctx, record,
+                                                     establisher_frame, context_record,
+                                                     dispatcher_context);
+  ctx.r3.u64 = disposition;
 }
 
 REX_EXPORT_STUB(__imp__RtlAnsiStringToUnicodeString);
