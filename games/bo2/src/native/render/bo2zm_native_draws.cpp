@@ -54,10 +54,8 @@
 #include "../../bo2zm_debug_watch.h"
 #include "bo2zm_page_writes.h"  // write stamps for the vertex cache  // PC diagnostics, who writes the lighting volume
 #include "../../bo2zm_volume_writes.h"  // the lighting volume's writer, hooked
-#include "../../bo2zm_gpu_skin.h"  // GPU skinning, the skinning hooks' jobs
 #include "../../bo2zm_cheats.h"  // in a match or not, for the pipeline cache's saves
 #include "../../bo2zm_switch.h"  // CoresInUse, for the precompile's threads
-#include "shaders/bo2zm_gpu_skin_cs.h"
 #if __has_include("bo2zm_native_glow_energy_spirv.h") && __has_include("bo2zm_native_smooth_glow_spirv.h")
 #include "bo2zm_native_glow_energy_spirv.h"
 #include "bo2zm_native_smooth_glow_spirv.h"
@@ -2837,13 +2835,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (sampler_empty_ != VK_NULL_HANDLE) dfn_.vkDestroySampler(device_, sampler_empty_, nullptr);
     if (layout_pipeline_ != VK_NULL_HANDLE)
       dfn_.vkDestroyPipelineLayout(device_, layout_pipeline_, nullptr);
-    bo2zm::gpu_skin::SetRendererReady(false);
-    if (skin_pipeline_ != VK_NULL_HANDLE) dfn_.vkDestroyPipeline(device_, skin_pipeline_, nullptr);
-    if (skin_layout_ != VK_NULL_HANDLE) dfn_.vkDestroyPipelineLayout(device_, skin_layout_, nullptr);
-    if (skin_table_buffer_ != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, skin_table_buffer_, nullptr);
-    if (skin_table_memory_ != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, skin_table_memory_, nullptr);
-    if (skin_pool_buffer_ != VK_NULL_HANDLE) dfn_.vkDestroyBuffer(device_, skin_pool_buffer_, nullptr);
-    if (skin_pool_memory_ != VK_NULL_HANDLE) dfn_.vkFreeMemory(device_, skin_pool_memory_, nullptr);
     if (pool_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, pool_, nullptr);
     if (pool_ubo_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorPool(device_, pool_ubo_, nullptr);
     if (layout_ubo_ != VK_NULL_HANDLE) dfn_.vkDestroyDescriptorSetLayout(device_, layout_ubo_, nullptr);
@@ -2901,7 +2892,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     if (!address_buffer_ || !CreateUpload() || !CreateDescriptors()) {
       return false;
     }
-    CreateGpuSkin();  // bo2zm_gpu_skin
     // The pool is created after CreateDescriptors (where textures_mb_max_ is read) and before CreateEmpty,
     // so the three empty images can already come from it. The slabs are prewarmed here, while the game is
     // still loading: a 32 MB memset during gameplay would be a 10-15 ms stutter.
@@ -3892,19 +3882,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
           dedupe_.Find(source.address, source.bytes, uint32_t(source.order), offset, hash_dedupe)) {
         offsets_vertices[b] = offset;
         SamplerPath(40, t_binding);
-        continue;
-      }
-      // GPU skinning (bo2zm_gpu_skin.h). A range that holds skinning jobs' output is skinned by compute
-      // dispatches into its place in the upload buffer instead of copied (the parts without a job are copied).
-      if (skin_on_ && bo2zm::gpu_skin::MayOverlap(uint32_t(source.address), source.bytes) &&
-          SkinOnGpu(source.data, source.order, source.bytes, source.address, input->bindings[b].stride,
-                    input->bindings.size() == 1, offset)) {
-        offsets_vertices[b] = offset;
-        bytes_vertices_ += source.bytes;
-        if (dedupe_active_) {
-          dedupe_.Annotate(source.address, source.bytes, uint32_t(source.order), offset, hash_dedupe);
-        }
-        SamplerPath(42, t_binding);
         continue;
       }
       // bo2zm_native_vertex_cache: bound from a persistent copy when its bytes did not change (the offset then
@@ -5690,11 +5667,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     // is flushed and it is submitted (bo2zm_native_texture_hash_thread). Their barrier and copy are
     // already recorded.
     CollectHashes();
-    // GPU skinning. One dispatch for this submission's skinning jobs, and the barrier before its draws
-    // (DispatchSkinTable).
-    if (skin_on_) {
-      DispatchSkinTable();
-    }
     if (upload_used_ && !upload_coherent_) {
       rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, upload_memory_, upload_type_, 0,
                                                     upload_size_real_, upload_used_);
@@ -5709,11 +5681,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
 
   void UseSlot(uint32_t slot) override {
     WaitUploads();  // already empty after BeforeSubmit; just in case, before switching buffers
-    // GPU skinning. This slot's upload buffer is back from the GPU: its checks are compared before it
-    // is filled again; and the new upload command buffer has no pipeline bound yet.
-    CheckGpuSkin(uint32_t(slot % uploads_.size()));
-    skin_bound_ = false;
-    skin_tables_[slot % uploads_.size()] = {};
     ReportCopies();  // every 10 s, who made the vertex copies and how long the ring waited
     ReportCacheFetch();  // every 10 s, the per-fetch sampler table
     // A texture may arrive here with its bind in flight (it was prepared before this submission's first
@@ -9512,400 +9479,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
     return true;
   }
 
-
-  /*
-   * GPU skinning (bo2zm_gpu_skin.h, shaders/bo2zm_gpu_skin.comp). The vertex range [address, + bytes)
-   * (guest bytes at data, physical address) holds output of the jobs in skin_jobs_. Its output is reserved where the
-   * copy would have put it, and each job's part becomes a record in this submission's job table: a block in the
-   * upload buffer with the job's constants and bone snapshot (copied with the vertex copy's k8in32 swap, so the shader
-   * reads values), and the model's records and input vertices from the input cache (below), or copied after the block
-   * when they are not in it. BeforeSubmit records one dispatch over the table's workgroups in the upload command
-   * buffer, which is submitted before the job buffer, and the barrier (DispatchSkinTable). What no job covers is
-   * copied as usual. A range the shader cannot write as the copy would have (another stride or byte order, a job that
-   * does not start on one of its vertices, no room) has its jobs computed on the CPU into guest memory and is copied
-   * as usual.
-   *
-   * The input cache: a job's records and input vertices are its model's data, the same for every zombie with that
-   * model and in every frame. A job's whole inputs are copied once into the pool being filled (two persistent pools)
-   * and stay valid while no page they come from has a write stamp since the copy (bo2zm_page_writes.h, as the vertex
-   * cache); the first 2 uses of a copy and every 256th after compare the guest bytes' ChangeSum with the copy's. A full
-   * pool hands over to the other one once that one has rested kVertexPoolRest submissions; both pools' copies are
-   * dropped then (as the vertex pools: the one left is never read again before it has rested).
-   */
-  struct SkinJobRecord {  // the shader's JobRecord (std430)
-    VkDeviceAddress block;
-    VkDeviceAddress inputs;
-    VkDeviceAddress target;
-    uint32_t count, kernel, bones_word, records_byte, vertices_word, bones_guest, bones_lo, unused;
-  };
-  static_assert(sizeof(SkinJobRecord) == 56, "the shader's job record");
-  struct SkinPush {
-    VkDeviceAddress jobs;
-    VkDeviceAddress groups;
-  };
-  static constexpr uint32_t kSkinTableJobs = 4096;     // job records per submission
-  static constexpr uint32_t kSkinTableGroups = 32768;  // workgroups of 64 vertices per submission
-  static constexpr VkDeviceSize kSkinTableBytes = VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord) +
-                                                  VkDeviceSize(kSkinTableGroups) * 8;
-  // Each of the input cache's two pools. By round 15 in Town they hold ~1 MB in all.
-  static constexpr VkDeviceSize kSkinPoolBytes = VkDeviceSize(8) << 20;
-
-  // A host-visible buffer the shader reaches by its address (the upload buffer's memory type).
-  bool CreateSkinBuffer(VkDeviceSize size, VkBuffer& buffer, VkDeviceMemory& memory, uint8_t*& data,
-                        VkDeviceAddress& address) {
-    VkBufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = size;
-    info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (dfn_.vkCreateBuffer(device_, &info, nullptr, &buffer) != VK_SUCCESS) {
-      return false;
-    }
-    VkMemoryRequirements requirements;
-    dfn_.vkGetBufferMemoryRequirements(device_, buffer, &requirements);
-    if (!((requirements.memoryTypeBits >> upload_type_) & 1)) {
-      return false;
-    }
-    VkMemoryAllocateFlagsInfo flags{};
-    flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    VkMemoryAllocateInfo reserve{};
-    reserve.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    reserve.pNext = &flags;
-    reserve.allocationSize = requirements.size;
-    reserve.memoryTypeIndex = upload_type_;
-    void* mapped = nullptr;
-    if (dfn_.vkAllocateMemory(device_, &reserve, nullptr, &memory) != VK_SUCCESS ||
-        dfn_.vkBindBufferMemory(device_, buffer, memory, 0) != VK_SUCCESS ||
-        dfn_.vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) {
-      return false;
-    }
-    data = static_cast<uint8_t*>(mapped);
-    VkBufferDeviceAddressInfo where{};
-    where.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-    where.buffer = buffer;
-    address = address_buffer_(device_, &where);
-    return address != 0;
-  }
-
-  void CreateGpuSkin() {
-    if (!bo2zm::gpu_skin::RendererOn()) {
-      return;
-    }
-    VkShaderModuleCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = sizeof(kSpirvBo2zmGpuSkin);
-    info.pCode = kSpirvBo2zmGpuSkin;
-    VkShaderModule module = VK_NULL_HANDLE;
-    if (dfn_.vkCreateShaderModule(device_, &info, nullptr, &module) != VK_SUCCESS) {
-      REXLOG_ERROR("[gpu_skin] the compute shader could not be created: skinning stays on the CPU");
-      return;
-    }
-    const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SkinPush)};
-    VkPipelineLayoutCreateInfo layout{};
-    layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout.pushConstantRangeCount = 1;
-    layout.pPushConstantRanges = &range;
-    if (dfn_.vkCreatePipelineLayout(device_, &layout, nullptr, &skin_layout_) == VK_SUCCESS) {
-      VkComputePipelineCreateInfo pipeline{};
-      pipeline.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-      pipeline.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-      pipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-      pipeline.stage.module = module;
-      pipeline.stage.pName = "main";
-      pipeline.layout = skin_layout_;
-      if (dfn_.vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipeline, nullptr, &skin_pipeline_) !=
-          VK_SUCCESS) {
-        skin_pipeline_ = VK_NULL_HANDLE;
-      }
-    }
-    dfn_.vkDestroyShaderModule(device_, module, nullptr);
-    const bool buffers =
-        skin_pipeline_ != VK_NULL_HANDLE &&
-        CreateSkinBuffer(kSkinTableBytes * kSlotsOfJob, skin_table_buffer_, skin_table_memory_, skin_table_data_,
-                         skin_table_address_) &&
-        CreateSkinBuffer(kSkinPoolBytes * 2, skin_pool_buffer_, skin_pool_memory_, skin_pool_data_,
-                         skin_pool_address_);
-    skin_on_ = buffers;
-    bo2zm::gpu_skin::SetRendererReady(skin_on_);
-    REXLOG_INFO("[gpu_skin] renderer: {}", skin_on_ ? "the compute pipeline and its buffers are ready, the hooks may "
-                                                      "record jobs"
-                                                    : "no compute pipeline or buffers: skinning stays on the CPU");
-  }
-
-  // The job's whole inputs in the input cache (its records from the word that holds the first one, then its input
-  // vertices): their address, or 0 when they must be copied per use. records_words: the records' words there.
-  VkDeviceAddress SkinCachedInputs(const bo2zm::gpu_skin::Job& job, uint32_t halves, uint32_t& records_words) {
-    bo2zm::gpu_skin::RendererCounts& counts = bo2zm::gpu_skin::Counts();
-    records_words = ((job.records_guest & 3) + job.count * halves * 2 + 3) / 4;
-    uint32_t vertices_physical = 0, records_physical = 0;
-    if (!bo2zm::page_writes::g_enabled.load(std::memory_order_relaxed) ||
-        !bo2zm::gpu_skin::Physical(job.vertices_guest, vertices_physical) ||
-        !bo2zm::gpu_skin::Physical(job.records_guest & ~3u, records_physical)) {
-      return 0;
-    }
-    const uint32_t vertices_bytes = job.count * 24, records_bytes = records_words * 4;
-    const uint8_t* records = job.records - (job.records_guest & 3);
-    const uint64_t key = uint64_t(job.vertices_guest) | (uint64_t(job.count & 0x3FFFFFFF) << 32) |
-                         (uint64_t(job.kernel) << 62);
-    auto [it, fresh] = skin_cache_.try_emplace(key);
-    SkinCacheEntry& e = it->second;
-    if (!fresh && e.records_guest == job.records_guest && e.generation == skin_pools_[e.pool].generation &&
-        bo2zm::page_writes::Unchanged(vertices_physical, vertices_bytes, e.epoch) &&
-        bo2zm::page_writes::Unchanged(records_physical, records_bytes, e.epoch)) {
-      const uint32_t use = e.uses++;
-      if ((use >= 2 && (use & 255) != 0) ||
-          (ChangeSum(job.vertices, vertices_bytes) ^ ChangeSum(records, records_bytes)) == e.sum) {
-        counts.cache_hits.fetch_add(1, std::memory_order_relaxed);
-        return skin_pool_address_ + e.pool * kSkinPoolBytes + e.offset;
-      }
-      counts.guard_fails.fetch_add(1, std::memory_order_relaxed);  // changed without a stamp: copied again
-    }
-    const VkDeviceSize need = (VkDeviceSize(records_bytes) + vertices_bytes + 15) & ~VkDeviceSize(15);
-    SkinPool* pool = &skin_pools_[skin_pool_];
-    if (pool->used + need > kSkinPoolBytes) {
-      SkinPool& other = skin_pools_[skin_pool_ ^ 1];
-      if (need > kSkinPoolBytes || frame_ - other.left < kVertexPoolRest) {
-        skin_cache_.erase(it);
-        return 0;
-      }
-      pool->left = frame_;
-      ++pool->generation;  // its copies are not used again: the GPU is done with them once it has rested
-      skin_pool_ ^= 1;
-      pool = &other;
-      ++pool->generation;
-      pool->used = 0;
-    }
-    const VkDeviceSize at = pool->used;
-    pool->used += need;
-    uint8_t* target = skin_pool_data_ + skin_pool_ * kSkinPoolBytes + at;
-    CopyVertices(CopyJob{records, target, records_words, xenos::Endian::k8in32});
-    CopyVertices(CopyJob{job.vertices, target + records_bytes, job.count * 6, xenos::Endian::k8in32});
-    pool->dirty_lo = std::min(pool->dirty_lo, at);
-    pool->dirty_hi = std::max(pool->dirty_hi, at + need);
-    e = {job.records_guest,
-         skin_pool_,
-         pool->generation,
-         at,
-         bo2zm::page_writes::Epoch(),
-         0,
-         ChangeSum(job.vertices, vertices_bytes) ^ ChangeSum(records, records_bytes)};
-    counts.cache_fills.fetch_add(1, std::memory_order_relaxed);
-    counts.cache_fill_bytes.fetch_add(need, std::memory_order_relaxed);
-    return skin_pool_address_ + skin_pool_ * kSkinPoolBytes + at;
-  }
-
-  bool SkinOnGpu(const uint8_t* data, xenos::Endian order, uint32_t bytes, uint64_t address, uint32_t stride,
-                 bool single, VkDeviceSize& offset) {
-    const auto t0 = std::chrono::steady_clock::now();
-    const uint32_t lo = uint32_t(address);
-    const uint64_t hi = uint64_t(lo) + bytes;
-    bo2zm::gpu_skin::Overlapping(lo, bytes, skin_jobs_);
-    if (skin_jobs_.empty()) {
-      return false;
-    }
-    bo2zm::gpu_skin::RendererCounts& counts = bo2zm::gpu_skin::Counts();
-    static constexpr uint32_t kHalves[3] = {1, 3, 5};
-    const char* refused = nullptr;
-    VkDeviceSize space = VkDeviceSize(bytes) + stride + 16;  // the output, with ReserveMultiple's padding
-    uint32_t parts = 0, groups = 0;
-    if (stride != 32) {
-      refused = "stride";
-    } else if (order != xenos::Endian::k8in32) {
-      refused = "byte order";
-    } else {
-      for (const auto& job : skin_jobs_) {
-        const uint64_t first = std::max<uint64_t>(lo, job->out);
-        const uint64_t last = std::min<uint64_t>(hi, job->out + uint64_t(job->count) * 32);
-        if ((first - lo) % 32 || (first - job->out) % 32 || (last - first) % 32) {
-          refused = "a job not on the range's vertices";
-          break;
-        }
-        const uint64_t n = (last - first) / 32;
-        // The block, and the inputs in case they are not in the input cache.
-        space += 128 + job->bones.size() + n * kHalves[job->kernel] * 2 + 8 + n * 24 + 32 +
-                 (job->cpu_written ? n * 32 + 16 : 0);
-        parts += 1;
-        groups += uint32_t((n + 63) / 64);
-      }
-    }
-    SkinTable& table = skin_tables_[slot_current_];
-    if (!refused && (table.jobs + parts > kSkinTableJobs || table.groups + groups > kSkinTableGroups)) {
-      refused = "the submission's job table is full";
-    }
-    if (!refused && upload_used_ + space > kSizeUpload) {
-      refused = "no room in the upload buffer";
-    }
-    if (refused) {
-      bo2zm::gpu_skin::Refused(refused, lo, bytes, stride, uint32_t(order));
-      counts.refused.fetch_add(1, std::memory_order_relaxed);
-      for (const auto& job : skin_jobs_) {
-        counts.refused_vertices.fetch_add(job->count, std::memory_order_relaxed);
-        bo2zm::gpu_skin::Materialize(*job);
-      }
-      skin_jobs_.clear();
-      return false;
-    }
-    if (vertices_base_cero_ && single) {
-      ReserveMultiple(bytes, stride, offset);
-    } else {
-      Reserve(bytes, 4, offset);
-    }
-    const auto gap = [&](uint64_t from, uint64_t to) {
-      CopyVertices(CopyJob{data + (from - lo), upload_data_ + offset + (from - lo), uint32_t(to - from) / 4, order});
-      counts.gap_bytes.fetch_add(to - from, std::memory_order_relaxed);
-    };
-    uint8_t* const table_data = skin_table_data_ + slot_current_ * kSkinTableBytes;
-    uint64_t cursor = lo, per_use = 0, vertices = 0;
-    for (const auto& job : skin_jobs_) {
-      const uint64_t first = std::max<uint64_t>(lo, job->out);
-      const uint64_t last = std::min<uint64_t>(hi, job->out + uint64_t(job->count) * 32);
-      if (first > cursor) {
-        gap(cursor, first);
-      }
-      cursor = std::max(cursor, last);
-      const uint32_t v0 = uint32_t((first - job->out) / 32), n = uint32_t((last - first) / 32);
-      if (n == 0) {
-        continue;
-      }
-      const uint32_t halves = kHalves[job->kernel];
-      const uint32_t bones_bytes = uint32_t(job->bones.size());
-      uint32_t records_words = 0;
-      VkDeviceAddress inputs = SkinCachedInputs(*job, halves, records_words);
-      // Not cached: the part's records, from the word that holds vertex v0's first one, and vertices after the bones.
-      const uint32_t records_from = job->records_guest + v0 * halves * 2;
-      const uint32_t records_word0 = records_from & ~3u;
-      const uint32_t part_records_words = (records_from + n * halves * 2 - records_word0 + 3) / 4;
-      const uint32_t block_bytes = 128 + bones_bytes + (inputs ? 0 : part_records_words * 4 + n * 24);
-      VkDeviceSize block = 0;
-      Reserve(block_bytes, 16, block);
-      uint8_t* at = upload_data_ + block;
-      std::memcpy(at, job->constants, 128);
-      CopyVertices(CopyJob{job->bones.data(), at + 128, bones_bytes / 4, xenos::Endian::k8in32});
-      SkinJobRecord record{};
-      record.block = upload_address_ + block;
-      record.target = upload_address_ + offset + (first - lo);
-      record.count = n;
-      record.kernel = job->kernel;
-      record.bones_word = 32;
-      record.bones_guest = job->bones_guest;
-      record.bones_lo = job->bones_lo;
-      if (inputs) {
-        record.inputs = inputs;
-        record.records_byte = (job->records_guest & 3) + v0 * halves * 2;
-        record.vertices_word = records_words + v0 * 6;
-      } else {
-        CopyVertices(CopyJob{job->records + (int64_t(records_word0) - int64_t(job->records_guest)),
-                             at + 128 + bones_bytes, part_records_words, xenos::Endian::k8in32});
-        CopyVertices(CopyJob{job->vertices + size_t(v0) * 24, at + 128 + bones_bytes + part_records_words * 4, n * 6,
-                             xenos::Endian::k8in32});
-        record.inputs = upload_address_ + block + 128 + bones_bytes;
-        record.records_byte = records_from & 3;
-        record.vertices_word = part_records_words;
-        counts.uncached.fetch_add(1, std::memory_order_relaxed);
-      }
-      std::memcpy(table_data + VkDeviceSize(table.jobs) * sizeof(SkinJobRecord), &record, sizeof(record));
-      uint8_t* const group_data = table_data + VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord);
-      for (uint32_t g = 0; g < n; g += 64) {
-        const uint32_t entry[2] = {table.jobs, g};
-        std::memcpy(group_data + VkDeviceSize(table.groups++) * 8, entry, 8);
-      }
-      ++table.jobs;
-      per_use += block_bytes;
-      vertices += n;
-      counts.dispatches.fetch_add(1, std::memory_order_relaxed);
-      if (job->cpu_written) {
-        // bo2zm_gpu_skin_check: the CPU kernel's output, copied next to it, compared when the buffer comes back.
-        VkDeviceSize cpu = 0;
-        Reserve(VkDeviceSize(n) * 32, 16, cpu);
-        CopyVertices(CopyJob{data + (first - lo), upload_data_ + cpu, n * 8, order});
-        skin_checks_.push_back({slot_current_, offset + (first - lo), cpu, n, job->kernel, uint32_t(first)});
-      }
-    }
-    if (cursor < hi) {
-      gap(cursor, hi);
-    }
-    skin_jobs_.clear();
-    counts.ranges.fetch_add(1, std::memory_order_relaxed);
-    counts.vertices.fetch_add(vertices, std::memory_order_relaxed);
-    counts.input_bytes.fetch_add(per_use, std::memory_order_relaxed);
-    counts.ns.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now() - t0)
-                                     .count()),
-                        std::memory_order_relaxed);
-    return true;
-  }
-
-  // BeforeSubmit: the job table's workgroups not dispatched yet, as one dispatch in the upload command buffer, and
-  // the barrier before the job buffer's draws read the vertices.
-  void DispatchSkinTable() {
-    SkinTable& table = skin_tables_[slot_current_];
-    if (table.groups == table.dispatched) {
-      return;
-    }
-    const VkCommandBuffer upload = context_->CommandsUpload();
-    if (!upload) {
-      return;
-    }
-    if (!upload_coherent_) {
-      rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, skin_table_memory_, upload_type_, 0,
-                                                    VK_WHOLE_SIZE, VK_WHOLE_SIZE);
-      for (uint32_t p = 0; p < 2; ++p) {
-        SkinPool& pool = skin_pools_[p];
-        if (pool.dirty_lo < pool.dirty_hi) {
-          rex::ui::vulkan::util::FlushMappedMemoryRange(vulkan_device_, skin_pool_memory_, upload_type_, 0,
-                                                        VK_WHOLE_SIZE, VK_WHOLE_SIZE);
-          break;
-        }
-      }
-    }
-    for (SkinPool& pool : skin_pools_) {
-      pool.dirty_lo = ~VkDeviceSize(0);
-      pool.dirty_hi = 0;
-    }
-    if (!skin_bound_) {
-      dfn_.vkCmdBindPipeline(upload, VK_PIPELINE_BIND_POINT_COMPUTE, skin_pipeline_);
-      skin_bound_ = true;
-    }
-    const VkDeviceAddress base = skin_table_address_ + slot_current_ * kSkinTableBytes;
-    const SkinPush push{base, base + VkDeviceSize(kSkinTableJobs) * sizeof(SkinJobRecord) +
-                                  VkDeviceSize(table.dispatched) * 8};
-    dfn_.vkCmdPushConstants(upload, skin_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-    dfn_.vkCmdDispatch(upload, table.groups - table.dispatched, 1, 1);
-    table.dispatched = table.groups;
-    bo2zm::gpu_skin::Counts().submit_dispatches.fetch_add(1, std::memory_order_relaxed);
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-    dfn_.vkCmdPipelineBarrier(upload, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1,
-                              &barrier, 0, nullptr, 0, nullptr);
-  }
-
-  // bo2zm_gpu_skin_check: the checks recorded in upload buffer `index`, now that the GPU is done with it.
-  void CheckGpuSkin(uint32_t index) {
-    if (skin_checks_.empty()) {
-      return;
-    }
-    const UploadBuffer& u = uploads_[index];
-    bool invalidated = upload_coherent_;
-    for (auto it = skin_checks_.begin(); it != skin_checks_.end();) {
-      if (it->upload != index) {
-        ++it;
-        continue;
-      }
-      if (!invalidated) {
-        VkMappedMemoryRange range{};
-        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        range.memory = u.guest_memory;
-        range.size = VK_WHOLE_SIZE;
-        dfn_.vkInvalidateMappedMemoryRanges(device_, 1, &range);
-        invalidated = true;
-      }
-      bo2zm::gpu_skin::Compare(u.data + it->gpu, u.data + it->cpu, it->vertices, it->kernel, it->physical);
-      it = skin_checks_.erase(it);
-    }
-  }
 
   /*
    * bo2zm_native_index_cache. The vertex cache by write stamps
@@ -16147,53 +15720,6 @@ class VulkanDrawsImpl final : public VulkanDraws {
   // One per work slot (there are 3). With fewer than there are slots, two slots would share a buffer and
   // the CPU would write over what the GPU is still reading.
   std::array<UploadBuffer, kSlotsOfJob> uploads_{};  // upload_* are the current slot's
-  // GPU skinning (SkinOnGpu).
-  bool skin_on_ = false;
-  VkPipelineLayout skin_layout_ = VK_NULL_HANDLE;
-  VkPipeline skin_pipeline_ = VK_NULL_HANDLE;
-  bool skin_bound_ = false;  // the pipeline is bound in this recording's upload command buffer
-  // The job tables, one per upload buffer (kSkinTableBytes each: the job records, then the workgroups).
-  VkBuffer skin_table_buffer_ = VK_NULL_HANDLE;
-  VkDeviceMemory skin_table_memory_ = VK_NULL_HANDLE;
-  uint8_t* skin_table_data_ = nullptr;
-  VkDeviceAddress skin_table_address_ = 0;
-  struct SkinTable {
-    uint32_t jobs = 0, groups = 0, dispatched = 0;
-  };
-  std::array<SkinTable, kSlotsOfJob> skin_tables_{};
-  // The input cache (SkinCachedInputs): two pools of kSkinPoolBytes in one buffer.
-  VkBuffer skin_pool_buffer_ = VK_NULL_HANDLE;
-  VkDeviceMemory skin_pool_memory_ = VK_NULL_HANDLE;
-  uint8_t* skin_pool_data_ = nullptr;
-  VkDeviceAddress skin_pool_address_ = 0;
-  struct SkinPool {
-    VkDeviceSize used = 0;
-    uint64_t generation = 1;
-    uint64_t left = 0;  // frame_ when the filling moved to the other pool
-    VkDeviceSize dirty_lo = ~VkDeviceSize(0), dirty_hi = 0;
-  };
-  std::array<SkinPool, 2> skin_pools_{};
-  uint32_t skin_pool_ = 0;
-  struct SkinCacheEntry {
-    uint32_t records_guest = 0;
-    uint32_t pool = 0;
-    uint64_t generation = 0;
-    VkDeviceSize offset = 0;
-    uint32_t epoch = 0;
-    uint32_t uses = 0;
-    uint64_t sum = 0;
-  };
-  std::unordered_map<uint64_t, SkinCacheEntry> skin_cache_;  // by input vertices, count and kernel
-  std::vector<bo2zm::gpu_skin::JobRef> skin_jobs_;
-  struct SkinCheck {
-    uint32_t upload;     // which upload buffer
-    VkDeviceSize gpu;    // the dispatch's output
-    VkDeviceSize cpu;    // the CPU kernel's, copied
-    uint32_t vertices;
-    uint32_t kernel;
-    uint32_t physical;
-  };
-  std::vector<SkinCheck> skin_checks_;
   // Separate shared constants, CPU-cached (bo2zm_native_shared_constants_cache).
   std::array<UploadBuffer, kSlotsOfJob> shared_bufs_{};
   bool shared_separate_ = false;

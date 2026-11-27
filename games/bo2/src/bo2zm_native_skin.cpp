@@ -59,7 +59,6 @@
 #include <simde/arm/neon.h>
 
 #include "bo2zm_benchmark.h"
-#include "bo2zm_gpu_skin.h"
 
 REXCVAR_DEFINE_BOOL(bo2zm_native_skin_fast, true, "BO2",
                     "The skinning rewrites' fast form (the same results with fewer instructions, see "
@@ -553,63 +552,6 @@ void Skin2(PPCContext& ctx, uint8_t* base) {
 // y * row 1 in both chains, and wb * B in the blend (wa * A fused, then wc * C).
 void Skin3(PPCContext& ctx, uint8_t* base) {
   Kernel<__imp__sub_82913B50, 2, true>(ctx, base, Run3<false>, Run3<true>);
-}
-
-// GPU skinning (bo2zm_gpu_skin.h): the call as a job. Only what the fast form also takes: an 8-byte aligned vertex
-// array, the game's usual vperm controls and an even record array (the shader reads each weight as the 16-bit
-// integer it is and puts the position's w in by a lane move).
-bool RecordGpu(int kernel, PPCContext& ctx, uint8_t* base, bool cpu_written) {
-  const uint32_t count = ctx.r5.u32;
-  uint32_t out = 0;
-  if ((ctx.r3.u32 & 7) || count == 0 || !gpu_skin::Physical(ctx.r7.u32 & ~15u, out)) {
-    gpu_skin::CountNotRecorded();
-    return false;
-  }
-  const Constants k = Read(ctx, base);
-  if (!k.position_simple || (kernel != 0 && (!k.weight_simple || (ctx.r4.u32 & 1)))) {
-    gpu_skin::CountNotRecorded();
-    return false;
-  }
-  // The bones the records name (big-endian u16 byte offsets from r6). A record: the bone; or bone A, bone B and B's
-  // weight; or bone C, bone A, A's weight, bone B and B's weight. The snapshot spans the lowest to the highest.
-  static constexpr uint32_t kHalves[3] = {1, 3, 5};
-  const uint32_t halves = kHalves[kernel];
-  const uint8_t* records = Ptr(base, ctx.r4.u32);
-  uint32_t lo = 0xFFFF, hi = 0;
-  for (uint32_t i = 0; i < count; ++i) {
-    const uint8_t* r = records + size_t(i) * halves * 2;
-    for (uint32_t h = 0; h < halves; ++h) {
-      if (h == 2 || h == 4) {
-        continue;  // a weight
-      }
-      const uint32_t offset = uint32_t(r[2 * h]) << 8 | r[2 * h + 1];
-      lo = std::min(lo, offset);
-      hi = std::max(hi, offset);
-    }
-  }
-  gpu_skin::JobRef job = gpu_skin::JobRef::New();
-  job->out = out;
-  job->count = count;
-  job->kernel = uint32_t(kernel);
-  job->vertices = Ptr(base, ctx.r3.u32);
-  job->vertices_guest = ctx.r3.u32;
-  job->records = records;
-  job->target = Ptr(base, ctx.r7.u32 & ~15u);
-  job->records_guest = ctx.r4.u32;
-  job->bones_guest = ctx.r6.u32;
-  // Each row as lvx reads it: the matrix's address rounded down to 16.
-  job->bones_lo = (ctx.r6.u32 + lo) & ~15u;
-  const uint32_t bones_hi = ((ctx.r6.u32 + hi) & ~15u) + 64;
-  job->bones.resize(bones_hi - job->bones_lo);
-  std::memcpy(job->bones.data(), Ptr(base, job->bones_lo), job->bones.size());
-  const F4 vectors[7] = {k.scale, k.bias, k.k8, k.k9, k.k10, k.k11, k.one};
-  for (int v = 0; v < 7; ++v) {
-    simde_vst1q_u32(job->constants + 4 * v, simde_vreinterpretq_u32_f32(vectors[v]));
-  }
-  simde_vst1q_u32(job->constants + 28, k.weight_lanes);
-  job->cpu_written = cpu_written;
-  gpu_skin::Add(std::move(job));
-  return true;
 }
 
 void Report() {

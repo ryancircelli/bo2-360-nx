@@ -62,7 +62,6 @@ set(BO2ZM_SOURCES
     ${BO2ZM_ROOT}/src/bo2zm_native_lzx.cpp
     ${BO2ZM_ROOT}/../../core/bo2zm_page_writes.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_skin.cpp
-    ${BO2ZM_ROOT}/src/bo2zm_gpu_skin.cpp
     ${BO2ZM_ROOT}/src/bo2zm_native_cull.cpp
     # The entity loops: a read-only scan pass before sub_822FD360, the plane test sub_822FE3B8 natively.
     ${BO2ZM_ROOT}/src/bo2zm_native_entities.cpp

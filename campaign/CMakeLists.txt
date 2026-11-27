@@ -67,8 +67,7 @@ if(BO2CP_NATIVE)
         ${BO2ZM_SRC}/bo2zm_native_audio.cpp
         ${BO2ZM_SRC}/bo2zm_native_limiter.cpp
         ${BO2ZM_SRC}/bo2zm_native_lzx.cpp
-        ${BO2ZM_SRC}/bo2zm_native_skin.cpp
-        ${BO2ZM_SRC}/bo2zm_gpu_skin.cpp)
+        ${BO2ZM_SRC}/bo2zm_native_skin.cpp)
     list(APPEND BO2CP_SOURCES ${BO2CP_NATIVE_SOURCES}
         src/native/bo2cp_native_stubs.cpp
         ${REXSDK_DIR}/src/graphics/pipeline/shader/interpreter.cpp

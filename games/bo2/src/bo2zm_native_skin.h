@@ -17,11 +17,6 @@ void Skin2(PPCContext& ctx, uint8_t* base);
 // sub_82913B50: three bones per vertex, two weights.
 void Skin3(PPCContext& ctx, uint8_t* base);
 
-// GPU skinning (bo2zm_gpu_skin.h): records the call of kernel 0, 1 or 2 (one, two, three bones) as a job instead of
-// computing it. False when it cannot be one (the caller then computes it). cpu_written: the caller computes it too
-// (bo2zm_gpu_skin_check).
-bool RecordGpu(int kernel, PPCContext& ctx, uint8_t* base, bool cpu_written);
-
 // A "[native_skin] timed" line: each kernel's vertices per call and time per vertex in the last 10 s, in the general
 // and the fast form (bo2zm_native_skin_fast). Called every 10 s.
 void Report();

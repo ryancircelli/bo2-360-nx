@@ -52,7 +52,6 @@
 
 #include "bo2zm_game.h"
 #include "bo2zm_benchmark.h"
-#include "bo2zm_gpu_skin.h"
 #include "bo2zm_native_limiter.h"
 #include "bo2zm_native_lzx.h"
 #include "bo2zm_native_skin.h"
@@ -386,7 +385,6 @@ void Summarize() {
   }
   ReportSoundPool();
   bo2zm::native_skin::Report();
-  bo2zm::gpu_skin::Report();
 }
 
 void Save(uint8_t* base, const Regions& rg, std::vector<uint8_t>& copy) {
@@ -1445,76 +1443,34 @@ REX_HOOK_RAW(sub_827E7058) {
 REX_EXTERN(__imp__sub_82912D78);
 REX_EXTERN(__imp__sub_82913378);
 REX_EXTERN(__imp__sub_82913B50);
-REX_EXTERN(__imp__sub_82914AA0);
-
-namespace {
-// GPU skinning (bo2zm_gpu_skin.h): the call recorded as a job instead of computed, when it can be one. With
-// bo2zm_gpu_skin_check the kernel runs as well (its output in guest memory, for the renderer's comparison).
-enum class OnGpu { kNo, kRecorded, kRecordedAndCpu };
-OnGpu SkinOnGpu(int kernel, PPCContext& ctx, uint8_t* base) {
-  if (!bo2zm::gpu_skin::WantedNow()) {
-    return OnGpu::kNo;
-  }
-  const bool check = bo2zm::gpu_skin::CheckNext();
-  if (!bo2zm::native_skin::RecordGpu(kernel, ctx, base, check)) {
-    return OnGpu::kNo;
-  }
-  return check ? OnGpu::kRecordedAndCpu : OnGpu::kRecorded;
-}
-}  // namespace
 
 // Each kernel's output is stamped as written (bo2zm_page_writes.h: the renderer does not reuse vertex copies of it).
 REX_HOOK_RAW(sub_82912D78) {
   const uint32_t out = ctx.r7.u32 & ~15u, bytes = ctx.r5.u32 * 32;
-  if (SkinOnGpu(0, ctx, base) != OnGpu::kRecorded) {
-    if (SkinningOffInThisArm()) {
-      __imp__sub_82912D78(ctx, base);
-    } else {
-      Call(g_skin1, ctx, base, __imp__sub_82912D78, bo2zm::native_skin::Skin1, RegionsSkin);
-    }
+  if (SkinningOffInThisArm()) {
+    __imp__sub_82912D78(ctx, base);
+  } else {
+    Call(g_skin1, ctx, base, __imp__sub_82912D78, bo2zm::native_skin::Skin1, RegionsSkin);
   }
   bo2zm::page_writes::MarkGuest(out, bytes);
 }
 REX_HOOK_RAW(sub_82913378) {
   const uint32_t out = ctx.r7.u32 & ~15u, bytes = ctx.r5.u32 * 32;
-  if (SkinOnGpu(1, ctx, base) != OnGpu::kRecorded) {
-    if (SkinningOffInThisArm()) {
-      __imp__sub_82913378(ctx, base);
-    } else {
-      Call(g_skin2, ctx, base, __imp__sub_82913378, bo2zm::native_skin::Skin2, RegionsSkin);
-    }
+  if (SkinningOffInThisArm()) {
+    __imp__sub_82913378(ctx, base);
+  } else {
+    Call(g_skin2, ctx, base, __imp__sub_82913378, bo2zm::native_skin::Skin2, RegionsSkin);
   }
   bo2zm::page_writes::MarkGuest(out, bytes);
 }
 REX_HOOK_RAW(sub_82913B50) {
   const uint32_t out = ctx.r7.u32 & ~15u, bytes = ctx.r5.u32 * 32;
-  if (SkinOnGpu(2, ctx, base) != OnGpu::kRecorded) {
-    if (SkinningOffInThisArm()) {
-      __imp__sub_82913B50(ctx, base);
-    } else {
-      Call(g_skin3, ctx, base, __imp__sub_82913B50, bo2zm::native_skin::Skin3, RegionsSkin);
-    }
+  if (SkinningOffInThisArm()) {
+    __imp__sub_82913B50(ctx, base);
+  } else {
+    Call(g_skin3, ctx, base, __imp__sub_82913B50, bo2zm::native_skin::Skin3, RegionsSkin);
   }
   bo2zm::page_writes::MarkGuest(out, bytes);
-}
-
-// sub_82914AA0, the skinning of one surface (r4 its vertices, r5 its blend groups: the vertex counts of the one-,
-// two-, three- and four-bone groups as int16 at +0, +2, +4, +6, r6 the bone matrices, r7 the output; disassembly at
-// 0x82914AA0-0x82914E28: each group's kernel writes r7 + 32 * the vertices before it). With GPU skinning on, the jobs
-// in the whole output are forgotten first: a group whose kernel has no hook (four bones, sub_829143D0) or that stays
-// on the CPU then never takes an older job's vertices.
-REX_HOOK_RAW(sub_82914AA0) {
-  if (bo2zm::gpu_skin::Enabled()) {
-    const uint8_t* groups = rex::memory::GuestPtr<uint8_t*>(base, ctx.r5.u32);
-    int32_t total = 0;
-    for (int g = 0; g < 4; ++g) {
-      total += int16_t(uint16_t(groups[2 * g]) << 8 | groups[2 * g + 1]);  // extsh, as the dispatcher sums them
-    }
-    if (total > 0) {
-      bo2zm::gpu_skin::Forget(ctx.r7.u32 & ~15u, uint32_t(total) * 32);
-    }
-  }
-  __imp__sub_82914AA0(ctx, base);
 }
 
 REX_EXTERN(__imp__sub_8258B208);
