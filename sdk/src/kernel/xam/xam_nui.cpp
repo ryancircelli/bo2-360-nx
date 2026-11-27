@@ -83,21 +83,21 @@ REX_EXPORT_STUB(__imp__XamKinectGetHardwareType);
 REX_EXPORT_STUB(__imp__XamNatalDeviceAudioCalibrate);
 REX_EXPORT_STUB(__imp__XamNuiCameraAdjustTilt);
 REX_EXPORT_STUB(__imp__XamNuiCameraElevationAutoTilt);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationGetAngle, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationGetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiCameraElevationReverseAutoTilt);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetAngle, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationSetAngle, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiCameraElevationSetCallback);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraElevationStopMovement, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiCameraGetTiltControllerType);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraRememberFloor, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiCameraSetFlags);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltGetStatus, 0x32);
-REX_EXPORT_STUB(__imp__XamNuiCameraTiltReportStatus);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltSetCallback, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltGetStatus, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltReportStatus, 0x80004005);  // X_E_FAIL: no Kinect
+REX_EXPORT_STUB_RETURN(__imp__XamNuiCameraTiltSetCallback, 0);  // canary stores cb, returns 0; no tilt events ever fire
 REX_EXPORT_STUB(__imp__XamNuiEnableChatMic);
 REX_EXPORT_STUB(__imp__XamNuiGetCameraIntrinsics);
 REX_EXPORT_STUB(__imp__XamNuiGetDepthCalibration);
-REX_EXPORT_STUB_RETURN(__imp__XamNuiGetDeviceSerialNumber, 0x32);
+REX_EXPORT_STUB_RETURN(__imp__XamNuiGetDeviceSerialNumber, 0x80004005);  // X_E_FAIL: no Kinect (callers test blt)
 REX_EXPORT_STUB(__imp__XamNuiGetFanRate);
 REX_EXPORT_STUB(__imp__XamNuiGetLoadedDepthCalibration);
 REX_EXPORT_STUB(__imp__XamNuiGetSupportString);

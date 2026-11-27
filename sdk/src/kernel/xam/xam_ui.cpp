@@ -578,6 +578,16 @@ u32 XamShowCommunitySessionsUI_entry(u32 r3, u32 r4) {
   return X_ERROR_FUNCTION_FAILED;
 }
 
+// Offline guide panel (stub-noref-research specs/stub-specs.md #1/#2; checks after xenia-canary):
+// no profile -> NO_SUCH_USER, UI already up -> ACCESS_DENIED, else "opened and dismissed" = 0.
+u32 XamShowOfflinePanelUI_entry(u32 user_index) {
+  if (user_index >= 4 || !REX_KERNEL_STATE()->user_profile(user_index)) return X_ERROR_NO_SUCH_USER;
+  if (xeXamIsUIActive()) return X_ERROR_ACCESS_DENIED;
+  REX_KERNEL_STATE()->BroadcastNotification(0x9, true);
+  REX_KERNEL_STATE()->BroadcastNotification(0x9, false);
+  return X_ERROR_SUCCESS;
+}
+
 // The app's text input (rex/kernel/xam/text_input.h).
 namespace {
 
@@ -711,7 +721,7 @@ REX_EXPORT_STUB(__imp__XamNavigate);
 REX_EXPORT_STUB(__imp__XamNavigateBack);
 REX_EXPORT_STUB(__imp__XamOverrideHudOpenType);
 REX_EXPORT_STUB(__imp__XamShowAchievementDetailsUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowAchievementsUI, 0x32);
+REX_EXPORT(__imp__XamShowAchievementsUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB(__imp__XamShowAchievementsUIEx);
 REX_EXPORT_STUB(__imp__XamShowAndWaitForMessageBoxEx);
 REX_EXPORT_STUB(__imp__XamShowAvatarAwardGamesUI);
@@ -736,13 +746,13 @@ REX_EXPORT_STUB(__imp__XamShowFitnessWarnAboutPrivacyUI);
 REX_EXPORT_STUB(__imp__XamShowFitnessWarnAboutTimeUI);
 REX_EXPORT_STUB(__imp__XamShowFofUI);
 REX_EXPORT_STUB(__imp__XamShowForcedNameChangeUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowFriendRequestUI, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamShowFriendsUI, 0x32);
+REX_EXPORT(__imp__XamShowFriendRequestUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
+REX_EXPORT(__imp__XamShowFriendsUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB(__imp__XamShowFriendsUIp);
-REX_EXPORT_STUB_RETURN(__imp__XamShowGameInviteUI, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamShowGameVoiceChannelUI, 0x32);
+REX_EXPORT(__imp__XamShowGameInviteUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
+REX_EXPORT(__imp__XamShowGameVoiceChannelUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB(__imp__XamShowGamerCardUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowGamerCardUIForXUID, 0x32);
+REX_EXPORT(__imp__XamShowGamerCardUIForXUID, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB(__imp__XamShowGamerCardUIForXUIDp);
 REX_EXPORT_STUB_RETURN(__imp__XamShowGamesUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowGenericOnlineAppUI);
@@ -764,8 +774,8 @@ REX_EXPORT_STUB(__imp__XamShowMarketplacePurchaseOrderUIEx);
 REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceUI, 0x32);
 REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplaceUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowMessageBox);
-REX_EXPORT_STUB_RETURN(__imp__XamShowMessageComposeUI, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUI, 0x32);
+REX_EXPORT(__imp__XamShowMessageComposeUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
+REX_EXPORT(__imp__XamShowMessagesUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUIEx, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessengerUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowMultiplayerUpgradeUI);
@@ -800,10 +810,10 @@ REX_EXPORT_STUB(__imp__XamShowPasscodeVerifyUI);
 REX_EXPORT_STUB(__imp__XamShowPasscodeVerifyUIEx);
 REX_EXPORT_STUB_RETURN(__imp__XamShowPaymentOptionsUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowPersonalizationUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowPlayerReviewUI, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamShowPlayersUI, 0x32);
+REX_EXPORT(__imp__XamShowPlayerReviewUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
+REX_EXPORT(__imp__XamShowPlayersUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowPrivateChatInviteUI, 0x32);  // offline: not supported
-REX_EXPORT_STUB_RETURN(__imp__XamShowQuickChatUI, 0x32);
+REX_EXPORT(__imp__XamShowQuickChatUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB(__imp__XamShowQuickChatUIp);
 REX_EXPORT_STUB_RETURN(__imp__XamShowQuickLaunchUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB_RETURN(__imp__XamShowRecentMessageUI, 0x32);  // offline: not supported
@@ -818,7 +828,7 @@ REX_EXPORT_STUB(__imp__XamShowTermsOfUseUI);
 REX_EXPORT_STUB(__imp__XamShowUpdaterUI);
 REX_EXPORT_STUB_RETURN(__imp__XamShowVideoChatInviteUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowVideoRichPresenceUI);
-REX_EXPORT_STUB_RETURN(__imp__XamShowVoiceMailUI, 0x32);
+REX_EXPORT(__imp__XamShowVoiceMailUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB(__imp__XamShowVoiceSettingsUI);
 REX_EXPORT_STUB_RETURN(__imp__XamShowWhatsOnUI, 0x32);  // offline: not supported
 REX_EXPORT_STUB(__imp__XamShowWordRegisterUI);
