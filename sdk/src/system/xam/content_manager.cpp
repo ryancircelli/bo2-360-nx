@@ -11,9 +11,6 @@
 
 #include <array>
 #include <cstring>
-#ifndef _WIN32
-#include <unistd.h>
-#endif
 #include <queue>
 #include <string>
 
@@ -219,18 +216,13 @@ void CopyForUser(uint64_t owner, uint64_t primary_owner, const std::string_view 
 
 ContentPackage::ContentPackage(KernelState* kernel_state, const std::string_view root_name,
                                const XCONTENT_AGGREGATE_DATA& data,
-                               const std::filesystem::path& package_path,
-                               const std::filesystem::path& staging_path)
-    : kernel_state_(kernel_state),
-      root_name_(root_name),
-      package_path_(package_path),
-      staging_path_(staging_path),
-      license_(0) {
+                               const std::filesystem::path& package_path)
+    : kernel_state_(kernel_state), root_name_(root_name), package_path_(package_path), license_(0) {
   device_path_ = fmt::format("\\Device\\Content\\{0}\\", ++content_device_id_);
   content_data_ = data;
 
   auto fs = kernel_state_->file_system();
-  auto device = std::make_unique<rex::filesystem::HostPathDevice>(device_path_, staging_path.empty() ? package_path : staging_path, false,
+  auto device = std::make_unique<rex::filesystem::HostPathDevice>(device_path_, package_path, false,
                                                                   /*allow_share_delete=*/true);
   device->Initialize();
   fs->RegisterDevice(std::move(device));
@@ -335,7 +327,7 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
     }
     const auto entry_name = rex::path_to_utf8(file_info.name);
     if (entry_name.ends_with(".staging") || entry_name.ends_with(".old")) {
-      continue;  // atomic-save scratch folders
+      continue;  // left by the reverted atomic-save build (1117fd8e); may hold unsaved progress, never list or delete
     }
 
     XCONTENT_AGGREGATE_DATA content_data{};
@@ -374,67 +366,8 @@ std::unique_ptr<ContentPackage> ContentManager::ResolvePackage(
   }
   auto owned_data = data;
   owned_data.xuid = EffectiveContentOwner(xuid, data);
-  RecoverStaging(package_path);
-  const auto staging = StagingPathFor(package_path);
-  uint32_t files = 0;
-  if (!CopyFolder(package_path, staging, files)) {
-    // Cannot clone: fall back to editing in place rather than failing the save.
-    REXSYS_WARN("[save] could not stage {}; editing in place", rex::path_to_utf8(package_path));
-    std::error_code ec;
-    std::filesystem::remove_all(staging, ec);
-    return std::make_unique<ContentPackage>(kernel_state_, root_name, owned_data, package_path);
-  }
-  return std::make_unique<ContentPackage>(kernel_state_, root_name, owned_data, package_path, staging);
-}
-
-std::filesystem::path ContentManager::StagingPathFor(const std::filesystem::path& package_path) {
-  auto p = package_path;
-  p += ".staging";
-  return p;
-}
-
-void ContentManager::RecoverStaging(const std::filesystem::path& package_path) {
-  std::error_code ec;
-  auto old = package_path;
-  old += ".old";
-  if (!std::filesystem::exists(package_path, ec) && std::filesystem::exists(old, ec)) {
-    std::filesystem::rename(old, package_path, ec);  // swap died between its two renames
-  }
-  std::filesystem::remove_all(StagingPathFor(package_path), ec);
-  std::filesystem::remove_all(old, ec);
-}
-
-bool ContentManager::CommitStaging(const std::filesystem::path& staging,
-                                   const std::filesystem::path& package_path) {
-  std::error_code ec;
-#ifndef _WIN32
-  // shortcut: fsync only on POSIX hosts; Windows relies on close-time flush, upgrade if saves corrupt there.
-  for (const auto& e : std::filesystem::recursive_directory_iterator(staging, ec)) {
-    if (e.is_regular_file(ec)) {
-      if (FILE* f = fopen(e.path().c_str(), "rb")) {
-        fsync(fileno(f));
-        fclose(f);
-      }
-    }
-  }
-#endif
-  auto old = package_path;
-  old += ".old";
-  std::filesystem::remove_all(old, ec);
-  ec.clear();
-  if (std::filesystem::exists(package_path)) {
-    std::filesystem::rename(package_path, old, ec);
-    if (ec) {
-      return false;
-    }
-  }
-  std::filesystem::rename(staging, package_path, ec);
-  if (ec) {
-    std::filesystem::rename(old, package_path, ec);  // put the old save back
-    return false;
-  }
-  std::filesystem::remove_all(old, ec);
-  return true;
+  auto package = std::make_unique<ContentPackage>(kernel_state_, root_name, owned_data, package_path);
+  return package;
 }
 
 bool ContentManager::ContentExists(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data) {
@@ -597,12 +530,7 @@ X_RESULT ContentManager::CloseContent(const std::string_view root_name) {
   const std::filesystem::path path_str = package->package_path();
   const std::string name = package->GetPackageContentData().file_name();
   const uint64_t owner = package->GetPackageContentData().xuid;
-  const std::filesystem::path staging = package->staging_path();
-  delete package;  // unmounts the guest drive
-  if (!staging.empty() && !CommitStaging(staging, path_str)) {
-    REXSYS_ERROR("[save] close '{}': could not swap {} in; the previous save is kept", name,
-                 rex::path_to_utf8(staging));
-  }
+  delete package;  // unmounts the guest drive: from here on the files are in place
 
   REXSYS_INFO("[save] close '{}' (root {}) in {} -> {}", name, root_name,
               rex::path_to_utf8(path_str), WhatIsInside(path_str));
@@ -659,7 +587,6 @@ X_RESULT ContentManager::DeleteContent(uint64_t xuid, const XCONTENT_AGGREGATE_D
   if (ec) {
     return X_ERROR_ACCESS_DENIED;
   }
-  std::filesystem::remove_all(StagingPathFor(package_path), ec);
 
   uint64_t used_xuid = (data.xuid != uint64_t(-1) && data.xuid != 0) ? uint64_t(data.xuid) : xuid;
   auto header_path =
@@ -683,12 +610,7 @@ X_RESULT ContentManager::UnmountContent(uint64_t xuid, const XCONTENT_AGGREGATE_
     }
     package = DetachPackage(it);
   }
-  const auto staging = package->staging_path();
-  const auto final_path = package->package_path();
   delete package;
-  if (!staging.empty()) {
-    CommitStaging(staging, final_path);
-  }
   return X_ERROR_SUCCESS;
 }
 
@@ -703,12 +625,7 @@ X_RESULT ContentManager::UnmountAndDeleteContent(uint64_t xuid,
       package = DetachPackage(it);
     }
   }
-  const std::filesystem::path stale = package ? package->staging_path() : std::filesystem::path();
   delete package;
-  if (!stale.empty()) {
-    std::error_code ec_staging;
-    std::filesystem::remove_all(stale, ec_staging);
-  }
 
   // Delete phase: remove package directory and .header file
   auto package_path = ResolvePackagePath(xuid, data);

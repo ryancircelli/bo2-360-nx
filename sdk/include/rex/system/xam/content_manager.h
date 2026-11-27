@@ -120,8 +120,7 @@ static_assert_size(XCONTENT_AGGREGATE_DATA, 0x148);
 class ContentPackage {
  public:
   ContentPackage(KernelState* kernel_state, const std::string_view root_name,
-                 const XCONTENT_AGGREGATE_DATA& data, const std::filesystem::path& package_path,
-                 const std::filesystem::path& staging_path = {});
+                 const XCONTENT_AGGREGATE_DATA& data, const std::filesystem::path& package_path);
   ~ContentPackage();
 
   void LoadPackageLicenseMask(const std::filesystem::path header_path);
@@ -129,8 +128,6 @@ class ContentPackage {
   const XCONTENT_AGGREGATE_DATA& GetPackageContentData() const { return content_data_; }
 
   const std::filesystem::path& package_path() const { return package_path_; }
-  // Non-empty when the game works on a clone that CloseContent swaps into package_path().
-  const std::filesystem::path& staging_path() const { return staging_path_; }
 
   uint32_t GetPackageLicense() const { return license_; }
 
@@ -139,7 +136,6 @@ class ContentPackage {
   std::string root_name_;
   std::string device_path_;
   std::filesystem::path package_path_;
-  std::filesystem::path staging_path_;
   XCONTENT_AGGREGATE_DATA content_data_;
   uint32_t license_ = 0;
 };
@@ -155,12 +151,6 @@ class ContentManager {
 
   std::unique_ptr<ContentPackage> ResolvePackage(const std::string_view root_name, uint64_t xuid,
                                                  const XCONTENT_AGGREGATE_DATA& data);
-
-  // Saves are edited in <pkg>.staging and swapped in on close, so a kill mid-write keeps the old save.
-  static std::filesystem::path StagingPathFor(const std::filesystem::path& package_path);
-  static bool CommitStaging(const std::filesystem::path& staging, const std::filesystem::path& package_path);
-  // Open-time recovery: drop a stale staging copy, and undo a swap that died halfway.
-  static void RecoverStaging(const std::filesystem::path& package_path);
 
   bool ContentExists(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data);
   X_RESULT CreateContent(const std::string_view root_name, uint64_t xuid,
