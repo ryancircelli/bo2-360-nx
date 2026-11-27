@@ -129,10 +129,9 @@ TEST_CASE("XNotifyGetNext tolerates null pointers and unknown handles and zeroes
 
 TEST_CASE("A restored listener with queued notifications is signaled", "[runtime][notify][xam]") {
   std::vector<uint8_t> blob(4096);
-  uint32_t handle = 0;
   {
     Fixture f;
-    handle = XamNotifyCreateListener_entry(kCategory1, 10);
+    const uint32_t handle = XamNotifyCreateListener_entry(kCategory1, 10);
     f.kernel()->BroadcastNotification(Id(4), 44);
     auto listener = f.kernel()->object_table()->LookupObject<rex::system::XNotifyListener>(handle);
     REQUIRE(listener);
@@ -146,9 +145,10 @@ TEST_CASE("A restored listener with queued notifications is signaled", "[runtime
   REQUIRE(restored);
   uint64_t timeout = 0;
   CHECK(restored->Wait(0, 0, 0, &timeout) == X_STATUS_SUCCESS);  // a guest waiting on it must wake
-  auto got = Next(handle);
-  REQUIRE(got.any);
-  CHECK(got.id == Id(4));
-  CHECK(got.param == 44);
+  rex::system::XNotificationID id{};
+  uint32_t param = 0;
+  REQUIRE(restored->DequeueNotification(&id, &param));
+  CHECK(uint32_t(id) == Id(4));
+  CHECK(param == 44);
   CHECK(restored->Wait(0, 0, 0, &timeout) == X_STATUS_TIMEOUT);
 }
