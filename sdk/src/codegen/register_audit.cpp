@@ -346,6 +346,8 @@ std::vector<EarlyRead> FindEarlyReads(std::string_view body) {
     const bool top = raw.starts_with("\t") && !raw.starts_with("\t\t");
     if (top && (s.starts_with("goto ") || s == "return;" || s.starts_with("__builtin_trap")))
       openEnd.back() = false;
+    else if (!gotos.back().empty())  // a conditional jump leaves before the block's later writes
+      blocks.emplace_back(), gotos.emplace_back(), openEnd.push_back(true);
   }
 
   const size_t n = blocks.size();
