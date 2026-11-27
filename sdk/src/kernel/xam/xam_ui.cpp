@@ -9,7 +9,11 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <atomic>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <cstdlib>
 #include <chrono>
 #include <limits>
@@ -735,6 +739,81 @@ u32 XamShowMessageBoxUIEx_entry(u32 user_index, mapped_wstring title_ptr, mapped
                                    active_button, flags, result_ptr, overlapped);
 }
 
+// XUI heap (spec round 2: XuiAlloc/XuiFree = system heap). Sizes tracked so XuiRealloc can copy.
+namespace {
+std::mutex xui_heap_mutex_;
+std::unordered_map<uint32_t, uint32_t> xui_heap_;
+}  // namespace
+
+u32 XuiAlloc_entry(u32 size) {
+  if (!size) return 0;
+  uint32_t addr = REX_KERNEL_MEMORY()->SystemHeapAlloc(size);
+  if (addr) {
+    std::lock_guard<std::mutex> lock(xui_heap_mutex_);
+    xui_heap_[addr] = size;
+  }
+  return addr;
+}
+void XuiFree_entry(u32 ptr) {
+  if (!ptr) return;
+  {
+    std::lock_guard<std::mutex> lock(xui_heap_mutex_);
+    if (!xui_heap_.erase(ptr)) return;  // not ours: ignore rather than corrupt the heap
+  }
+  REX_KERNEL_MEMORY()->SystemHeapFree(ptr);
+}
+u32 XuiRealloc_entry(u32 ptr, u32 size) {
+  if (!ptr) return XuiAlloc_entry(size);
+  if (!size) {
+    XuiFree_entry(ptr);
+    return 0;
+  }
+  uint32_t old_size = 0;
+  {
+    std::lock_guard<std::mutex> lock(xui_heap_mutex_);
+    auto it = xui_heap_.find(ptr);
+    if (it == xui_heap_.end()) return 0;
+    old_size = it->second;
+  }
+  uint32_t fresh = XuiAlloc_entry(size);
+  if (!fresh) return 0;  // original block stays valid, like realloc
+  std::memcpy(REX_KERNEL_MEMORY()->TranslateVirtual(fresh), REX_KERNEL_MEMORY()->TranslateVirtual(ptr),
+              std::min(old_size, uint32_t(size)));
+  XuiFree_entry(ptr);
+  return fresh;
+}
+// Duplicates a guest UTF-16 string into an XuiAlloc block; E_OUTOFMEMORY when allocation fails.
+u32 XuiCopyString_entry(mapped_u32 dst, u32 src) {
+  if (!dst || !src) return 0x80070057;  // E_INVALIDARG
+  const auto* chars = reinterpret_cast<const uint8_t*>(REX_KERNEL_MEMORY()->TranslateVirtual(src));
+  uint32_t n = 0;
+  while (chars[n * 2] || chars[n * 2 + 1]) ++n;
+  uint32_t out = XuiAlloc_entry((n + 1) * 2);
+  if (!out) return 0x8007000E;
+  std::memcpy(REX_KERNEL_MEMORY()->TranslateVirtual(out), chars, (n + 1) * 2);
+  *dst = out;
+  return 0;
+}
+u32 XuiDefault_True_entry() { return 1; }
+u32 XuiDefault_Zero_entry() { return 0; }
+// Message boxes, no UI: forward to the shared path (default button chosen, XN_SYS_UI open/close).
+u32 XamShowMessageBox_entry(u32 user_index, mapped_wstring title, mapped_wstring text, u32 button_count,
+                            mapped_u32 buttons, u32 active_button, u32 flags, mapped_u32 result,
+                            mapped_void overlapped) {
+  return XamShowMessageBoxUI_entry(user_index, title, text, button_count, buttons, active_button, flags,
+                                   result, overlapped);
+}
+// Synchronous form: no overlapped, so the headless dispatcher completes before returning.
+u32 XamShowAndWaitForMessageBoxEx_entry(u32 user_index, mapped_wstring title, mapped_wstring text,
+                                        u32 button_count, mapped_u32 buttons, u32 active_button, u32 flags,
+                                        u32 unused, mapped_u32 result) {
+  return XamShowMessageBoxUIEx_entry(user_index, title, text, button_count, buttons, active_button, flags,
+                                     unused, result, mapped_void(0));
+}
+void XamShowNuiDirtyDiscErrorUI_entry(u32 user_index) {
+  XamShowDirtyDiscErrorUI_entry(user_index);
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -748,8 +827,19 @@ REX_EXPORT(__imp__XamShowPartyUI, rex::kernel::xam::XamShowPartyUI_entry)
 REX_EXPORT(__imp__XamShowCommunitySessionsUI, rex::kernel::xam::XamShowCommunitySessionsUI_entry)
 REX_EXPORT(__imp__XamShowMessageBoxUIEx, rex::kernel::xam::XamShowMessageBoxUIEx_entry)
 
+REX_EXPORT(__imp__XamIsMessageBoxActive, rex::kernel::xam::XamIsUIActive_entry)
+REX_EXPORT(__imp__XamShowMessageBox, rex::kernel::xam::XamShowMessageBox_entry)
+REX_EXPORT(__imp__XamShowAndWaitForMessageBoxEx, rex::kernel::xam::XamShowAndWaitForMessageBoxEx_entry)
+REX_EXPORT(__imp__XamShowNuiDirtyDiscErrorUI, rex::kernel::xam::XamShowNuiDirtyDiscErrorUI_entry)
+REX_EXPORT(__imp__XuiAlloc, rex::kernel::xam::XuiAlloc_entry)
+REX_EXPORT(__imp__XuiFree, rex::kernel::xam::XuiFree_entry)
+REX_EXPORT(__imp__XuiRealloc, rex::kernel::xam::XuiRealloc_entry)
+REX_EXPORT(__imp__XuiCopyString, rex::kernel::xam::XuiCopyString_entry)
+REX_EXPORT(__imp__XuiDefault_True, rex::kernel::xam::XuiDefault_True_entry)
+REX_EXPORT(__imp__XuiDefault_False, rex::kernel::xam::XuiDefault_Zero_entry)
+REX_EXPORT(__imp__XuiDefault_IntegerZero, rex::kernel::xam::XuiDefault_Zero_entry)
+REX_EXPORT(__imp__XuiHandleIsValid, rex::kernel::xam::XuiDefault_Zero_entry)  // no XUI objects exist
 REX_EXPORT_STUB_RETURN(__imp__XamIsGuideDisabled, 0);  // FALSE: no guide/UI state emulated
-REX_EXPORT_STUB_RETURN(__imp__XamIsMessageBoxActive, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT(__imp__XamIsNuiUIActive, rex::kernel::xam::XamIsUIActive_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByTitle, 0);  // FALSE: no guide/UI state emulated
 REX_EXPORT_STUB_RETURN(__imp__XamIsSysUiInvokedByXenonButton, 0);  // FALSE: no guide/UI state emulated
@@ -760,7 +850,6 @@ REX_EXPORT_STUB_RETURN(__imp__XamOverrideHudOpenType, 0);
 REX_EXPORT_STUB_RETURN(__imp__XamShowAchievementDetailsUI, 0x4C7);
 REX_EXPORT(__imp__XamShowAchievementsUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowAchievementsUIEx, 0x4C7);
-REX_EXPORT_STUB_RETURN(__imp__XamShowAndWaitForMessageBoxEx, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowAvatarAwardGamesUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowAvatarAwardsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowAvatarMiniCreatorUI, 0x4C7);
@@ -810,7 +899,6 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplacePurchaseOrderUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowMarketplacePurchaseOrderUIEx, 0x4C7);
 REX_EXPORT(__imp__XamShowMarketplaceUI, rex::kernel::xam::XamShowMarketplaceUI_entry)
 REX_EXPORT(__imp__XamShowMarketplaceUIEx, rex::kernel::xam::XamShowMarketplaceUIEx_entry)
-REX_EXPORT_STUB_RETURN(__imp__XamShowMessageBox, 0x4C7);
 REX_EXPORT(__imp__XamShowMessageComposeUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT(__imp__XamShowMessagesUI, rex::kernel::xam::XamShowOfflinePanelUI_entry)
 REX_EXPORT_STUB_RETURN(__imp__XamShowMessagesUIEx, 0x32);  // offline: not supported
@@ -821,7 +909,6 @@ REX_EXPORT_STUB_RETURN(__imp__XamShowNuiAchievementsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiCommunitySessionsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiControllerRequiredUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiDeviceSelectorUI, 0x32);
-REX_EXPORT_STUB_RETURN(__imp__XamShowNuiDirtyDiscErrorUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiFriendRequestUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiFriendsUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamShowNuiGameInviteUI, 0x4C7);
@@ -885,7 +972,6 @@ REX_EXPORT_STUB_RETURN(__imp__XamResumeUpdaterUI, 0);
 REX_EXPORT_STUB_RETURN(__imp__XamTestShowNuiTroubleshooterUI, 0x4C7);
 REX_EXPORT_STUB_RETURN(__imp__XamUIThreadDisableFontPatching, 0);
 REX_EXPORT_STUB_RETURN(__imp__XamUIThreadEnableFontPatching, 0);
-REX_EXPORT_STUB_RETURN(__imp__XuiAlloc, 0);
 REX_EXPORT_STUB_RETURN(__imp__XuiAnimRun, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiApplyLocale, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiAttachTextureBrush, 0x80004005);
@@ -902,14 +988,9 @@ REX_EXPORT_STUB_RETURN(__imp__XuiControlIsNavButton, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiControlPlayOptionalVisual, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiControlSetItemAssociation, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiControlWantsUnfocusedInput, 0x80004005);
-REX_EXPORT_STUB_RETURN(__imp__XuiCopyString, 0);
 REX_EXPORT_STUB_RETURN(__imp__XuiCreateObject, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiCreateSolidBrush, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiCreateTextureBrush, 0x80004005);
-REX_EXPORT_STUB_RETURN(__imp__XuiDefault_EmptyString, 0);
-REX_EXPORT_STUB_RETURN(__imp__XuiDefault_False, 0);
-REX_EXPORT_STUB_RETURN(__imp__XuiDefault_IntegerZero, 0);
-REX_EXPORT_STUB_RETURN(__imp__XuiDefault_True, 0);
 REX_EXPORT_STUB_RETURN(__imp__XuiDestroyBrush, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiDestroyObject, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiDrawShape, 0x80004005);
@@ -974,7 +1055,6 @@ REX_EXPORT_STUB_RETURN(__imp__XuiFigureSetShape, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiFigureSetTexture, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiFillRect, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiFindClass, 0x80004005);
-REX_EXPORT_STUB_RETURN(__imp__XuiFree, 0);
 REX_EXPORT_STUB_RETURN(__imp__XuiFreeStringTable, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiFreeUnusedTextures, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiFreeVisuals, 0x80004005);
@@ -983,7 +1063,6 @@ REX_EXPORT_STUB_RETURN(__imp__XuiGetBaseObject, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiGetClass, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiGetObjectClass, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiGetOuter, 0x80004005);
-REX_EXPORT_STUB_RETURN(__imp__XuiHandleIsValid, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiImageElementGetImagePath, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiImageElementSetImagePath, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiInit, 0x80004005);
@@ -1009,7 +1088,6 @@ REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarGetRange, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarGetValue, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarSetRange, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiProgressBarSetValue, 0x80004005);
-REX_EXPORT_STUB_RETURN(__imp__XuiRealloc, 0);
 REX_EXPORT_STUB_RETURN(__imp__XuiRegisterClass, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiRenderBegin, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__XuiRenderCreateDC, 0x80004005);

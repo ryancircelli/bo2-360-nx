@@ -160,6 +160,14 @@ target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2Wit
 set_target_properties(kernel_backfill_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
 add_test(NAME kernel_backfill_tests COMMAND kernel_backfill_tests)
+add_executable(xam_nui_tests kernel/xam_nui_test.cpp)
+target_link_libraries(xam_nui_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME xam_nui_tests COMMAND xam_nui_tests)
+
+add_executable(xam_device_output_tests kernel/xam_device_output_test.cpp)
+target_link_libraries(xam_device_output_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME xam_device_output_tests COMMAND xam_device_output_tests)
+
 add_executable(xmemory_heap_tests system/xmemory_heap_test.cpp)
 target_link_libraries(xmemory_heap_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(xmemory_heap_tests PROPERTIES
