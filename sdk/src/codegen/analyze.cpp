@@ -17,13 +17,65 @@
 #include <rex/codegen/analysis_errors.h>
 #include <rex/codegen/analyze.h>
 #include <rex/codegen/phases.h>
+#include <rex/memory/utils.h>
 #include <rex/logging.h>
 
 #include "codegen_logging.h"
 
 namespace rex::codegen {
 
+namespace {
+
+// Unresolved plain branches (not bl) whose target sits right after a word that ends a function
+// (blr, bctr, an unconditional b, or zero padding): thunks reached only by `b`.
+std::vector<uint32_t> tailBranchTargets(const CodegenContext& ctx) {
+  using rex::memory::load_and_swap;
+  std::vector<uint32_t> out;
+  for (const auto& e : ctx.errors.Entries()) {
+    if (e.category != AnalysisErrors::Category::UnresolvedCall)
+      continue;
+    const uint8_t* site = ctx.binary().translate(e.secondaryAddress);
+    const uint8_t* before = ctx.binary().translate(e.address - 4);
+    if (!site || !before || (load_and_swap<uint32_t>(site) & 1))
+      continue;
+    const uint32_t w = load_and_swap<uint32_t>(before);
+    const bool ends = w == 0 || w == 0x4E800020 || w == 0x4E800420 || ((w >> 26) == 18 && !(w & 1));
+    if (ends && !ctx.Config().functions.contains(e.address))
+      out.push_back(e.address);
+  }
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
+Result<void> AnalyzeOnce(CodegenContext& ctx, ProgressReporter* reporter);
+
+}  // namespace
+
 Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
+  // A tail-branch target found by Validate becomes a config function and the analysis runs again
+  // from the start, as a hand-written `"0x..." = { }` override would (this replaced
+  // tools/codegen_fix_unresolved.py). Each round only adds functions, so it ends.
+  const AnalysisState start = ctx.analysisState();
+  for (int round = 1;; ++round) {
+    auto result = AnalyzeOnce(ctx, reporter);
+    const auto targets = result ? std::vector<uint32_t>{} : tailBranchTargets(ctx);
+    if (targets.empty() || round == 16)
+      return result;
+    REXCODEGEN_INFO("Analyze: {} tail-branch targets declared as functions, analysing again (round {})",
+                    targets.size(), round + 1);
+    for (uint32_t t : targets)
+      ctx.Config().functions.emplace(t, FunctionConfig{});
+    ctx.graph = FunctionGraph{};
+    ctx.errors.Clear();
+    ctx.scan = {};
+    ctx.analysisState() = start;
+  }
+}
+
+namespace {
+
+Result<void> AnalyzeOnce(CodegenContext& ctx, ProgressReporter* reporter) {
   REXCODEGEN_TRACE("Analyze: starting analysis...");
 
   ctx.initDecoded();
@@ -87,6 +139,8 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
 
   return Ok();
 }
+
+}  // namespace
 
 //=============================================================================
 // AnalysisErrors implementation

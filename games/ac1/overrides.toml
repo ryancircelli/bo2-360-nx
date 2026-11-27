@@ -1,6 +1,2 @@
 # overrides for default.xex (none yet)
 [functions]
-
-# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
-"0x828A6EB0" = { }   # lis r11, -0x7dff; lwz r11, -0xb94(r11); cmplw cr6, r4, r11; beqlr cr6; lis r11, -0x7dff; lwz r11, -0x9b8(r11)   <- 0x828A6F28
-"0x828B7F00" = { }   # addi r3, r3, 4; b 0x828b00b0   <- 0x828BBC3C

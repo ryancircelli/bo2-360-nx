@@ -41,7 +41,6 @@ from the game is ever written inside the repository.
 | `localize.py` | Local-register copies of the functions in `games/bo2/locals.txt` | `python tools/localize.py` |
 | `guest_barriers.py` | Compiler barriers for plain guest memory | `[--check \| --undo]` |
 | `codegen_stats.py` | Counts what makes generated code slow | `python tools/codegen_stats.py` |
-| `codegen_fix_unresolved.py` | Declares tail-branch targets that are in no function | `[--max-rounds N]` |
 | `codegen_gaps.py` | Classifies code no function covers into `games/bo2/gaps.toml` | `[--min 8]` |
 | `volatile_locals.py` | Experimental: volatile registers as locals (+0.07 %, not used) | `[--check]` |
 | `gen_d3d_trace_list.py` | Lists the Direct3D functions the trace wrappers cover | `python tools/gen_d3d_trace_list.py` |

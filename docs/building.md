@@ -138,8 +138,8 @@ This runs the code generator on `games/bo2/bo2zm_manifest.toml` and then the fix
 7. `tools/codegen_stats.py`: a summary of the generated code.
 
 Always use `codegen.sh`. A bare `rexglue codegen` silently drops the fix-ups, and the builds check for them and stop.
-If the generator reports a branch to a target outside any function, `tools/codegen_fix_unresolved.py` declares the
-missing functions in `games/bo2/overrides.toml`.
+A branch to a target outside any function, right after a word that ends a function, is declared a function by the
+generator itself.
 
 ## Step 5: build the shader library
 

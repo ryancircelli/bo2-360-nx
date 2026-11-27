@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerates a small game's code by hand (games/<game>/generated/default) and refreshes its gaps.toml: rexglue
-# codegen, tools/codegen_fix_unresolved.py, tools/codegen_gaps.py, then the fix-up passes of the game's app.toml
+# codegen (it declares tail-branch targets itself), tools/codegen_gaps.py, then the fix-up passes of the game's app.toml
 # [source] codegen_passes (the ones tools/mac/build_app.py runs), then a check that no unresolved branch is left.
 #
 #   tools/game_codegen.sh <game> <.text START:END>
@@ -23,10 +23,6 @@ cd "$DIR"
 echo "== codegen"
 "$REXGLUE" codegen --ignore-stamp "${GAME}_manifest.toml" > codegen.log 2>&1 || { tail -n 80 codegen.log >&2; exit 1; }
 tail -n 4 codegen.log
-
-echo "== fix unresolved"
-REXGLUE_BIN="$(dirname "$REXGLUE")" "$PY" "$ROOT/tools/codegen_fix_unresolved.py" \
-    --project "$DIR" --manifest "${GAME}_manifest.toml" --image "$IMAGE"
 
 echo "== gap entries (min 4: pulls in the tiny thunk/stub gaps below the default 8)"
 "$PY" "$ROOT/tools/codegen_gaps.py" --gen "$GEN" --prefix "$GAME" --min 4 --image "$IMAGE" \

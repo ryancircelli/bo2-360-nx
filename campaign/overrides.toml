@@ -27,9 +27,6 @@ vector_scratch_as_local = true
 
 [functions]
 
-# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
-"0x823D20D8" = { }   # stw r4, 0x20(r3); blr   <- 0x8247D4F8
-
 # --- Software-pipelined VMX loops that read v57-v63 before writing them ------
 # tools/read_before_write.py on the campaign: the first pass of each loop reads
 # vectors the previous pass left (as default_mp's sub_828212C0 / sub_82821A80

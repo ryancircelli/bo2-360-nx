@@ -6,7 +6,6 @@ REXGLUE="${REXGLUE:-$ROOT/out/host-mac/bin/rexglue}"
 PY="${PYTHON:-python3}"
 G="$ROOT/games/fallout3"; GEN="$G/generated/default"
 cd "$G"
-REXGLUE_BIN="$(dirname "$REXGLUE")" "$PY" "$ROOT/tools/codegen_fix_unresolved.py" --project "$G" --manifest fallout3_manifest.toml --image work/default.image.bin || true
 "$REXGLUE" codegen --ignore-stamp fallout3_manifest.toml > codegen.log 2>&1 || { echo "codegen failed, see $G/codegen.log" >&2; exit 1; }
 tail -n 2 codegen.log
 "$PY" "$ROOT/tools/read_before_write.py" --gen "$GEN" --strict

@@ -89,12 +89,6 @@ vector_scratch_as_local = true
 # match ends, the map changes or a split-screen player leaves.
 "0x8249A9C0" = { size = 4 }   # b 0x8248EB80   <- table 0x829873F0[7]
 
-# --- Tail-branch targets, round 1 (tools/codegen_fix_unresolved.py) ---
-"0x827C0590" = { }   # lwz r3, 0(r3); b 0x827c2250   <- 0x8279F90C
-"0x827C0598" = { }   # lwz r3, 0(r3); b 0x827c2260   <- 0x8279F914
-"0x827C05A0" = { }   # lwz r3, 0(r3); b 0x827c2258   <- 0x8279F91C
-"0x827C05A8" = { }   # slwi r11, r4, 3; add r11, r11, r3; stfs f1, 8(r11); stw r5, 4(r11); blr   <- 0x8279F924
-
 # --- Entry stubs glued onto the end of the previous function -----------------
 # sub_82274C38(mode) stores the mode, then calls sub_827D36E8("default_mp.xex", 0)
 # = XamLoaderLaunchTitle, which never returns. The analyzer therefore kept going

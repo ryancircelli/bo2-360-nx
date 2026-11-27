@@ -7,8 +7,7 @@
 #   3. tools/read_before_write.py: registers read before they are written (campaign/codegen_read_before_write.log);
 #      a new entry needs a look, and share_registers in overrides.toml if it is a piece of a split function;
 #   4. tools/setjmp_locals.py --fix, tools/direct_calls.py, tools/guest_barriers.py.
-# New unresolved tail branches stop the code generator; tools/codegen_fix_unresolved.py --project campaign
-# --manifest bo2cp_manifest.toml --image work/dump_tu18/default.image.bin declares them.
+# Tail-branch targets in no function are declared by the code generator itself (sdk/src/codegen/analyze.cpp).
 # REXGLUE_BIN: the folder with rexglue.exe (default sdk/out/win-amd64 of this checkout).
 set -euo pipefail
 CP="$(cd "$(dirname "$0")" && pwd)"

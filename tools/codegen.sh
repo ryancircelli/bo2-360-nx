@@ -13,7 +13,7 @@
 #    tools/localize.py: copies of the hot leaf functions in games/bo2/locals.txt with their ctx registers as locals
 #    (games/bo2/src/bo2zm_native_audio.cpp checks them against the originals before they run alone).
 # 5. tools/codegen_stats.py: what the generated code looks like now.
-# New unresolved tail-branch targets (codegen errors) are a job for tools/codegen_fix_unresolved.py first.
+# Tail-branch targets in no function are declared by the codegen itself (sdk/src/codegen/analyze.cpp).
 #
 # In a worktree, games/bo2/generated must be this checkout's own copy (tools/bootstrap_worktree.sh --own-generated), never
 # the junction to the main checkout's.
