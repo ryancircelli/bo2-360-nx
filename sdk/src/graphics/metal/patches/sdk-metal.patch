@@ -5876,17 +5876,19 @@ diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor
 index 9ae30ab..7d209af 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
-@@ -10,10 +10,13 @@
+@@ -10,14 +10,15 @@
   */
  
+ #include <cstdio>
  #include <algorithm>
 +#include <atomic>
-+#include <chrono>
+ #include <chrono>
+ #include <string>
+ #include <thread>
  #include <cinttypes>
  #include <cmath>
  #include <cstring>
  #include <string_view>
-+#include <thread>
  
  #include <fmt/format.h>
  

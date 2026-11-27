@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 
@@ -15,6 +16,10 @@
 #include <rex/kernel/init.h>
 #include <rex/runtime.h>
 #include <rex/system/game_patches.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/user_module.h>
+#include <rex/system/xex_module.h>
+#include <rex/system/xmemory.h>
 
 namespace rexglue::cli {
 using rex::X_STATUS;
@@ -28,8 +33,10 @@ void RegisterPatches(CLI::App& parent, const CliContext&, DeferredAction& pendin
   sub->add_option("xex", *xex, "Game executable (default.xex); a title update beside it (<name>p) is applied")
       ->required();
   sub->add_option("dir", *dir, "Folder of xenia-canary patch files")->required();
-  sub->callback([xex, dir, &pending]() {
-    pending = [xex, dir]() -> rex::Result<void> {
+  auto dump = std::make_shared<std::string>();
+  sub->add_option("--dump-image", *dump, "Also write the loaded image (title update applied) here, for writing patches");
+  sub->callback([xex, dir, dump, &pending]() {
+    pending = [xex, dir, dump]() -> rex::Result<void> {
       const fs::path path = fs::canonical(*xex);
       rex::patches::Configure({fs::path(*dir)}, {});
       auto runtime = std::make_unique<rex::Runtime>(path.parent_path().string());
@@ -41,6 +48,13 @@ void RegisterPatches(CLI::App& parent, const CliContext&, DeferredAction& pendin
         return rex::Err<void>(rex::ErrorCategory::IO, "could not load " + path.string());
       }
       for (const auto& m : rex::patches::ModuleSummary()) std::printf("module %s\n", m.c_str());
+      if (!dump->empty()) {
+        auto* xm = runtime->kernel_state()->GetExecutableModule()->xex_module();
+        const uint32_t size = xm->xex_security_info()->image_size;
+        std::ofstream(*dump, std::ios::binary)
+            .write(runtime->memory()->TranslateVirtual<const char*>(xm->base_address()), size);
+        std::printf("image\t%08X\t%u bytes\t%s\n", xm->base_address(), size, dump->c_str());
+      }
       std::map<std::string, int> counts;
       for (const auto& e : rex::patches::List()) {
         const char* kind = e.kind == rex::patches::Kind::kCode ? "code" : "data";
