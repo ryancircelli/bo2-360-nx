@@ -84,25 +84,45 @@ bool build_vmulfp128(BuilderContext& ctx) {
 }
 
 bool build_vmaddfp(BuilderContext& ctx) {
+  // Xenon VMX multiply-add rounds once (fused); arm64 lowers this to one fmla. Without
+  // exactVectorMath it stays a multiply and an add, which hand-written natives mirror.
   ctx.emit_set_flush_mode(true);
-  ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
-      "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
-      ctx.v(ctx.insn.operands[3]));
+  if (ctx.config().exactVectorMath)
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
+  else
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, simde_mm_add_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
   return true;
 }
 
 bool build_vnmsubfp(BuilderContext& ctx) {
-  // vnmsubfp: vD = -(vA * vB - vC) - negation done by XOR with sign bit (0x80000000)
+  // vnmsubfp: vD = -(vA * vB - vC), fused like vmaddfp: fmadd(vA, vB, -vC) then negate by XOR
+  // (simde_mm_fmsub_ps is not fused on arm64; negating vC is exact)
   ctx.emit_set_flush_mode(true);
-  ctx.println(
-      "\tsimde_mm_store_ps({}.f32, "
-      "simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
-      "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), "
-      "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
-      ctx.v(ctx.insn.operands[3]));
+  if (ctx.config().exactVectorMath)
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, "
+        "simde_mm_xor_ps(simde_mm_fmadd_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32), "
+        "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
+        "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
+  else
+    ctx.println(
+        "\tsimde_mm_store_ps({}.f32, "
+        "simde_mm_xor_ps(simde_mm_sub_ps(simde_mm_mul_ps(simde_mm_load_ps({}.f32), "
+        "simde_mm_load_ps({}.f32)), simde_mm_load_ps({}.f32)), "
+        "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
+        ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]),
+        ctx.v(ctx.insn.operands[3]));
   return true;
 }
 
@@ -156,9 +176,10 @@ bool build_vmsum3fp128(BuilderContext& ctx) {
   // Preserve Xenon accumulation and overflow semantics, including lane reversal.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, rex::ppc::VmxDot<3>(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, rex::ppc::{}<3>(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+      ctx.v(ctx.insn.operands[0]), ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot",
+      ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
@@ -166,9 +187,10 @@ bool build_vmsum4fp128(BuilderContext& ctx) {
   // Preserve Xenon accumulation and overflow semantics, including lane reversal.
   ctx.emit_set_flush_mode(true);
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, rex::ppc::VmxDot<4>(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, rex::ppc::{}<4>(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)));",
-      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+      ctx.v(ctx.insn.operands[0]), ctx.config().exactVectorMath ? "VmxDotExact" : "VmxDot",
+      ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
   return true;
 }
 
@@ -1272,6 +1294,9 @@ bool build_vpkd3d128(BuilderContext& ctx) {
 
     case 3:  // FLOAT16_2 - pack 2 floats to 2 float16s
     {
+      // Read a copy of vB: vD may be vB, and the loop writes vD before its last vB read
+      ctx.println("\t{{");
+      ctx.println("\tconst PPCVRegister vSource = {};", ctx.v(ctx.insn.operands[1]));
       // Pack 2 elements into 32 bits (1 word)
       // Guest element 0 goes to high 16 bits, element 1 to low 16 bits
       // Output u16 index = (1-i) + 2*shift for element i
@@ -1279,27 +1304,31 @@ bool build_vpkd3d128(BuilderContext& ctx) {
         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
         size_t dstIdx =
             (1 - i) + (2 * ctx.insn.operands[4]);  // Output reversed: elem 0 to high, elem 1 to low
-        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), "vSource",
                     srcIdx);
         ctx.println(
             "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 131008.0f) ? 0xFF : "
             "(({2}.u32[{3}]&0x7f800000)>>23);",
-            ctx.v_temp(), ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+            ctx.v_temp(), ctx.temp(), "vSource", srcIdx);
         ctx.println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", ctx.temp(),
-                    ctx.v_temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+                    ctx.v_temp(), "vSource", srcIdx);
         ctx.println(
             "\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? "
             "((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : "
             "((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;",
             ctx.v(ctx.insn.operands[0]), dstIdx, ctx.v_temp(), ctx.temp());
         ctx.println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", ctx.v(ctx.insn.operands[0]),
-                    dstIdx, ctx.v(ctx.insn.operands[1]), srcIdx);
+                    dstIdx, "vSource", srcIdx);
       }
+      ctx.println("\t}}");
       break;
     }
 
     case 4:  // NORMSHORT4 - pack 4 floats (in 3.0+X form) to 4 signed shorts
     {
+      // Read a copy of vB: vD may be vB, and the loop writes vD before its last vB read
+      ctx.println("\t{{");
+      ctx.println("\tconst PPCVRegister vSource = {};", ctx.v(ctx.insn.operands[1]));
       // Pack 4 elements into 64 bits (2 words)
       // Guest element 0 goes to highest 16-bit position, element 3 to lowest
       // Output u16 index = (3-i) + 2*shift for element i
@@ -1308,20 +1337,24 @@ bool build_vpkd3d128(BuilderContext& ctx) {
         size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
         if (dstIdx > 7)
           continue;  // shift 3 keeps only the low word; x and y would land past the register
-        ctx.println("\t{}.s64 = int64_t({}.s32[{}]) - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        ctx.println("\t{}.s64 = int64_t({}.s32[{}]) - 0x40400000;", ctx.temp(), "vSource",
                     srcIdx);
         ctx.println("\t{}.s32 = {}.s64 > 32767 ? 32767 : ({}.s64 < -32767 ? -32767 : int32_t({}.s64));",
                     ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
         ctx.println("\t{0}.s32 = ({1}.f32[{2}] != {1}.f32[{2}]) ? -32768 : {0}.s32;", ctx.temp(),
-                    ctx.v(ctx.insn.operands[1]), srcIdx);
+                    "vSource", srcIdx);
         ctx.println("\t{}.u16[{}] = uint16_t({}.s32);", ctx.v(ctx.insn.operands[0]), dstIdx,
                     ctx.temp());
       }
+      ctx.println("\t}}");
       break;
     }
 
     case 5:  // float16_4
     {
+      // Read a copy of vB: vD may be vB, and the loop writes vD before its last vB read
+      ctx.println("\t{{");
+      ctx.println("\tconst PPCVRegister vSource = {};", ctx.v(ctx.insn.operands[1]));
       // Pack 4 elements into 64 bits (4 x 16-bit floats)
       // Guest element 0 goes to highest 16-bit position, element 3 to lowest
       // Output u16 index = (3-i) + 2*shift for element i
@@ -1333,22 +1366,23 @@ bool build_vpkd3d128(BuilderContext& ctx) {
         size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
         if (dstIdx > 7)
           continue;  // shift 3 keeps only the low word; x and y would land past the register
-        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), "vSource",
                     srcIdx);
         ctx.println(
             "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 131008.0f) ? 0xFF : "
             "(({2}.u32[{3}]&0x7f800000)>>23);",
-            ctx.v_temp(), ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+            ctx.v_temp(), ctx.temp(), "vSource", srcIdx);
         ctx.println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", ctx.temp(),
-                    ctx.v_temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+                    ctx.v_temp(), "vSource", srcIdx);
         ctx.println(
             "\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? "
             "((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : "
             "((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;",
             ctx.v(ctx.insn.operands[0]), dstIdx, ctx.v_temp(), ctx.temp());
         ctx.println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", ctx.v(ctx.insn.operands[0]),
-                    dstIdx, ctx.v(ctx.insn.operands[1]), srcIdx);
+                    dstIdx, "vSource", srcIdx);
       }
+      ctx.println("\t}}");
       break;
     }
 

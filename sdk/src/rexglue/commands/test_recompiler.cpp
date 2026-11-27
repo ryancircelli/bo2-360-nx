@@ -209,7 +209,16 @@ std::vector<TestSpec> ParseTestSpecs(const std::string& asmPath,
     return false;
   };
 
-  while (getline()) {
+  // A test_ label (a function) with no directives of its own, a callee, ends at the next one, so it
+  // does not take the following test's directives; reuse keeps that label line for the outer loop.
+  auto isLabel = [&] {
+    auto colon = line.find(':');
+    return colon != std::string::npos && line.starts_with("test_") &&
+           symbols.contains(line.substr(0, colon));
+  };
+  bool reuse = false;
+  while (reuse || getline()) {
+    reuse = false;
     if (line.empty() || line[0] == '#')
       continue;
     auto colonIndex = line.find(':');
@@ -224,16 +233,19 @@ std::vector<TestSpec> ParseTestSpecs(const std::string& asmPath,
     spec.name = name;
     spec.symbol = symbolIt->second;
 
-    while (getline() && !line.empty() && line[0] == '#') {
+    bool more = true;
+    while ((more = getline()) && !line.empty() && line[0] == '#') {
       ApplyDirective(line, "REGISTER_IN", "MEMORY_IN", spec.inputs, spec.mem_inputs);
     }
-    while (line.empty() || line[0] != '#') {
-      if (!getline())
-        break;
+    while (more && (line.empty() || line[0] != '#') && !(reuse = isLabel())) {
+      more = getline();
     }
-    do {
-      ApplyDirective(line, "REGISTER_OUT", "MEMORY_OUT", spec.outputs, spec.mem_outputs);
-    } while (getline() && !line.empty() && line[0] == '#');
+    if (more && !reuse) {
+      do {
+        ApplyDirective(line, "REGISTER_OUT", "MEMORY_OUT", spec.outputs, spec.mem_outputs);
+      } while ((more = getline()) && !line.empty() && line[0] == '#');
+      reuse = more && isLabel();
+    }
 
     if (!spec.inputs.empty() || !spec.outputs.empty() || !spec.mem_inputs.empty() ||
         !spec.mem_outputs.empty()) {
@@ -347,6 +359,7 @@ bool RecompileTests(std::string_view binDir, std::string_view asmDir, std::strin
 
     codegen::RecompilerConfig config;
     config.outDirectoryPath = std::string(outDir);
+    config.exactVectorMath = true;  // the cases hold console results
     auto ctx =
         codegen::CodegenContext::Create(codegen::BinaryView::fromModule(module), std::move(config));
 
@@ -411,6 +424,17 @@ bool RecompileTests(std::string_view binDir, std::string_view asmDir, std::strin
   templateData["functions"] = nlohmann::json::array();
   for (const auto& funcName : allFunctionNames)
     templateData["functions"].push_back({{"name", funcName}});
+  // Each case registers its file's functions, so an indirect call (bctr through a thunk) finds them.
+  templateData["stems"] = nlohmann::json::array();
+  for (const auto& [stem, addresses] : functionsByFile) {
+    std::vector<size_t> sortedAddresses(addresses.begin(), addresses.end());
+    std::sort(sortedAddresses.begin(), sortedAddresses.end());
+    nlohmann::json stemFunctions = nlohmann::json::array();
+    for (size_t address : sortedAddresses)
+      stemFunctions.push_back({{"name", fmt::format("{}_{:X}", stem, address)},
+                               {"address", fmt::format("{:X}", address)}});
+    templateData["stems"].push_back({{"stem", stem}, {"functions", std::move(stemFunctions)}});
+  }
   templateData["functions_code"] = functionsOut.str();
   templateData["image_base"] = "82010000";
   templateData["image_size"] = "100000";

@@ -191,3 +191,7 @@ inline std::atomic<i32>& ppc_global_lock_count_() {
     rex::thread::global_critical_region::mutex().unlock();                                \
   } while (0)
 
+
+// Stack and MMIO access macros (same as the codegen PCH)
+{% include "codegen/_stack_access.inja" %}
+{% include "codegen/_mmio_access.inja" %}

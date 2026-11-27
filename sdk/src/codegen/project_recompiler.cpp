@@ -85,6 +85,7 @@ std::string FingerprintModule(const RecompilerConfig& cfg,
   std::vector<std::string> flags{
       fmt::format("templates={}", EmbeddedTemplatesHash()),
       fmt::format("abi_poison_checks={}", cfg.abiPoisonChecks),
+      fmt::format("exact_vector_math={}", cfg.exactVectorMath),
       fmt::format("reference_functions={}", cfg.referenceFunctions.size()),
       fmt::format("reference_sample_every={}", cfg.referenceSampleEvery),
       fmt::format("generate_exception_handlers={}", cfg.generateExceptionHandlers),

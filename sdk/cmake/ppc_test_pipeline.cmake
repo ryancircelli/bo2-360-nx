@@ -4,7 +4,9 @@
 # symbol maps from PPC assembly test files.
 
 # Locate PPC toolchain in tools/ directory
-set(PPC_TOOLS_DIR "${PROJECT_SOURCE_DIR}/tools/binutils")
+set(REXGLUE_PPC_BINUTILS_DIR "${PROJECT_SOURCE_DIR}/tools/binutils"
+    CACHE PATH "Directory holding the powerpc-none-elf binutils for the PPC instruction tests")
+set(PPC_TOOLS_DIR "${REXGLUE_PPC_BINUTILS_DIR}")
 
 if(WIN32)
     set(PPC_ASSEMBLER "${PPC_TOOLS_DIR}/powerpc-none-elf-as.exe")

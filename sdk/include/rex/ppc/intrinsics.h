@@ -19,6 +19,7 @@
 
 #include <simde/x86/avx.h>
 #include <simde/x86/avx2.h>
+#include <simde/x86/fma.h>
 #include <simde/x86/sse.h>
 #include <simde/x86/sse4.1.h>
 
@@ -27,6 +28,7 @@
 #endif
 
 #include <rex/platform/fpscr.h>
+#include <rex/ppc/dot_product.h>
 #include <rex/types.h>
 
 namespace rex::ppc {
@@ -193,6 +195,14 @@ inline simde__m128 VmxDot(simde__m128 a, simde__m128 b) {
     bits &= 0x80000000u;
   return simde_mm_castsi128_ps(simde_mm_set1_epi32(int32_t(bits)));
 #endif
+}
+
+// vmsum3fp128/vmsum4fp128 with exactVectorMath: the console's truncating fixed-point adder,
+// bit-exact (dot_product.h). Denormal inputs flush (VSCR NJ is always set here).
+template <int Elements>
+inline simde__m128 VmxDotExact(simde__m128 a, simde__m128 b) {
+  static_assert(Elements == 3 || Elements == 4);
+  return simd::detail::DotProductVector<Elements>(a, b, true);
 }
 
 // Unsigned 32-bit saturating add
