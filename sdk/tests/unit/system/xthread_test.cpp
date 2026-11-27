@@ -444,3 +444,25 @@ TEST_CASE("A thread created without a processor mask gets its creator's CPU numb
   REQUIRE(top->Resume() == X_STATUS_SUCCESS);
   REQUIRE(top->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
 }
+
+// pthread_exit runs no C++ destructors on macOS, so Exit's own reference to the thread was never dropped: every
+// exited thread stayed registered with its host thread, stack and semaphore. Now the next exiting thread frees it.
+TEST_CASE("An exited thread is freed once the next thread exits", "[runtime][thread][exit]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+  auto run_one = [&]() {
+    auto t = rex::system::object_ref<rex::system::XHostThread>(
+        new rex::system::XHostThread(ks, 128 * 1024, 0, []() { return 0; }));
+    REQUIRE(t->Create() == X_STATUS_SUCCESS);
+    REQUIRE(t->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
+    return t->thread_id();
+  };
+  uint32_t first = run_one();
+  CHECK(ks->GetThreadByID(first));  // parked until another thread exits
+  uint32_t second = run_one();
+  CHECK_FALSE(ks->GetThreadByID(first));
+  CHECK(ks->GetThreadByID(second));
+}
