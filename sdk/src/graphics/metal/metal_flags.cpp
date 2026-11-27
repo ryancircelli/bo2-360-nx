@@ -21,12 +21,6 @@ DEFINE_bool(metal_dedupe_gpu_access, true,
             "Skip marking a shared memory range as GPU-accessed again when it "
             "was already marked for the same submission.",
             "Metal");
-DEFINE_bool(metal_draw_fastpath, false,
-            "Per-draw cache-hit fast path: reuse the last pipeline handle when "
-            "the shader pair, attachment formats and rendering key are "
-            "unchanged, and skip re-deriving sampler parameters when no fetch "
-            "constant changed. Output is identical; default off.",
-            "Metal");
 DEFINE_bool(metal_fetch_constants_shared, true,
             "Fetch constant uploads: dirty only fetch registers whose value "
             "changed, and let every shader stage and draw share one upload "
@@ -54,23 +48,6 @@ DEFINE_bool(metal_encode_nosync, true,
             "hand them the real encoder. Flippable at run time (latched at "
             "the drained frame boundary). Default on; env "
             "REX_METAL_ENCODE_NOSYNC=0/1 overrides.",
-            "Metal");
-DEFINE_bool(metal_const_fastpath, false,
-            "Pack changed constant blocks (system, float, bool/loop) straight "
-            "into the upload slice instead of packing into a scratch copy, "
-            "comparing and copying again. Gives up reuse of byte-identical "
-            "re-uploads. Ignored while metal_constant_payload_cache is on.",
-            "Metal");
-DEFINE_bool(metal_encode_thread_xpass, false,
-            "With metal_encode_thread: let the encode thread own whole "
-            "sequences of render passes (it creates and ends the encoders); "
-            "the command processor waits only when it touches the command "
-            "buffer itself.",
-            "Metal");
-DEFINE_bool(metal_constant_payload_cache, false,
-            "Reuse identical Metal constant/descriptor payload uploads across "
-            "draws within a frame. Disable to A/B hash/cache CPU cost against "
-            "extra CBV uploads and root argument churn.",
             "Metal");
 DEFINE_bool(metal_pipeline_binary_archive, true,
             "Use MTLBinaryArchive for Metal pipeline compilation caching. "
@@ -101,7 +78,6 @@ DEFINE_bool(submit_on_primary_buffer_end, true,
             "possible to submit immediately to try to reduce frame latency.",
             "GPU");
 
-DEFINE_bool(ac6_ground_fix, false, "XeniOS AC6-specific texture workaround (leave disabled for Fable II)", "HACKS");
 DEFINE_bool(half_pixel_offset, true, "Adjust pixel centers between guest and host graphics APIs", "GPU");
 DEFINE_int32(anisotropic_override, -1, "Anisotropic filtering override (-1 follows the game)", "GPU");
 DEFINE_bool(gpu_3d_to_2d_texture, true, "Handle 3D textures sampled as 2D using the first guest slice", "GPU");

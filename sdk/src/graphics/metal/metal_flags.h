@@ -13,15 +13,11 @@ DECLARE_bool(metal_allow_gamma_unorm16);
 DECLARE_bool(metal_allow_tearing);
 DECLARE_bool(metal_backend_telemetry);
 DECLARE_int32(metal_backend_telemetry_interval);
-DECLARE_bool(metal_constant_payload_cache);
 DECLARE_bool(metal_cmdcost_all);
-DECLARE_bool(metal_const_fastpath);
 DECLARE_bool(metal_dedupe_gpu_access);
 DECLARE_bool(metal_tile_resolve_half_bits);
 DECLARE_bool(metal_fetch_constants_shared);
-DECLARE_bool(metal_draw_fastpath);
 DECLARE_bool(metal_encode_thread);
-DECLARE_bool(metal_encode_thread_xpass);
 DECLARE_bool(metal_encode_nosync);
 DECLARE_bool(metal_direct_host_resolve);
 DECLARE_bool(metal_float_constants_dirty_on_change);
@@ -50,8 +46,6 @@ DECLARE_bool(metal_use_heaps);
 DECLARE_bool(occlusion_query_log);
 DECLARE_bool(snorm16_render_target_full_range);
 DECLARE_bool(submit_on_primary_buffer_end);
-
-DECLARE_bool(ac6_ground_fix);
 
 // Settings formerly read from FABLE2_* environment variables (README.md,
 // "Settings"). User-facing ones are the cvars below (env REX_METAL_<NAME>, or

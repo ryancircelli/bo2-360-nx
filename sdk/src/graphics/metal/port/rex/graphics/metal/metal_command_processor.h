@@ -1028,14 +1028,6 @@ class MetalCommandProcessor final : public CommandProcessor {
     std::array<uint64_t, kCbvSlotCount> cbv_reuse_hits = {};
     std::array<uint64_t, kCbvSlotCount> cbv_upload_bytes = {};
     std::array<uint64_t, kStageCount> descriptor_index_uploads = {};
-    std::array<uint64_t, kCbvSlotCount> constant_payload_cache_hits = {};
-    std::array<uint64_t, kCbvSlotCount> constant_payload_cache_misses = {};
-    std::array<uint64_t, kCbvSlotCount> constant_payload_cache_bytes_saved = {};
-    std::array<uint64_t, kStageCount> descriptor_index_payload_cache_hits = {};
-    std::array<uint64_t, kStageCount> descriptor_index_payload_cache_misses =
-        {};
-    std::array<uint64_t, kStageCount>
-        descriptor_index_payload_cache_bytes_saved = {};
     std::array<uint64_t, kStageCount> bindless_root_allocations = {};
     std::array<uint64_t, kStageCount> bindless_root_reuse_hits = {};
     std::array<uint64_t, kStageCount> bindless_root_arg_noop_updates = {};
@@ -1618,24 +1610,6 @@ class MetalCommandProcessor final : public CommandProcessor {
     uint64_t upload_frame = 0;
     bool up_to_date = false;
   };
-  static constexpr size_t kConstantPayloadSharedStage = kStageCount;
-  static constexpr size_t kConstantPayloadCacheMaxBytes = 64 * 1024 * 1024;
-  // Frame-local cache of uploaded constant payloads, keyed by content. Split
-  // screen draws the same materials once per view, so most fetch constant and
-  // descriptor index payloads repeat within a frame. Entries live in a fixed
-  // open-addressed table invalidated by bumping a generation at frame open,
-  // and their bytes in one arena, so neither a hit nor a store allocates.
-  struct ConstantPayloadCacheEntry {
-    uint64_t hash = 0;
-    uint64_t generation = 0;
-    uint32_t arena_offset = 0;
-    uint32_t size = 0;
-    uint16_t cbv_slot = 0;
-    uint16_t stage_index = 0;
-    ConstantBufferBinding binding;
-  };
-  static constexpr size_t kConstantPayloadCacheSlots = 16384;
-  static constexpr size_t kConstantPayloadCacheProbes = 8;
   using StageRootArgumentEntries =
       std::array<uint64_t, kTopLevelABSlotsPerTable>;
   struct StageRootArgumentAllocation {
@@ -1655,12 +1629,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   bool AllocateStageRootArgument(size_t stage_index,
                                  const StageRootArgumentEntries& entries,
                                  StageRootArgumentAllocation& allocation_out);
-  bool TryReuseConstantPayloadFromCache(ConstantBufferBinding& binding,
-                                        size_t cbv_slot, size_t stage_index,
-                                        const uint8_t* payload, size_t size);
-  void StoreConstantPayloadInCache(const ConstantBufferBinding& binding,
-                                   size_t cbv_slot, size_t stage_index,
-                                   const uint8_t* payload, size_t size);
   ConstantBufferBinding cbuffer_binding_system_;
   ConstantBufferBinding cbuffer_binding_float_vertex_;
   ConstantBufferBinding cbuffer_binding_float_pixel_;
@@ -1694,10 +1662,6 @@ class MetalCommandProcessor final : public CommandProcessor {
   std::vector<uint8_t> scratch_payload_float_pixel_;
   std::vector<uint8_t> scratch_payload_bool_loop_;
   std::array<std::vector<uint8_t>, kStageCount> scratch_payload_fetch_;
-  std::vector<ConstantPayloadCacheEntry> constant_payload_cache_;
-  std::vector<uint8_t> constant_payload_cache_arena_;
-  uint64_t constant_payload_cache_generation_ = 1;
-  size_t constant_payload_cache_bytes_ = 0;
   std::array<DxbcShader::FetchConstantDwordMask, kStageCount>
       fetch_constant_dirty_masks_ = {};
 
