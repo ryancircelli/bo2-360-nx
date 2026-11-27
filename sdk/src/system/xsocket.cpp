@@ -313,11 +313,23 @@ void Trace(const char* what, uint32_t ip, uint16_t guest_port, int bytes, int er
 void TraceSend(uint32_t ip, uint16_t guest_port, int bytes, int error) { Trace("sent to", ip, guest_port, bytes, error); }
 void TraceReceive(uint32_t ip, uint16_t guest_port, int bytes) { Trace("received from", ip, guest_port, bytes, 0); }
 
+// Instance 0's port offset: net_system_port_offset minus this process's 16-port instance stride
+// (the title registers offset = base + 16 * instance), so every instance's block derives from the cvar.
+int InstancePortBase() {
+  int instance = 0;
+  if (const char* value = rex::InstanceEnv()) {
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    if (end && *end == '\0' && parsed >= 0 && parsed < 16) instance = int(parsed);
+  }
+  return REXCVAR_GET(net_system_port_offset) - 16 * instance;
+}
+
 uint16_t GuestPort(uint16_t host_port) {
   // Receive traffic from any local instance's disjoint port block, not just
   // this process's block. The instance stride leaves room for BO2's ports.
   for (int instance = 0; instance < 16; ++instance) {
-    const int first = 31000 + instance * 16;  // host offset + BO2 title ports 1000..1015
+    const int first = InstancePortBase() + 1000 + instance * 16;  // host offset + title ports 1000..1015
     if (host_port >= first && host_port < first + 16) return uint16_t(1000 + host_port - first);
     const int system_link = 3074 + instance * 16;
     if (host_port >= system_link && host_port < system_link + 16) {
@@ -1034,6 +1046,7 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
 }
 
 X_STATUS XSocket::Close() {
+  CancelReceive();
   if (broadcast_helper_) {
     rex::net::socket_close(broadcast_helper_);
     broadcast_helper_ = 0;
@@ -1063,9 +1076,56 @@ X_STATUS XSocket::GetName(XSOCKADDR_IN* out_name) {
   }
   std::memset(out_name, 0, sizeof(*out_name));
   out_name->sin_family = 2;  // AF_INET
-  out_name->sin_port = bound_ ? bound_port_ : uint16_t(ntohs(host.sin_port));
+  out_name->sin_port = bound_ && bound_port_ ? bound_port_ : uint16_t(ntohs(host.sin_port));
   out_name->sin_addr = ntohl(host.sin_addr.s_addr);
   return X_STATUS_SUCCESS;
+}
+
+X_STATUS XSocket::GetPeerName(XSOCKADDR_IN* out_name) {
+  sockaddr_in host{};
+  socklen_t length = sizeof(host);
+  if (getpeername(native_handle_, reinterpret_cast<sockaddr*>(&host), &length) < 0)
+    return X_STATUS_UNSUCCESSFUL;
+  std::memset(out_name, 0, sizeof(*out_name));
+  out_name->sin_family = 2;
+  out_name->sin_port = ntohs(host.sin_port);
+  out_name->sin_addr = ntohl(host.sin_addr.s_addr);
+  return X_STATUS_SUCCESS;
+}
+
+bool XSocket::StartReceive(std::function<bool(bool)> receive) {
+  std::lock_guard lock(receive_mutex_);
+  if (!receive_done_.load(std::memory_order_acquire)) return false;
+#if !REX_PLATFORM_WIN32
+  if (native_handle_ >= FD_SETSIZE) return false;
+#endif
+  if (receive_thread_.joinable()) receive_thread_.join();
+  receive_done_.store(false, std::memory_order_release);
+  receive_thread_ = std::jthread([this, receive = std::move(receive)](std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      if (receive(false)) {
+        receive_done_.store(true, std::memory_order_release);
+        return;
+      }
+      // Bounded readiness wait also makes cancellation/close independent of traffic.
+      fd_set read;
+      FD_ZERO(&read);
+      FD_SET(native_handle_, &read);
+      timeval timeout{0, 20000};
+      select(int(native_handle_) + 1, &read, nullptr, nullptr, &timeout);
+    }
+    receive(true);
+    receive_done_.store(true, std::memory_order_release);
+  });
+  return true;
+}
+
+void XSocket::CancelReceive() {
+  std::lock_guard lock(receive_mutex_);
+  if (receive_thread_.joinable()) {
+    receive_thread_.request_stop();
+    receive_thread_.join();
+  }
 }
 
 static void MapSocketOption(uint32_t level, uint32_t optname, int* native_level, int* native_optname) {
@@ -1385,7 +1445,7 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADD
     if (ret > 0 && source == 0x7F000001u) {
       const uint16_t host_port = ntohs(nfrom.sin_port);
       for (int instance = 0; instance < 16; ++instance) {
-        const uint16_t first = uint16_t(31000 + instance * 16);
+        const uint16_t first = uint16_t(system_link::InstancePortBase() + 1000 + instance * 16);
         if (host_port >= first && host_port < first + 16) {
           reported = 0x7F000101u + uint32_t(instance);
           break;
@@ -1487,7 +1547,7 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
       if (target_instance >= 0) {
         nto.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         nto.sin_port = htons(to->sin_port == 3074 ? uint16_t(3074 + target_instance * 16)
-                                                  : uint16_t(30000 + target_instance * 16 + to->sin_port));
+                                                  : uint16_t(system_link::InstancePortBase() + target_instance * 16 + to->sin_port));
       }
     }
     // Online: a console on the internet gets the datagram at the port it was last heard from.
@@ -1549,7 +1609,7 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags, N_XSOCKADDR_
       sockaddr_in copy = nto;
       copy.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
       copy.sin_port = htons(to->sin_port == 3074 ? uint16_t(3074 + instance * 16)
-                                                 : uint16_t(30000 + instance * 16 + to->sin_port));
+                                                 : uint16_t(system_link::InstancePortBase() + instance * 16 + to->sin_port));
       const int copied = sendto(native_handle_, data, buf_len, flags, (sockaddr*)&copy, sizeof(copy));
       if (REXCVAR_GET(net_system_link_trace)) {
         REXSYS_INFO("[system link] local broadcast copy for instance {} to 127.0.0.1:{}: {}", instance,

@@ -12,6 +12,11 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include "net_socket.h"
+#include "xhttp_url.h"
+
+#include <algorithm>
+#include <climits>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
@@ -118,24 +123,6 @@ struct X_WSADATA {
   rex::be<uint32_t> vendor_info_ptr;
 };
 
-struct XWSABUF {
-  rex::be<uint32_t> len;
-  rex::be<uint32_t> buf_ptr;
-};
-
-struct XWSAOVERLAPPED {
-  rex::be<uint32_t> internal;
-  rex::be<uint32_t> internal_high;
-  union {
-    struct {
-      rex::be<uint32_t> low;
-      rex::be<uint32_t> high;
-    } offset;  // must be named to avoid GCC error
-    rex::be<uint32_t> pointer;
-  };
-  rex::be<uint32_t> event_handle;
-};
-
 void LoadSockaddr(const uint8_t* ptr, sockaddr* out_addr) {
   out_addr->sa_family = memory::load_and_swap<uint16_t>(ptr + 0);
   switch (out_addr->sa_family) {
@@ -190,6 +177,11 @@ struct XNetStartupParams {
 
 XNetStartupParams xnet_startup_params = {};
 
+u32 NetDll_XNetStartup_entry(u32 caller, ppc_ptr_t<XNetStartupParams> params);
+u32 NetDll_XNetStartupEx_entry(u32 caller, ppc_ptr_t<XNetStartupParams> params, u32 /*requested*/) {
+  return NetDll_XNetStartup_entry(caller, params);
+}
+
 u32 NetDll_XNetStartup_entry(u32 caller, ppc_ptr_t<XNetStartupParams> params) {
   if (params) {
     assert_true(params->cfgSizeOfStruct == sizeof(XNetStartupParams));
@@ -238,13 +230,18 @@ u32 NetDll_XNetGetOpt_entry(u32 one, u32 option_id, mapped_void buffer_ptr,
   }
 }
 
-u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer_ptr, u32 length) {
-  // Real random bytes: the game seeds nonces and keys from this, and a constant would give
-  // every copy of the game (and every console in a System Link match) the same values.
-  thread_local std::mt19937_64 gen{std::random_device{}()};
-  auto* bytes = buffer_ptr.as<uint8_t*>();
-  for (u32 i = 0; i < length; ++i) bytes[i] = static_cast<uint8_t>(gen());
-
+u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer, u32 length) {
+  // Match the credited Xenia reference's null/empty-buffer handling. Random
+  // nonces must differ across peers and calls; a fixed fill breaks that contract.
+  if (!buffer || !length) return 0;
+  std::random_device random;
+  auto* bytes = buffer.as<uint8_t*>();
+  for (u32 offset = 0; offset < length;) {
+    const uint32_t value = random();
+    const u32 count = std::min(length - offset, u32(sizeof(value)));
+    std::memcpy(bytes + offset, &value, count);
+    offset += count;
+  }
   return 0;
 }
 
@@ -255,9 +252,9 @@ u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer_ptr, u32 length) {
 // receiving: recv/recvfrom. On the Switch an errno this table does not know
 // is reported as "no data yet" for those (offline nothing ever arrives, and
 // BO2 drops out on any other error); the raw value is logged once.
-static void SetLastSocketError(const char* call, bool receiving = false) {
+static uint32_t LastSocketErrorCode(const char* call, bool receiving = false) {
 #if REX_PLATFORM_WIN32
-  XThread::SetLastError(WSAGetLastError());
+  return WSAGetLastError();
 #else
   uint32_t wsa = 10022;  // WSAEINVAL
   switch (errno) {
@@ -326,8 +323,12 @@ static void SetLastSocketError(const char* call, bool receiving = false) {
       REXKRNL_WARN("{} failed: errno {} ({}) -> WSA {} (#{})", call, e, std::strerror(e), wsa, n + 1);
     }
   }
-  XThread::SetLastError(wsa);
+  return wsa;
 #endif
+}
+
+static void SetLastSocketError(const char* call, bool receiving = false) {
+  XThread::SetLastError(LastSocketErrorCode(call, receiving));
 }
 
 u32 NetDll_WSAStartup_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_ptr) {
@@ -378,6 +379,11 @@ u32 NetDll_WSAStartup_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_p
   return ret;
 }
 
+// The Ex variants take one extra trailing argument (a version request); shortcut: ignored, behaves as the plain call.
+u32 NetDll_WSAStartupEx_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_ptr, u32 /*requested*/) {
+  return NetDll_WSAStartup_entry(caller, version, data_ptr);
+}
+
 u32 NetDll_WSACleanup_entry(u32 caller) {
   // This does nothing. Xenia needs WSA running.
   return 0;
@@ -387,62 +393,188 @@ u32 NetDll_WSAGetLastError_entry() {
   return XThread::GetLastError();
 }
 
-u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket, ppc_ptr_t<XWSABUF> buffers_ptr,
-                             u32 buffer_count, mapped_u32 num_bytes_recv, mapped_u32 flags_ptr,
-                             ppc_ptr_t<XSOCKADDR_IN> from_addr,
-                             ppc_ptr_t<XWSAOVERLAPPED> overlapped_ptr,
-                             mapped_void completion_routine_ptr) {
-  if (overlapped_ptr) {
-    // auto evt = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(
-    //    overlapped_ptr->event_handle);
-
-    // if (evt) {
-    //  //evt->Set(0, false);
-    //}
-  }
-
-  // we're not going to be receiving packets any time soon
-  // return error so we don't wait on that - Cancerous
-  return -1;
+namespace {
+uint32_t SocketFailure(uint32_t error) {
+  XThread::SetLastError(error);
+  return ~0u;
 }
 
-// If the socket is a VDP socket, buffer 0 is the game data length, and buffer 1
-// is the unencrypted game data.
-u32 NetDll_WSASendTo_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
-                           u32 num_buffers, mapped_u32 num_bytes_sent, u32 flags,
-                           ppc_ptr_t<XSOCKADDR_IN> to_ptr, u32 to_len,
-                           ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void completion_routine) {
-  assert(!overlapped);
-  assert(!completion_routine);
+// Cap lengths to the signed count accepted by the native socket APIs.
+bool BufferSize(ppc_ptr_t<XWSABUF> buffers, uint32_t count, uint32_t* size) {
+  if (!buffers || !count || count > 1024) return false;
+  uint64_t total = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (buffers[i].len && !buffers[i].buf_ptr) return false;
+    total += buffers[i].len;
+    if (total > INT_MAX) return false;
+  }
+  *size = uint32_t(total);
+  return true;
+}
 
+void CompleteSocket(ppc_ptr_t<XWSAOVERLAPPED> overlapped,
+                    const object_ref<XEvent>& event, uint32_t error, uint32_t bytes) {
+  if (!overlapped) return;
+  overlapped->internal_high = bytes;
+  std::atomic_ref(overlapped->internal).store(rex::be<uint32_t>(error), std::memory_order_release);
+  if (event) event->Set(0, false);
+}
+
+struct SocketBuffer {
+  uint8_t* data;
+  uint32_t size;
+};
+
+u32 ReceiveBuffers(u32 socket_handle, ppc_ptr_t<XWSABUF> buffers, u32 count,
+                   mapped_u32 bytes, mapped_u32 flags,
+                   ppc_ptr_t<XSOCKADDR_IN> from, mapped_u32 fromlen,
+                   ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback,
+                   bool datagram) {
   auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
-  if (!socket) {
-    // WSAENOTSOCK
-    XThread::SetLastError(0x2736);
-    return -1;
+  if (!socket) return SocketFailure(10038);
+  uint32_t size;
+  if (!BufferSize(buffers, count, &size) || !flags || (!bytes && !overlapped) ||
+      (from && (!fromlen || *fromlen < sizeof(XSOCKADDR_IN)))) return SocketFailure(10014);
+  // Alertable completion needs four guest arguments; the existing APC adapter has three.
+  if (callback) return SocketFailure(10045);  // WSAEOPNOTSUPP
+  if (overlapped && socket->ReceivePending()) return SocketFailure(10035);
+  datagram = datagram || socket->is_datagram();
+  const uint32_t input_flags = *flags;
+  if (input_flags & ~3u) return SocketFailure(10045);  // OOB / PEEK only
+  int native_flags = (input_flags & 1 ? MSG_OOB : 0) | (input_flags & 2 ? MSG_PEEK : 0);
+#if defined(MSG_DONTWAIT)
+  if (overlapped) native_flags |= MSG_DONTWAIT;
+#else
+  // A cancellable, per-call nonblocking receive is not available on this backend yet.
+  if (overlapped) return SocketFailure(10045);
+#endif
+  // Copy descriptors now: the caller may reuse its WSABUF array after posting.
+  std::vector<SocketBuffer> destinations;
+  auto memory = REX_KERNEL_MEMORY();
+  for (uint32_t i = 0; i < count; ++i)
+    destinations.push_back({memory->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len});
+  auto event = overlapped ? REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped->event_handle)
+                          : object_ref<XEvent>{};
+  // One host receive preserves datagram boundaries across all guest buffers.
+  auto transfer = [socket_ptr = socket.get(), destinations = std::move(destinations), size,
+                   native_flags, from, fromlen, overlapped, event, datagram]
+                  (bool cancelled, uint32_t* transferred, uint32_t* error) {
+    *transferred = 0;
+    if (cancelled) {
+      *error = 995;  // WSA_OPERATION_ABORTED
+      CompleteSocket(overlapped, event, *error, 0);
+      return true;
+    }
+    std::vector<uint8_t> storage(datagram ? std::max(size, 65536u) : size);
+    N_XSOCKADDR_IN address{};
+    uint32_t length = sizeof(address);
+    const int result = datagram
+        ? socket_ptr->RecvFrom(storage.data(), uint32_t(storage.size()), native_flags, &address, &length)
+        : socket_ptr->Recv(storage.data(), size, native_flags);
+    if (result < 0) {
+      *error = LastSocketErrorCode("WSARecv");
+      return false;
+    }
+    *error = 0;
+    *transferred = uint32_t(result);
+    uint32_t offset = 0;
+    for (const auto& buffer : destinations) {
+      const uint32_t n = std::min(buffer.size, std::min(size, uint32_t(result)) - offset);
+      if (n) std::memcpy(buffer.data, storage.data() + offset, n);
+      offset += n;
+    }
+    if (from) {
+      from->sin_family = address.sin_family;
+      from->sin_port = address.sin_port;
+      from->sin_addr = address.sin_addr;
+      std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
+      *fromlen = sizeof(XSOCKADDR_IN);
+    }
+    if (uint32_t(result) > size) {
+      *error = 10040;  // WSAEMSGSIZE: consume one datagram, retain only the prefix
+      return false;
+    }
+    CompleteSocket(overlapped, event, 0, uint32_t(result));
+    return true;
+  };
+  uint32_t transferred, error;
+  if (transfer(false, &transferred, &error)) {
+    if (bytes) *bytes = transferred;
+    *flags = 0;
+    return 0;
   }
+  if (!overlapped || error != 10035) return SocketFailure(error);
+  overlapped->internal_high = 0;
+  std::atomic_ref(overlapped->internal).store(rex::be<uint32_t>(996), std::memory_order_release);  // WSA_IO_INCOMPLETE, queried by WSAGetOverlappedResult
+  if (event) event->Reset();
+  if (!socket->StartReceive([transfer = std::move(transfer), overlapped, event](bool cancel) {
+        uint32_t n, error;
+        if (transfer(cancel, &n, &error)) return true;
+        if (error == 10035) return false;
+        CompleteSocket(overlapped, event, error, 0);
+        return true;
+      })) return SocketFailure(10035);
+  return SocketFailure(997);  // WSA_IO_PENDING
+}
+}  // namespace
 
-  // Our sockets implementation doesn't support multiple buffers, so we need
-  // to combine the buffers the game has given us!
-  std::vector<uint8_t> combined_buffer_mem;
-  uint32_t combined_buffer_size = 0;
-  uint32_t combined_buffer_offset = 0;
-  for (uint32_t i = 0; i < num_buffers; i++) {
-    combined_buffer_size += buffers[i].len;
-    combined_buffer_mem.resize(combined_buffer_size);
-    uint8_t* combined_buffer = combined_buffer_mem.data();
+u32 NetDll_WSARecvFrom_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                             u32 count, mapped_u32 bytes, mapped_u32 flags,
+                             ppc_ptr_t<XSOCKADDR_IN> from, mapped_u32 fromlen,
+                             ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  return ReceiveBuffers(socket_handle, buffers, count, bytes, flags, from, fromlen,
+                        overlapped, callback, true);
+}
 
-    std::memcpy(combined_buffer + combined_buffer_offset,
-                REX_KERNEL_MEMORY()->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len);
-    combined_buffer_offset += buffers[i].len;
+u32 NetDll_WSARecv_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                         u32 count, mapped_u32 bytes, mapped_u32 flags,
+                         ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  return ReceiveBuffers(socket_handle, buffers, count, bytes, flags, nullptr, nullptr,
+                        overlapped, callback, false);
+}
+
+u32 NetDll_WSASendTo_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                           u32 count, mapped_u32 bytes, u32 flags,
+                           ppc_ptr_t<XSOCKADDR_IN> to, u32 tolen,
+                           ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) return SocketFailure(10038);
+  uint32_t size;
+  if (!BufferSize(buffers, count, &size) || (!bytes && !overlapped) ||
+      (to && tolen < sizeof(XSOCKADDR_IN))) return SocketFailure(10014);
+  if (callback || (flags & ~5u)) return SocketFailure(10045);
+  const int native_flags = (flags & 1 ? MSG_OOB : 0) | (flags & 4 ? MSG_DONTROUTE : 0);
+  std::vector<uint8_t> storage(size);
+  uint32_t offset = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (buffers[i].len)
+      std::memcpy(storage.data() + offset,
+                  REX_KERNEL_MEMORY()->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len);
+    offset += buffers[i].len;
   }
-
-  N_XSOCKADDR_IN native_to(to_ptr);
-  socket->SendTo(combined_buffer_mem.data(), combined_buffer_size, flags, &native_to, to_len);
-
-  // TODO: Instantly complete overlapped
-
+  int result;
+  if (to) {
+    N_XSOCKADDR_IN address(to);
+    result = socket->SendTo(storage.data(), size, native_flags, &address, sizeof(address));
+  } else {
+    result = socket->Send(storage.data(), size, native_flags);
+  }
+  if (result < 0) {
+    SetLastSocketError("WSASendTo");
+    return ~0u;
+  }
+  if (bytes) *bytes = uint32_t(result);
+  auto event = overlapped ? REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped->event_handle)
+                          : object_ref<XEvent>{};
+  CompleteSocket(overlapped, event, 0, uint32_t(result));
   return 0;
+}
+
+u32 NetDll_WSASend_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buffers,
+                         u32 count, mapped_u32 bytes, u32 flags,
+                         ppc_ptr_t<XWSAOVERLAPPED> overlapped, mapped_void callback) {
+  return NetDll_WSASendTo_entry(caller, socket_handle, buffers, count, bytes, flags,
+                               nullptr, 0, overlapped, callback);
 }
 
 u32 NetDll_WSAWaitForMultipleEvents_entry(u32 num_events, mapped_u32 events, u32 wait_all,
@@ -566,6 +698,16 @@ u32 NetDll_XNetGetTitleXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
   std::memset(addr_ptr->abOnline, 0, 20);
 
   return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+}
+
+// XNetCreateKey(caller, XNKID* key_id, XNKEY* key): fills the 8-byte id and 16-byte key with random bytes.
+u32 NetDll_XNetCreateKey_entry(u32 caller, mapped_void key_id, mapped_void key) {
+  if (!key_id || !key) return 0x2726;  // WSAEINVAL
+  NetDll_XNetRandom_entry(caller, key_id, 8);
+  // XNKID type lives in ab[0]'s high bits; 0 = system link, matching xgi_app session ids.
+  key_id.as<uint8_t*>()[0] = 0;
+  NetDll_XNetRandom_entry(caller, key, 16);
+  return 0;
 }
 
 u32 NetDll_XNetGetDebugXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
@@ -844,13 +986,26 @@ u32 NetDll_getsockname_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR_
   return 0;
 }
 
+u32 NetDll_getpeername_entry(u32 caller, u32 socket_handle,
+                            ppc_ptr_t<XSOCKADDR_IN> name, mapped_u32 length) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) return SocketFailure(10038);
+  if (!name || !length || *length < sizeof(XSOCKADDR_IN)) return SocketFailure(10014);
+  if (XFAILED(socket->GetPeerName(name))) {
+    SetLastSocketError("getpeername");
+    return ~0u;
+  }
+  *length = sizeof(XSOCKADDR_IN);
+  return 0;
+}
+
 u32 NetDll_WSACancelOverlappedIO_entry(u32 caller, u32 socket_handle) {
-  // Our overlapped receives never stay pending (NetDll_WSARecvFrom fails at once), so there is
-  // nothing to cancel on a real socket.
-  if (!REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle)) {
+  auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
     XThread::SetLastError(0x2736);  // WSAENOTSOCK
     return -1;
   }
+  socket->CancelReceive();
   return 0;
 }
 
@@ -862,9 +1017,20 @@ u32 NetDll_WSAGetOverlappedResult_entry(u32 caller, u32 socket_handle,
     XThread::SetLastError(0x2726);  // WSAEINVAL
     return 0;
   }
-  // shortcut: never waits on the event; nothing here completes an overlapped asynchronously.
-  const uint32_t status = overlapped->internal;
-  if (status == 0x3E4) {  // WSA_IO_INCOMPLETE
+  if (!REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle)) {
+    XThread::SetLastError(10038);
+    return 0;
+  }
+  if (wait && std::atomic_ref(overlapped->internal).load(std::memory_order_acquire).get() == 996) {
+    auto event = REX_KERNEL_OBJECTS()->LookupObject<XEvent>(overlapped->event_handle);
+    if (!event) {
+      XThread::SetLastError(10022);  // waiting without an event is not supported yet
+      return 0;
+    }
+    event->Wait(0, 0, 0, nullptr);
+  }
+  const uint32_t status = std::atomic_ref(overlapped->internal).load(std::memory_order_acquire);
+  if (status == 996) {
     XThread::SetLastError(status);
     return 0;
   }
@@ -1248,113 +1414,262 @@ REX_EXPORT(__imp__NetDll_sendto, rex::kernel::xam::NetDll_sendto_entry)
 REX_EXPORT(__imp__NetDll___WSAFDIsSet, rex::kernel::xam::NetDll___WSAFDIsSet_entry)
 REX_EXPORT(__imp__NetDll_WSASetLastError, rex::kernel::xam::NetDll_WSASetLastError_entry)
 
-REX_EXPORT_STUB(__imp__NetDll_UpnpActionCalculateWorkBufferSize);
-REX_EXPORT_STUB(__imp__NetDll_UpnpActionCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpActionGetResults);
-REX_EXPORT_STUB(__imp__NetDll_UpnpCleanup);
-REX_EXPORT_STUB(__imp__NetDll_UpnpCloseHandle);
-REX_EXPORT_STUB(__imp__NetDll_UpnpDescribeCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpDescribeGetResults);
-REX_EXPORT_STUB(__imp__NetDll_UpnpDoWork);
-REX_EXPORT_STUB(__imp__NetDll_UpnpEventCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpEventGetCurrentState);
-REX_EXPORT_STUB(__imp__NetDll_UpnpEventUnsubscribe);
-REX_EXPORT_STUB(__imp__NetDll_UpnpSearchCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpSearchGetDevices);
-REX_EXPORT_STUB(__imp__NetDll_UpnpStartup);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpActionCalculateWorkBufferSize, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpActionCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpActionGetResults, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpCleanup, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpCloseHandle, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpDescribeCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpDescribeGetResults, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpDoWork, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpEventCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpEventGetCurrentState, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpEventUnsubscribe, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpSearchCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpSearchGetDevices, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpStartup, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_WSAEventSelect, 0xFFFFFFFF);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_WSARecv, 0xFFFFFFFF);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_WSASend, 0xFFFFFFFF);
-REX_EXPORT_STUB(__imp__NetDll_WSAStartupEx);
+REX_EXPORT(__imp__NetDll_WSARecv, rex::kernel::xam::NetDll_WSARecv_entry)
+REX_EXPORT(__imp__NetDll_WSASend, rex::kernel::xam::NetDll_WSASend_entry)
+REX_EXPORT(__imp__NetDll_WSAStartupEx, rex::kernel::xam::NetDll_WSAStartupEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCloseHandle, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpConnect, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCrackUrl, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpCrackUrlW);
-REX_EXPORT_STUB(__imp__NetDll_XHttpCreateUrl);
-REX_EXPORT_STUB(__imp__NetDll_XHttpCreateUrlW);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpDoWork, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpGetPerfCounters);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpen, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpenRequest, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpOpenRequestUsingMemory);
-REX_EXPORT_STUB(__imp__NetDll_XHttpQueryAuthSchemes);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryHeaders, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpQueryOption);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReadData, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReceiveResponse, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpResetPerfCounters);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSendRequest, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpSetCredentials);
-REX_EXPORT_STUB(__imp__NetDll_XHttpSetOption);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpGetPerfCounters, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpenRequestUsingMemory, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryAuthSchemes, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryOption, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpResetPerfCounters, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetCredentials, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetOption, 1);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetStatusCallback, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpShutdown, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpStartup, 0);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpWriteData, 0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpStartup, 1);
 REX_EXPORT(__imp__NetDll_XNetConnect, rex::kernel::xam::NetDll_XNetConnect_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetCreateKey);
-REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseLookup);
-REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseRelease);
-REX_EXPORT_STUB(__imp__NetDll_XNetGetBroadcastVersionStatus);
+REX_EXPORT(__imp__NetDll_XNetCreateKey, rex::kernel::xam::NetDll_XNetCreateKey_entry)
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseLookup, 0x2af9);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseRelease, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetGetBroadcastVersionStatus, 0);
 REX_EXPORT(__imp__NetDll_XNetGetConnectStatus, rex::kernel::xam::NetDll_XNetGetConnectStatus_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetGetSystemLinkPort);
-REX_EXPORT_STUB(__imp__NetDll_XNetGetXnAddrPlatform);
-REX_EXPORT_STUB(__imp__NetDll_XNetInAddrToServer);
-REX_EXPORT_STUB(__imp__NetDll_XNetQosGetListenStats);
-REX_EXPORT_STUB(__imp__NetDll_XNetQosLookup);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetInAddrToServer, 10050);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosGetListenStats, 10050);
+// shortcut: 10050 (WSAENETDOWN) = offline failure; out pointers are not zeroed, so a caller that reads them anyway sees stale data. Upgrade if a game does.
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosLookup, 10050);
 REX_EXPORT(__imp__NetDll_XNetRegisterKey, rex::kernel::xam::NetDll_XNetRegisterKey_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetReplaceKey);
-REX_EXPORT_STUB(__imp__NetDll_XNetServerToInAddr);
-REX_EXPORT_STUB(__imp__NetDll_XNetSetOpt);
-REX_EXPORT_STUB(__imp__NetDll_XNetStartupEx);
-REX_EXPORT_STUB(__imp__NetDll_XNetTsAddrToInAddr);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetReplaceKey, 0x2726);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetServerToInAddr, 10050);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetSetOpt, 0);
+REX_EXPORT(__imp__NetDll_XNetStartupEx, rex::kernel::xam::NetDll_XNetStartupEx_entry)
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetTsAddrToInAddr, 10050);
 REX_EXPORT(__imp__NetDll_XNetUnregisterInAddr, rex::kernel::xam::NetDll_XNetUnregisterInAddr_entry)
 REX_EXPORT(__imp__NetDll_XNetUnregisterKey, rex::kernel::xam::NetDll_XNetUnregisterKey_entry)
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadContinue);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetParseTime);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetReceivedDataSize);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadStart);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadStop);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadContinue, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadGetParseTime, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadGetReceivedDataSize, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadStart, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadStop, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpCapture, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpConfig, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpConfigUPnP, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpConfigUPnPPortAndExternalAddr);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpConfigUPnPPortAndExternalAddr, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptRecv, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptSetCallbacks, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpEthernetInterceptSetExtendedReceiveCallback);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptSetExtendedReceiveCallback, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptXmit, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpEthernetInterceptXmitAsIp);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptXmitAsIp, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetActiveSocketList, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetConfigStatus, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpGetKeyList);
-REX_EXPORT_STUB(__imp__NetDll_XnpGetQosLookupList);
-REX_EXPORT_STUB(__imp__NetDll_XnpGetSecAssocList);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetKeyList, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetQosLookupList, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetSecAssocList, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetVlanXboxName, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLoadConfigParams, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLoadMachineAccount, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpLogonClearChallenge);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonClearChallenge, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonClearQEvent, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpLogonGetChallenge);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetChallenge, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetQFlags, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetQVals, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetStatus, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpLogonSetChallengeResponse);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetChallengeResponse, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetPState, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetQEvent, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetQFlags, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetQVals, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpNoteSystemTime, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpPersistTitleState);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistoryGetAggregateMeasurement);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistoryGetEntries);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistoryLoad);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistorySaveMeasurements);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpPersistTitleState, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistoryGetAggregateMeasurement, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistoryGetEntries, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistoryLoad, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistorySaveMeasurements, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpRegisterKeyForCallerType, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpReplaceKeyForCallerType);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpReplaceKeyForCallerType, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpSaveConfigParams, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpSaveMachineAccount, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpSetVlanXboxName, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpToolIpProxyInject);
-REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpToolIpProxyInject, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpToolSetCallbacks, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpUnregisterKeyForCallerType, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
-REX_EXPORT_STUB_RETURN(__imp__NetDll_getpeername, 0xFFFFFFFF);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpUpdateConfigParams, 0x0);
+REX_EXPORT(__imp__NetDll_getpeername, rex::kernel::xam::NetDll_getpeername_entry)
+
+// XNetGetSystemLinkPort: report the default system-link port (3074, big-endian) when none was set.
+// XNetGetXnAddrPlatform: platform 0 (retail console).
+namespace rex::kernel::xam {
+u32 NetDll_XNetGetSystemLinkPort_entry(u32 caller, mapped_u16 port) {
+  if (port) *port = 0x0C02;
+  return 0;
+}
+u32 NetDll_XNetGetXnAddrPlatform_entry(u32 caller, u32 xnaddr, mapped_u32 platform) {
+  if (platform) *platform = 0;
+  return 0;
+}
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__NetDll_XNetGetSystemLinkPort, rex::kernel::xam::NetDll_XNetGetSystemLinkPort_entry)
+REX_EXPORT(__imp__NetDll_XNetGetXnAddrPlatform, rex::kernel::xam::NetDll_XNetGetXnAddrPlatform_entry)
+
+// ---- XHttp URL helpers (WinHttpCrackUrl / WinHttpCreateUrl behaviour, 32-bit guest URL_COMPONENTS) ----
+namespace rex::kernel::xam {
+namespace {
+constexpr uint32_t kHttpInvalidUrl = 12005, kInsufficientBuffer = 122;
+// URL_COMPONENTS field offsets: size, scheme(ptr,len), nScheme, host(ptr,len), port(u16), user, pass, path, extra.
+constexpr uint32_t kOffScheme = 4, kOffNScheme = 12, kOffHost = 16, kOffPort = 24, kOffUser = 28,
+                   kOffPass = 36, kOffPath = 44, kOffExtra = 52;
+
+uint32_t RdU32(uint8_t* base, uint32_t off) {
+  return rex::byte_swap(*reinterpret_cast<uint32_t*>(base + off));
+}
+void WrU32(uint8_t* base, uint32_t off, uint32_t v) {
+  *reinterpret_cast<uint32_t*>(base + off) = rex::byte_swap(v);
+}
+template <typename C>
+std::string ReadStr(uint32_t guest, uint32_t len) {
+  std::string out;
+  if (!guest) return out;
+  auto* p = REX_KERNEL_MEMORY()->TranslateVirtual<C*>(guest);
+  for (uint32_t i = 0; (len ? i < len : true); ++i) {
+    C c = p[i];
+    if constexpr (sizeof(C) == 2) c = rex::byte_swap(c);
+    if (!len && !c) break;
+    out.push_back(char(c));
+  }
+  return out;
+}
+// Fill one component per WinHttpCrackUrl: buffer given -> copy (NUL-terminated); no buffer but a
+// non-zero length -> point into the source URL; neither -> untouched.
+template <typename C>
+bool CrackField(uint8_t* comps, uint32_t off, std::string_view url, UrlSpan sp, uint32_t url_guest) {
+  uint32_t ptr = RdU32(comps, off), cap = RdU32(comps, off + 4);
+  if (ptr) {
+    if (cap < sp.len + 1) {
+      WrU32(comps, off + 4, sp.len + 1);
+      return false;
+    }
+    auto* d = REX_KERNEL_MEMORY()->TranslateVirtual<C*>(ptr);
+    for (uint32_t i = 0; i < sp.len; ++i) {
+      C c = C(uint8_t(url[sp.off + i]));
+      if constexpr (sizeof(C) == 2) c = rex::byte_swap(c);
+      d[i] = c;
+    }
+    d[sp.len] = 0;
+    WrU32(comps, off + 4, sp.len);
+  } else if (cap) {
+    WrU32(comps, off, url_guest + sp.off * sizeof(C));
+    WrU32(comps, off + 4, sp.len);
+  }
+  return true;
+}
+template <typename C>
+u32 CrackImpl(u32 url_guest, u32 len, u32 comps_guest) {
+  if (!url_guest || !comps_guest) {
+    XThread::SetLastError(87);
+    return 0;
+  }
+  std::string url = ReadStr<C>(url_guest, len);
+  UrlParts p;
+  if (!ParseUrl(url, p)) {
+    XThread::SetLastError(kHttpInvalidUrl);
+    return 0;
+  }
+  auto* c = REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(comps_guest);
+  bool ok = CrackField<C>(c, kOffScheme, url, p.scheme, url_guest) &&
+            CrackField<C>(c, kOffHost, url, p.host, url_guest) &&
+            CrackField<C>(c, kOffUser, url, p.user, url_guest) &&
+            CrackField<C>(c, kOffPass, url, p.pass, url_guest) &&
+            CrackField<C>(c, kOffPath, url, p.path, url_guest) &&
+            CrackField<C>(c, kOffExtra, url, p.extra, url_guest);
+  if (!ok) {
+    XThread::SetLastError(kInsufficientBuffer);
+    return 0;
+  }
+  WrU32(c, kOffNScheme, p.scheme_id);
+  *reinterpret_cast<uint16_t*>(c + kOffPort) = rex::byte_swap(p.port);
+  return 1;
+}
+template <typename C>
+u32 CreateImpl(u32 comps_guest, u32 out_guest, u32 len_guest) {
+  if (!comps_guest || !len_guest) {
+    XThread::SetLastError(87);
+    return 0;
+  }
+  auto* c = REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(comps_guest);
+  auto field = [&](uint32_t off) { return ReadStr<C>(RdU32(c, off), RdU32(c, off + 4)); };
+  uint16_t port = rex::byte_swap(*reinterpret_cast<uint16_t*>(c + kOffPort));
+  std::string url = BuildUrl(RdU32(c, kOffNScheme), field(kOffScheme), field(kOffHost), port,
+                             field(kOffUser), field(kOffPass), field(kOffPath), field(kOffExtra));
+  auto* plen = REX_KERNEL_MEMORY()->TranslateVirtual<uint32_t*>(len_guest);
+  uint32_t cap = rex::byte_swap(*plen);
+  if (!out_guest || cap < url.size() + 1) {
+    *plen = rex::byte_swap(uint32_t(url.size() + 1));
+    XThread::SetLastError(kInsufficientBuffer);
+    return 0;
+  }
+  auto* d = REX_KERNEL_MEMORY()->TranslateVirtual<C*>(out_guest);
+  for (size_t i = 0; i < url.size(); ++i) {
+    C ch = C(uint8_t(url[i]));
+    if constexpr (sizeof(C) == 2) ch = rex::byte_swap(ch);
+    d[i] = ch;
+  }
+  d[url.size()] = 0;
+  *plen = rex::byte_swap(uint32_t(url.size()));
+  return 1;
+}
+}  // namespace
+u32 NetDll_XHttpCrackUrl_entry(u32 caller, u32 url, u32 len, u32 flags, u32 comps) {
+  return CrackImpl<char>(url, len, comps);
+}
+u32 NetDll_XHttpCrackUrlW_entry(u32 caller, u32 url, u32 len, u32 flags, u32 comps) {
+  return CrackImpl<char16_t>(url, len, comps);
+}
+u32 NetDll_XHttpCreateUrl_entry(u32 caller, u32 comps, u32 flags, u32 out, u32 len) {
+  return CreateImpl<char>(comps, out, len);
+}
+u32 NetDll_XHttpCreateUrlW_entry(u32 caller, u32 comps, u32 flags, u32 out, u32 len) {
+  return CreateImpl<char16_t>(comps, out, len);
+}
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__NetDll_XHttpCrackUrl, rex::kernel::xam::NetDll_XHttpCrackUrl_entry)
+REX_EXPORT(__imp__NetDll_XHttpCrackUrlW, rex::kernel::xam::NetDll_XHttpCrackUrlW_entry)
+REX_EXPORT(__imp__NetDll_XHttpCreateUrl, rex::kernel::xam::NetDll_XHttpCreateUrl_entry)
+REX_EXPORT(__imp__NetDll_XHttpCreateUrlW, rex::kernel::xam::NetDll_XHttpCreateUrlW_entry)
+
+// XHttp offline: there is no HTTP session layer (the games' servers are gone), so requests refuse cleanly with
+// ERROR_WINHTTP_NAME_NOT_RESOLVED (12007) as the last error.
+namespace rex::kernel::xam {
+u32 XHttpRefuse() { XThread::SetLastError(12007); return 0; }
+u32 NetDll_XHttpOpen_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpConnect_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpOpenRequest_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpSendRequest_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpReceiveResponse_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpQueryHeaders_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpReadData_entry() { return XHttpRefuse(); }
+u32 NetDll_XHttpWriteData_entry() { return XHttpRefuse(); }
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__NetDll_XHttpOpen, rex::kernel::xam::NetDll_XHttpOpen_entry)
+REX_EXPORT(__imp__NetDll_XHttpConnect, rex::kernel::xam::NetDll_XHttpConnect_entry)
+REX_EXPORT(__imp__NetDll_XHttpOpenRequest, rex::kernel::xam::NetDll_XHttpOpenRequest_entry)
+REX_EXPORT(__imp__NetDll_XHttpSendRequest, rex::kernel::xam::NetDll_XHttpSendRequest_entry)
+REX_EXPORT(__imp__NetDll_XHttpReceiveResponse, rex::kernel::xam::NetDll_XHttpReceiveResponse_entry)
+REX_EXPORT(__imp__NetDll_XHttpQueryHeaders, rex::kernel::xam::NetDll_XHttpQueryHeaders_entry)
+REX_EXPORT(__imp__NetDll_XHttpReadData, rex::kernel::xam::NetDll_XHttpReadData_entry)
+REX_EXPORT(__imp__NetDll_XHttpWriteData, rex::kernel::xam::NetDll_XHttpWriteData_entry)

@@ -51,28 +51,48 @@ REX_EXPORT(__imp__XamPartySendGameInvites, rex::kernel::xam::XamPartySendGameInv
 REX_EXPORT(__imp__XamPartySetCustomData, rex::kernel::xam::XamPartySetCustomData_entry)
 REX_EXPORT(__imp__XamPartyGetBandwidth, rex::kernel::xam::XamPartyGetBandwidth_entry)
 
-REX_EXPORT_STUB(__imp__XamPartyAddLocalUsers);
-REX_EXPORT_STUB(__imp__XamPartyAutomationInprocCall);
-REX_EXPORT_STUB(__imp__XamPartyCreate);
-REX_EXPORT_STUB(__imp__XamPartyGetAccessLevel);
-REX_EXPORT_STUB(__imp__XamPartyGetFormation);
-REX_EXPORT_STUB(__imp__XamPartyGetInfo);
-REX_EXPORT_STUB(__imp__XamPartyGetInfoEx);
-REX_EXPORT_STUB(__imp__XamPartyGetJoinable);
-REX_EXPORT_STUB(__imp__XamPartyGetNetworkCounters);
-REX_EXPORT_STUB(__imp__XamPartyGetRoutingTable);
-REX_EXPORT_STUB(__imp__XamPartyGetState);
-REX_EXPORT_STUB(__imp__XamPartyGetUserListInternal);
-REX_EXPORT_STUB(__imp__XamPartyIsCoordinator);
-REX_EXPORT_STUB(__imp__XamPartyJoin);
-REX_EXPORT_STUB(__imp__XamPartyJoinEx);
-REX_EXPORT_STUB(__imp__XamPartyKickUser);
-REX_EXPORT_STUB(__imp__XamPartyLeave);
-REX_EXPORT_STUB(__imp__XamPartyOverrideNatType);
-REX_EXPORT_STUB(__imp__XamPartyRemoveLocalUsers);
-REX_EXPORT_STUB(__imp__XamPartySendInvite);
-REX_EXPORT_STUB(__imp__XamPartySendInviteDeprecated);
-REX_EXPORT_STUB(__imp__XamPartySetConnectivityGraph);
-REX_EXPORT_STUB(__imp__XamPartySetJoinable);
-REX_EXPORT_STUB(__imp__XamPartySetTestDelay);
-REX_EXPORT_STUB(__imp__XamPartySetTestFlags);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyAddLocalUsers, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyAutomationInprocCall, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyCreate, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyGetInfo, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyGetInfoEx, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyGetNetworkCounters, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyGetRoutingTable, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyIsCoordinator, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyJoin, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyJoinEx, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyKickUser, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyLeave, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyOverrideNatType, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartyRemoveLocalUsers, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartySendInvite, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartySendInviteDeprecated, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__XamPartySetConnectivityGraph, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartySetJoinable, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartySetTestDelay, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__XamPartySetTestFlags, 0x0);
+
+namespace rex::kernel::xam {
+u32 XamPartyGetAccessLevel_entry(mapped_u32 out) {
+  if (out) *out = 0;
+  return 0;
+}
+u32 XamPartyGetFormation_entry(mapped_u32 out) {
+  if (out) *out = 0;
+  return 0;
+}
+u32 XamPartyGetJoinable_entry(mapped_u32 out) {
+  if (out) *out = 0;
+  return 0;
+}
+u32 XamPartyGetState_entry(mapped_u32 out) {
+  if (out) *out = 0;
+  return 0;
+}
+u32 XamPartyGetUserListInternal_entry(u32 c, mapped_u32 l) { return XamPartyGetUserList_entry(c, l); }
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__XamPartyGetAccessLevel, rex::kernel::xam::XamPartyGetAccessLevel_entry)
+REX_EXPORT(__imp__XamPartyGetFormation, rex::kernel::xam::XamPartyGetFormation_entry)
+REX_EXPORT(__imp__XamPartyGetJoinable, rex::kernel::xam::XamPartyGetJoinable_entry)
+REX_EXPORT(__imp__XamPartyGetState, rex::kernel::xam::XamPartyGetState_entry)
+REX_EXPORT(__imp__XamPartyGetUserListInternal, rex::kernel::xam::XamPartyGetUserListInternal_entry)

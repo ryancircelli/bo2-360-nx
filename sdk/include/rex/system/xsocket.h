@@ -13,6 +13,8 @@
 #include <atomic>
 #include <cstring>
 #include <queue>
+#include <functional>
+#include <thread>
 
 #include <rex/math.h>
 #include <rex/platform.h>
@@ -123,6 +125,12 @@ class XSocket : public XObject {
 
   // The socket's local address as the guest sees it (its own bound port, not the remapped host port).
   X_STATUS GetName(XSOCKADDR_IN* out_name);
+  X_STATUS GetPeerName(XSOCKADDR_IN* out_name);
+  // Owns one pending nonblocking receive; cancel joins before native close.
+  bool StartReceive(std::function<bool(bool)> receive);
+  void CancelReceive();
+  bool ReceivePending() const { return !receive_done_.load(std::memory_order_acquire); }
+  bool is_datagram() const { return type_ == X_SOCK_DGRAM; }
   X_STATUS GetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t* optlen);
   X_STATUS SetOption(uint32_t level, uint32_t optname, void* optval_ptr, uint32_t optlen);
   X_STATUS IOControl(uint32_t cmd, uint8_t* arg_ptr);
@@ -154,14 +162,17 @@ class XSocket : public XObject {
 
  private:
   XSocket(KernelState* kernel_state, uint64_t native_handle);
+  std::mutex receive_mutex_;
+  std::jthread receive_thread_;
+  std::atomic<bool> receive_done_{true};
   uint64_t native_handle_ = -1;
   // Switch: until when recv/recvfrom answer EWOULDBLOCK without asking (xsocket.cpp, the idle
   // window); 0 = ask.
   std::atomic<int64_t> idle_until_ns_{0};
 
-  AddressFamily af_;    // Address family
-  Type type_;           // Type (DGRAM/Stream/etc)
-  Protocol proto_;      // Protocol (TCP/UDP/etc)
+  AddressFamily af_ = X_AF_INET;    // Address family
+  Type type_ = X_SOCK_STREAM;           // Type (DGRAM/Stream/etc)
+  Protocol proto_ = X_IPPROTO_TCP;      // Protocol (TCP/UDP/etc)
   bool secure_ = true;  // Secure socket (encryption enabled)
 
   bool bound_ = false;  // Explicitly bound to an IP address?
@@ -207,6 +218,8 @@ bool OnLan(uint32_t ip);
 // port moves up by net_system_port_offset on every peer, in binds, destinations and reported sources alike.
 uint16_t HostPort(uint16_t guest_port);
 uint16_t GuestPort(uint16_t host_port);
+// Port offset of instance 0 (net_system_port_offset less this process's 16-port instance stride).
+int InstancePortBase();
 // The net_system_link_trace lines (ip in host byte order, the title's port).
 void TraceSend(uint32_t ip, uint16_t guest_port, int bytes, int error);
 void TraceReceive(uint32_t ip, uint16_t guest_port, int bytes);
