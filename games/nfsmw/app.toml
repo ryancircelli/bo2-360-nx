@@ -8,4 +8,4 @@ name = "Need for Speed Most Wanted"                         # the app's name and
 # version of the disc (or a title update, which patches the code) would need its own recompile, so the builder refuses it.
 [source]
 executables = { "default.xex" = "aebdf3c14d1e4e4ed2c130d94bc1a0e97bd6d5bf39bdfdef33c3909c9cc4ba4c" }
-codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # as tools/nfsmw_codegen.sh
+codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # run by tools/mac/build_app.py and tools/game_codegen.sh

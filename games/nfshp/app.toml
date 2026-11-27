@@ -8,4 +8,4 @@ name = "Need for Speed Hot Pursuit"                         # the app's name and
 # version of the disc (or a title update, which patches the code) would need its own recompile, so the builder refuses it.
 [source]
 executables = { "Default.XEX" = "faa878be8fa0c3bc764600f20188494559f76767f8083e71f958e36c13b3140a", "Alaska.xex.DLL" = "4d3f53616c3df82bf308e366b01de868c4e5f257725ca9289a18a89fc0915139" }
-codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # as tools/criterion_codegen.sh
+codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # run by tools/mac/build_app.py and tools/game_codegen.sh

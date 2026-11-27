@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(REXSDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../sdk" CACHE PATH "Path to the rexglue-sdk source tree")
-# The generated code is made once by tools/criterion_codegen.sh (codegen plus the post passes), never by the build:
+# The generated code is made once by tools/mac/build_app.py or tools/game_codegen.sh (codegen plus the post passes), never by the build:
 # with host tools off there is no rexglue target, so the DLL module's dependency on ac1_codegen is met by a no-op.
 include(generated/rexglue.cmake)
 # Cross builds get no codegen target from rexglue.cmake; keep the name dependable.

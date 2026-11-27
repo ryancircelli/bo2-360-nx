@@ -8,4 +8,4 @@ name = "Need for Speed Most Wanted 2012"                         # the app's nam
 # version of the disc (or a title update, which patches the code) would need its own recompile, so the builder refuses it.
 [source]
 executables = { "DEFAULT.XEX" = "81806b65e1ca4a6891cb9c063428f7b205f56715d763897dd8ad082f8649851e", "HAWAII.XEX.DLL" = "3b6d80ac90422fd6c459cb89550e60bb9de1e5f628d4f494a81c605ba045e1d8" }
-codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # as tools/criterion_codegen.sh
+codegen_passes = ["read_before_write", "setjmp_locals", "direct_calls", "guest_barriers"]   # run by tools/mac/build_app.py and tools/game_codegen.sh
