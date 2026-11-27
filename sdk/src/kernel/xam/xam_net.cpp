@@ -1411,20 +1411,20 @@ REX_EXPORT(__imp__NetDll_sendto, rex::kernel::xam::NetDll_sendto_entry)
 REX_EXPORT(__imp__NetDll___WSAFDIsSet, rex::kernel::xam::NetDll___WSAFDIsSet_entry)
 REX_EXPORT(__imp__NetDll_WSASetLastError, rex::kernel::xam::NetDll_WSASetLastError_entry)
 
-REX_EXPORT_STUB(__imp__NetDll_UpnpActionCalculateWorkBufferSize);
-REX_EXPORT_STUB(__imp__NetDll_UpnpActionCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpActionGetResults);
-REX_EXPORT_STUB(__imp__NetDll_UpnpCleanup);
-REX_EXPORT_STUB(__imp__NetDll_UpnpCloseHandle);
-REX_EXPORT_STUB(__imp__NetDll_UpnpDescribeCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpDescribeGetResults);
-REX_EXPORT_STUB(__imp__NetDll_UpnpDoWork);
-REX_EXPORT_STUB(__imp__NetDll_UpnpEventCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpEventGetCurrentState);
-REX_EXPORT_STUB(__imp__NetDll_UpnpEventUnsubscribe);
-REX_EXPORT_STUB(__imp__NetDll_UpnpSearchCreate);
-REX_EXPORT_STUB(__imp__NetDll_UpnpSearchGetDevices);
-REX_EXPORT_STUB(__imp__NetDll_UpnpStartup);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpActionCalculateWorkBufferSize, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpActionCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpActionGetResults, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpCleanup, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpCloseHandle, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpDescribeCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpDescribeGetResults, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpDoWork, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpEventCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpEventGetCurrentState, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpEventUnsubscribe, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpSearchCreate, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpSearchGetDevices, 0xffffffff);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_UpnpStartup, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_WSAEventSelect, 0xFFFFFFFF);
 REX_EXPORT(__imp__NetDll_WSARecv, rex::kernel::xam::NetDll_WSARecv_entry)
 REX_EXPORT(__imp__NetDll_WSASend, rex::kernel::xam::NetDll_WSASend_entry)
@@ -1432,22 +1432,22 @@ REX_EXPORT(__imp__NetDll_WSAStartupEx, rex::kernel::xam::NetDll_WSAStartupEx_ent
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCloseHandle, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpConnect, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCrackUrl, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpCrackUrlW);
-REX_EXPORT_STUB(__imp__NetDll_XHttpCreateUrl);
-REX_EXPORT_STUB(__imp__NetDll_XHttpCreateUrlW);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCrackUrlW, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCreateUrl, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpCreateUrlW, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpDoWork, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpGetPerfCounters);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpGetPerfCounters, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpen, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpenRequest, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpOpenRequestUsingMemory);
-REX_EXPORT_STUB(__imp__NetDll_XHttpQueryAuthSchemes);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpOpenRequestUsingMemory, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryAuthSchemes, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryHeaders, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpQueryOption);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpQueryOption, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReadData, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReceiveResponse, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpResetPerfCounters);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpResetPerfCounters, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSendRequest, 0);
-REX_EXPORT_STUB(__imp__NetDll_XHttpSetCredentials);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetCredentials, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetOption, 1);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetStatusCallback, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpShutdown, 0);
@@ -1455,70 +1455,83 @@ REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpStartup, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpWriteData, 0);
 REX_EXPORT(__imp__NetDll_XNetConnect, rex::kernel::xam::NetDll_XNetConnect_entry)
 REX_EXPORT(__imp__NetDll_XNetCreateKey, rex::kernel::xam::NetDll_XNetCreateKey_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseLookup);
-REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseRelease);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseLookup, 0x2af9);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetDnsReverseRelease, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetGetBroadcastVersionStatus, 0);
 REX_EXPORT(__imp__NetDll_XNetGetConnectStatus, rex::kernel::xam::NetDll_XNetGetConnectStatus_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetGetSystemLinkPort);
-REX_EXPORT_STUB(__imp__NetDll_XNetGetXnAddrPlatform);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetInAddrToServer, 10050);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosGetListenStats, 10050);
 // shortcut: 10050 (WSAENETDOWN) = offline failure; out pointers are not zeroed, so a caller that reads them anyway sees stale data. Upgrade if a game does.
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosLookup, 10050);
 REX_EXPORT(__imp__NetDll_XNetRegisterKey, rex::kernel::xam::NetDll_XNetRegisterKey_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetReplaceKey);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetReplaceKey, 0x2726);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetServerToInAddr, 10050);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetSetOpt, 0);
 REX_EXPORT(__imp__NetDll_XNetStartupEx, rex::kernel::xam::NetDll_XNetStartupEx_entry)
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetTsAddrToInAddr, 10050);
 REX_EXPORT(__imp__NetDll_XNetUnregisterInAddr, rex::kernel::xam::NetDll_XNetUnregisterInAddr_entry)
 REX_EXPORT(__imp__NetDll_XNetUnregisterKey, rex::kernel::xam::NetDll_XNetUnregisterKey_entry)
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadContinue);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetParseTime);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadGetReceivedDataSize);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadStart);
-REX_EXPORT_STUB(__imp__NetDll_XmlDownloadStop);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadContinue, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadGetParseTime, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadGetReceivedDataSize, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadStart, 0x80004005);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XmlDownloadStop, 0x80004005);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpCapture, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpConfig, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpConfigUPnP, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpConfigUPnPPortAndExternalAddr);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpConfigUPnPPortAndExternalAddr, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptRecv, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptSetCallbacks, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpEthernetInterceptSetExtendedReceiveCallback);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptSetExtendedReceiveCallback, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptXmit, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpEthernetInterceptXmitAsIp);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpEthernetInterceptXmitAsIp, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetActiveSocketList, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetConfigStatus, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpGetKeyList);
-REX_EXPORT_STUB(__imp__NetDll_XnpGetQosLookupList);
-REX_EXPORT_STUB(__imp__NetDll_XnpGetSecAssocList);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetKeyList, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetQosLookupList, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetSecAssocList, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpGetVlanXboxName, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLoadConfigParams, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLoadMachineAccount, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpLogonClearChallenge);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonClearChallenge, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonClearQEvent, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpLogonGetChallenge);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetChallenge, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetQFlags, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetQVals, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonGetStatus, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpLogonSetChallengeResponse);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetChallengeResponse, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetPState, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetQEvent, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetQFlags, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpLogonSetQVals, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpNoteSystemTime, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpPersistTitleState);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistoryGetAggregateMeasurement);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistoryGetEntries);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistoryLoad);
-REX_EXPORT_STUB(__imp__NetDll_XnpQosHistorySaveMeasurements);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpPersistTitleState, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistoryGetAggregateMeasurement, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistoryGetEntries, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistoryLoad, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpQosHistorySaveMeasurements, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpRegisterKeyForCallerType, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpReplaceKeyForCallerType);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpReplaceKeyForCallerType, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpSaveConfigParams, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpSaveMachineAccount, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpSetVlanXboxName, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpToolIpProxyInject);
-REX_EXPORT_STUB(__imp__NetDll_XnpToolSetCallbacks);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpToolIpProxyInject, 0x0);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpToolSetCallbacks, 0x0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpUnregisterKeyForCallerType, 0);
-REX_EXPORT_STUB(__imp__NetDll_XnpUpdateConfigParams);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XnpUpdateConfigParams, 0x0);
 REX_EXPORT(__imp__NetDll_getpeername, rex::kernel::xam::NetDll_getpeername_entry)
+
+// XNetGetSystemLinkPort: report the default system-link port (3074, big-endian) when none was set.
+// XNetGetXnAddrPlatform: platform 0 (retail console).
+namespace rex::kernel::xam {
+u32 NetDll_XNetGetSystemLinkPort_entry(u32 caller, mapped_u16 port) {
+  if (port) *port = 0x0C02;
+  return 0;
+}
+u32 NetDll_XNetGetXnAddrPlatform_entry(u32 caller, u32 xnaddr, mapped_u32 platform) {
+  if (platform) *platform = 0;
+  return 0;
+}
+}  // namespace rex::kernel::xam
+REX_EXPORT(__imp__NetDll_XNetGetSystemLinkPort, rex::kernel::xam::NetDll_XNetGetSystemLinkPort_entry)
+REX_EXPORT(__imp__NetDll_XNetGetXnAddrPlatform, rex::kernel::xam::NetDll_XNetGetXnAddrPlatform_entry)
