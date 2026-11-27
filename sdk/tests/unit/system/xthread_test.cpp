@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <utility>
 
@@ -22,6 +23,7 @@
 #include <rex/system/xevent.h>
 #include <rex/system/xio.h>
 #include <rex/system/xmemory.h>
+#include <rex/system/xsemaphore.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 #include <rex/thread/fiber.h>
@@ -310,4 +312,44 @@ TEST_CASE("Starting a deferred overlapped call clears the caller's event", "[run
   REQUIRE(caller->Create() == X_STATUS_SUCCESS);
   REQUIRE(caller->Wait(0, 0, 0, nullptr) == X_STATUS_SUCCESS);
   CHECK(wait_status.load(std::memory_order_acquire) == uint32_t(X_STATUS_TIMEOUT));
+}
+
+TEST_CASE("A guest object body that is initialised again gets a fresh host object", "[runtime][object]") {
+  rex::Runtime runtime(std::filesystem::current_path());
+  rex::RuntimeConfig config{};
+  config.tool_mode = true;
+  REQUIRE(runtime.Setup(std::move(config)) == X_STATUS_SUCCESS);
+  auto* ks = runtime.kernel_state();
+  auto* table = ks->object_table();
+
+  const uint32_t body = ks->memory()->SystemHeapAlloc(sizeof(rex::system::X_KSEMAPHORE));
+  REQUIRE(body != 0);
+  auto* sem = ks->memory()->TranslateVirtual<rex::system::X_KSEMAPHORE*>(body);
+  // What KeInitializeSemaphore does to the body.
+  auto init = [&](uint32_t count) {
+    std::memset(static_cast<void*>(sem), 0, sizeof(*sem));
+    sem->header.type = 5;
+    sem->header.signal_state = count;
+    sem->limit = 1;
+    return rex::system::XObject::GetNativeObject<rex::system::XSemaphore>(ks, sem, 5);
+  };
+
+  auto first = init(1);  // left with one count that nobody takes
+  REQUIRE(first);
+  const auto first_handle = first->handle();
+  first.reset();
+
+  auto second = init(0);
+  REQUIRE(second);
+  uint64_t no_wait = 0;
+  CHECK(second->Wait(0, 0, 0, &no_wait) == X_STATUS_TIMEOUT);  // the old count is not inherited
+  // The first use's object is gone (its slot is free or already reused by the second), not leaked.
+  auto at_first = table->LookupObject<rex::system::XObject>(first_handle);
+  CHECK((!at_first || at_first.get() == second.get()));
+
+  const size_t before = table->GetAllObjects().size();
+  for (int i = 0; i < 50; ++i) {
+    REQUIRE(init(0));
+  }
+  CHECK(table->GetAllObjects().size() == before);
 }

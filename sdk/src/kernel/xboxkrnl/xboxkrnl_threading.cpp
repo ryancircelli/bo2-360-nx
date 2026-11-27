@@ -574,6 +574,7 @@ u32 NtClearEvent_entry(u32 handle) {
 
 // https://msdn.microsoft.com/en-us/library/windows/hardware/ff552150(v=vs.85).aspx
 void KeInitializeSemaphore_entry(ppc_ptr_t<X_KSEMAPHORE> semaphore_ptr, u32 count, u32 limit) {
+  semaphore_ptr.Zero();  // also clears a previous use's stash, so the count below takes effect
   semaphore_ptr->header.type = 5;  // SemaphoreObject
   semaphore_ptr->header.signal_state = (uint32_t)count;
   semaphore_ptr->limit = (uint32_t)limit;
@@ -609,6 +610,7 @@ u32 KeReleaseSemaphore_entry(ppc_ptr_t<X_KSEMAPHORE> semaphore_ptr, u32 incremen
 }
 
 void KeInitializeMutant_entry(ppc_ptr_t<X_KMUTANT> mutant_ptr, u32 initial_owner) {
+  mutant_ptr.Zero();  // also clears a previous use's stash, so the mutant starts unowned
   mutant_ptr->header.type = 2;  // MutantObject
   mutant_ptr->header.signal_state = initial_owner ? 0 : 1;
   mutant_ptr->owner_thread = 0;

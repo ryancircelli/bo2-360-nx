@@ -368,6 +368,8 @@ void xeRtlInitializeCriticalSection(X_RTL_CRITICAL_SECTION* cs, uint32_t cs_ptr)
   cs->header.type = 1;      // EventSynchronizationObject (auto reset)
   cs->header.absolute = 0;  // spin count div 256
   cs->header.signal_state = 0;
+  cs->header.wait_list_flink = 0;  // a previous use of this memory must not lend its wait object
+  cs->header.wait_list_blink = 0;
   cs->lock_count = -1;
   cs->recursion_count = 0;
   cs->owning_thread = 0;
@@ -390,6 +392,8 @@ X_STATUS xeRtlInitializeCriticalSectionAndSpinCount(X_RTL_CRITICAL_SECTION* cs, 
   cs->header.type = 1;  // EventSynchronizationObject (auto reset)
   cs->header.absolute = spin_count_div_256;
   cs->header.signal_state = 0;
+  cs->header.wait_list_flink = 0;  // a previous use of this memory must not lend its wait object
+  cs->header.wait_list_blink = 0;
   cs->lock_count = -1;
   cs->recursion_count = 0;
   cs->owning_thread = 0;

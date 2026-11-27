@@ -54,6 +54,11 @@ void PublishStash(X_DISPATCH_HEADER* header, uint32_t handle) {
 std::mutex g_created_bodies_mutex;
 std::unordered_map<uint32_t, XObject*> g_created_bodies;
 
+// Guest body address to the handle of the host object made for it by GetNativeObject. One body has one host
+// object: when a body is set up again, the object made for its previous use is released, not leaked.
+// Guarded by the global critical region. Entries can go stale, so a user checks the object still stands for the body.
+std::unordered_map<uint32_t, X_HANDLE> g_wrapped_bodies;
+
 // True when guest addresses a and b are the same object body, also through the physical-memory views
 // (0xA0000000/0xC0000000/0xE0000000 map the same pages).
 bool SameBody(KernelState* kernel_state, uint32_t a, uint32_t b) {
@@ -534,6 +539,14 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
   } else {
     // First use (or a stale stash), create new.
     // https://www.nirsoft.net/kernel_struct/vista/KOBJECTS.html
+    if (auto it = g_wrapped_bodies.find(body); it != g_wrapped_bodies.end()) {
+      // The guest initialised this body again (the stash is gone): drop the object of its previous use.
+      auto old = kernel_state->object_table()->LookupObject<XObject>(it->second);
+      if (old && old->wrapped_native_ptr_ == body) {
+        old->ReleaseHandle();
+      }
+      g_wrapped_bodies.erase(it);
+    }
     XObject* object = nullptr;
     switch (as_type) {
       case 0:  // EventNotificationObject
@@ -581,6 +594,7 @@ object_ref<XObject> XObject::GetNativeObject(KernelState* kernel_state, void* na
     }
     // Stash pointer in struct. Bodies without a dispatch header are SDK-allocated and were returned above.
     object->wrapped_native_ptr_ = body;
+    g_wrapped_bodies[body] = object->handle();
     PublishStash(header, object->handle());
 
     return object_ref<XObject>(object);
