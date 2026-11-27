@@ -12,6 +12,7 @@
 #include <rex/chrono/chrono.h>
 #include <rex/chrono/clock.h>
 #include <rex/logging.h>
+#include <rex/system/kernel_state.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xtimer.h>
 
@@ -38,7 +39,7 @@ void XTimer::Initialize(uint32_t timer_type) {
 }
 
 X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine,
-                          uint32_t routine_arg, bool resume) {
+                          uint32_t routine_arg, bool resume, uint32_t dpc) {
   using rex::chrono::WinSystemClock;
   using rex::chrono::XSystemClock;
   // Caller is checking for STATUS_TIMER_RESUME_IGNORED.
@@ -61,21 +62,32 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
   callback_thread_ = XThread::GetCurrentThread();
   callback_routine_ = routine;
   callback_routine_arg_ = routine_arg;
+  callback_dpc_ = dpc;
 
-  // This callback will only be issued when the timer is fired.
-  std::function<void()> callback = nullptr;
-  if (callback_routine_) {
-    callback = [this]() {
+  // Issued only when the timer fires.
+  std::function<void()> callback = [this, periodic = period_ms != 0]() {
+    if (!periodic) {
+      inserted_ = false;
+    }
+    if (!callback_routine_ && !callback_dpc_) {
+      return;
+    }
+    uint64_t time = rex::chrono::Clock::QueryGuestSystemTime();
+    uint32_t time_low = static_cast<uint32_t>(time);
+    uint32_t time_high = static_cast<uint32_t>(time >> 32);
+    if (callback_dpc_) {
+      // KDPC SystemArgument1/2 carry the expiry time, as on NT.
+      kernel_state()->QueueGuestDpc(callback_dpc_, time_low, time_high);
+    }
+    if (callback_routine_) {
       // Queue APC to call back routine with (arg, low, high).
       // It'll be executed on the thread that requested the timer.
-      uint64_t time = rex::chrono::Clock::QueryGuestSystemTime();
-      uint32_t time_low = static_cast<uint32_t>(time);
-      uint32_t time_high = static_cast<uint32_t>(time >> 32);
       REXSYS_DEBUG("XTimer enqueuing timer callback to {:08X}({:08X}, {:08X}, {:08X})",
                    callback_routine_, callback_routine_arg_, time_low, time_high);
       callback_thread_->EnqueueApc(callback_routine_, callback_routine_arg_, time_low, time_high);
-    };
-  }
+    }
+  };
+  inserted_ = true;
 
   bool result;
   if (!period_ms) {
@@ -89,6 +101,7 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
 }
 
 X_STATUS XTimer::Cancel() {
+  inserted_ = false;
   return timer_->Cancel() ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
 }
 

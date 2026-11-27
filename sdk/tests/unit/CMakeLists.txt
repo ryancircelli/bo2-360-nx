@@ -155,7 +155,8 @@ add_test(NAME sha512_selfcheck COMMAND sha512_selfcheck)
 add_executable(kernel_backfill_tests
     kernel/stub_backfill_test.cpp
     kernel/gather_write_test.cpp
-    kernel/rtl_conversion_test.cpp)
+    kernel/rtl_conversion_test.cpp
+    kernel/ke_timer_test.cpp)
 target_link_libraries(kernel_backfill_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 set_target_properties(kernel_backfill_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)

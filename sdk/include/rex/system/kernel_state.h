@@ -240,6 +240,9 @@ class KernelState {
 
   DPCImpersonationScope BeginDPCImpersonation();
   void EndDPCImpersonation(const DPCImpersonationScope& scope);
+  // Runs the guest KDPC's routine(dpc, context, arg1, arg2) at DISPATCH_LEVEL on the
+  // kernel dispatch thread (single DPC processor; DPCs run one at a time, in order).
+  void QueueGuestDpc(uint32_t dpc_ptr, uint32_t arg1, uint32_t arg2);
 
   uint32_t AllocateTLS(PPCContext* context);
   void FreeTLS(PPCContext* context, uint32_t slot);
@@ -415,6 +418,7 @@ class KernelState {
 
   AchievementManager achievement_manager_;
 
+  void StartDispatchThread();
   std::atomic<bool> dispatch_thread_running_;
   std::atomic<bool> terminating_title_{false};
   object_ref<XHostThread> dispatch_thread_;

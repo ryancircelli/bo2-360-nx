@@ -793,6 +793,36 @@ void KeInitializeTimerEx_entry(ppc_ptr_t<X_KTIMER> timer_ptr, u32 timer_type, u3
   timer_ptr->period = 0;
 }
 
+// Returns whether the timer was already set (still in the timer queue), as NT does.
+u32 KeSetTimerEx_entry(ppc_ptr_t<X_KTIMER> timer_ptr, u64 due_time, u32 period_ms,
+                       ppc_ptr_t<XDPC> dpc_ptr) {
+  auto timer = XObject::GetNativeObject<XTimer>(REX_KERNEL_STATE(), timer_ptr);
+  if (!timer) {
+    return 0;
+  }
+  bool was_inserted = timer->inserted();
+  timer_ptr->due_time = due_time;
+  timer_ptr->period = period_ms;
+  timer_ptr->dpc = dpc_ptr.guest_address();
+  timer->SetTimer(static_cast<int64_t>(due_time), period_ms, 0, 0, false,
+                  dpc_ptr.guest_address());
+  return was_inserted ? 1 : 0;
+}
+
+u32 KeSetTimer_entry(ppc_ptr_t<X_KTIMER> timer_ptr, u64 due_time, ppc_ptr_t<XDPC> dpc_ptr) {
+  return KeSetTimerEx_entry(timer_ptr, due_time, 0, dpc_ptr);
+}
+
+u32 KeCancelTimer_entry(ppc_ptr_t<X_KTIMER> timer_ptr) {
+  auto timer = XObject::GetNativeObject<XTimer>(REX_KERNEL_STATE(), timer_ptr);
+  if (!timer) {
+    return 0;
+  }
+  bool was_inserted = timer->inserted();
+  timer->Cancel();
+  return was_inserted ? 1 : 0;
+}
+
 u32 NtSetTimerEx_entry(u32 timer_handle, mapped_u64 due_time_ptr,
                        mapped_void routine_ptr /*PTIMERAPCROUTINE*/, u32 unk_one,
                        mapped_void routine_arg, u32 resume, u32 period_ms, u32 unk_zero) {
@@ -1584,7 +1614,7 @@ REX_EXPORT(__imp__KeSetEventBoostPriority, rex::kernel::xboxkrnl::KeSetEventBoos
 REX_EXPORT(__imp__KeAlertResumeThread, rex::kernel::xboxkrnl::KeAlertResumeThread_entry)
 REX_EXPORT(__imp__KeStallExecutionProcessor, rex::kernel::xboxkrnl::KeStallExecutionProcessor_entry)
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeBoostPriorityThread);  // no-op: single coherent host cache/TB
-REX_EXPORT_STUB_RETURN(__imp__KeCancelTimer, 0);
+REX_EXPORT(__imp__KeCancelTimer, rex::kernel::xboxkrnl::KeCancelTimer_entry)
 REX_EXPORT_QUIET_RETURN(__imp__KeConnectInterrupt, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_QUIET_RETURN(__imp__KeContextFromKframes, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
 REX_EXPORT_QUIET_RETURN(__imp__KeContextToKframes, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
@@ -1610,8 +1640,8 @@ REX_EXPORT_QUIET_RETURN(__imp__KeSaveVectorUnitState, 0);  // unknown: hardware 
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSetBackgroundProcessors);  // no-op: single coherent host cache/TB
 REX_EXPORT_QUIET_RETURN(__imp__KeSetPriorityClassThread, 0);  // no APCs/background procs modelled
 REX_EXPORT_QUIET_RETURN(__imp__KeSetPriorityThread, 0);  // unknown: hardware interrupt/context state not modelled; 0 = failure/none
-REX_EXPORT_STUB_RETURN(__imp__KeSetTimer, 0);
-REX_EXPORT_QUIET_RETURN(__imp__KeSetTimerEx, 0);  // unknown: timer+DPC not modelled; 0 = was not set
+REX_EXPORT(__imp__KeSetTimer, rex::kernel::xboxkrnl::KeSetTimer_entry)
+REX_EXPORT(__imp__KeSetTimerEx, rex::kernel::xboxkrnl::KeSetTimerEx_entry)
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSweepDcacheRange);  // no-op: single coherent host cache/TB
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__KeSweepIcacheRange);  // no-op: single coherent host cache/TB
 REX_EXPORT_QUIET_RETURN(__imp__KeTestAlertThread, 0);  // no APCs/background procs modelled
