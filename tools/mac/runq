@@ -641,6 +641,16 @@ def is_freezable_heavy(proc):
                  FREEZE_HEAVY_COMMAND.search(proc.get('command', ''))))
 
 
+
+_DARWIN_CACHE = None
+def darwin_user_cache_dir():
+    """os.confstr has no CS_DARWIN_USER_CACHE_DIR in this Python build; getconf has it."""
+    global _DARWIN_CACHE
+    if _DARWIN_CACHE is None:
+        _DARWIN_CACHE = subprocess.run(['getconf', 'DARWIN_USER_CACHE_DIR'], capture_output=True,
+                                       text=True).stdout.strip() or os.path.expanduser('~/Library/Caches')
+    return _DARWIN_CACHE
+
 class ContentionMeter:
     """Integrates the outside CPU of one speed run: cores per OUTSIDE_WINDOW_S window, who used it, CPU-seconds."""
 
@@ -1811,6 +1821,13 @@ class Daemon:
                 subprocess.run(['plutil', '-replace', 'LSUIElement', '-bool', 'YES',
                                 os.path.join(app, 'Contents', 'Info.plist')], capture_output=True)
             if not job.get('shared_metal_cache'):
+                # sweep per-job caches of jobs that ended abnormally (lost/crashed daemon skips the end-of-job removal)
+                live = {re.sub(r'[^A-Za-z0-9]', '', k) for k in self.jobs}
+                cd = darwin_user_cache_dir()
+                for n in os.listdir(cd):
+                    m = re.search(r'\.rq(\d+)$', n)
+                    if m and m.group(1) not in live:
+                        shutil.rmtree(os.path.join(cd, n), ignore_errors=True)
                 # own throwaway Metal cache: macOS keys ~/C/<bundle id>/com.apple.metal(+gpuarchiver) by bundle id, so a
                 # unique id per job keeps ~3 GB/launch out of the installed game's cache; removed when the job ends
                 plist = os.path.join(app, 'Contents', 'Info.plist')
@@ -2496,7 +2513,7 @@ class Daemon:
             if j['job'].get('clone_app', True) and j['job'].get('app'):
                 shutil.rmtree(os.path.join(j['job']['out'], 'app'), ignore_errors=True)  # our own clone
             if j['job'].get('metal_cache_id'):
-                shutil.rmtree(os.path.join(os.confstr('CS_DARWIN_USER_CACHE_DIR'), j['job']['metal_cache_id']), ignore_errors=True)
+                shutil.rmtree(os.path.join(darwin_user_cache_dir(), j['job']['metal_cache_id']), ignore_errors=True)
             for suf in ('.json', '.run.json', '.cancel', '.lanestop'):
                 try:
                     os.unlink(os.path.join(D['running'], jid + suf))
