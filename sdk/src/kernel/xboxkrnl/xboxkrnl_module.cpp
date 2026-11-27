@@ -125,6 +125,20 @@ XboxkrnlModule::XboxkrnlModule(Runtime* emulator, KernelState* kernel_state)
   memory::store_and_swap<uint8_t>(lpXboxHardwareInfo + 4, 0x06);   // cpu count
   // Remaining 11b are zeroes?
 
+  // XboxKrnlBaseVersion (u16[4] major/minor/build/qfe + u16 pad, from the retail 2.0.1888.0 kernel).
+  uint32_t pXboxKrnlBaseVersion = memory_->SystemHeapAlloc(16);
+  auto lpXboxKrnlBaseVersion = memory_->TranslateVirtual(pXboxKrnlBaseVersion);
+  export_resolver_->SetVariableMapping("xboxkrnl.exe", 0x0157, pXboxKrnlBaseVersion);
+  memory::store_and_swap<uint16_t>(lpXboxKrnlBaseVersion + 0, 2);
+  memory::store_and_swap<uint16_t>(lpXboxKrnlBaseVersion + 2, 0);
+  memory::store_and_swap<uint16_t>(lpXboxKrnlBaseVersion + 4, 1888);
+  memory::store_and_swap<uint16_t>(lpXboxKrnlBaseVersion + 6, 0);
+
+  // KiBugCheckData: five zeroed be u32 (no bugcheck has happened).
+  uint32_t pKiBugCheckData = memory_->SystemHeapAlloc(20);
+  std::memset(memory_->TranslateVirtual(pKiBugCheckData), 0, 20);
+  export_resolver_->SetVariableMapping("xboxkrnl.exe", 0x00B5, pKiBugCheckData);
+
   // ExConsoleGameRegion, probably same values as keyvault region uses?
   // Just return all 0xFF, should satisfy anything that checks it
   uint32_t pExConsoleGameRegion = memory_->SystemHeapAlloc(4);

@@ -580,6 +580,16 @@ u32 NtCreateFile_entry(mapped_u32 handle_out, u32 desired_access,
   return result;
 }
 
+// Deletes the file named by the attributes through the VFS (documented NT behaviour).
+u32 NtDeleteFile_entry(ppc_ptr_t<X_OBJECT_ATTRIBUTES> object_attrs) {
+  if (!object_attrs) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
+  auto object_name = REX_KERNEL_MEMORY()->TranslateVirtual<X_ANSI_STRING*>(object_attrs->name_ptr);
+  auto path = util::TranslateAnsiPath(REX_KERNEL_MEMORY(), object_name);
+  return REX_KERNEL_FS()->DeletePath(path) ? X_STATUS_SUCCESS : X_STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
 u32 NtOpenFile_entry(mapped_u32 handle_out, u32 desired_access,
                      ppc_ptr_t<X_OBJECT_ATTRIBUTES> object_attributes,
                      ppc_ptr_t<X_IO_STATUS_BLOCK> io_status_block, u32 open_options) {
@@ -1323,7 +1333,8 @@ REX_EXPORT_QUIET_RETURN(__imp__IoBuildSynchronousFsdRequest, 0);  // round-2 spe
 REX_EXPORT_QUIET_RETURN(__imp__IoCallDriver, 0xC0000010);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_STUB_RETURN(__imp__IoCheckShareAccess, 0);
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoCompleteRequest);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__IoCreateFile, 0xC0000001);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+// IoCreateFile = NtCreateFile plus a trailing driver-flags arg, which we ignore.
+REX_EXPORT(__imp__IoCreateFile, rex::kernel::xboxkrnl::NtCreateFile_entry)
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoDeleteDevice);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_STUB_RETURN(__imp__IoDismountVolume, 0);
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoFreeIrp);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
@@ -1338,7 +1349,7 @@ REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoStartNextPacket);  // round-2 spec: delibe
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoStartNextPacketByKey);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_PASSTHROUGH(__imp__IoStartPacket);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT_QUIET_RETURN(__imp__IoSynchronousFsdRequest, 0xC0000010);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
-REX_EXPORT_QUIET_RETURN(__imp__NtDeleteFile, 0xC0000034);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
+REX_EXPORT(__imp__NtDeleteFile, rex::kernel::xboxkrnl::NtDeleteFile_entry)
 REX_EXPORT_QUIET_RETURN(__imp__NtSetSystemTime, 0xC0000061);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
 REX_EXPORT(__imp__NtWriteFileGather, rex::kernel::xboxkrnl::NtWriteFileGather_entry)
 REX_EXPORT_QUIET_RETURN(__imp__IoAcquireCancelSpinLock, 0);  // round-2 spec: deliberate return (behaviour unknown/not modelled)
