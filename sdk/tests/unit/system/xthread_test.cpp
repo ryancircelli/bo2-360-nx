@@ -100,6 +100,44 @@ TEST_CASE("Thread priority changes keep the user-interactive QoS class on macOS"
 #endif
 
 #if !defined(_WIN32)
+// Every guest thread is created suspended and then resumed (XThread::Create).
+TEST_CASE("A thread created suspended can be suspended again from outside", "[thread][suspend]") {
+  std::atomic<uint64_t> ticks{0};
+  std::atomic<bool> stop{false};
+  rex::thread::Thread::CreationParameters params;
+  params.create_suspended = true;
+  auto thread = rex::thread::Thread::Create(params, [&]() {
+    while (!stop.load(std::memory_order_acquire)) {
+      ticks.fetch_add(1, std::memory_order_relaxed);
+    }
+  });
+  REQUIRE(thread);
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  CHECK(ticks.load(std::memory_order_relaxed) == 0);  // not started yet
+  REQUIRE(thread->Resume());
+  auto moved = [&](uint64_t from) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (ticks.load(std::memory_order_relaxed) == from && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return ticks.load(std::memory_order_relaxed) != from;
+  };
+  REQUIRE(moved(0));
+  for (int round = 0; round < 3; ++round) {  // each resume must leave the next suspend working
+    REQUIRE(thread->Suspend());
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let the signal park it
+    uint64_t parked = ticks.load(std::memory_order_relaxed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK(ticks.load(std::memory_order_relaxed) == parked);
+    REQUIRE(thread->Resume());
+    CHECK(moved(parked));
+  }
+  stop.store(true, std::memory_order_release);
+  REQUIRE(rex::thread::Wait(thread.get(), false) == rex::thread::WaitResult::kSuccess);
+}
+#endif
+
+#if !defined(_WIN32)
 TEST_CASE("Nested host suspends resume the thread after the matching resumes", "[thread][suspend]") {
   std::atomic<uint64_t> ticks{0};
   std::atomic<bool> stop{false};
