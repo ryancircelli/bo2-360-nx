@@ -70,6 +70,14 @@ class InstallContentDisc(unittest.TestCase):
             self.run_install()
         self.assertFalse(self.out.exists())
 
+    def test_disc_licence_bits_survive_zero_flags(self):
+        data = bytearray(self.pkg.read_bytes())
+        struct.pack_into(">QII", data, 0x22C, 0xFFFFFFFFFFFFFFFF, 1, 0)
+        self.pkg.write_bytes(data)
+        self.run_install()
+        header = next(self.out.rglob("*.header")).read_bytes()
+        self.assertEqual(struct.unpack_from("=I", header, 0x148)[0], 1)
+
     def test_traversal_and_bad_parent_leave_no_package(self):
         for name, parent in [(b"../escape", 0xFFFF), (b"addon.esm", 0)]:
             package(self.pkg, name=name, parent=parent)

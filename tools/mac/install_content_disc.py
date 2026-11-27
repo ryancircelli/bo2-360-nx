@@ -108,9 +108,10 @@ def install_package(source, info, out):
         package.f.seek(0x22C)
         mask = 0
         for _ in range(16):
-            _, bits, flags = struct.unpack(">QII", package.f.read(16))
-            if flags:
-                mask |= bits
+            _, bits, _ = struct.unpack(">QII", package.f.read(16))
+            # Flags are metadata, not an entry-present boolean. Retail PIRS
+            # content discs carry real licence bits with flags == 0.
+            mask |= bits
         packages.mkdir(parents=True, exist_ok=True)
         headers.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".content-", dir=root) as staging:
