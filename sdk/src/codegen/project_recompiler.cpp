@@ -37,6 +37,8 @@
 
 #include <chrono>
 
+#include <rex/system/game_patches.h>
+
 #include "codegen_flags.h"
 #include "codegen_logging.h"
 #include "file_io.h"
@@ -65,6 +67,11 @@ std::vector<std::filesystem::path> CollectModuleInputs(const RecompilerConfig& c
   if (auto patch = fs::path((configDir / cfg.filePath).string() + "p"); fs::exists(patch))
     inputs.push_back(patch);
   inputs.push_back(manifestPath);
+  if (!cfg.patchesDir.empty()) {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(configDir / cfg.patchesDir, ec))
+      if (rex::patches::IsPatchFileName(entry.path().filename().string())) inputs.push_back(entry.path());
+  }
   for (const auto& loaded : cfg.loadedFiles) {
     inputs.emplace_back(loaded);
   }
@@ -258,6 +265,9 @@ Result<void> ProjectRecompiler::Run(const ProjectRecompilerOptions& opts) {
   std::string entryRelStr = entryRel.string();
   std::replace(entryRelStr.begin(), entryRelStr.end(), '/', '\\');
   auto entryVfsPath = "game:\\" + entryRelStr;
+  if (!targeted[0].config.patchesDir.empty()) {
+    rex::patches::Configure({configDir / targeted[0].config.patchesDir}, {}, /*apply=*/false);
+  }
   rtStatus = runtime->LoadXexImage(entryVfsPath);
   if (rtStatus != X_STATUS_SUCCESS) {
     return Err<void>(ErrorCategory::IO,
@@ -322,6 +332,19 @@ Result<void> ProjectRecompiler::Run(const ProjectRecompilerOptions& opts) {
       cfg.generateExceptionHandlers = true;
     if (opts.abiPoisonChecks)
       cfg.abiPoisonChecks = true;
+    if (!cfg.patchesDir.empty()) {
+      for (auto& p : rex::patches::CodePatchesForBuild()) {
+        const auto index = uint32_t(cfg.codePatches.size());
+        size_t used = 0;
+        for (const auto& [addr, word] : p.words) {
+          if (!bv.isExecutable(addr)) continue;
+          cfg.codePatchWords[addr].emplace_back(index, word);
+          ++used;
+        }
+        REXCODEGEN_INFO("[patches] building in '{}' ({} instructions)", p.name, used);
+        cfg.codePatches.push_back({std::move(p.name), p.title_id, p.module_hash});
+      }
+    }
 
     auto ctx = CodegenContext::Create(std::move(bv), std::move(cfg));
     ctx.setResolver(resolver);

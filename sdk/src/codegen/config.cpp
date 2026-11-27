@@ -91,6 +91,9 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
   if (auto v = toml["file_path"].value<std::string>()) {
     MergeScalar(cfg.filePath, *v, "file_path");
   }
+  if (auto v = toml["patches_dir"].value<std::string>()) {
+    MergeScalar(cfg.patchesDir, *v, "patches_dir");
+  }
   if (auto v = toml["out_directory_path"].value<std::string>()) {
     MergeScalar(cfg.outDirectoryPath, *v, "out_directory_path");
   }

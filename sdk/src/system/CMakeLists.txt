@@ -49,6 +49,7 @@ set(REXSYSTEM_SOURCES
     gpu_plugin_loader.cpp
     live_control.cpp
     patch_loader.cpp
+    game_patches.cpp
     thread.cpp
     thread_state.cpp
     xex_module.cpp

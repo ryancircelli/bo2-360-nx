@@ -135,6 +135,17 @@ struct RecompilerConfig {
   std::unordered_map<uint32_t, FunctionConfig> functions;  ///< Function/chunk configuration
   std::unordered_map<uint32_t, JumpTable> switchTables;
   std::unordered_map<uint32_t, MidAsmHook> midAsmHooks;
+  /// Folder of xenia-canary game patch files (TOML `patches_dir`, relative to the config). Matched patches that
+  /// change code are built in behind a switch the Guide toggles (rex/system/game_patches.h).
+  std::string patchesDir;
+  struct CodePatch {
+    std::string name;
+    uint32_t titleId = 0;
+    uint64_t moduleHash = 0;
+  };
+  std::vector<CodePatch> codePatches;  ///< filled at load from patchesDir
+  /// Instruction address -> (index into codePatches, the patched instruction word).
+  std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> codePatchWords;
   uint32_t longJmpAddress = 0;
   uint32_t setJmpAddress = 0;
 

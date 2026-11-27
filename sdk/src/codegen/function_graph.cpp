@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <unordered_set>
 
 #include <fmt/format.h>
@@ -409,6 +410,32 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
           labels.emplace(label);
       }
 
+      // Game patch files built in (config.codePatchWords): branch labels of the new instructions, and one switch
+      // per patch, defined once per output file and registered with the Guide's patch list.
+      if (auto cp = ctx.config.codePatchWords.find(static_cast<uint32_t>(addr));
+          cp != ctx.config.codePatchWords.end()) {
+        for (const auto& [index, word] : cp->second) {
+          if (!PPC_BL(word)) {
+            if (PPC_OP(word) == PPC_OP_B && !(word & 2))
+              labels.emplace(addr + PPC_BI(word));
+            else if (PPC_OP(word) == PPC_OP_BC && !(word & 2))
+              labels.emplace(addr + PPC_BD(word));
+          }
+          const auto& patch = ctx.config.codePatches[index];
+          std::string name;
+          for (char c : patch.name) {
+            if (c == '"' || c == '\\') name += '\\';
+            name += (c == '\n' || c == '\r') ? ' ' : c;
+          }
+          emit_println(out,
+                       "#ifndef REX_CODE_PATCH_{0}\n#define REX_CODE_PATCH_{0}\n#include <rex/system/game_patches.h>\n"
+                       "inline std::atomic<bool> rex_code_patch_{0}{{false}};\n"
+                       "[[maybe_unused]] static const bool rex_code_patch_{0}_registered = "
+                       "(rex::patches::RegisterBuiltIn(0x{1:08X}, 0x{2:016X}ull, \"{3}\", &rex_code_patch_{0}), true);\n#endif",
+                       index, patch.titleId, patch.moduleHash, name);
+        }
+      }
+
       // Labels and extern declarations from mid-asm hooks
       auto hookIt = ctx.config.midAsmHooks.find(static_cast<uint32_t>(addr));
       if (hookIt != ctx.config.midAsmHooks.end()) {
@@ -591,9 +618,44 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
         }
 
         const size_t bodyBefore = body.size();
+        // A built-in game patch: the patched instruction behind its switch, else the original.
+        const auto patchIt = ctx.config.codePatchWords.find(blockBase);
+        const bool patched = patchIt != ctx.config.codePatchWords.end();
+        if (patched) {
+          bool first = true;
+          for (const auto& [index, word] : patchIt->second) {
+            emit_println(body, "\t{}if (rex_code_patch_{}.load(std::memory_order_relaxed)) {{", first ? "" : "} else ",
+                         index);
+            first = false;
+            // Neighbours stay the image's (some builders look back for a pattern); only this word changes.
+            uint32_t window[8];
+            std::memcpy(window, data - 3, sizeof(window));
+            window[3] = rex::byte_swap(word);
+            ppc_insn patchedInsn;
+            Disassemble(&window[3], 4, blockBase, patchedInsn);
+            if (!patchedInsn.opcode) {
+              REXCODEGEN_WARN("Patch word {:08X} at 0x{:X} does not decode", word, blockBase);
+              emit_println(body, "\t// undecodable patched word {:08X}", word);
+              continue;
+            }
+            emit_println(body, "\t// patched: {} {}", patchedInsn.opcode->name, patchedInsn.op_str);
+            CSRState patchedCsr = csrState;
+            BuilderContext patchedCtx{body, ctx, *this, patchedInsn, blockBase, &window[3],
+                                      localVariables, patchedCsr, activeJt};
+            if (!DispatchInstruction(patchedInsn.opcode->id, patchedCtx)) {
+              REXCODEGEN_WARN("Unrecognized patched instruction at 0x{:X}: {}", blockBase,
+                              patchedInsn.opcode->name);
+            }
+          }
+          emit_println(body, "\t}} else {{");
+        }
         if (!DispatchInstruction(id, builderCtx)) {
           REXCODEGEN_WARN("Unrecognized instruction at 0x{:X}: {}", blockBase, insn.opcode->name);
           allRecompiled = false;
+        }
+        if (patched) {
+          emit_println(body, "\t}}");
+          csrState = CSRState::Unknown;
         }
         if (ctx.referenceBlocked) {
           // A reference copy must be rolled back by its store log alone: no

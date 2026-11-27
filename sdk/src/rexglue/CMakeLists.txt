@@ -8,6 +8,7 @@ add_executable(rexglue
     commands/init_command.cpp
     commands/test_recompiler.cpp
     commands/project_scan.cpp
+    commands/patches_command.cpp
 )
 
 rex_config_postfix(rexglue)

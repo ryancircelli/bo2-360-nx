@@ -15,6 +15,7 @@
 
 #include <rex/assert.h>
 #include <rex/cvar.h>
+#include <rex/system/game_patches.h>
 #include <rex/ui/flags.h>
 #include <rex/kernel/crt/heap.h>
 #include <rex/filesystem.h>
@@ -629,6 +630,65 @@ void ReXApp::SetupGuide() {
       guide::CvarToggle("audio_mute", "Mute", "Silence all game audio."),
   };
   guide::RegisterPage(std::move(audio));
+
+  // ---- Game: patch files (any game; xenia-canary .patch.toml) ----
+  guide::Page patches;
+  patches.id = "rex.game.patches";
+  patches.title = "Patches / Cheats";
+  patches.blade = std::string(guide::kBladeGame);
+  patches.order = 900;
+  patches.description = "Xenia-style patch files for this game: cheats, field of view, HUD and fixes.";
+  patches.build = [this] {
+    std::vector<guide::Item> items;
+    const auto list = rex::patches::List();
+    if (list.empty()) {
+      items.push_back(guide::Info(
+          "No patches", [] { return std::string("Add files"); },
+          "Put xenia-canary patch files (\"<TITLE ID> - <name>.patch.toml\") in " +
+              (std::filesystem::absolute(user_data_root_) / "patches").string() + " and restart the game."));
+    }
+    for (const auto& e : list) {
+      std::string about = e.desc;
+      if (!e.author.empty()) about += (about.empty() ? "By " : " By ") + e.author + ".";
+      if (e.available) {
+        about += e.kind == rex::patches::Kind::kCode ? " Changes game code (built into this app)."
+                                                     : " Changes game data; applied right away. Some only take "
+                                                       "effect after a restart or a new level.";
+        about += " File: " + e.file;
+        const size_t id = e.id;
+        const std::string label = e.title;
+        items.push_back(guide::Toggle(
+            e.title, [id] {
+              for (const auto& x : rex::patches::List())
+                if (x.id == id) return x.on;
+              return false;
+            },
+            [id, label](bool on) {
+              std::string why;
+              if (rex::patches::SetEnabled(id, on, &why)) {
+                guide::LogChange(label, on ? "On" : "Off");
+              } else {
+                guide::LogChange(label, "failed: " + why);
+              }
+            },
+            about));
+      } else {
+        const bool other_version = e.reason.starts_with("Made for another");
+        const bool code = e.reason.starts_with("Changes game code");
+        items.push_back(guide::Info(
+            e.title, [t = std::string(other_version ? "Other version" : code ? "Needs rebuild" : "Unavailable")] {
+              return t;
+            },
+            e.reason + (about.empty() ? "" : " " + about) + " File: " + e.file));
+      }
+    }
+    for (const auto& m : rex::patches::ModuleSummary()) {
+      items.push_back(guide::Info("Game module", [m] { return m; },
+                                  "Name, title id and module hash that patch files are matched against."));
+    }
+    return items;
+  };
+  guide::RegisterPage(std::move(patches));
 
   guide::Page input;
   input.id = "rex.system.input";

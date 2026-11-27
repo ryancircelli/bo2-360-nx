@@ -25,6 +25,8 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/user_module.h>
+#include <rex/system/game_patches.h>
+#include <rex/filesystem.h>
 #include <rex/system/xmemory.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
@@ -33,6 +35,9 @@ REXCVAR_DEFINE_STRING(patch_library, "", "Runtime",
                       "Hot-reloadable patch library (see rex/system/patch.h); empty = off");
 REXCVAR_DEFINE_BOOL(patch_reload, false, "Runtime",
                     "Watch patch_library and swap in a rebuilt one at the next frame boundary");
+REXCVAR_DEFINE_BOOL(apply_patches, true, "Runtime",
+                    "Load game patch files (<TITLEID> - name.patch.toml, xenia-canary format)");
+REXCVAR_DEFINE_STRING(patches_dir, "", "Runtime", "Extra folder of game patch files");
 REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
@@ -144,6 +149,15 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
   thread::EnableAffinityConfiguration();
 
   tool_mode_ = config.tool_mode;
+
+  // Game patch files: the user's folder, an optional folder bundled with the app, and patches_dir.
+  if (!tool_mode_ && REXCVAR_GET(apply_patches)) {
+    const auto user_patches = std::filesystem::absolute(user_data_root_) / "patches";
+    std::vector<std::filesystem::path> dirs{rex::filesystem::GetExecutableFolder() / ".." / "Resources" / "patches",
+                                            user_patches};
+    if (!REXCVAR_GET(patches_dir).empty()) dirs.emplace_back(REXCVAR_GET(patches_dir));
+    patches::Configure(std::move(dirs), user_patches / "enabled");
+  }
 
   // Create memory system first
   memory_ = std::make_unique<memory::Memory>();

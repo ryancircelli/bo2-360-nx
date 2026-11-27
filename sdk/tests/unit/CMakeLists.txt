@@ -64,6 +64,10 @@ add_executable(guide_input_gate_tests ui/guide_input_gate_test.cpp)
 target_link_libraries(guide_input_gate_tests PRIVATE rexruntime imgui::imgui Catch2::Catch2WithMain)
 add_test(NAME guide_input_gate_tests COMMAND guide_input_gate_tests)
 
+add_executable(game_patches_tests system/game_patches_test.cpp)
+target_link_libraries(game_patches_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+add_test(NAME game_patches_tests COMMAND game_patches_tests)
+
 add_executable(host_path_rename_tests filesystem/host_path_rename_test.cpp)
 target_link_libraries(host_path_rename_tests PRIVATE rexruntime Catch2::Catch2WithMain)
 add_test(NAME host_path_rename_tests COMMAND host_path_rename_tests)

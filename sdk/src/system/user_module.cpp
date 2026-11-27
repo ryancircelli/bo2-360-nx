@@ -19,6 +19,7 @@
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
+#include <rex/system/game_patches.h>
 #include <rex/system/xex_module.h>
 #include <rex/system/xfile.h>
 #include <rex/system/xthread.h>
@@ -194,6 +195,8 @@ X_STATUS UserModule::LoadXexContinue() {
   if (!xex_module()->LoadContinue()) {
     return X_STATUS_UNSUCCESSFUL;
   }
+  // Game patch files (rex/system/game_patches.h): hash the loaded image, apply enabled data patches.
+  rex::patches::OnModuleLoaded(memory(), *xex_module(), title_id());
 
   // Copy the xex2 header into guest memory.
   auto header = this->xex_module()->xex_header();
