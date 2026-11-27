@@ -1,0 +1,4 @@
+# Read by tools/gates/install_guard.py: gate.py install refuses an app that lacks these or lacks a PASS record for each gate on the same build.
+binaries = ["bo2zm"]   # Contents/MacOS
+required_paths = ["Resources/runtime", "Resources/AppIcon.icns"]
+gates = ["boot", "guide", "open", "drive"]
