@@ -688,7 +688,19 @@ def g_save(a, G):
     log = cfg.get('save_log')
     at, ff = a.at or cfg.get('save_after_s') or cfg['scene_s'], a.ff or 1
     t_from = G.t0
-    if log:
+    if a.route_file and _condition.load(a.route_file):   # condition route: drive its navigation to verified gameplay, then save there
+        recipe = _condition.load(a.route_file)
+        run = _condition.Runner(G, recipe, a.out, _driving)
+        try:
+            run.command('timescale %g' % (a.ff or 1))
+            run.navigate()
+        except (OSError, ValueError, RuntimeError) as e:
+            G.stop()
+            return out_line('FAIL', 'save', a.game, f'never reached verified gameplay: {e}', a.out, a.out)
+        run.command('timescale 1')
+        at, ff, log = 0, 1, 'verified gameplay'
+        t_from = time.monotonic()
+    elif log:
         if not G.wait_log(log, 900):
             G.stop()
             return out_line('FAIL', 'save', a.game, f'never logged "{log}"', a.out, a.out)
@@ -849,10 +861,12 @@ def queue_gate(a, gate=None, game=None):
         b.app, b.out = app, out
         return run_inner(b)
     timeout = {'boot': 300, 'shot': 900, 'drive': 1500, 'guide': 600, 'open': 400, 'save': 900}.get(gate, 900)
-    if gate in ('shot', 'drive', 'savefile'):
+    if gate in ('shot', 'drive', 'savefile', 'save'):
         route = resolve_route(game, a.route)
         if route and _condition.load(route):
             timeout = int(a.ready_timeout + route_len(route) + 120)
+            if gate == 'save':
+                timeout = int(a.ready_timeout + _condition.load(route).get('navigation_timeout_s', 900) + 300)
             if gate == 'savefile':
                 timeout += int(a.ready_timeout + 420)
     args = ['--'] + inner_args(b, out)
