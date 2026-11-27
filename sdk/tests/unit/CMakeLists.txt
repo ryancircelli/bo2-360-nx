@@ -186,3 +186,32 @@ add_executable(guest_stack_range_tests runtime_stack_range_test.cpp)
 target_include_directories(guest_stack_range_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(guest_stack_range_tests PRIVATE rex::core Catch2::Catch2WithMain)
 add_test(NAME guest_stack_range_tests COMMAND guest_stack_range_tests)
+
+add_executable(xevent_tests system/xevent_test.cpp)
+target_include_directories(xevent_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(xevent_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(xevent_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME xevent_tests COMMAND xevent_tests)
+
+add_executable(runtime_objects_tests system/runtime_objects_test.cpp)
+target_include_directories(runtime_objects_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(runtime_objects_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(runtime_objects_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME runtime_objects_tests COMMAND runtime_objects_tests)
+set_tests_properties(runtime_objects_tests PROPERTIES TIMEOUT 30)
+
+add_executable(vfs_devices_tests filesystem/devices_test.cpp)
+target_include_directories(vfs_devices_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(vfs_devices_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(vfs_devices_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME vfs_devices_tests COMMAND vfs_devices_tests)
+
+add_executable(content_manager_tests system/content_manager_test.cpp)
+target_include_directories(content_manager_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(content_manager_tests PRIVATE rexruntime Catch2::Catch2WithMain)
+set_target_properties(content_manager_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>)
+add_test(NAME content_manager_tests COMMAND content_manager_tests)
