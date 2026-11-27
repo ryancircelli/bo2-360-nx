@@ -566,19 +566,25 @@ X_STATUS XThread::Create() {
   params.create_suspended = true;
   thread_ = rex::thread::Thread::Create(params, [this]() {
     rex::initialize_seh_thread();
+    // Snapshot under thread_lock_: a guest SetThreadName races these reads (the string is rewritten).
+    std::string thread_name;
+    {
+      std::lock_guard<std::mutex> lock(thread_lock_);
+      thread_name = thread_name_;
+    }
 #if !REX_PLATFORM_SWITCH
-    if (guest_thread_ ? GuestAudioThread(thread_name_) : HostAudioThread(thread_name_)) {
-      REXSYS_INFO("{}: {}", thread_name_, rex::thread::SetThreadAudioPriority());
+    if (guest_thread_ ? GuestAudioThread(thread_name) : HostAudioThread(thread_name)) {
+      REXSYS_INFO("{}: {}", thread_name, rex::thread::SetThreadAudioPriority());
     }
 #endif
 #if REX_PLATFORM_SWITCH
     {
-      const int priority = SwitchPriorityFor(guest_thread_, thread_name_);
+      const int priority = SwitchPriorityFor(guest_thread_, thread_name);
       RexSwitchSetCurrentThreadPriority(priority);
       if (const int32_t mask = REXCVAR_GET(switch_audio_core_mask);
           priority == REX_SWITCH_PRIO_AUDIO && mask > 0) {
         const bool accepted = RexSwitchSetCurrentThreadCoreMask(uint64_t(mask));
-        REXSYS_INFO("{}: Switch core mask {:#x} (switch_audio_core_mask){}", thread_name_, mask,
+        REXSYS_INFO("{}: Switch core mask {:#x} (switch_audio_core_mask){}", thread_name, mask,
                     accepted ? "" : " REFUSED by the kernel");
       }
     }
@@ -595,7 +601,7 @@ X_STATUS XThread::Create() {
       thread_->set_name(thread_name_);
     }
 
-    PROFILE_THREAD_ENTER(thread_name_.c_str());
+    PROFILE_THREAD_ENTER(thread_name.c_str());
     PROFILE_THREAD_CREATED();
 
     // Execute user code.
