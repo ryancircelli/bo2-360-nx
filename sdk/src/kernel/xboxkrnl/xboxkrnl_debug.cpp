@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <cstddef>
 #include <format>
 #include <iterator>
 #include <string>
@@ -47,8 +48,13 @@ void HandleSetThreadName(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
   // SetThreadName. FFS.
   // https://msdn.microsoft.com/en-us/library/xcb2z8hs.aspx
 
-  // TODO(benvanik): check record->number_parameters to make sure it's a
-  // correct size.
+  // Flags is never read, so only the words before it must be there (Xenia Canary 59496965b).
+  constexpr uint32_t kRequiredParameters = offsetof(X_THREADNAME_INFO, flags) / sizeof(uint32_t);
+  if (record->number_parameters < kRequiredParameters) {
+    REXKRNL_WARN("SetThreadName called with {} parameters",
+                 static_cast<uint32_t>(record->number_parameters));
+    return;
+  }
   auto thread_info = reinterpret_cast<X_THREADNAME_INFO*>(&record->exception_information[0]);
 
   assert_true(thread_info->type == 0x1000);

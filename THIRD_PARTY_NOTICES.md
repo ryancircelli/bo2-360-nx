@@ -45,6 +45,7 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | Xenia Canary `057f66e57` | XMABlockWhileInUse waits on the context lock | `sdk/src/kernel/xboxkrnl/xboxkrnl_audio_xma.cpp` |
 | ReXGlue SDK PR 638 `4202e25` (beeeeswax; open upstream) | XMA ignores a loop end inside the packet header | `sdk/src/audio/xma_context.cpp`, `sdk/include/rex/audio/xma/context.h` |
 | ReXGlue SDK PR 531 `44322407` (Drew Atz; open upstream) | Compared only: its single-object SignalAndWait / set-reset fixes were already here; the multi-object queued wait is our own, after the same idea | `sdk/src/core/threading_posix.cpp`, `sdk/tests/unit/core/thread_wait_test.cpp` |
+| Xenia Canary `59496965b` (Adrian) | SetThreadName checks the exception record's parameter count | `sdk/src/kernel/xboxkrnl/xboxkrnl_debug.cpp` |
 
 ## Libraries
 
