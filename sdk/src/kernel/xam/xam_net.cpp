@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <random>
 
 #if REX_PLATFORM_MAC
 #include <sys/select.h>
@@ -28,6 +29,7 @@
 #include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/logging.h>
 #include <cstdio>
+#include <random>
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/string.h>
@@ -599,6 +601,19 @@ u32 NetDll_XNetGetTitleXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
   std::memset(addr_ptr->abOnline, 0, 20);
 
   return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+}
+
+// XNetCreateKey(caller, XNKID* key_id, XNKEY* key): fills the 8-byte id and 16-byte key with random bytes.
+u32 NetDll_XNetCreateKey_entry(u32 caller, mapped_void key_id, mapped_void key) {
+  if (!key_id || !key) return 0x2726;  // WSAEINVAL
+  std::random_device rd;
+  auto fill = [&](void* p, size_t n) {
+    auto* b = static_cast<uint8_t*>(p);
+    for (size_t i = 0; i < n; ++i) b[i] = uint8_t(rd());
+  };
+  fill(key_id.host_address(), 8);
+  fill(key.host_address(), 16);
+  return 0;
 }
 
 u32 NetDll_XNetGetDebugXnAddr_entry(u32 caller, ppc_ptr_t<XNADDR> addr_ptr) {
@@ -1318,28 +1333,29 @@ REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpReceiveResponse, 0);
 REX_EXPORT_STUB(__imp__NetDll_XHttpResetPerfCounters);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSendRequest, 0);
 REX_EXPORT_STUB(__imp__NetDll_XHttpSetCredentials);
-REX_EXPORT_STUB(__imp__NetDll_XHttpSetOption);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetOption, 1);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpSetStatusCallback, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpShutdown, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpStartup, 0);
 REX_EXPORT_STUB_RETURN(__imp__NetDll_XHttpWriteData, 0);
 REX_EXPORT(__imp__NetDll_XNetConnect, rex::kernel::xam::NetDll_XNetConnect_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetCreateKey);
+REX_EXPORT(__imp__NetDll_XNetCreateKey, rex::kernel::xam::NetDll_XNetCreateKey_entry)
 REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseLookup);
 REX_EXPORT_STUB(__imp__NetDll_XNetDnsReverseRelease);
-REX_EXPORT_STUB(__imp__NetDll_XNetGetBroadcastVersionStatus);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetGetBroadcastVersionStatus, 0);
 REX_EXPORT(__imp__NetDll_XNetGetConnectStatus, rex::kernel::xam::NetDll_XNetGetConnectStatus_entry)
 REX_EXPORT_STUB(__imp__NetDll_XNetGetSystemLinkPort);
 REX_EXPORT_STUB(__imp__NetDll_XNetGetXnAddrPlatform);
-REX_EXPORT_STUB(__imp__NetDll_XNetInAddrToServer);
-REX_EXPORT_STUB(__imp__NetDll_XNetQosGetListenStats);
-REX_EXPORT_STUB(__imp__NetDll_XNetQosLookup);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetInAddrToServer, 10050);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosGetListenStats, 10050);
+// shortcut: 10050 (WSAENETDOWN) = offline failure; out pointers are not zeroed, so a caller that reads them anyway sees stale data. Upgrade if a game does.
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetQosLookup, 10050);
 REX_EXPORT(__imp__NetDll_XNetRegisterKey, rex::kernel::xam::NetDll_XNetRegisterKey_entry)
 REX_EXPORT_STUB(__imp__NetDll_XNetReplaceKey);
-REX_EXPORT_STUB(__imp__NetDll_XNetServerToInAddr);
-REX_EXPORT_STUB(__imp__NetDll_XNetSetOpt);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetServerToInAddr, 10050);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetSetOpt, 0);
 REX_EXPORT(__imp__NetDll_XNetStartupEx, rex::kernel::xam::NetDll_XNetStartupEx_entry)
-REX_EXPORT_STUB(__imp__NetDll_XNetTsAddrToInAddr);
+REX_EXPORT_STUB_RETURN(__imp__NetDll_XNetTsAddrToInAddr, 10050);
 REX_EXPORT(__imp__NetDll_XNetUnregisterInAddr, rex::kernel::xam::NetDll_XNetUnregisterInAddr_entry)
 REX_EXPORT(__imp__NetDll_XNetUnregisterKey, rex::kernel::xam::NetDll_XNetUnregisterKey_entry)
 REX_EXPORT_STUB(__imp__NetDll_XmlDownloadContinue);
