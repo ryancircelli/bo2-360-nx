@@ -42,3 +42,25 @@ TEST_CASE("lstrlenW reads big endian UTF-16 and stops at the first terminator", 
   CHECK(lstrlenW_entry(mapped_u16(text, 0x1000)) == 4);
   CHECK(lstrlenW_entry(mapped_u16(text + 4, 0x1008)) == 0);
 }
+
+#include <rex/ppc/func.h>
+#define STUB_DECL(n) extern "C" void n(PPCContext&, uint8_t*)
+STUB_DECL(__imp__XamNuiGetDeviceSerialNumber);
+STUB_DECL(__imp__XamAvatarGetAssets);
+STUB_DECL(__imp__XamInputSetKeyLocks);
+STUB_DECL(__imp__XGetDisplaySize);
+STUB_DECL(__imp__XamGetToken);
+STUB_DECL(__imp__XamFreeToken);
+static u64 call_stub(void (*f)(PPCContext&, uint8_t*), u64 r3) {
+  PPCContext ctx{};
+  ctx.r3.u64 = r3;
+  f(ctx, nullptr);
+  return ctx.r3.u64;
+}
+TEST_CASE("Backfilled xam stubs return their family's deliberate value", "[xam]") {
+  CHECK(call_stub(__imp__XamAvatarGetAssets, 7) == 0x80004005);   // query family: failure
+  CHECK(call_stub(__imp__XamInputSetKeyLocks, 7) == 0);           // setter family: success
+  CHECK(call_stub(__imp__XamGetToken, 7) == 0x80151802);          // not logged on
+  CHECK(call_stub(__imp__XamFreeToken, 7) == 0);
+  CHECK(call_stub(__imp__XGetDisplaySize, 7) == 7);               // passthrough keeps r3
+}
