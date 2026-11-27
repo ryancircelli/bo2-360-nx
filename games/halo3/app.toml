@@ -1,12 +1,4 @@
 name = "Halo 3"
-executable = "halo3"
-bundle_id = "io.github.ryancircelli.halo3-360"
-version = "0.1.0"
-support_folder = "halo3-360"
-env_prefix = "HALO3"
-data_path = "~/Games/Xbox360/halo3/disc"
-settings = "app_settings.toml"
-shaders = false
 microphone = "Halo 3 uses the microphone only if the game asks for it."
 
 [source]
