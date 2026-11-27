@@ -239,6 +239,16 @@ void DeferredRenderEncoder::Barrier(const char* site,
       break;
     }
   }
+  // The worker only encodes into the command buffer of the last OpenXpass
+  // (the main one; it is drained before it is committed or replaced). Another
+  // command buffer (pre-commit, standalone) needs no drain: Metal encodes
+  // separate command buffers from separate threads, and GPU order is commit
+  // order, which this does not change. The drain stays pending for the next
+  // caller on the worker's command buffer.
+  if (cmd && cmd != xpass_cmd_) {
+    ++s->skipped;
+    return;
+  }
   ++stats_.xpass_barrier_drains;
   ++s->drains;
   s->wait_us += Drain();
