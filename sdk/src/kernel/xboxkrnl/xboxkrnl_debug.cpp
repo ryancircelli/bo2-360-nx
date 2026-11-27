@@ -18,6 +18,7 @@
 #include <string>
 
 #include <rex/dbg.h>
+#include <rex/kernel/xboxkrnl/guest_exception.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
 #include <rex/hook.h>
@@ -132,11 +133,22 @@ void HandleCppException(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
 }
 
 void RtlRaiseException_entry(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
-  switch (record->code) {
-    case 0x406D1388: {
-      HandleSetThreadName(record);
+  if (record->code == 0x406D1388) {
+    HandleSetThreadName(record);
+    return;
+  }
+
+  if (guest_eh::Enabled()) {
+    auto& ctx = *rex::runtime::current_ppc_context();
+    record->exception_address = static_cast<uint32_t>(ctx.lr);
+    // Returns only for ContinueExecution; a taken exception unwinds (throws) past here.
+    if (guest_eh::Dispatch(guest_eh::KernelEnv(), ctx, record.guest_address()))
       return;
-    }
+    REXKRNL_ERROR("RtlRaiseException: no guest handler took {:08X}",
+                  static_cast<uint32_t>(record->code));
+  }
+
+  switch (record->code) {
     case 0xE06D7363: {
       HandleCppException(record);
       return;
