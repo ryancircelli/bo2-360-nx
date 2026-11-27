@@ -39,6 +39,14 @@ Changes hand-ported into `sdk/` after v0.10.0 from the upstream ReXGlue SDK (BSD
 | ReXGlue SDK `a04d6fc` (Tom Clay) | critical section `lock_count` kept as a big endian guest word | `sdk/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp` |
 | Xenia Canary `a4ef31cdf` (Adrian Cassar) | XMA drops a decode position's start subframes | `sdk/src/audio/xma_context.cpp`, `sdk/include/rex/audio/xma/context.h` |
 | ReXGlue SDK PR 628 (open upstream) | `dcbz` clears the full 128-byte cache line | `sdk/src/codegen/builders/system.cpp` |
+| Xenia Canary `ace153cb8` (goldislead) | a level 0 packed mip tail uses the base address | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `4a863a0e1` (goldislead) | keep a separate base page when mip_min_level is nonzero; base map samples level 0 | `sdk/src/graphics/pipeline/texture/util.cpp`, `sdk/src/graphics/metal/port/rex/graphics/metal/metal_texture_cache.cc`, `sdk/src/graphics/vulkan/texture_cache.cpp` |
+| Xenia Canary `344fca758` (bomabomaboma) | 2x1 packed mip tails laid out along X | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `bc6b7a020` (goldislead) | 2D array and volume mip layout | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `81e3deaee` (goldislead) | rounded dimensions for packed base slice strides | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `19da17403` (goldislead) | linear 96bpp mip row pitch | `sdk/src/graphics/pipeline/texture/util.cpp` |
+| Xenia Canary `c9c8e483b` (goldislead) | tiled 3D address lower bound | `sdk/include/rex/graphics/pipeline/texture/util.h` |
+| Xenia Canary `c332733af` (goldislead) | exact tiled 3D address upper bound | `sdk/src/graphics/pipeline/texture/util.cpp` |
 
 ## Libraries
 
